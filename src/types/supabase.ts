@@ -1,0 +1,172 @@
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
+
+export interface Database {
+  public: {
+    Tables: {
+      stores: {
+        Row: {
+          id: string
+          account_id: string
+          store_code: string
+          name: string
+          marketplace: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          store_code?: string
+          name: string
+          marketplace?: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['stores']['Insert']>
+        Relationships: []
+      }
+      shipments: {
+        Row: {
+          id: string
+          account_id: string
+          store_id: string
+          tracking_number: number
+          tracking_code: string
+          carrier: string
+          destination_warehouse: string
+          box_qty: number
+          units_qty: number
+          units_total: number
+          arrived_box_qty: number
+          planned_marketplace_delivery_date: string | null
+          arrival_date: string | null
+          status: string
+          payment_status: string
+          comment: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          store_id: string
+          tracking_number?: number
+          tracking_code?: string
+          carrier: string
+          destination_warehouse: string
+          box_qty?: number
+          units_qty?: number
+          units_total?: number
+          arrived_box_qty?: number
+          planned_marketplace_delivery_date?: string | null
+          arrival_date?: string | null
+          status: string
+          payment_status: string
+          comment?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['shipments']['Insert']>
+        Relationships: []
+      }
+      shipment_status_history: {
+        Row: {
+          id: string
+          shipment_id: string
+          old_status: string | null
+          new_status: string
+          changed_at: string
+          changed_by: string | null
+        }
+        Insert: {
+          id?: string
+          shipment_id: string
+          old_status?: string | null
+          new_status: string
+          changed_at?: string
+          changed_by?: string | null
+        }
+        Update: Partial<Database['public']['Tables']['shipment_status_history']['Insert']>
+        Relationships: []
+      }
+      accounts: {
+        Row: {
+          id: string
+          name: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['accounts']['Insert']>
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          id: string
+          user_id: string
+          full_name: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          full_name: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['profiles']['Insert']>
+        Relationships: []
+      }
+      account_members: {
+        Row: {
+          id: string
+          account_id: string
+          user_id: string
+          role: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          user_id: string
+          role: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['account_members']['Insert']>
+        Relationships: []
+      }
+    }
+    Functions: {
+      create_shipment: {
+        Args: {
+          p_account_id: string
+          p_store_id: string
+          p_carrier: string
+          p_destination_warehouse: string
+          p_box_qty: number
+          p_units_qty: number
+          p_units_total: number
+          p_arrived_box_qty: number
+          p_planned_marketplace_delivery_date: string | null
+          p_arrival_date: string | null
+          p_status: string
+          p_payment_status: string
+          p_comment?: string
+        }
+        Returns: Database['public']['Tables']['shipments']['Row']
+      }
+      create_account_with_owner: {
+        Args: {
+          p_account_name: string
+        }
+        Returns: Database['public']['Tables']['accounts']['Row']
+      }
+      delete_account_with_owner: {
+        Args: {
+          p_account_id: string
+        }
+        Returns: boolean
+      }
+    }
+  }
+}
