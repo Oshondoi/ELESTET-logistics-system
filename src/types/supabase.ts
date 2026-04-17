@@ -135,6 +135,83 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['account_members']['Insert']>
         Relationships: []
       }
+      trips: {
+        Row: {
+          id: string
+          account_id: string
+          draft_number: number
+          trip_number: string | null
+          carrier: string
+          departure_date: string | null
+          status: string
+          payment_status: string
+          comment: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          draft_number?: number
+          trip_number?: string | null
+          carrier: string
+          departure_date?: string | null
+          status?: string
+          payment_status?: string
+          comment?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['trips']['Insert']>
+        Relationships: []
+      }
+      trip_lines: {
+        Row: {
+          id: string
+          trip_id: string
+          account_id: string
+          store_id: string
+          shipment_number: number
+          destination_warehouse: string
+          box_qty: number
+          units_qty: number
+          units_total: number
+          arrived_box_qty: number
+          planned_marketplace_delivery_date: string | null
+          arrival_date: string | null
+          status: string
+          payment_status: string
+          comment: string
+          invoice_photo_urls: string[]
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          trip_id: string
+          account_id: string
+          store_id: string
+          shipment_number?: number
+          destination_warehouse: string
+          box_qty?: number
+          units_qty?: number
+          units_total?: number
+          arrived_box_qty?: number
+          planned_marketplace_delivery_date?: string | null
+          arrival_date?: string | null
+          status?: string
+          payment_status?: string
+          comment?: string
+          invoice_photo_urls?: string[]
+          created_at?: string
+          updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['trip_lines']['Insert']>
+        Relationships: []
+      }
+    }
+    Views: {
+      [_ in never]: never
     }
     Functions: {
       create_shipment: {
@@ -167,6 +244,49 @@ export interface Database {
         }
         Returns: boolean
       }
+      create_trip: {
+        Args: {
+          p_account_id: string
+          p_carrier: string
+          p_departure_date?: string | null
+          p_status?: string
+          p_payment_status?: string
+          p_comment?: string
+        }
+        Returns: Database['public']['Tables']['trips']['Row']
+      }
+      add_trip_line: {
+        Args: {
+          p_trip_id: string
+          p_account_id: string
+          p_store_id: string
+          p_destination_warehouse: string
+          p_box_qty?: number
+          p_units_qty?: number
+          p_units_total?: number
+          p_arrived_box_qty?: number
+          p_planned_marketplace_delivery_date?: string | null
+          p_arrival_date?: string | null
+          p_status?: string
+          p_payment_status?: string
+          p_comment?: string
+        }
+        Returns: Database['public']['Tables']['trip_lines']['Row']
+      }
+      update_trip_status: {
+        Args: {
+          p_account_id: string
+          p_trip_id: string
+          p_status: string
+        }
+        Returns: Database['public']['Tables']['trips']['Row']
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
     }
   }
 }

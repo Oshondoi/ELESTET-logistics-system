@@ -18,6 +18,7 @@ const buildTripLineWithStore = (line: TripLine, stores: Store[]): TripLineWithSt
 })
 
 export const fetchTrips = async (accountId: string, stores: Store[]): Promise<TripWithLines[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { data: trips, error: tripsError } = await supabase
     .from('trips')
     .select('*')
@@ -49,6 +50,7 @@ export const createTrip = async (
   accountId: string,
   values: TripFormValues,
 ): Promise<Trip> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase.rpc('create_trip', {
     p_account_id: accountId,
     p_carrier: values.carrier,
@@ -64,6 +66,7 @@ export const addTripLine = async (
   tripId: string,
   values: TripLineFormValues,
 ): Promise<TripLine> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase.rpc('add_trip_line', {
     p_trip_id: tripId,
     p_account_id: accountId,
@@ -84,6 +87,7 @@ export const addTripLine = async (
 }
 
 export const deleteTripLine = async (accountId: string, lineId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await supabase
     .from('trip_lines')
     .delete()
@@ -94,6 +98,7 @@ export const deleteTripLine = async (accountId: string, lineId: string): Promise
 }
 
 export const deleteTrip = async (accountId: string, tripId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { error: linesError } = await supabase
     .from('trip_lines')
     .delete()
@@ -116,6 +121,7 @@ export const updateTripStatus = async (
   tripId: string,
   status: TripStatus,
 ): Promise<Trip> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase.rpc('update_trip_status', {
     p_account_id: accountId,
     p_trip_id: tripId,
@@ -131,6 +137,7 @@ export const updateTripLineStatus = async (
   lineId: string,
   status: ShipmentStatus,
 ): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await supabase
     .from('trip_lines')
     .update({ status })
@@ -145,6 +152,7 @@ export const updateTripLinePaymentStatus = async (
   lineId: string,
   payment_status: PaymentStatus,
 ): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await supabase
     .from('trip_lines')
     .update({ payment_status })
@@ -159,6 +167,7 @@ export const uploadInvoicePhoto = async (
   lineId: string,
   file: File,
 ): Promise<string> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const ext = file.name.split('.').pop() ?? 'jpg'
   const path = `${accountId}/${lineId}/${Date.now()}.${ext}`
 
@@ -177,6 +186,7 @@ export const updateTripLineInvoicePhotos = async (
   lineId: string,
   invoice_photo_urls: string[],
 ): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await supabase
     .from('trip_lines')
     .update({ invoice_photo_urls })

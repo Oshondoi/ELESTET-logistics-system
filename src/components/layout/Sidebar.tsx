@@ -99,8 +99,8 @@ export const Sidebar = ({
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
   const companyRef = useRef<HTMLDivElement | null>(null)
   const hasActiveAccount = Boolean(activeAccount)
-  const companyName = hasActiveAccount ? activeAccount.name : 'Нет компании'
-  const companyIdLabel = hasActiveAccount ? `ID: ${activeAccount.id.slice(0, 8)}` : 'Создайте компанию'
+  const companyName = activeAccount ? activeAccount.name : 'Нет компании'
+  const companyIdLabel = activeAccount ? `ID: ${activeAccount.id.slice(0, 8)}` : 'Создайте компанию'
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
