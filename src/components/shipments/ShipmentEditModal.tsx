@@ -1,15 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { carrierOptions, paymentStatuses, shipmentStatuses, warehouseOptions } from '../../lib/constants'
-import type { ShipmentFormValues, Store } from '../../types'
+import { formatDateInputValue } from '../../lib/utils'
+import { createShipmentDraft } from '../../services/shipmentService'
+import type { Shipment, ShipmentFormValues, Store } from '../../types'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
 import { Select } from '../ui/Select'
 import { Textarea } from '../ui/Textarea'
 
-interface ShipmentFormModalProps {
+interface ShipmentEditModalProps {
   open: boolean
   stores: Store[]
+  shipments: Shipment[]
   onClose: () => void
   onSubmit: (values: ShipmentFormValues) => Promise<unknown>
 }
@@ -19,12 +22,13 @@ const defaultPaymentStatus = paymentStatuses[0]
 const defaultCarrier = carrierOptions[0]
 const defaultWarehouse = warehouseOptions[0]
 
-export const ShipmentFormModal = ({
+export const ShipmentEditModal = ({
   open,
   stores,
+  shipments,
   onClose,
   onSubmit,
-}: ShipmentFormModalProps) => {
+}: ShipmentEditModalProps) => {
   const [values, setValues] = useState<ShipmentFormValues>({
     store_id: stores[0]?.id ?? '',
     carrier: defaultCarrier,
@@ -45,6 +49,21 @@ export const ShipmentFormModal = ({
       setValues((current) => ({ ...current, store_id: stores[0].id }))
     }
   }, [stores, values.store_id])
+
+  useEffect(() => {
+    if (values.status === 'Прибыл' && !values.arrival_date) {
+      setValues((current) => ({
+        ...current,
+        arrival_date: formatDateInputValue(new Date().toISOString()),
+      }))
+    }
+  }, [values.status, values.arrival_date])
+
+  const trackingPreview = useMemo(() => {
+    if (!values.store_id) return 'TRK-?'
+
+    return createShipmentDraft(values.store_id, shipments).tracking_code
+  }, [values.store_id, shipments])
 
   const handleChange = <K extends keyof ShipmentFormValues>(key: K, value: ShipmentFormValues[K]) => {
     setValues((current) => ({ ...current, [key]: value }))
@@ -75,9 +94,13 @@ export const ShipmentFormModal = ({
     <Modal
       open={open}
       onClose={onClose}
-      title="Новая поставка"
+      title="Редактирование поставки"
     >
       <form className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
+        <div className="min-w-0 rounded-xl border border-dashed border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-700">
+          Предварительный Tracking ID: <span className="font-semibold">{trackingPreview}</span>
+        </div>
+
         <div className="grid min-w-0 gap-4 md:grid-cols-2">
           <Select
             label="Магазин"
@@ -107,6 +130,48 @@ export const ShipmentFormModal = ({
             value={values.box_qty}
             onChange={(event) => handleChange('box_qty', Number(event.target.value))}
           />
+          <Input
+            label="Количество единиц в коробках"
+            type="number"
+            min={0}
+            value={values.units_qty}
+            onChange={(event) => handleChange('units_qty', Number(event.target.value))}
+          />
+          <Input
+            label="Сумма единиц"
+            type="number"
+            min={0}
+            value={values.units_total}
+            onChange={(event) => handleChange('units_total', Number(event.target.value))}
+          />
+          <Input
+            label="Приехало коробов по факту"
+            type="number"
+            min={0}
+            value={values.arrived_box_qty}
+            onChange={(event) => handleChange('arrived_box_qty', Number(event.target.value))}
+          />
+          <Input
+            label="Дата поставки МП"
+            type="date"
+            value={values.planned_marketplace_delivery_date}
+            onChange={(event) =>
+              handleChange('planned_marketplace_delivery_date', event.target.value)
+            }
+          />
+          <Input
+            label="Дата прибытия"
+            type="date"
+            value={values.arrival_date}
+            onChange={(event) => handleChange('arrival_date', event.target.value)}
+            hint='При статусе "Прибыл" дата подставляется автоматически, но её можно изменить.'
+          />
+          <Select
+            label="Статус"
+            value={values.status}
+            onChange={(event) => handleChange('status', event.target.value as ShipmentFormValues['status'])}
+            options={shipmentStatuses.map((status) => ({ label: status, value: status }))}
+          />
           <Select
             label="Статус оплаты"
             value={values.payment_status}
@@ -131,7 +196,7 @@ export const ShipmentFormModal = ({
               Отмена
             </Button>
             <Button type="submit" className="w-full sm:w-auto">
-              Создать поставку
+              Сохранить изменения
             </Button>
           </div>
         </div>

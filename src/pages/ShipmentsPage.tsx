@@ -1,76 +1,312 @@
-import { Card } from '../components/ui/Card'
-import { ShipmentTable } from '../components/shipments/ShipmentTable'
+import { useEffect, useMemo, useState } from 'react'
+import { TripTable } from '../components/trips/TripTable'
 import { Button } from '../components/ui/Button'
-import type { Shipment, ShipmentWithStore, Store } from '../types'
+import { Card } from '../components/ui/Card'
+import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
+import type { Store, TripLineFormValues, TripStatus, ShipmentStatus, PaymentStatus, TripWithLines } from '../types'
 
-interface ShipmentsPageProps {
-  shipments: ShipmentWithStore[]
-  rawShipments: Shipment[]
-  stores: Store[]
-  onOpenCreate: () => void
+const pluralize = (count: number, one: string, few: string, many: string) => {
+  const mod10 = count % 10
+  const mod100 = count % 100
+
+  if (mod10 === 1 && mod100 !== 11) {
+    return one
+  }
+
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return few
+  }
+
+  return many
 }
 
-const StatCard = ({ label, value, hint }: { label: string; value: string; hint: string }) => (
-  <Card className="rounded-3xl p-4">
-    <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">{label}</div>
-    <div className="mt-1.5 text-2xl font-semibold text-slate-900">{value}</div>
-    <div className="mt-1 text-xs text-slate-500">{hint}</div>
-  </Card>
-)
+interface ShipmentsPageProps {
+  trips: TripWithLines[]
+  stores: Store[]
+  onOpenCreate: () => void
+  onDeleteTrip: (tripId: string) => Promise<void>
+  onDeleteTripLine: (tripId: string, lineId: string) => Promise<void>
+  onChangeTripStatus: (tripId: string, status: TripStatus) => Promise<void>
+  onChangeTripLineStatus: (tripId: string, lineId: string, status: ShipmentStatus) => Promise<void>
+  onChangeTripLinePaymentStatus: (tripId: string, lineId: string, paymentStatus: PaymentStatus) => Promise<void>
+  onAddTripLine: (tripId: string, values: TripLineFormValues) => Promise<unknown>
+  onAddInvoicePhoto: (tripId: string, lineId: string, file: File) => Promise<void>
+  onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
+  onRemoveInvoicePhoto: (tripId: string, lineId: string, index: number) => Promise<void>
+}
 
 export const ShipmentsPage = ({
-  shipments,
-  rawShipments,
+  trips,
   stores,
   onOpenCreate,
+  onDeleteTrip,
+  onDeleteTripLine,
+  onChangeTripStatus,
+  onChangeTripLineStatus,
+  onChangeTripLinePaymentStatus,
+  onAddTripLine,
+  onAddInvoicePhoto,
+  onReplaceInvoicePhoto,
+  onRemoveInvoicePhoto,
 }: ShipmentsPageProps) => {
-  const totalBoxes = shipments.reduce((sum, shipment) => sum + shipment.box_qty, 0)
-  const inTransit = shipments.filter((shipment) => shipment.status === 'В пути').length
-  const arrived = shipments.filter((shipment) => shipment.status === 'Прибыл').length
+  const [expandAllTrips, setExpandAllTrips] = useState(false)
+  const [selectedTripIds, setSelectedTripIds] = useState<Set<string>>(new Set())
+  const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null)
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
 
-  const nextPreview = stores[0]
-    ? `Следующий для ${stores[0].name}: TRK-${
-        rawShipments
-          .filter((shipment) => shipment.store_id === stores[0].id)
-          .reduce((max, shipment) => Math.max(max, shipment.tracking_number), 0) + 1
-      }`
-    : 'Сначала создайте магазин'
+  const lineToTripId = useMemo(() => {
+    const next = new Map<string, string>()
+
+    trips.forEach((trip) => {
+      trip.lines.forEach((line) => {
+        next.set(line.id, trip.id)
+      })
+    })
+
+    return next
+  }, [trips])
+
+  useEffect(() => {
+    const validTripIds = new Set(trips.map((trip) => trip.id))
+    const validLineIds = new Set(trips.flatMap((trip) => trip.lines.map((line) => line.id)))
+
+    setSelectedTripIds((current) => new Set([...current].filter((id) => validTripIds.has(id))))
+    setSelectedLineIds((current) => new Set([...current].filter((id) => validLineIds.has(id))))
+  }, [trips])
+
+  const effectiveSelectedLineIds = useMemo(
+    () => [...selectedLineIds].filter((lineId) => {
+      const tripId = lineToTripId.get(lineId)
+      return tripId ? !selectedTripIds.has(tripId) : false
+    }),
+    [lineToTripId, selectedLineIds, selectedTripIds],
+  )
+
+  const selectedTripCount = selectedTripIds.size
+  const selectedLineCount = effectiveSelectedLineIds.length
+  const hasBulkSelection = selectedTripCount > 0 || selectedLineCount > 0
+
+  const bulkDeleteDescription = useMemo(() => {
+    const parts: string[] = []
+
+    if (selectedTripCount > 0) {
+      parts.push(`${selectedTripCount} ${pluralize(selectedTripCount, 'рейс', 'рейса', 'рейсов')}`)
+    }
+
+    if (selectedLineCount > 0) {
+      parts.push(`${selectedLineCount} ${pluralize(selectedLineCount, 'поставка', 'поставки', 'поставок')}`)
+    }
+
+    if (parts.length === 0) {
+      return ''
+    }
+
+    return `Будут удалены ${parts.join(' и ')}. Это действие нельзя отменить.`
+  }, [selectedLineCount, selectedTripCount])
+
+  const toggleTripSelection = (tripId: string, checked: boolean) => {
+    if (checked) {
+      setSelectedLineIds(new Set())
+    }
+
+    setSelectedTripIds((current) => {
+      const next = new Set(current)
+
+      if (checked) {
+        next.add(tripId)
+      } else {
+        next.delete(tripId)
+      }
+
+      return next
+    })
+  }
+
+  const toggleLineSelection = (lineId: string, checked: boolean) => {
+    if (checked) {
+      setSelectedTripIds(new Set())
+    }
+
+    setSelectedLineIds((current) => {
+      const next = new Set(current)
+
+      if (checked) {
+        next.add(lineId)
+      } else {
+        next.delete(lineId)
+      }
+
+      return next
+    })
+  }
+
+  const toggleAllTripsSelection = (checked: boolean) => {
+    if (checked) {
+      setSelectedLineIds(new Set())
+    }
+
+    setSelectedTripIds(checked ? new Set(trips.map((trip) => trip.id)) : new Set())
+  }
+
+  const toggleTripLinesSelection = (tripId: string, checked: boolean) => {
+    const lineIds = trips.find((trip) => trip.id === tripId)?.lines.map((line) => line.id) ?? []
+
+    if (checked) {
+      setSelectedTripIds(new Set())
+    }
+
+    setSelectedLineIds((current) => {
+      const next = new Set(current)
+
+      lineIds.forEach((lineId) => {
+        if (checked) {
+          next.add(lineId)
+        } else {
+          next.delete(lineId)
+        }
+      })
+
+      return next
+    })
+  }
+
+  const handleCloseBulkDelete = () => {
+    if (isBulkDeleting) {
+      return
+    }
+
+    setBulkDeleteError(null)
+    setBulkDeleteOpen(false)
+  }
+
+  const handleConfirmBulkDelete = async () => {
+    if (!hasBulkSelection) {
+      return
+    }
+
+    setIsBulkDeleting(true)
+    setBulkDeleteError(null)
+
+    try {
+      for (const lineId of effectiveSelectedLineIds) {
+        const tripId = lineToTripId.get(lineId)
+
+        if (tripId) {
+          await onDeleteTripLine(tripId, lineId)
+        }
+      }
+
+      for (const tripId of selectedTripIds) {
+        await onDeleteTrip(tripId)
+      }
+
+      setSelectedTripIds(new Set())
+      setSelectedLineIds(new Set())
+      setBulkDeleteOpen(false)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setBulkDeleteError(`Не удалось удалить выбранные элементы: ${message}`)
+    } finally {
+      setIsBulkDeleting(false)
+    }
+  }
 
   return (
-    <div className="space-y-4">
-      <Card className="rounded-3xl p-2.5">
-        <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
-          <div className="grid gap-2.5 md:grid-cols-2 xl:flex">
-            <div className="flex h-10 min-w-[220px] items-center rounded-2xl bg-slate-100 px-4 text-sm text-slate-400">
-              Поиск по Tracking ID, магазину, перевозчику
+    <>
+      <div className="space-y-4">
+        <Card className="rounded-3xl p-2.5">
+          <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
+            <div className="grid gap-2.5 md:grid-cols-[minmax(220px,1fr)_auto_minmax(170px,220px)] xl:flex">
+              <div className="flex h-10 min-w-[220px] items-center rounded-2xl bg-slate-100 px-4 text-sm text-slate-400">
+                Поиск по рейсу, перевозчику
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                className={[
+                  '!h-10 !w-10 !min-w-10 !rounded-2xl !px-0',
+                  expandAllTrips
+                    ? '!bg-[#E3EAF6] !text-slate-700 hover:!bg-[#E3EAF6]'
+                    : '!text-slate-500',
+                ].join(' ')}
+                onClick={() => setExpandAllTrips((prev) => !prev)}
+                aria-pressed={expandAllTrips}
+                aria-label={expandAllTrips ? 'Свернуть все поставки' : 'Развернуть все поставки'}
+                title={expandAllTrips ? 'Свернуть все поставки' : 'Развернуть все поставки'}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-[15px] w-[15px] shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  {expandAllTrips ? (
+                    <>
+                      <path d="m7.5 11 4.5-4.5 4.5 4.5" />
+                      <path d="m7.5 17 4.5-4.5 4.5 4.5" />
+                    </>
+                  ) : (
+                    <>
+                      <path d="m7.5 7 4.5 4.5 4.5-4.5" />
+                      <path d="m7.5 13 4.5 4.5 4.5-4.5" />
+                    </>
+                  )}
+                </svg>
+              </Button>
+              <div className="flex h-10 min-w-[170px] items-center justify-between rounded-2xl bg-slate-100 px-4 text-sm text-slate-600">
+                <span>Все статусы</span>
+                <span>▾</span>
+              </div>
             </div>
-            <div className="flex h-10 min-w-[170px] items-center justify-between rounded-2xl bg-slate-100 px-4 text-sm text-slate-600">
-              <span>Все статусы</span>
-              <span>▾</span>
-            </div>
-            <div className="flex h-10 min-w-[170px] items-center justify-between rounded-2xl bg-slate-100 px-4 text-sm text-slate-600">
-              <span>Сортировка</span>
-              <span>▾</span>
+            <div className="flex items-center gap-2.5">
+              <Button variant="secondary" className="rounded-2xl px-4 py-2.5">
+                Обновить
+              </Button>
+              <Button className="rounded-2xl px-5 py-2.5 shadow-sm" onClick={onOpenCreate}>
+                + Создать рейс
+              </Button>
             </div>
           </div>
-          <div className="flex items-center gap-2.5">
-            <Button variant="secondary" className="rounded-2xl px-4 py-2.5 shadow-sm">
-              Обновить
-            </Button>
-            <Button className="rounded-2xl px-5 py-2.5 shadow-sm" onClick={onOpenCreate}>
-              + Создать поставку
-            </Button>
-          </div>
-        </div>
-      </Card>
+        </Card>
 
-      <div className="grid gap-3 xl:grid-cols-3">
-        <StatCard label="Всего поставок" value={String(shipments.length)} hint={nextPreview} />
-        <StatCard label="В пути" value={String(inTransit)} hint="Активные рейсы в движении" />
-        <StatCard label="Коробов" value={String(totalBoxes)} hint={`Статус "Прибыл": ${arrived}`} />
+        <TripTable
+          trips={trips}
+          stores={stores}
+          expandAll={expandAllTrips}
+          onDeleteTrip={onDeleteTrip}
+          onDeleteTripLine={onDeleteTripLine}
+          onChangeTripStatus={onChangeTripStatus}
+          onChangeTripLineStatus={onChangeTripLineStatus}
+          onChangeTripLinePaymentStatus={onChangeTripLinePaymentStatus}
+          selectedTripIds={selectedTripIds}
+          selectedLineIds={selectedLineIds}
+          onToggleTripSelection={toggleTripSelection}
+          onToggleLineSelection={toggleLineSelection}
+          onToggleAllTripsSelection={toggleAllTripsSelection}
+          onToggleTripLinesSelection={toggleTripLinesSelection}
+          hasBulkSelection={hasBulkSelection}
+          onBulkDelete={() => { setBulkDeleteError(null); setBulkDeleteOpen(true) }}
+          onAddTripLine={onAddTripLine}
+          onAddInvoicePhoto={onAddInvoicePhoto}
+          onReplaceInvoicePhoto={onReplaceInvoicePhoto}
+          onRemoveInvoicePhoto={onRemoveInvoicePhoto}
+        />
       </div>
 
-      <ShipmentTable shipments={shipments} />
-    </div>
+      <DeleteConfirmModal
+        open={bulkDeleteOpen}
+        title="Удалить выбранные элементы?"
+        description={bulkDeleteDescription}
+        isSubmitting={isBulkDeleting}
+        error={bulkDeleteError}
+        onClose={handleCloseBulkDelete}
+        onConfirm={() => void handleConfirmBulkDelete()}
+      />
+    </>
   )
 }

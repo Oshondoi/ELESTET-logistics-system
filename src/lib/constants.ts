@@ -1,4 +1,4 @@
-import type { PaymentStatus, ShipmentStatus } from '../types'
+import type { PaymentStatus, ShipmentStatus, TripStatus } from '../types'
 
 export const shipmentStatuses: ShipmentStatus[] = [
   'Ожидает отправки',
@@ -13,4 +13,29 @@ export const paymentStatuses: PaymentStatus[] = [
   'Оплачено',
 ]
 
+export const tripStatuses: TripStatus[] = [
+  'Формируется',
+  'Отправлен',
+  'Прибыл',
+  'Завершён',
+]
+
 export const marketplaceOptions = ['Wildberries', 'Ozon', 'Kaspi']
+
+export const carrierOptions = [
+  'Asia Cargo',
+  'Карго KG',
+  'WB Логистика',
+  'Деловые Линии',
+  'СДЭК',
+]
+
+export const warehouseOptions = [
+  'Коледино',
+  'Электросталь',
+  'Казань',
+  'Краснодар',
+  'Новосибирск',
+  'Екатеринбург',
+  'Хабаровск',
+]

@@ -1,69 +1,56 @@
 # Tech Context
 
 ## Stack
-- Frontend: React
+- Frontend: React + TypeScript
 - Bundler: Vite
-- Language: TypeScript
 - Styling: Tailwind CSS
-- Backend: Supabase
-- Database: Postgres via Supabase
+- Backend: Supabase (Postgres)
 
 ## Current Packages
-- `react`
-- `react-dom`
-- `vite`
-- `typescript`
-- `tailwindcss`
-- `@tailwindcss/postcss`
+- `react`, `react-dom`
+- `vite`, `typescript`
+- `tailwindcss`, `@tailwindcss/postcss`
 - `@vitejs/plugin-react`
 - `@supabase/supabase-js`
 
 ## Important Files
-- `package.json`
-- `src/App.tsx`
-- `src/hooks/useAuth.ts`
-- `src/hooks/useAccounts.ts`
-- `src/hooks/useAppData.ts`
-- `src/services/accountService.ts`
-- `src/services/shipmentService.ts`
-- `src/services/storeService.ts`
-- `src/types/index.ts`
-- `src/lib/supabase.ts`
-- `supabase/schema.sql`
+- `src/App.tsx` — app shell, routing by activePage state
+- `src/hooks/useAuth.ts` — auth session
+- `src/hooks/useAccounts.ts` — company list, create, delete
+- `src/hooks/useAppData.ts` — stores, shipments (legacy), trips, mutations
+- `src/services/tripService.ts` — fetchTrips, createTrip, addTripLine
+- `src/services/shipmentService.ts` — legacy, keep for now
+- `src/services/storeService.ts` — stores CRUD
+- `src/types/index.ts` — all domain types including Trip, TripLine, TripWithLines
+- `src/lib/supabase.ts` — Supabase client
+- `src/lib/constants.ts` — shipmentStatuses, paymentStatuses, tripStatuses, carrierOptions, warehouseOptions
+- `supabase/schema.sql` — main schema
+- `supabase/trips.sql` — trips + trip_lines tables, RLS, RPC
+- `supabase/patch_trip_functions.sql` — исправление FOR UPDATE в create_trip и add_trip_line
+- `supabase/carriers_warehouses.sql` — carriers + warehouses tables, RLS
+- `supabase/seed_trips.sql` — тестовый сид через SQL
+- `supabase/run_seed.mjs` — тестовый сид через Node.js + Supabase client
 
 ## Environment
-Expected env vars:
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-
-If env vars are missing, the app should be treated as misconfigured. Runtime is intended to work only with Supabase now.
+- `VITE_DEFAULT_ACCOUNT_ID` (legacy dev helper)
 
 ## Current Tooling Notes
-- Tailwind is wired through PostCSS using `@tailwindcss/postcss`
-- Dev server is started via `npm run dev`
-- Linting is currently checked through editor diagnostics rather than a dedicated lint script
+- Tailwind через PostCSS (`@tailwindcss/postcss`)
+- Dev server: `npm run dev`
+- No router — page switching is local state in App.tsx
+- No query caching library
 
-## Current Technical Constraints
-- No router installed yet; page switching is local state driven
-- No query caching library yet
-- No component library; UI is custom lightweight Tailwind primitives
-
-## Recommended Near-Term Technical Direction
-- Keep dependencies lean
-- Avoid over-engineering before real data is connected
-- When auth/data complexity grows, consider adding:
-  - React Router
-  - TanStack Query
-  - generated Supabase types
+## Future Technical Direction
+- Мобильное приложение: React Native (Expo) + TypeScript, та же Supabase БД
+- При росте сложности: React Router, TanStack Query, генерированные Supabase types
+- Production RLS — убрать disable_rls_dev.sql после исправления рекурсии в account_members
 
 ## Supabase Notes
-- Schema is ready in `supabase/schema.sql`
-- First account bootstrap exists in `supabase/bootstrap.sql`
-- Temporary browser-access helpers exist in:
-  - `supabase/dev_access.sql`
-  - `supabase/disable_rls_dev.sql`
-- Real implementation will likely need:
-  - direct table reads
-  - RPC for shipment creation
-  - auth session handling
-  - role-aware account resolution
+- Schema: `supabase/schema.sql`
+- Bootstrap: `supabase/bootstrap.sql`
+- Dev helpers: `supabase/dev_access.sql`, `supabase/disable_rls_dev.sql`
+- Trips schema: `supabase/trips.sql` + `supabase/patch_trip_functions.sql`
+- carriers/warehouses: `supabase/carriers_warehouses.sql` (таблицы применены, фронт не подключён)
+- RPC: `create_trip`, `add_trip_line` — работают, протестированы

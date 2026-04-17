@@ -3,6 +3,7 @@ import { AccountFormModal } from './components/accounts/AccountFormModal'
 import { DeleteAccountModal } from './components/accounts/DeleteAccountModal'
 import { Sidebar } from './components/layout/Sidebar'
 import { Topbar } from './components/layout/Topbar'
+import { TripFormModal } from './components/trips/TripFormModal'
 import { ShipmentFormModal } from './components/shipments/ShipmentFormModal'
 import { StoreFormModal } from './components/stores/StoreFormModal'
 import { useAccounts } from './hooks/useAccounts'
@@ -10,23 +11,26 @@ import { useAppData } from './hooks/useAppData'
 import { useAuth } from './hooks/useAuth'
 import { isSupabaseConfigured } from './lib/supabase'
 import { AuthPage } from './pages/AuthPage'
+import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
 import { RolesPage } from './pages/RolesPage'
 import { ShipmentsPage } from './pages/ShipmentsPage'
 import { StoresPage } from './pages/StoresPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'fulfillment' | 'shipments' | 'stores' | 'roles'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'products' | 'roles'
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
 
 const toRawShipments = (shipments: ShipmentWithStore[]): Shipment[] =>
   shipments.map(({ store, ...shipment }) => shipment)
 
-const pageTitles: Record<PageKey, 'Фулфилмент' | 'Логистика' | 'Магазины' | 'Роли'> = {
+const pageTitles: Record<PageKey, 'Главная' | 'Фулфилмент' | 'Логистика' | 'Магазины' | 'Товары' | 'Роли'> = {
+  home: 'Главная',
   fulfillment: 'Фулфилмент',
   shipments: 'Логистика',
   stores: 'Магазины',
+  products: 'Товары',
   roles: 'Роли',
 }
 
@@ -36,6 +40,7 @@ function App() {
     const storedPage = window.localStorage.getItem(ACTIVE_PAGE_STORAGE_KEY)
 
     if (
+      storedPage === 'home' ||
       storedPage === 'fulfillment' ||
       storedPage === 'shipments' ||
       storedPage === 'stores' ||
@@ -44,7 +49,7 @@ function App() {
       return storedPage
     }
 
-    return 'fulfillment'
+    return 'home'
   })
   const [activeAccountId, setActiveAccountId] = useState<string | null>(() => {
     return window.localStorage.getItem(ACTIVE_ACCOUNT_STORAGE_KEY)
@@ -53,10 +58,30 @@ function App() {
   const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState(false)
   const [isDeletingAccount, setIsDeletingAccount] = useState(false)
   const [shipmentModalOpen, setShipmentModalOpen] = useState(false)
+  const [tripModalOpen, setTripModalOpen] = useState(false)
   const [storeModalOpen, setStoreModalOpen] = useState(false)
   const { accounts, isLoading: isAccountsLoading, createAccount, deleteAccount } = useAccounts(Boolean(session))
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
-  const { shipments, stores, addShipment, addStore, isUsingSupabase, isLoading, error } = useAppData(activeAccount?.id ?? null)
+  const {
+    shipments,
+    stores,
+    trips,
+    addShipment,
+    addStore,
+    addTrip,
+    addTripLine,
+    addInvoicePhoto,
+    replaceInvoicePhoto,
+    removeInvoicePhoto,
+    removeTrip,
+    removeTripLine,
+    changeTripStatus,
+    changeTripLineStatus,
+    changeTripLinePaymentStatus,
+    isUsingSupabase,
+    isLoading,
+    error,
+  } = useAppData(activeAccount?.id ?? null)
 
   const rawShipments = useMemo(() => toRawShipments(shipments), [shipments])
 
@@ -126,8 +151,15 @@ function App() {
       setAccountModalOpen(true)
       return
     }
-
     setShipmentModalOpen(true)
+  }
+
+  const handleOpenTripCreate = () => {
+    if (!activeAccount) {
+      setAccountModalOpen(true)
+      return
+    }
+    setTripModalOpen(true)
   }
 
   const handleOpenStoreCreate = () => {
@@ -158,15 +190,27 @@ function App() {
 
           <div className="flex-1 p-3 lg:p-4">
             {!isLoading && !error ? (
-              activePage === 'fulfillment' ? (
+              activePage === 'home' ? (
+                <HomePage shipments={shipments} rawShipments={rawShipments} stores={stores} />
+              ) : activePage === 'fulfillment' ? (
                 <FulfillmentPage />
               ) : activePage === 'shipments' ? (
                 <ShipmentsPage
-                  shipments={shipments}
-                  rawShipments={rawShipments}
+                  trips={trips}
                   stores={stores}
-                  onOpenCreate={handleOpenShipmentCreate}
+                  onOpenCreate={handleOpenTripCreate}
+                  onDeleteTrip={removeTrip}
+                  onDeleteTripLine={removeTripLine}
+                  onChangeTripStatus={changeTripStatus}
+                  onChangeTripLineStatus={changeTripLineStatus}
+                  onChangeTripLinePaymentStatus={changeTripLinePaymentStatus}
+                  onAddTripLine={addTripLine}
+                  onAddInvoicePhoto={addInvoicePhoto}
+                  onReplaceInvoicePhoto={replaceInvoicePhoto}
+                  onRemoveInvoicePhoto={removeInvoicePhoto}
                 />
+              ) : activePage === 'products' ? (
+                <RolesPage />
               ) : activePage === 'roles' ? (
                 <RolesPage />
               ) : (
@@ -177,10 +221,15 @@ function App() {
         </main>
       </div>
 
+      <TripFormModal
+        open={tripModalOpen}
+        onClose={() => setTripModalOpen(false)}
+        onSubmit={addTrip}
+      />
+
       <ShipmentFormModal
         open={shipmentModalOpen}
         stores={stores}
-        shipments={rawShipments}
         onClose={() => setShipmentModalOpen(false)}
         onSubmit={addShipment}
       />

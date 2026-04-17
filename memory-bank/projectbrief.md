@@ -43,6 +43,15 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 ## Product Direction
 The product should feel like a practical operations system, not a marketing landing page. Dense, readable, and efficient UI is preferred over decorative layout.
 
+## Change Discipline
+- Work strictly to the user's task and the stated acceptance criteria
+- Do not change unrelated business logic, UI behavior, copy, layout, or visual style unless the task explicitly asks for it
+- Prefer the smallest safe fix that solves the requested problem
+- Avoid opportunistic refactors and side improvements during focused bugfix or UI tasks
+- A valid task result must not regress adjacent screens, forms, shared UI primitives, or existing flows
+- If a requested fix truly requires touching nearby areas, keep the blast radius minimal and explicit
+- Default project rule: preserve already working behavior and do not touch adjacent screens, entities, or styles unless the current task explicitly requires it
+
 ## Non-Goals For Current Stage
 - Production-grade role UI
 - Detailed analytics

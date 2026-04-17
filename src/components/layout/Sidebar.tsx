@@ -3,8 +3,8 @@ import { cn } from '../../lib/utils'
 import type { Account } from '../../types'
 
 interface SidebarProps {
-  activePage: 'fulfillment' | 'shipments' | 'stores' | 'roles'
-  onSelectPage: (page: 'fulfillment' | 'shipments' | 'stores' | 'roles') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'products' | 'roles'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'products' | 'roles') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -14,6 +14,17 @@ interface SidebarProps {
 }
 
 const items = [
+  {
+    key: 'home',
+    label: 'Главная',
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M3 10.5 12 4l9 6.5" />
+        <path d="M5.5 9.5V20h13V9.5" />
+        <path d="M9.5 20v-5h5V20" />
+      </svg>
+    ),
+  },
   {
     key: 'fulfillment',
     label: 'Фулфилмент',
@@ -44,6 +55,20 @@ const items = [
         <path d="M4 10.5 6 5h12l2 5.5" />
         <path d="M5 10h14v9H5z" />
         <path d="M9 14h6" />
+      </svg>
+    ),
+  },
+  {
+    key: 'products',
+    label: 'Товары',
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M3 6h18" />
+        <path d="M3 12h18" />
+        <path d="M3 18h18" />
+        <rect x="3" y="3" width="4" height="4" rx="0.5" />
+        <rect x="3" y="9" width="4" height="4" rx="0.5" />
+        <rect x="3" y="15" width="4" height="4" rx="0.5" />
       </svg>
     ),
   },
@@ -92,7 +117,7 @@ export const Sidebar = ({
   }, [])
 
   return (
-    <aside className="flex min-h-screen w-[242px] shrink-0 flex-col border-r border-slate-200 bg-white/95">
+    <aside className="flex min-h-screen w-[234px] shrink-0 flex-col border-r border-slate-200 bg-white/95">
       <div className="border-b border-slate-200 px-5 py-4">
         <button type="button" className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-xs font-bold text-white">
@@ -128,8 +153,8 @@ export const Sidebar = ({
               )}
             >
               <span>
-                <span className="block text-[14px] font-semibold text-slate-900">{companyName}</span>
-                <span className="mt-0.5 block text-[12px] text-[#61729E]">{companyIdLabel}</span>
+                <span className="block text-[15px] font-bold text-slate-900">{companyName}</span>
+                <span className="mt-0.5 block text-[11px] text-[#61729E]">{companyIdLabel}</span>
               </span>
               {hasActiveAccount ? (
                 <svg
@@ -161,7 +186,7 @@ export const Sidebar = ({
                       className="group flex w-full items-center justify-between rounded-[12px] px-[16px] py-[13px] text-left transition hover:bg-[#F8FAFF]"
                     >
                       <span>
-                        <span className="block text-[14px] font-semibold text-slate-900">{account.name}</span>
+                        <span className="block text-[15px] font-bold text-slate-900">{account.name}</span>
                         <span className="mt-0.5 block text-[12px] text-[#61729E]">{listCompanyIdLabel}</span>
                       </span>
 
@@ -214,20 +239,19 @@ export const Sidebar = ({
           <button
             type="button"
             onClick={onOpenAddCompany}
-            className="mt-[4px] inline-flex cursor-pointer items-center gap-[7px] px-[16px] text-[10px] font-medium tracking-[0.01em] text-[#6C84E8] transition hover:text-[#5B74DD]"
+            className="mt-[4px] inline-flex origin-left scale-[0.85] cursor-pointer items-center px-[16px] text-[10px] font-medium tracking-[0.01em] text-[#6C84E8] transition hover:text-[#5B74DD]"
           >
-            <span className="text-[12px] leading-none">+</span>
             <span className="whitespace-nowrap">Добавить компанию</span>
           </button>
         </div>
 
-        <nav className="flex flex-col gap-1">
+        <nav className="flex flex-col gap-0.5">
           {items.map((item) => (
             <button
               type="button"
               key={item.key}
               className={cn(
-                'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition',
+                'flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium transition',
                 activePage === item.key
                   ? 'bg-blue-600 text-white shadow-sm'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
@@ -236,13 +260,13 @@ export const Sidebar = ({
             >
               <span
                 className={cn(
-                  'flex h-7 w-7 items-center justify-center rounded-lg',
+                  'flex h-6.5 w-6.5 items-center justify-center rounded-md',
                   activePage === item.key ? 'bg-white/15' : 'bg-slate-100 text-slate-500',
                 )}
               >
                 {item.icon}
               </span>
-              <span className="font-semibold tracking-[0.01em]">{item.label}</span>
+              <span className="font-medium tracking-normal">{item.label}</span>
             </button>
           ))}
         </nav>
@@ -252,9 +276,9 @@ export const Sidebar = ({
         <button
           type="button"
           onClick={onSignOut}
-          className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+          className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
         >
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+          <span className="flex h-6.5 w-6.5 items-center justify-center rounded-md bg-slate-100 text-slate-500">
             <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
               <path d="M10 17l5-5-5-5" />
               <path d="M15 12H3" />

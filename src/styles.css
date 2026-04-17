@@ -28,3 +28,8 @@ select,
 textarea {
   font: inherit;
 }
+
+button:focus,
+button:focus-visible {
+  outline: none;
+}
