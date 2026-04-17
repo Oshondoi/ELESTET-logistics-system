@@ -62,6 +62,12 @@ function App() {
   const [storeModalOpen, setStoreModalOpen] = useState(false)
   const { accounts, isLoading: isAccountsLoading, createAccount, deleteAccount } = useAccounts(Boolean(session))
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
+
+  useEffect(() => {
+    if (!isAccountsLoading && accounts.length > 0 && !activeAccountId) {
+      setActiveAccountId(accounts[0].id)
+    }
+  }, [accounts, isAccountsLoading, activeAccountId])
   const {
     shipments,
     stores,
