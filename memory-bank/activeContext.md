@@ -37,7 +37,6 @@
 1. **Шаг 1:** Редактирование рейса (модалка редактирования) + редактирование строки поставки
 2. **Этап 3:** Справочники — управление carriers/warehouses из UI
 3. **Этап 5:** Реальный поиск и фильтры
-4. **Этап 6:** Деплой + production RLS
 
 ## Important Implementation Notes
 - Runtime is Supabase-only
@@ -49,7 +48,6 @@
 - Только минимально необходимые изменения
 
 ## Active Risks
-- RLS/auth design is not production-ready yet
 - carriers/warehouses пока не подключены к фронту (дропдауны из constants.ts)
 - Мобильное приложение запланировано на будущее (React Native + Expo, та же Supabase БД)
 

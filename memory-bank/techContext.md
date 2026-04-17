@@ -42,10 +42,16 @@
 - No router — page switching is local state in App.tsx
 - No query caching library
 
+## Deploy
+- Хостинг: Vercel (`elestet-logistics-system.vercel.app`)
+- CI/CD: автодеплой при push в `main` через GitHub
+- Env-переменные: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` добавлены в Vercel
+- Production RLS включён на всех таблицах
+- Рекурсивные политики `account_members` исправлены (`user_id = auth.uid()`)
+
 ## Future Technical Direction
 - Мобильное приложение: React Native (Expo) + TypeScript, та же Supabase БД
 - При росте сложности: React Router, TanStack Query, генерированные Supabase types
-- Production RLS — убрать disable_rls_dev.sql после исправления рекурсии в account_members
 
 ## Supabase Notes
 - Schema: `supabase/schema.sql`
