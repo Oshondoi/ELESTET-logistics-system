@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { carrierOptions } from '../../lib/constants'
 import type { TripFormValues } from '../../types'
 import { Button } from '../ui/Button'
+import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
 import { Select } from '../ui/Select'
 import { Textarea } from '../ui/Textarea'
@@ -10,16 +11,28 @@ interface TripFormModalProps {
   open: boolean
   onClose: () => void
   onSubmit: (values: TripFormValues) => Promise<unknown>
+  initialValues?: TripFormValues
+  carrierNames?: string[]
 }
 
-const defaults: TripFormValues = {
-  carrier: carrierOptions[0],
+const defaults = (carriers: string[]): TripFormValues => ({
+  carrier: carriers[0] ?? '',
   comment: '',
-}
+  departure_date: '',
+})
 
-export const TripFormModal = ({ open, onClose, onSubmit }: TripFormModalProps) => {
-  const [values, setValues] = useState<TripFormValues>(defaults)
+export const TripFormModal = ({ open, onClose, onSubmit, initialValues, carrierNames }: TripFormModalProps) => {
+  const isEdit = Boolean(initialValues)
+  const carriers = carrierNames && carrierNames.length > 0 ? carrierNames : carrierOptions
+  const [values, setValues] = useState<TripFormValues>(initialValues ?? defaults(carriers))
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      setValues(initialValues ?? defaults(carriers))
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialValues])
 
   const set = <K extends keyof TripFormValues>(key: K, value: TripFormValues[K]) =>
     setValues((prev) => ({ ...prev, [key]: value }))
@@ -29,20 +42,27 @@ export const TripFormModal = ({ open, onClose, onSubmit }: TripFormModalProps) =
     setIsSubmitting(true)
     void onSubmit(values)
       .then(() => {
-        setValues(defaults)
+        setValues(defaults(carriers))
         onClose()
       })
       .finally(() => setIsSubmitting(false))
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Новый рейс">
+    <Modal open={open} onClose={onClose} title={isEdit ? 'Редактировать рейс' : 'Новый рейс'}>
       <form className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
         <Select
           label="Перевозчик"
           value={values.carrier}
           onChange={(e) => set('carrier', e.target.value)}
-          options={carrierOptions.map((c) => ({ label: c, value: c }))}
+          options={carriers.map((c) => ({ label: c, value: c }))}
+        />
+
+        <Input
+          label="Дата отправки"
+          type="date"
+          value={values.departure_date ?? ''}
+          onChange={(e) => set('departure_date', e.target.value)}
         />
 
         <Textarea
@@ -59,7 +79,7 @@ export const TripFormModal = ({ open, onClose, onSubmit }: TripFormModalProps) =
               Отмена
             </Button>
             <Button type="submit" disabled={isSubmitting} className="w-full sm:w-auto">
-              {isSubmitting ? 'Создание…' : 'Создать рейс'}
+              {isSubmitting ? (isEdit ? 'Сохранение…' : 'Создание…') : (isEdit ? 'Сохранить' : 'Создать рейс')}
             </Button>
           </div>
         </div>

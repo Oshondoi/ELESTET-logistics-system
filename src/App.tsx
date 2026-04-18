@@ -10,26 +10,29 @@ import { useAccounts } from './hooks/useAccounts'
 import { useAppData } from './hooks/useAppData'
 import { useAuth } from './hooks/useAuth'
 import { isSupabaseConfigured } from './lib/supabase'
+import { carrierOptions, warehouseOptions } from './lib/constants'
 import { AuthPage } from './pages/AuthPage'
 import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
 import { RolesPage } from './pages/RolesPage'
 import { ShipmentsPage } from './pages/ShipmentsPage'
 import { StoresPage } from './pages/StoresPage'
+import { DirectoriesPage } from './pages/DirectoriesPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'products' | 'roles'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles'
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
 
 const toRawShipments = (shipments: ShipmentWithStore[]): Shipment[] =>
   shipments.map(({ store, ...shipment }) => shipment)
 
-const pageTitles: Record<PageKey, 'Главная' | 'Фулфилмент' | 'Логистика' | 'Магазины' | 'Товары' | 'Роли'> = {
+const pageTitles: Record<PageKey, 'Главная' | 'Фулфилмент' | 'Логистика' | 'Магазины' | 'Справочники' | 'Товары' | 'Роли'> = {
   home: 'Главная',
   fulfillment: 'Фулфилмент',
   shipments: 'Логистика',
   stores: 'Магазины',
+  directories: 'Справочники',
   products: 'Товары',
   roles: 'Роли',
 }
@@ -44,6 +47,7 @@ function App() {
       storedPage === 'fulfillment' ||
       storedPage === 'shipments' ||
       storedPage === 'stores' ||
+      storedPage === 'directories' ||
       storedPage === 'roles'
     ) {
       return storedPage
@@ -72,6 +76,8 @@ function App() {
     shipments,
     stores,
     trips,
+    carriers,
+    warehouses,
     addShipment,
     addStore,
     addTrip,
@@ -84,10 +90,19 @@ function App() {
     changeTripStatus,
     changeTripLineStatus,
     changeTripLinePaymentStatus,
+    editTrip,
+    editTripLine,
+    addCarrier,
+    removeCarrier,
+    addWarehouse,
+    removeWarehouse,
     isUsingSupabase,
     isLoading,
     error,
   } = useAppData(activeAccount?.id ?? null)
+
+  const carrierNames = carriers.length > 0 ? carriers.map((c) => c.name) : carrierOptions
+  const warehouseNames = warehouses.length > 0 ? warehouses.map((w) => w.name) : warehouseOptions
 
   const rawShipments = useMemo(() => toRawShipments(shipments), [shipments])
 
@@ -204,16 +219,30 @@ function App() {
                 <ShipmentsPage
                   trips={trips}
                   stores={stores}
+                  warehouseNames={warehouseNames}
                   onOpenCreate={handleOpenTripCreate}
                   onDeleteTrip={removeTrip}
                   onDeleteTripLine={removeTripLine}
                   onChangeTripStatus={changeTripStatus}
                   onChangeTripLineStatus={changeTripLineStatus}
                   onChangeTripLinePaymentStatus={changeTripLinePaymentStatus}
+                  onEditTrip={editTrip}
+                  onEditTripLine={editTripLine}
                   onAddTripLine={addTripLine}
                   onAddInvoicePhoto={addInvoicePhoto}
                   onReplaceInvoicePhoto={replaceInvoicePhoto}
                   onRemoveInvoicePhoto={removeInvoicePhoto}
+                />
+              ) : activePage === 'stores' ? (
+                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} />
+              ) : activePage === 'directories' ? (
+                <DirectoriesPage
+                  carriers={carriers}
+                  warehouses={warehouses}
+                  onAddCarrier={addCarrier}
+                  onDeleteCarrier={removeCarrier}
+                  onAddWarehouse={addWarehouse}
+                  onDeleteWarehouse={removeWarehouse}
                 />
               ) : activePage === 'products' ? (
                 <RolesPage />
@@ -231,6 +260,7 @@ function App() {
         open={tripModalOpen}
         onClose={() => setTripModalOpen(false)}
         onSubmit={addTrip}
+        carrierNames={carrierNames}
       />
 
       <ShipmentFormModal

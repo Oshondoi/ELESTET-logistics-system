@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { warehouseOptions, shipmentStatuses, paymentStatuses } from '../../lib/constants'
 import type { Store, TripLineFormValues } from '../../types'
 import { Button } from '../ui/Button'
@@ -12,11 +12,13 @@ interface TripLineFormModalProps {
   stores: Store[]
   onClose: () => void
   onSubmit: (values: TripLineFormValues) => Promise<void>
+  initialValues?: TripLineFormValues
+  warehouseNames?: string[]
 }
 
-const makeDefaults = (stores: Store[]): TripLineFormValues => ({
+const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues => ({
   store_id: stores[0]?.id ?? '',
-  destination_warehouse: warehouseOptions[0],
+  destination_warehouse: warehouses[0] ?? '',
   box_qty: 0,
   units_qty: 0,
   units_total: 0,
@@ -28,9 +30,18 @@ const makeDefaults = (stores: Store[]): TripLineFormValues => ({
   comment: '',
 })
 
-export const TripLineFormModal = ({ open, stores, onClose, onSubmit }: TripLineFormModalProps) => {
-  const [values, setValues] = useState<TripLineFormValues>(() => makeDefaults(stores))
+export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames }: TripLineFormModalProps) => {
+  const isEdit = Boolean(initialValues)
+  const warehouses = warehouseNames && warehouseNames.length > 0 ? warehouseNames : warehouseOptions
+  const [values, setValues] = useState<TripLineFormValues>(() => initialValues ?? makeDefaults(stores, warehouses))
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      setValues(initialValues ?? makeDefaults(stores, warehouses))
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialValues, stores])
 
   const set = <K extends keyof TripLineFormValues>(key: K, value: TripLineFormValues[K]) =>
     setValues((prev) => ({ ...prev, [key]: value }))
@@ -52,7 +63,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit }: TripLineF
   }))
 
   return (
-    <Modal open={open} onClose={onClose} title="Новая поставка">
+    <Modal open={open} onClose={onClose} title={isEdit ? 'Редактировать поставку' : 'Новая поставка'}>
       <form className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
         <div className="grid min-w-0 gap-4 md:grid-cols-2">
           <Select
@@ -65,7 +76,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit }: TripLineF
             label="Склад назначения"
             value={values.destination_warehouse}
             onChange={(e) => set('destination_warehouse', e.target.value)}
-            options={warehouseOptions.map((w) => ({ label: w, value: w }))}
+            options={warehouses.map((w) => ({ label: w, value: w }))}
           />
           <Input
             label="Коробов"
@@ -89,10 +100,23 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit }: TripLineF
             onChange={(e) => set('units_total', Number(e.target.value))}
           />
           <Input
+            label="Коробов фактически"
+            type="number"
+            min={0}
+            value={values.arrived_box_qty}
+            onChange={(e) => set('arrived_box_qty', Number(e.target.value))}
+          />
+          <Input
             label="Плановая дата доставки"
             type="date"
             value={values.planned_marketplace_delivery_date}
             onChange={(e) => set('planned_marketplace_delivery_date', e.target.value)}
+          />
+          <Input
+            label="Дата прибытия"
+            type="date"
+            value={values.arrival_date}
+            onChange={(e) => set('arrival_date', e.target.value)}
           />
           <Select
             label="Статус"
@@ -122,7 +146,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit }: TripLineF
               Отмена
             </Button>
             <Button type="submit" disabled={isSubmitting || !values.store_id}>
-              {isSubmitting ? 'Сохранение...' : 'Добавить поставку'}
+              {isSubmitting ? 'Сохранение…' : (isEdit ? 'Сохранить' : 'Добавить поставку')}
             </Button>
           </div>
         </div>

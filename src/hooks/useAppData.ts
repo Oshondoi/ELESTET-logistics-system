@@ -19,9 +19,19 @@ import {
   updateTripStatus as updateTripStatusInSupabase,
   updateTripLineStatus as updateTripLineStatusInSupabase,
   updateTripLinePaymentStatus as updateTripLinePaymentStatusInSupabase,
+  updateTrip as updateTripInSupabase,
+  updateTripLine as updateTripLineInSupabase,
   uploadInvoicePhoto as uploadInvoicePhotoInSupabase,
   updateTripLineInvoicePhotos as updateTripLineInvoicePhotosInSupabase,
 } from '../services/tripService'
+import {
+  fetchCarriers,
+  createCarrier as createCarrierInSupabase,
+  deleteCarrier as deleteCarrierInSupabase,
+  fetchWarehouses,
+  createWarehouse as createWarehouseInSupabase,
+  deleteWarehouse as deleteWarehouseInSupabase,
+} from '../services/directoriesService'
 import type {
   Shipment,
   ShipmentFormValues,
@@ -35,12 +45,18 @@ import type {
   TripFormValues,
   TripStatus,
   TripWithLines,
+  Trip,
+  TripLine,
+  Carrier,
+  Warehouse,
 } from '../types'
 
 export const useAppData = (accountId: string | null) => {
   const [stores, setStores] = useState<Store[]>([])
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [trips, setTrips] = useState<TripWithLines[]>([])
+  const [carriers, setCarriers] = useState<Carrier[]>([])
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [statusHistory] = useState<ShipmentStatusHistory[]>([])
   const [isUsingSupabase, setIsUsingSupabase] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -73,8 +89,14 @@ export const useAppData = (accountId: string | null) => {
       setStores(supabaseStores)
       setShipments(supabaseShipments)
 
-      const supabaseTrips = await fetchTrips(accountId, supabaseStores)
+      const [supabaseTrips, supabaseCarriers, supabaseWarehouses] = await Promise.all([
+        fetchTrips(accountId, supabaseStores),
+        fetchCarriers(accountId),
+        fetchWarehouses(accountId),
+      ])
       setTrips(supabaseTrips)
+      setCarriers(supabaseCarriers)
+      setWarehouses(supabaseWarehouses)
 
       setIsUsingSupabase(true)
     } catch (loadError) {
@@ -195,6 +217,62 @@ export const useAppData = (accountId: string | null) => {
     )
   }
 
+  const editTrip = async (tripId: string, values: TripFormValues) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const updatedTrip = await updateTripInSupabase(accountId, tripId, values) as Trip
+    setTrips((current) =>
+      current.map((trip) =>
+        trip.id === tripId
+          ? { ...trip, carrier: updatedTrip.carrier, comment: updatedTrip.comment, departure_date: updatedTrip.departure_date }
+          : trip,
+      ),
+    )
+  }
+
+  const editTripLine = async (tripId: string, lineId: string, values: TripLineFormValues) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const updatedLine = await updateTripLineInSupabase(accountId, lineId, values) as TripLine
+    const store = accountStores.find((s) => s.id === updatedLine.store_id)
+    setTrips((current) =>
+      current.map((trip) =>
+        trip.id === tripId
+          ? {
+              ...trip,
+              lines: trip.lines.map((line) =>
+                line.id === lineId ? { ...updatedLine, store } : line,
+              ),
+            }
+          : trip,
+      ),
+    )
+  }
+
+  const addCarrier = async (name: string): Promise<Carrier> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const carrier = await createCarrierInSupabase(accountId, name)
+    setCarriers((current) => [...current, carrier].sort((a, b) => a.name.localeCompare(b.name)))
+    return carrier
+  }
+
+  const removeCarrier = async (carrierId: string): Promise<void> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    await deleteCarrierInSupabase(accountId, carrierId)
+    setCarriers((current) => current.filter((c) => c.id !== carrierId))
+  }
+
+  const addWarehouse = async (name: string): Promise<Warehouse> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const warehouse = await createWarehouseInSupabase(accountId, name)
+    setWarehouses((current) => [...current, warehouse].sort((a, b) => a.name.localeCompare(b.name)))
+    return warehouse
+  }
+
+  const removeWarehouse = async (warehouseId: string): Promise<void> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    await deleteWarehouseInSupabase(accountId, warehouseId)
+    setWarehouses((current) => current.filter((w) => w.id !== warehouseId))
+  }
+
   const getLineUrls = (tripId: string, lineId: string): string[] => {
     const trip = trips.find((t) => t.id === tripId)
     return trip?.lines.find((l) => l.id === lineId)?.invoice_photo_urls ?? []
@@ -238,6 +316,8 @@ export const useAppData = (accountId: string | null) => {
     stores: accountStores,
     shipments: shipmentViews,
     trips,
+    carriers,
+    warehouses,
     statusHistory,
     isUsingSupabase,
     isLoading,
@@ -251,6 +331,12 @@ export const useAppData = (accountId: string | null) => {
     changeTripStatus,
     changeTripLineStatus,
     changeTripLinePaymentStatus,
+    editTrip,
+    editTripLine,
+    addCarrier,
+    removeCarrier,
+    addWarehouse,
+    removeWarehouse,
     addInvoicePhoto,
     replaceInvoicePhoto,
     removeInvoicePhoto,

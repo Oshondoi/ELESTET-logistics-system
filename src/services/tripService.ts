@@ -181,6 +181,58 @@ export const uploadInvoicePhoto = async (
   return data.publicUrl
 }
 
+export const updateTrip = async (
+  accountId: string,
+  tripId: string,
+  values: TripFormValues,
+): Promise<Trip> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('trips')
+    .update({
+      carrier: values.carrier,
+      comment: values.comment,
+      ...(values.departure_date !== undefined ? { departure_date: values.departure_date || null } : {}),
+    })
+    .eq('id', tripId)
+    .eq('account_id', accountId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data as Trip
+}
+
+export const updateTripLine = async (
+  accountId: string,
+  lineId: string,
+  values: TripLineFormValues,
+): Promise<TripLine> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('trip_lines')
+    .update({
+      store_id: values.store_id,
+      destination_warehouse: values.destination_warehouse,
+      box_qty: values.box_qty,
+      units_qty: values.units_qty,
+      units_total: values.units_total,
+      arrived_box_qty: values.arrived_box_qty,
+      planned_marketplace_delivery_date: values.planned_marketplace_delivery_date || null,
+      arrival_date: values.arrival_date || null,
+      status: values.status,
+      payment_status: values.payment_status,
+      comment: values.comment,
+    })
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data as TripLine
+}
+
 export const updateTripLineInvoicePhotos = async (
   accountId: string,
   lineId: string,

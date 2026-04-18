@@ -1,9 +1,25 @@
 # Active Context
 
 ## Current Focus
-Шаг 1 — Редактирование рейса и строки поставки (следующий).
+Этап 5 — Поиск и фильтры (следующий).
 
 ## What Was Recently Done
+
+### Шаг 1 — Редактирование рейса и поставки (завершён)
+- `updateTrip` и `updateTripLine` в `tripService.ts` (Supabase UPDATE + `.select().single()`)
+- `editTrip` и `editTripLine` в `useAppData.ts` — оптимистичный апдейт состояния
+- `TripFormModal`: режим edit (пропс `initialValues` + заголовок/кнопка меняются)
+- `TripLineFormModal`: режим edit (пропс `initialValues`), все поля включая `arrived_box_qty` и `arrival_date`
+- `TripTable`: кнопки редактирования рейса и поставки, второй экземпляр модалок для edit-режима
+- Поле `departure_date` добавлено в `TripFormValues` и в форму
+
+### Этап 3 — Справочники carriers/warehouses (завершён)
+- `src/services/directoriesService.ts` — CRUD для carriers и warehouses через Supabase
+- `src/pages/DirectoriesPage.tsx` — двухпанельный UI (lg:grid-cols-2), инлайн-форма добавления, удаление с подтверждением
+- `useAppData.ts` — состояния `carriers`/`warehouses`, методы `addCarrier`/`removeCarrier`/`addWarehouse`/`removeWarehouse`, загрузка параллельно с рейсами
+- `App.tsx` — `carrierNames`/`warehouseNames` из Supabase (fallback на constants), рендер DirectoriesPage
+- `Sidebar.tsx` — пункт «Справочники» в навигации (Товары → Справочники → Роли)
+- Дропдауны перевозчика и склада в модалках теперь динамические (из Supabase)
 
 ### Шаг 0 — Фото накладных (завершён)
 - Колонка `invoice_photo_urls text[]` в `trip_lines` (SQL-патч `patch_invoice_photos_v2.sql`)
@@ -28,15 +44,14 @@
 - Компактный сайдбар
 
 ## Present UI State
-- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Роли
-- Логистика: таблица рейсов, раскрытие → строки поставок + фото накладных
+- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Роли
+- Логистика: таблица рейсов, раскрытие → строки поставок + фото накладных + редактирование
 - Магазины: список + модалка создания
+- Справочники: управление carriers/warehouses (добавить/удалить)
 - Товары / Роли: заглушки
 
 ## Immediate Next Steps
-1. **Шаг 1:** Редактирование рейса (модалка редактирования) + редактирование строки поставки
-2. **Этап 3:** Справочники — управление carriers/warehouses из UI
-3. **Этап 5:** Реальный поиск и фильтры
+1. **Этап 5:** Реальный поиск и фильтры — текстовый поиск по рейсу/перевозчику + дропдаун фильтра статуса на странице Логистика
 
 ## Important Implementation Notes
 - Runtime is Supabase-only
@@ -48,7 +63,8 @@
 - Только минимально необходимые изменения
 
 ## Active Risks
-- carriers/warehouses пока не подключены к фронту (дропдауны из constants.ts)
+- Нет валидации форм кроме базовой
+- Страницы Товары и Роли — заглушки
 - Мобильное приложение запланировано на будущее (React Native + Expo, та же Supabase БД)
 
 

@@ -3,7 +3,7 @@ import { TripTable } from '../components/trips/TripTable'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
-import type { Store, TripLineFormValues, TripStatus, ShipmentStatus, PaymentStatus, TripWithLines } from '../types'
+import type { Store, TripFormValues, TripLineFormValues, TripStatus, ShipmentStatus, PaymentStatus, TripWithLines } from '../types'
 
 const pluralize = (count: number, one: string, few: string, many: string) => {
   const mod10 = count % 10
@@ -23,12 +23,15 @@ const pluralize = (count: number, one: string, few: string, many: string) => {
 interface ShipmentsPageProps {
   trips: TripWithLines[]
   stores: Store[]
+  warehouseNames?: string[]
   onOpenCreate: () => void
   onDeleteTrip: (tripId: string) => Promise<void>
   onDeleteTripLine: (tripId: string, lineId: string) => Promise<void>
   onChangeTripStatus: (tripId: string, status: TripStatus) => Promise<void>
   onChangeTripLineStatus: (tripId: string, lineId: string, status: ShipmentStatus) => Promise<void>
   onChangeTripLinePaymentStatus: (tripId: string, lineId: string, paymentStatus: PaymentStatus) => Promise<void>
+  onEditTrip: (tripId: string, values: TripFormValues) => Promise<void>
+  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues) => Promise<void>
   onAddTripLine: (tripId: string, values: TripLineFormValues) => Promise<unknown>
   onAddInvoicePhoto: (tripId: string, lineId: string, file: File) => Promise<void>
   onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
@@ -38,12 +41,15 @@ interface ShipmentsPageProps {
 export const ShipmentsPage = ({
   trips,
   stores,
+  warehouseNames,
   onOpenCreate,
   onDeleteTrip,
   onDeleteTripLine,
   onChangeTripStatus,
   onChangeTripLineStatus,
   onChangeTripLinePaymentStatus,
+  onEditTrip,
+  onEditTripLine,
   onAddTripLine,
   onAddInvoicePhoto,
   onReplaceInvoicePhoto,
@@ -277,12 +283,15 @@ export const ShipmentsPage = ({
         <TripTable
           trips={trips}
           stores={stores}
+          warehouseNames={warehouseNames}
           expandAll={expandAllTrips}
           onDeleteTrip={onDeleteTrip}
           onDeleteTripLine={onDeleteTripLine}
           onChangeTripStatus={onChangeTripStatus}
           onChangeTripLineStatus={onChangeTripLineStatus}
           onChangeTripLinePaymentStatus={onChangeTripLinePaymentStatus}
+          onEditTrip={onEditTrip}
+          onEditTripLine={onEditTripLine}
           selectedTripIds={selectedTripIds}
           selectedLineIds={selectedLineIds}
           onToggleTripSelection={toggleTripSelection}

@@ -3,8 +3,8 @@ import { cn } from '../../lib/utils'
 import type { Account } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'products' | 'roles'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'products' | 'roles') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -69,6 +69,18 @@ const items = [
         <rect x="3" y="3" width="4" height="4" rx="0.5" />
         <rect x="3" y="9" width="4" height="4" rx="0.5" />
         <rect x="3" y="15" width="4" height="4" rx="0.5" />
+      </svg>
+    ),
+  },
+  {
+    key: 'directories',
+    label: 'Справочники',
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M4 6h16" />
+        <path d="M4 10h16" />
+        <path d="M4 14h10" />
+        <path d="M4 18h7" />
       </svg>
     ),
   },

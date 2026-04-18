@@ -93,6 +93,20 @@ export interface StoreFormValues {
   store_code?: string
 }
 
+export interface Carrier {
+  id: string
+  account_id: string
+  name: string
+  created_at: string
+}
+
+export interface Warehouse {
+  id: string
+  account_id: string
+  name: string
+  created_at: string
+}
+
 // ─── Рейсы ───────────────────────────────────────────────────
 
 export type TripStatus = 'Формируется' | 'Отправлен' | 'Прибыл' | 'Завершён'
@@ -143,6 +157,7 @@ export interface TripWithLines extends Trip {
 export interface TripFormValues {
   carrier: string
   comment: string
+  departure_date?: string
 }
 
 export interface TripLineFormValues {
