@@ -28,10 +28,18 @@ import {
   fetchCarriers,
   createCarrier as createCarrierInSupabase,
   deleteCarrier as deleteCarrierInSupabase,
+  updateCarrier as updateCarrierInSupabase,
   fetchWarehouses,
   createWarehouse as createWarehouseInSupabase,
   deleteWarehouse as deleteWarehouseInSupabase,
+  updateWarehouse as updateWarehouseInSupabase,
 } from '../services/directoriesService'
+import {
+  fetchStickers,
+  createSticker as createStickerInSupabase,
+  updateSticker as updateStickerInSupabase,
+  deleteSticker as deleteStickerInSupabase,
+} from '../services/stickerService'
 import type {
   Shipment,
   ShipmentFormValues,
@@ -49,6 +57,8 @@ import type {
   TripLine,
   Carrier,
   Warehouse,
+  StickerTemplate,
+  StickerFormValues,
 } from '../types'
 
 export const useAppData = (accountId: string | null) => {
@@ -57,6 +67,7 @@ export const useAppData = (accountId: string | null) => {
   const [trips, setTrips] = useState<TripWithLines[]>([])
   const [carriers, setCarriers] = useState<Carrier[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  const [stickers, setStickers] = useState<StickerTemplate[]>([])
   const [statusHistory] = useState<ShipmentStatusHistory[]>([])
   const [isUsingSupabase, setIsUsingSupabase] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -97,6 +108,9 @@ export const useAppData = (accountId: string | null) => {
       setTrips(supabaseTrips)
       setCarriers(supabaseCarriers)
       setWarehouses(supabaseWarehouses)
+
+      const supabaseStickers = await fetchStickers(accountId)
+      setStickers(supabaseStickers)
 
       setIsUsingSupabase(true)
     } catch (loadError) {
@@ -260,6 +274,12 @@ export const useAppData = (accountId: string | null) => {
     setCarriers((current) => current.filter((c) => c.id !== carrierId))
   }
 
+  const renameCarrier = async (carrierId: string, name: string): Promise<void> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const updated = await updateCarrierInSupabase(accountId, carrierId, name)
+    setCarriers((current) => current.map((c) => c.id === carrierId ? updated : c).sort((a, b) => a.name.localeCompare(b.name)))
+  }
+
   const addWarehouse = async (name: string): Promise<Warehouse> => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const warehouse = await createWarehouseInSupabase(accountId, name)
@@ -271,6 +291,31 @@ export const useAppData = (accountId: string | null) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     await deleteWarehouseInSupabase(accountId, warehouseId)
     setWarehouses((current) => current.filter((w) => w.id !== warehouseId))
+  }
+
+  const renameWarehouse = async (warehouseId: string, name: string): Promise<void> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const updated = await updateWarehouseInSupabase(accountId, warehouseId, name)
+    setWarehouses((current) => current.map((w) => w.id === warehouseId ? updated : w).sort((a, b) => a.name.localeCompare(b.name)))
+  }
+
+  const addSticker = async (values: StickerFormValues): Promise<StickerTemplate> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const sticker = await createStickerInSupabase(accountId, values)
+    setStickers((current) => [sticker, ...current])
+    return sticker
+  }
+
+  const editSticker = async (stickerId: string, values: StickerFormValues): Promise<void> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const updated = await updateStickerInSupabase(accountId, stickerId, values)
+    setStickers((current) => current.map((s) => s.id === stickerId ? updated : s))
+  }
+
+  const removeSticker = async (stickerId: string): Promise<void> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    await deleteStickerInSupabase(accountId, stickerId)
+    setStickers((current) => current.filter((s) => s.id !== stickerId))
   }
 
   const getLineUrls = (tripId: string, lineId: string): string[] => {
@@ -318,6 +363,7 @@ export const useAppData = (accountId: string | null) => {
     trips,
     carriers,
     warehouses,
+    stickers,
     statusHistory,
     isUsingSupabase,
     isLoading,
@@ -335,8 +381,13 @@ export const useAppData = (accountId: string | null) => {
     editTripLine,
     addCarrier,
     removeCarrier,
+    renameCarrier,
     addWarehouse,
     removeWarehouse,
+    renameWarehouse,
+    addSticker,
+    editSticker,
+    removeSticker,
     addInvoicePhoto,
     replaceInvoicePhoto,
     removeInvoicePhoto,

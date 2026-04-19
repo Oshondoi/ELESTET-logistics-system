@@ -70,6 +70,16 @@ MVP в активной разработке. Шаг 0, Шаг 1, Шаг 2, Эт
 - Авто-выбор первого аккаунта при первом входе (новый браузер/устройство)
 - Env-переменные добавлены в Vercel
 
+### Стикеры WB (завершён)
+- Таблица `sticker_templates` в Supabase (CRUD через `storeService`)
+- `StickerTemplate` тип в `src/types/index.ts`
+- `StickersPage.tsx` — таблица с чекбоксами, bulk preview/download, CRUD
+- `StickerFormModal.tsx` — форма создания/редактирования шаблона стикера
+- `src/lib/stickerPdf.ts` — Canvas → PNG → jsPDF, EAN-13 баркод, EAC логотип, иконки по уходу
+- PDF раскладка: HEADER(штрихкод) / BODY(текст, полная ширина) / FOOTER(иконки 26px + ЕАС в ряд)
+- Предпросмотр в новой вкладке + скачивание `.pdf`
+- Пункт «Стикеры» добавлен в Sidebar
+
 ## What Is Not Yet Done
 - Реальный поиск и фильтры (Этап 5)
 - Мобильное приложение (будущее)

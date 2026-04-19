@@ -3,8 +3,8 @@ import { cn } from '../../lib/utils'
 import type { Account } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles' | 'stickers'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles' | 'stickers') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -93,6 +93,19 @@ const items = [
         <circle cx="9.5" cy="7" r="3.5" />
         <path d="M20 8v6" />
         <path d="M17 11h6" />
+      </svg>
+    ),
+  },
+  {
+    key: 'stickers',
+    label: 'Стикеры',
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <path d="M7 7h2" />
+        <path d="M7 12h10" />
+        <path d="M7 17h6" />
+        <path d="M13 7h4" />
       </svg>
     ),
   },

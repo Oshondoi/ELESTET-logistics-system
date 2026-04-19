@@ -1,7 +1,7 @@
 # Active Context
 
 ## Current Focus
-Этап 5 — Поиск и фильтры (следующий).
+Стикеры WB — завершены. Следующий: Этап 5 — Поиск и фильтры.
 
 ## What Was Recently Done
 
@@ -44,11 +44,26 @@
 - Компактный сайдбар
 
 ## Present UI State
-- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Роли
+- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Роли / Стикеры
 - Логистика: таблица рейсов, раскрытие → строки поставок + фото накладных + редактирование
 - Магазины: список + модалка создания
 - Справочники: управление carriers/warehouses (добавить/удалить)
 - Товары / Роли: заглушки
+
+### Стикеры WB (завершён)
+- Таблица `sticker_templates` в Supabase (CRUD)
+- `src/types/index.ts` — тип `StickerTemplate`
+- `src/services/storeService.ts` — функции `fetchStickers`, `createSticker`, `updateSticker`, `deleteSticker`
+- `src/hooks/useAppData.ts` — состояние `stickers`, методы `addSticker`, `editSticker`, `removeSticker`
+- `src/components/stickers/StickerFormModal.tsx` — создание/редактирование шаблона
+- `src/pages/StickersPage.tsx` — таблица с чекбоксами, предпросмотр, скачивание PDF, редактирование, удаление
+- `src/lib/stickerPdf.ts` — генерация PDF через Canvas + jsPDF + JsBarcode (EAN-13)
+  - Раскладка 58×40мм: HEADER(120px штрихкод) / BODY(236px текст полная ширина) / FOOTER(44px иконки+ЕАС)
+  - Иконки по уходу 26px в ряд + ЕАС справа, всё центрировано в подвале
+  - EAC — геометрические буквы через fillRect (без шрифтов)
+  - Штрихкод: JsBarcode `width:4, flat:true, displayValue:false`, цифры вручную с spacing
+  - Предпросмотр (`output('bloburl')`) и скачивание (`.save()`)
+- `src/components/layout/Sidebar.tsx` — пункт «Стикеры» в навигации
 
 ## Immediate Next Steps
 1. **Этап 5:** Реальный поиск и фильтры — текстовый поиск по рейсу/перевозчику + дропдаун фильтра статуса на странице Логистика

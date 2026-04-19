@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { warehouseOptions, shipmentStatuses, paymentStatuses } from '../../lib/constants'
+import { shipmentStatuses, paymentStatuses } from '../../lib/constants'
 import type { Store, TripLineFormValues } from '../../types'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -32,7 +32,7 @@ const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues
 
 export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames }: TripLineFormModalProps) => {
   const isEdit = Boolean(initialValues)
-  const warehouses = warehouseNames && warehouseNames.length > 0 ? warehouseNames : warehouseOptions
+  const warehouses = warehouseNames ?? []
   const [values, setValues] = useState<TripLineFormValues>(() => initialValues ?? makeDefaults(stores, warehouses))
   const [isSubmitting, setIsSubmitting] = useState(false)
 

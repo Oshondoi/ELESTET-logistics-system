@@ -10,7 +10,6 @@ import { useAccounts } from './hooks/useAccounts'
 import { useAppData } from './hooks/useAppData'
 import { useAuth } from './hooks/useAuth'
 import { isSupabaseConfigured } from './lib/supabase'
-import { carrierOptions, warehouseOptions } from './lib/constants'
 import { AuthPage } from './pages/AuthPage'
 import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
@@ -18,16 +17,17 @@ import { RolesPage } from './pages/RolesPage'
 import { ShipmentsPage } from './pages/ShipmentsPage'
 import { StoresPage } from './pages/StoresPage'
 import { DirectoriesPage } from './pages/DirectoriesPage'
+import { StickersPage } from './pages/StickersPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles' | 'stickers'
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
 
 const toRawShipments = (shipments: ShipmentWithStore[]): Shipment[] =>
   shipments.map(({ store, ...shipment }) => shipment)
 
-const pageTitles: Record<PageKey, 'Главная' | 'Фулфилмент' | 'Логистика' | 'Магазины' | 'Справочники' | 'Товары' | 'Роли'> = {
+const pageTitles: Record<PageKey, string> = {
   home: 'Главная',
   fulfillment: 'Фулфилмент',
   shipments: 'Логистика',
@@ -35,6 +35,7 @@ const pageTitles: Record<PageKey, 'Главная' | 'Фулфилмент' | '�
   directories: 'Справочники',
   products: 'Товары',
   roles: 'Роли',
+  stickers: 'Стикеры',
 }
 
 function App() {
@@ -48,7 +49,8 @@ function App() {
       storedPage === 'shipments' ||
       storedPage === 'stores' ||
       storedPage === 'directories' ||
-      storedPage === 'roles'
+      storedPage === 'roles' ||
+      storedPage === 'stickers'
     ) {
       return storedPage
     }
@@ -78,6 +80,7 @@ function App() {
     trips,
     carriers,
     warehouses,
+    stickers,
     addShipment,
     addStore,
     addTrip,
@@ -94,15 +97,20 @@ function App() {
     editTripLine,
     addCarrier,
     removeCarrier,
+    renameCarrier,
     addWarehouse,
     removeWarehouse,
+    renameWarehouse,
+    addSticker,
+    editSticker,
+    removeSticker,
     isUsingSupabase,
     isLoading,
     error,
   } = useAppData(activeAccount?.id ?? null)
 
-  const carrierNames = carriers.length > 0 ? carriers.map((c) => c.name) : carrierOptions
-  const warehouseNames = warehouses.length > 0 ? warehouses.map((w) => w.name) : warehouseOptions
+  const carrierNames = carriers.map((c) => c.name)
+  const warehouseNames = warehouses.map((w) => w.name)
 
   const rawShipments = useMemo(() => toRawShipments(shipments), [shipments])
 
@@ -219,6 +227,7 @@ function App() {
                 <ShipmentsPage
                   trips={trips}
                   stores={stores}
+                  carrierNames={carrierNames}
                   warehouseNames={warehouseNames}
                   onOpenCreate={handleOpenTripCreate}
                   onDeleteTrip={removeTrip}
@@ -241,13 +250,22 @@ function App() {
                   warehouses={warehouses}
                   onAddCarrier={addCarrier}
                   onDeleteCarrier={removeCarrier}
+                  onRenameCarrier={renameCarrier}
                   onAddWarehouse={addWarehouse}
                   onDeleteWarehouse={removeWarehouse}
+                  onRenameWarehouse={renameWarehouse}
                 />
               ) : activePage === 'products' ? (
                 <RolesPage />
               ) : activePage === 'roles' ? (
                 <RolesPage />
+              ) : activePage === 'stickers' ? (
+                <StickersPage
+                  stickers={stickers}
+                  onAdd={addSticker}
+                  onEdit={editSticker}
+                  onDelete={removeSticker}
+                />
               ) : (
                 <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} />
               )

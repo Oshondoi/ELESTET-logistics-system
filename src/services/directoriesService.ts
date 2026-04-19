@@ -33,12 +33,26 @@ export const deleteCarrier = async (accountId: string, carrierId: string): Promi
   if (error) throw error
 }
 
+export const updateCarrier = async (accountId: string, carrierId: string, name: string): Promise<Carrier> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('carriers')
+    .update({ name })
+    .eq('id', carrierId)
+    .eq('account_id', accountId)
+    .select()
+    .single()
+  if (error) throw error
+  return data as Carrier
+}
+
 export const fetchWarehouses = async (accountId: string): Promise<Warehouse[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase
     .from('warehouses')
     .select('*')
-    .eq('account_id', accountId)
+    .or(`account_id.eq.${accountId},account_id.is.null`)
+    .order('is_system', { ascending: false })
     .order('name', { ascending: true })
   if (error) throw error
   return (data ?? []) as Warehouse[]
@@ -63,4 +77,17 @@ export const deleteWarehouse = async (accountId: string, warehouseId: string): P
     .eq('id', warehouseId)
     .eq('account_id', accountId)
   if (error) throw error
+}
+
+export const updateWarehouse = async (accountId: string, warehouseId: string, name: string): Promise<Warehouse> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('warehouses')
+    .update({ name })
+    .eq('id', warehouseId)
+    .eq('account_id', accountId)
+    .select()
+    .single()
+  if (error) throw error
+  return data as Warehouse
 }

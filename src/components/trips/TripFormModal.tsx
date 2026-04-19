@@ -23,7 +23,7 @@ const defaults = (carriers: string[]): TripFormValues => ({
 
 export const TripFormModal = ({ open, onClose, onSubmit, initialValues, carrierNames }: TripFormModalProps) => {
   const isEdit = Boolean(initialValues)
-  const carriers = carrierNames && carrierNames.length > 0 ? carrierNames : carrierOptions
+  const carriers = carrierNames ?? []
   const [values, setValues] = useState<TripFormValues>(initialValues ?? defaults(carriers))
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -58,12 +58,14 @@ export const TripFormModal = ({ open, onClose, onSubmit, initialValues, carrierN
           options={carriers.map((c) => ({ label: c, value: c }))}
         />
 
-        <Input
-          label="Дата отправки"
-          type="date"
-          value={values.departure_date ?? ''}
-          onChange={(e) => set('departure_date', e.target.value)}
-        />
+        {isEdit && (
+          <Input
+            label="Дата отправки"
+            type="date"
+            value={values.departure_date ?? ''}
+            onChange={(e) => set('departure_date', e.target.value)}
+          />
+        )}
 
         <Textarea
           label="Комментарий"

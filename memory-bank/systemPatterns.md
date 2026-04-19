@@ -15,12 +15,13 @@ Layers:
 - `src/components/trips` — TripTable, TripFormModal
 - `src/components/stores` — StoreFormModal, StoreList
 - `src/components/accounts` — AccountFormModal, DeleteAccountModal
+- `src/components/stickers` — StickerFormModal
 - `src/components/ui` — Button, Badge, Card, Input, Modal, Select, Textarea
 - `src/pages` — page composition only
 - `src/hooks` — useAuth, useAccounts, useAppData
 - `src/services` — shipmentService, storeService, tripService
+- `src/lib` — supabase client, constants, utils, **stickerPdf**
 - `src/types` — domain contracts
-- `src/lib` — supabase client, constants, utils
 
 ## State Pattern
 1. resolve auth session (`useAuth`)
@@ -33,6 +34,19 @@ Layers:
 
 ### Multi-Tenant Boundary
 `account_id` is the main tenant boundary for all business data.
+
+### Sticker PDF Generation
+```
+stickerPdf.ts:
+  renderStickerToCanvas(tpl) → canvas (580×400px, 10px/mm)
+    HEADER (120px) — EAN-13 штрихкод (JsBarcode, width:4, flat:true) + цифры вручную
+    BODY   (236px) — текст полная ширина: название 24px bold + поля 18px
+    FOOTER  (44px) — 4 иконки по уходу 26px + ЕАС 26px, всё в ряд
+  buildPdf(templates) → jsPDF (multi-page, copies учитываются)
+  downloadStickerPdf / previewStickerPdf
+```
+- EAC рисуется через fillRect (не текст)
+- ctx.save()/restore() во всех draw-функциях — изоляция состояния
 
 ### Trip → TripLine Hierarchy
 ```

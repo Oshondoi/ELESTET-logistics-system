@@ -23,6 +23,7 @@ const pluralize = (count: number, one: string, few: string, many: string) => {
 interface ShipmentsPageProps {
   trips: TripWithLines[]
   stores: Store[]
+  carrierNames?: string[]
   warehouseNames?: string[]
   onOpenCreate: () => void
   onDeleteTrip: (tripId: string) => Promise<void>
@@ -41,6 +42,7 @@ interface ShipmentsPageProps {
 export const ShipmentsPage = ({
   trips,
   stores,
+  carrierNames,
   warehouseNames,
   onOpenCreate,
   onDeleteTrip,
@@ -283,6 +285,7 @@ export const ShipmentsPage = ({
         <TripTable
           trips={trips}
           stores={stores}
+          carrierNames={carrierNames}
           warehouseNames={warehouseNames}
           expandAll={expandAllTrips}
           onDeleteTrip={onDeleteTrip}

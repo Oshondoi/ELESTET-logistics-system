@@ -43,6 +43,14 @@ MVP веб-приложения для логистики поставок на 
 ### Страница магазинов
 - Список магазинов + модалка создания
 
+### Стикеры WB (58×40мм)
+- Таблица `sticker_templates` в Supabase — полный CRUD
+- Генерация PDF через Canvas + jsPDF + JsBarcode
+- Раскладка: Шапка (штрихкод EAN-13) / Тело (текст полная ширина) / Подвал (иконки ухода + ЕАС)
+- Предпросмотр в новой вкладке и скачивание `.pdf` (bulk или по одному)
+- Чекбоксы для массовых операций
+- Пункт «Стикеры» в левом сайдбаре
+
 ## Структура
 
 ```text
@@ -53,9 +61,10 @@ src/
     shipments/     — legacy
     stores/
     accounts/
+    stickers/        — StickerFormModal
     ui/            — Button, Badge, Card, Input, Modal, Select, Textarea, InvoicePhotoCell
   hooks/           — useAuth, useAccounts, useAppData
-  lib/             — supabase, constants, utils
+  lib/             — supabase, constants, utils, stickerPdf
   pages/           — ShipmentsPage, StoresPage, HomePage, ...
   services/        — tripService, shipmentService, storeService, directoriesService
   types/           — index.ts (Trip, TripLine, TripWithLines, ...)
@@ -107,6 +116,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | Деплой | ✅ Готово | Vercel + production RLS |
 | Шаг 1. Редактирование | ✅ Готово | Редактирование рейса и поставки |
 | 3. Справочники | ✅ Готово | UI управления carriers/warehouses |
+| Стикеры WB | ✅ Готово | CRUD шаблонов, PDF-генерация, предпросмотр |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
 

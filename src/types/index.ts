@@ -102,8 +102,9 @@ export interface Carrier {
 
 export interface Warehouse {
   id: string
-  account_id: string
+  account_id: string | null
   name: string
+  is_system: boolean
   created_at: string
 }
 
@@ -172,4 +173,38 @@ export interface TripLineFormValues {
   status: ShipmentStatus
   payment_status: PaymentStatus
   comment: string
+}
+
+// ─── Стикеры ─────────────────────────────────────────────────
+
+export interface StickerTemplate {
+  id: string
+  account_id: string
+  barcode: string
+  name: string
+  composition: string | null
+  article: string | null
+  brand: string | null
+  size: string | null
+  color: string | null
+  supplier: string | null
+  supplier_address: string | null
+  production_date: string | null
+  country: string
+  copies: number
+  created_at: string
+}
+
+export interface StickerFormValues {
+  name: string
+  composition: string
+  article: string
+  brand: string
+  size: string
+  color: string
+  supplier: string
+  supplier_address: string
+  production_date: string
+  country: string
+  copies: number
 }

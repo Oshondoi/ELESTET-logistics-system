@@ -28,6 +28,7 @@ type DeleteTarget =
 interface TripTableProps {
   trips: TripWithLines[]
   stores: Store[]
+  carrierNames?: string[]
   warehouseNames?: string[]
   expandAll?: boolean
   onDeleteTrip: (tripId: string) => Promise<void>
@@ -74,6 +75,7 @@ const paymentTone = {
 export const TripTable = ({
   trips,
   stores,
+  carrierNames,
   warehouseNames,
   expandAll = false,
   onDeleteTrip,
@@ -411,14 +413,14 @@ export const TripTable = ({
                       <div
                         className={cn(
                           'overflow-hidden transition-all duration-200',
-                          isExpanded ? 'h-[38px]' : 'h-0 group-hover/row:h-[38px]',
+                          isExpanded ? 'h-[26px]' : 'h-0 group-hover/row:h-[26px]',
                         )}
                       >
                         <div className="flex items-center border-t border-slate-100 bg-slate-50/60">
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); setAddLineForTripId(trip.id) }}
-                            className="flex h-full w-full items-center justify-center gap-1.5 py-1.5 text-xs font-medium text-slate-400 transition hover:bg-slate-200/60 hover:text-slate-600"
+                            className="flex h-full w-full items-center justify-center gap-1.5 py-1 text-xs font-medium text-slate-400 transition hover:bg-slate-200/60 hover:text-slate-600"
                           >
                             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
                               <path d="M12 5v14M5 12h14" />
@@ -610,6 +612,7 @@ export const TripTable = ({
 
       <TripFormModal
         open={editingTrip !== null}
+        carrierNames={carrierNames}
         onClose={() => setEditingTrip(null)}
         initialValues={editingTrip ? {
           carrier: editingTrip.carrier,
