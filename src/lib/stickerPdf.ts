@@ -37,56 +37,54 @@ const boldLabel = (
   const lw = ctx.measureText(label).width
   ctx.fillText(label, px, py)
   ctx.font = `${fontSize}px Arial, sans-serif`
-  let val = value
+  const clean = value.replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
+  let val = clean
   while (ctx.measureText(val).width > maxX - px - lw && val.length > 2) val = val.slice(0, -1)
-  if (val !== value) val += '…'
+  if (val !== clean) val += '…'
   ctx.fillText(val, px + lw, py)
   return py + Math.round(fontSize * 1.38)
 }
 
-/* ── Знак ЕАС — геометрические буквы, как в официальном логотипе ─
-   Рисуем каждую букву прямоугольниками (без текста/шрифта),
-   чтобы точно соответствовать официальной форме знака.
+/* ── Знак ЕАС — из файла public/eac.svg ────────────────────────
+   Файл загружается один раз при старте, браузер кэширует.
 ────────────────────────────────────────────────────────────── */
+const _eacImg: HTMLImageElement | null = typeof document !== 'undefined' ? new Image() : null
+if (_eacImg) _eacImg.src = '/eac.svg'
+
 const drawEAC = (ctx: CanvasRenderingContext2D, x: number, y: number, size: number) => {
-  ctx.save()
-  /* --- рамка --- */
-  const bw = Math.max(2, Math.round(size / 13))
-  ctx.strokeStyle = '#111'
-  ctx.lineWidth = bw
-  ctx.strokeRect(x + bw / 2, y + bw / 2, size - bw, size - bw)
-
-  /* --- пропорции букв --- */
-  const t  = Math.round(size * 0.095)   // толщина штриха
-  const cw = Math.round(size * 0.215)   // ширина буквы
-  const ch = Math.round(size * 0.54)    // высота букв
-  const gp = Math.round(size * 0.052)   // зазор между буквами
-  const tw = cw * 3 + gp * 2
-  const ox = x + Math.round((size - tw) / 2)
-  const oy = y + Math.round((size - ch) / 2)
-
-  ctx.fillStyle = '#111'
-
-  /* ─ Е ─────────────────────────────────────── */
-  const ex = ox
-  ctx.fillRect(ex,       oy,              t,  ch)              // вертикаль
-  ctx.fillRect(ex,       oy,              cw, t)               // верх
-  ctx.fillRect(ex,       oy + (ch - t) >> 1, Math.round(cw * 0.72), t)  // середина (чуть короче)
-  ctx.fillRect(ex,       oy + ch - t,    cw, t)               // низ
-
-  /* ─ А ─────────────────────────────────────── */
-  const ax = ox + cw + gp
-  ctx.fillRect(ax,       oy,              t,  ch)              // левая вертикаль
-  ctx.fillRect(ax+cw-t,  oy,              t,  ch)              // правая вертикаль
-  ctx.fillRect(ax,       oy,              cw, t)               // верх (перекладина)
-  ctx.fillRect(ax,       oy + Math.round(ch * 0.42), cw, t)   // поперечина (без низа)
-
-  /* ─ С ─────────────────────────────────────── */
-  const sx = ox + (cw + gp) * 2
-  ctx.fillRect(sx,       oy,              t,  ch)              // вертикаль
-  ctx.fillRect(sx,       oy,              cw, t)               // верх
-  ctx.fillRect(sx,       oy + ch - t,    cw, t)               // низ
-  ctx.restore()
+  if (_eacImg && _eacImg.complete && _eacImg.naturalWidth > 0) {
+    ctx.drawImage(_eacImg, x, y, size, size)
+  } else {
+    /* fallback на rect-рисование если файл ещё не загрузился */
+    ctx.save()
+    const bw = Math.max(2, Math.round(size / 13))
+    ctx.strokeStyle = '#111'
+    ctx.lineWidth = bw
+    ctx.strokeRect(x + bw / 2, y + bw / 2, size - bw, size - bw)
+    const t  = Math.round(size * 0.095)
+    const cw = Math.round(size * 0.215)
+    const ch = Math.round(size * 0.54)
+    const gp = Math.round(size * 0.052)
+    const tw = cw * 3 + gp * 2
+    const ox = x + Math.round((size - tw) / 2)
+    const oy = y + Math.round((size - ch) / 2)
+    ctx.fillStyle = '#111'
+    const ex = ox
+    ctx.fillRect(ex, oy, t, ch)
+    ctx.fillRect(ex, oy, cw, t)
+    ctx.fillRect(ex, oy + ((ch - t) >> 1), Math.round(cw * 0.72), t)
+    ctx.fillRect(ex, oy + ch - t, cw, t)
+    const ax = ox + cw + gp
+    ctx.fillRect(ax, oy, t, ch)
+    ctx.fillRect(ax + cw - t, oy, t, ch)
+    ctx.fillRect(ax, oy, cw, t)
+    ctx.fillRect(ax, oy + Math.round(ch * 0.42), cw, t)
+    const sx = ox + (cw + gp) * 2
+    ctx.fillRect(sx, oy, t, ch)
+    ctx.fillRect(sx, oy, cw, t)
+    ctx.fillRect(sx, oy + ch - t, cw, t)
+    ctx.restore()
+  }
 }
 
 /* ── Иконки по уходу — 2-колоночная сетка ───────────────────── */
@@ -298,6 +296,10 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   boldLabel(ctx, 'Страна: ', tpl.country, PAD, y, 18, maxX)
 
   ctx.restore() // конец клиппинга левого блока
+
+  /* ЕАС в правом верхнем углу тела */
+  const eacSize = 64
+  drawEAC(ctx, W_PX - PAD - eacSize, BODY_Y + 10, eacSize)
 
   /* разделитель тело / подвал */
   ctx.save()

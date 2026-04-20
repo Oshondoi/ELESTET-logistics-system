@@ -24,16 +24,16 @@ export const createSticker = async (
     .insert({
       account_id: accountId,
       barcode,
-      name: values.name,
-      composition: values.composition || null,
-      article: values.article || null,
-      brand: values.brand || null,
-      size: values.size || null,
-      color: values.color || null,
-      supplier: values.supplier || null,
-      supplier_address: values.supplier_address || null,
-      production_date: values.production_date || null,
-      country: values.country || 'Кыргызстан',
+      name: values.name.trim(),
+      composition: values.composition.trim() || null,
+      article: values.article.trim() || null,
+      brand: values.brand.trim() || null,
+      size: values.size.trim() || null,
+      color: values.color.trim() || null,
+      supplier: values.supplier.trim() || null,
+      supplier_address: values.supplier_address.trim() || null,
+      production_date: values.production_date.trim() || null,
+      country: values.country.trim() || 'Кыргызстан',
       copies: values.copies,
     })
     .select()
@@ -51,16 +51,16 @@ export const updateSticker = async (
   const { data, error } = await supabase
     .from('sticker_templates')
     .update({
-      name: values.name,
-      composition: values.composition || null,
-      article: values.article || null,
-      brand: values.brand || null,
-      size: values.size || null,
-      color: values.color || null,
-      supplier: values.supplier || null,
-      supplier_address: values.supplier_address || null,
-      production_date: values.production_date || null,
-      country: values.country || 'Кыргызстан',
+      name: values.name.trim(),
+      composition: values.composition.trim() || null,
+      article: values.article.trim() || null,
+      brand: values.brand.trim() || null,
+      size: values.size.trim() || null,
+      color: values.color.trim() || null,
+      supplier: values.supplier.trim() || null,
+      supplier_address: values.supplier_address.trim() || null,
+      production_date: values.production_date.trim() || null,
+      country: values.country.trim() || 'Кыргызстан',
       copies: values.copies,
     })
     .eq('id', stickerId)
