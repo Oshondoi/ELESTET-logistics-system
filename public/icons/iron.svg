@@ -1,0 +1,19 @@
+<svg width="200" height="200" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path 
+    d="M10 75 C10 60 25 50 45 50 H85 L85 75 Z" 
+    stroke="black" 
+    stroke-width="6" 
+    stroke-linejoin="round" 
+    stroke-linecap="round"
+  />
+  
+  <path 
+    d="M40 25 H80 C82 25 85 27 85 30 V50" 
+    stroke="black" 
+    stroke-width="6" 
+    stroke-linejoin="round" 
+    stroke-linecap="round"
+  />
+  
+  <circle cx="50" cy="65" r="3" fill="black" />
+</svg>

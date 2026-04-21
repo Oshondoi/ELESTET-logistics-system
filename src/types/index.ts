@@ -192,6 +192,24 @@ export interface StickerTemplate {
   production_date: string | null
   country: string
   copies: number
+  icon_wash: boolean
+  icon_iron: boolean
+  icon_no_bleach: boolean
+  icon_no_tumble_dry: boolean
+  icon_eac: boolean
+  created_at: string
+}
+
+export interface StickerBundleItem {
+  sticker_id: string
+  copies: number
+}
+
+export interface StickerBundle {
+  id: string
+  account_id: string
+  name: string
+  items: StickerBundleItem[]
   created_at: string
 }
 
@@ -207,4 +225,9 @@ export interface StickerFormValues {
   production_date: string
   country: string
   copies: number
+  icon_wash: boolean
+  icon_iron: boolean
+  icon_no_bleach: boolean
+  icon_no_tumble_dry: boolean
+  icon_eac: boolean
 }

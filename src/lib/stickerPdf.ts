@@ -11,15 +11,12 @@ const PAD  = 14
 
 /* ── Зоны (px) ─────────────────────────────────────────────────
    HEADER  = 120px  — штрихкод
-   BODY    = 236px  — текстовые поля (полная ширина)
-   FOOTER  =  44px  — иконки по уходу + ЕАС (горизонтально)
+   BODY    = 280px  — текстовые поля (до самого низа)
    Итого   = 400px ✓
 ────────────────────────────────────────────────────────────── */
 const HEADER_H = 120
-const FOOTER_H = 44
-const BODY_H   = H_PX - HEADER_H - FOOTER_H  // 236
-const BODY_Y   = HEADER_H                     // 120
-const FOOTER_Y = BODY_Y + BODY_H              // 356
+const BODY_H   = H_PX - HEADER_H  // 280
+const BODY_Y   = HEADER_H         // 120
 
 /* ── Вспомогательная: жирная метка + обычный текст ─────────── */
 const boldLabel = (
@@ -87,101 +84,21 @@ const drawEAC = (ctx: CanvasRenderingContext2D, x: number, y: number, size: numb
   }
 }
 
-/* ── Иконки по уходу — 2-колоночная сетка ───────────────────── */
-/* ── Подвал: иконки по уходу + ЕАС горизонтально ──────────── */
-const drawFooterIcons = (
-  ctx: CanvasRenderingContext2D,
-  footerY: number,
-  footerH: number,
-) => {
-  ctx.save()
-  const size = 26                          // px — ≈2.6мм на стикере
-  const gap  = 10
-  const items = 5                          // 4 иконки + ЕАС
-  const totalW = items * size + (items - 1) * gap
-  const startX = Math.round((W_PX - totalW) / 2)
-  const startY = footerY + Math.round((footerH - size) / 2)
-  const sw = Math.max(1, Math.round(size / 14))
 
-  ctx.strokeStyle = '#333'
-  ctx.fillStyle   = '#333'
-  ctx.lineWidth   = sw
 
-  for (let i = 0; i < 4; i++) {
-    const x  = startX + i * (size + gap)
-    const y  = startY
-    const cx = x + size / 2
-    const cy = y + size / 2
-
-    ctx.save()
-    ctx.lineWidth = sw
-
-    if (i === 0) {
-      /* Стирка 30°C — корыто */
-      const r = Math.round(size * 0.18)
-      ctx.beginPath()
-      ctx.moveTo(x, y)
-      ctx.lineTo(x + size, y)
-      ctx.lineTo(x + size, y + size - r)
-      ctx.quadraticCurveTo(x + size, y + size, x + size - r, y + size)
-      ctx.lineTo(x + r, y + size)
-      ctx.quadraticCurveTo(x, y + size, x, y + size - r)
-      ctx.closePath()
-      ctx.stroke()
-      ctx.font = `bold ${Math.round(size * 0.33)}px Arial`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('30', cx, cy + size * 0.08)
-    } else if (i === 1) {
-      /* Утюг */
-      ctx.beginPath()
-      ctx.moveTo(x + size * 0.30, y + size * 0.28)
-      ctx.lineTo(x + size * 0.30, y + size * 0.10)
-      ctx.lineTo(x + size * 0.72, y + size * 0.10)
-      ctx.stroke()
-      ctx.beginPath()
-      ctx.moveTo(x,              y + size * 0.30)
-      ctx.lineTo(x + size,       y + size * 0.30)
-      ctx.lineTo(x + size * 0.88, y + size * 0.72)
-      ctx.lineTo(x + size * 0.12, y + size * 0.72)
-      ctx.closePath()
-      ctx.stroke()
-    } else if (i === 2) {
-      /* Нельзя отбеливать — треугольник с × */
-      ctx.beginPath()
-      ctx.moveTo(x + size / 2, y)
-      ctx.lineTo(x + size,     y + size * 0.82)
-      ctx.lineTo(x,            y + size * 0.82)
-      ctx.closePath()
-      ctx.stroke()
-      ctx.beginPath()
-      ctx.moveTo(x + size * 0.30, y + size * 0.28)
-      ctx.lineTo(x + size * 0.70, y + size * 0.64)
-      ctx.moveTo(x + size * 0.70, y + size * 0.28)
-      ctx.lineTo(x + size * 0.30, y + size * 0.64)
-      ctx.stroke()
-    } else {
-      /* Нельзя в барабан — квадрат + круг + × */
-      ctx.strokeRect(x, y, size, size)
-      ctx.beginPath()
-      ctx.arc(cx, cy, size * 0.30, 0, Math.PI * 2)
-      ctx.stroke()
-      ctx.beginPath()
-      ctx.moveTo(x + size * 0.27, y + size * 0.27)
-      ctx.lineTo(x + size * 0.73, y + size * 0.73)
-      ctx.moveTo(x + size * 0.73, y + size * 0.27)
-      ctx.lineTo(x + size * 0.27, y + size * 0.73)
-      ctx.stroke()
-    }
-    ctx.restore()
+/* ── Иконки по уходу — PNG из public/icons/ ────────────────────
+   Файлы грузятся один раз при старте, браузер кэширует.
+────────────────────────────────────────────────────────────── */
+const _iconNames = ['wash-30', 'iron', 'no-bleach', 'no-tumble-dry'] as const
+const _icons: Partial<Record<string, HTMLImageElement>> = {}
+if (typeof document !== 'undefined') {
+  for (const name of _iconNames) {
+    const img = new Image()
+    img.src = `/icons/${name}.svg`
+    _icons[name] = img
   }
-
-  // 5-й элемент: ЕАС
-  const eacX = startX + 4 * (size + gap)
-  drawEAC(ctx, eacX, startY, size)
-
-  ctx.restore()
 }
+
 
 /* ── Основная функция рендера ────────────────────────────────── */
 const renderStickerToCanvas = (tpl: StickerTemplate): string => {
@@ -245,13 +162,6 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
     ctx.restore()
   }
 
-  /* разделитель шапка / тело */
-  ctx.save()
-  ctx.strokeStyle = '#d4d4d4'
-  ctx.lineWidth = 1
-  ctx.beginPath(); ctx.moveTo(PAD, BODY_Y); ctx.lineTo(W_PX - PAD, BODY_Y); ctx.stroke()
-  ctx.restore()
-
   /* ════════════════════════════════
      ТЕЛО: текстовые поля (полная ширина)
   ════════════════════════════════ */
@@ -265,53 +175,74 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
 
   /* Наименование — жирное */
   ctx.fillStyle = '#111'
-  ctx.font = `bold 24px Arial, sans-serif`
+  ctx.font = `bold 27px Arial, sans-serif`
   let nm = tpl.name
   while (ctx.measureText(nm).width > maxX - PAD && nm.length > 2) nm = nm.slice(0, -1)
   if (nm !== tpl.name) nm += '…'
   ctx.fillText(nm, PAD, y)
-  y += 32
+  y += 38
 
-  if (tpl.composition)      y = boldLabel(ctx, 'Состав: ',             tpl.composition,      PAD, y, 18, maxX)
-  if (tpl.article)          y = boldLabel(ctx, 'Артикул: ',            tpl.article,          PAD, y, 18, maxX)
-  if (tpl.brand)            y = boldLabel(ctx, 'Бренд: ',              tpl.brand,            PAD, y, 18, maxX)
+  if (tpl.composition)      y = boldLabel(ctx, 'Состав: ',             tpl.composition,      PAD, y, 20, maxX)
+  if (tpl.article)          y = boldLabel(ctx, 'Артикул: ',            tpl.article,          PAD, y, 20, maxX)
+  if (tpl.brand)            y = boldLabel(ctx, 'Бренд: ',              tpl.brand,            PAD, y, 20, maxX)
 
   if (tpl.size || tpl.color) {
     ctx.fillStyle = '#111'
     let cx = PAD
     const pair = (lbl: string, val: string) => {
-      ctx.font = `bold 18px Arial, sans-serif`
+      ctx.font = `bold 20px Arial, sans-serif`
       ctx.fillText(lbl, cx, y); cx += ctx.measureText(lbl).width
-      ctx.font = `18px Arial, sans-serif`
-      ctx.fillText(val, cx, y); cx += ctx.measureText(val).width + 18
+      ctx.font = `20px Arial, sans-serif`
+      ctx.fillText(val, cx, y); cx += ctx.measureText(val).width + 20
     }
     if (tpl.size)  pair('Размер: ', tpl.size)
     if (tpl.color) pair('Цвет: ',   tpl.color)
-    y += Math.round(18 * 1.38)
+    y += Math.round(20 * 1.38)
   }
 
-  if (tpl.supplier)         y = boldLabel(ctx, 'Поставщик: ',         tpl.supplier,         PAD, y, 18, maxX)
-  if (tpl.supplier_address) y = boldLabel(ctx, 'Адрес поставщика: ',  tpl.supplier_address, PAD, y, 18, maxX)
-  if (tpl.production_date)  y = boldLabel(ctx, 'Дата производства: ', tpl.production_date,  PAD, y, 18, maxX)
-  boldLabel(ctx, 'Страна: ', tpl.country, PAD, y, 18, maxX)
+  if (tpl.supplier)         y = boldLabel(ctx, 'Поставщик: ',         tpl.supplier,         PAD, y, 20, maxX)
+  if (tpl.supplier_address) y = boldLabel(ctx, 'Адрес поставщика: ',  tpl.supplier_address, PAD, y, 20, maxX)
+  if (tpl.production_date)  y = boldLabel(ctx, 'Дата производства: ', tpl.production_date,  PAD, y, 20, maxX)
 
-  ctx.restore() // конец клиппинга левого блока
+  /* Страна + иконки по уходу на одной строке */
+  ctx.fillStyle = '#111'
+  ctx.font = 'bold 20px Arial, sans-serif'
+  const countryLabel = 'Страна: '
+  ctx.fillText(countryLabel, PAD, y)
+  ctx.font = '20px Arial, sans-serif'
+  const countryVal = (tpl.country || '').replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
+  ctx.fillText(countryVal, PAD + ctx.measureText(countryLabel).width, y)
+
+  /* иконки по уходу справа на строке Страна — только включённые */
+  const iconFlags: Record<string, boolean> = {
+    'wash-30':       tpl.icon_wash,
+    'iron':          tpl.icon_iron,
+    'no-bleach':     tpl.icon_no_bleach,
+    'no-tumble-dry': tpl.icon_no_tumble_dry,
+  }
+  const activeIcons = _iconNames.filter((n) => iconFlags[n])
+  const iconSize = 44
+  const iconGap  = 10
+  if (activeIcons.length > 0) {
+    const iconsTotal = activeIcons.length * iconSize + (activeIcons.length - 1) * iconGap
+    const iconsX = W_PX - PAD - iconsTotal
+    const iconsY = y - iconSize + 12
+    for (let i = 0; i < activeIcons.length; i++) {
+      const img = _icons[activeIcons[i]]
+      const ix = iconsX + i * (iconSize + iconGap)
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, ix, iconsY, iconSize, iconSize)
+      }
+    }
+  }
+
+  ctx.restore() // конец клиппинга
 
   /* ЕАС в правом верхнем углу тела */
-  const eacSize = 64
-  drawEAC(ctx, W_PX - PAD - eacSize, BODY_Y + 10, eacSize)
-
-  /* разделитель тело / подвал */
-  ctx.save()
-  ctx.strokeStyle = '#d4d4d4'
-  ctx.lineWidth = 1
-  ctx.beginPath(); ctx.moveTo(PAD, FOOTER_Y); ctx.lineTo(W_PX - PAD, FOOTER_Y); ctx.stroke()
-  ctx.restore()
-
-  /* ════════════════════════════════
-     ПОДВАЛ: иконки по уходу + ЕАС
-  ════════════════════════════════ */
-  drawFooterIcons(ctx, FOOTER_Y, FOOTER_H)
+  if (tpl.icon_eac) {
+    const eacSize = 64
+    drawEAC(ctx, W_PX - PAD - eacSize, BODY_Y + 10, eacSize)
+  }
 
   return canvas.toDataURL('image/png')
 }

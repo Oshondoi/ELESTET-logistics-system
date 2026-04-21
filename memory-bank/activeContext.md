@@ -1,7 +1,49 @@
 # Active Context
 
 ## Current Focus
-Стикеры WB — завершены (включая багфикс EAC-знака). Следующий: Этап 5 — Поиск и фильтры.
+Наборы стикеров — завершены. Следующий: Этап 5 — Поиск и фильтры.
+
+## What Was Recently Done
+
+### Наборы стикеров (завершен)
+- Таблица `sticker_bundles` в Supabase с RLS
+- Типы `StickerBundle` и `StickerBundleItem` в `index.ts`
+- `stickerService.ts` — `fetchBundles`, `createBundle`, `updateBundle`, `deleteBundle`
+- `useAppData.ts` — состояние `bundles`, методы `addBundle`, `editBundle`, `removeBundle`
+- `App.tsx` — проброс всех пропс в `StickersPage`
+- `StickersPage.tsx`:
+  - Таблица стикеров с чекбоксами — выбор товаров для набора
+  - Кнопка «Создать набор» активна только при выбранных стикерах
+  - Модалка создания: название + список выбранных с индивидуальным кол-вом копий
+  - Модалка редактирования: только стикеры из набора, менять название и копии
+  - Список наборов (отдельная Card): название, кол стикеров, копий итого, дата
+  - Действия: предпросмотр PDF, скачать PDF, редактировать, удалить
+  - Индивидуальное кол-во копий стикера в наборе (не привязано к `copies` шаблона)
+- `fetchBundles` устойчив к отсутствию таблицы (возвращает `[]` вместо краша)
+
+### Иконки ухода в стикере (завершен)
+- SVG-файлы: `public/icons/wash-30.svg`, `iron.svg`, `no-bleach.svg`, `no-tumble-dry.svg`
+- `public/eac.svg` — знак ЕАС
+- Боолеан поля `icon_wash`, `icon_iron`, `icon_no_bleach`, `icon_no_tumble_dry`, `icon_eac` в `sticker_templates`
+- Визуальные тогглы иконок в `StickerFormModal`
+- Иконки рисуются в PDF (строка «Страна:» справа, 44px)
+
+### Предыдущее
+- Шаблоны стикеров: CRUD, PDF-генерация, векторные иконки, EAC-тоггл
+
+## Present UI State
+- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Роли / Стикеры
+- Стикеры: таблица стикеров + секция наборов, полный CRUD, PDF-генерация
+- Логистика: таблица рейсов, фото накладных, редактирование
+- Справочники: carriers/warehouses
+
+## Immediate Next Steps
+1. **Этап 5:** Текстовый поиск + фильтр по статусу на странице Логистика
+
+## Important Implementation Notes
+- `fetchBundles` возвращает `[]` при ошибке (не крашит апп если таблица не создана)
+- Runtime is Supabase-only
+- `useAuth` handles session
 
 ## What Was Recently Done
 

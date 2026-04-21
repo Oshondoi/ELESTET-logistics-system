@@ -39,6 +39,10 @@ import {
   createSticker as createStickerInSupabase,
   updateSticker as updateStickerInSupabase,
   deleteSticker as deleteStickerInSupabase,
+  fetchBundles,
+  createBundle as createBundleInSupabase,
+  updateBundle as updateBundleInSupabase,
+  deleteBundle as deleteBundleInSupabase,
 } from '../services/stickerService'
 import type {
   Shipment,
@@ -59,6 +63,8 @@ import type {
   Warehouse,
   StickerTemplate,
   StickerFormValues,
+  StickerBundle,
+  StickerBundleItem,
 } from '../types'
 
 export const useAppData = (accountId: string | null) => {
@@ -68,6 +74,7 @@ export const useAppData = (accountId: string | null) => {
   const [carriers, setCarriers] = useState<Carrier[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [stickers, setStickers] = useState<StickerTemplate[]>([])
+  const [bundles, setBundles] = useState<StickerBundle[]>([])
   const [statusHistory] = useState<ShipmentStatusHistory[]>([])
   const [isUsingSupabase, setIsUsingSupabase] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -111,6 +118,9 @@ export const useAppData = (accountId: string | null) => {
 
       const supabaseStickers = await fetchStickers(accountId)
       setStickers(supabaseStickers)
+
+      const supabaseBundles = await fetchBundles(accountId)
+      setBundles(supabaseBundles)
 
       setIsUsingSupabase(true)
     } catch (loadError) {
@@ -318,6 +328,26 @@ export const useAppData = (accountId: string | null) => {
     setStickers((current) => current.filter((s) => s.id !== stickerId))
   }
 
+  const addBundle = async (name: string, items: StickerBundleItem[]): Promise<StickerBundle> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const bundle = await createBundleInSupabase(accountId, name, items)
+    setBundles((current) => [bundle, ...current])
+    return bundle
+  }
+
+  const editBundle = async (bundleId: string, name: string, items: StickerBundleItem[]): Promise<StickerBundle> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const updated = await updateBundleInSupabase(accountId, bundleId, name, items)
+    setBundles((current) => current.map((b) => b.id === bundleId ? updated : b))
+    return updated
+  }
+
+  const removeBundle = async (bundleId: string): Promise<void> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    await deleteBundleInSupabase(accountId, bundleId)
+    setBundles((current) => current.filter((b) => b.id !== bundleId))
+  }
+
   const getLineUrls = (tripId: string, lineId: string): string[] => {
     const trip = trips.find((t) => t.id === tripId)
     return trip?.lines.find((l) => l.id === lineId)?.invoice_photo_urls ?? []
@@ -364,6 +394,7 @@ export const useAppData = (accountId: string | null) => {
     carriers,
     warehouses,
     stickers,
+    bundles,
     statusHistory,
     isUsingSupabase,
     isLoading,
@@ -388,6 +419,9 @@ export const useAppData = (accountId: string | null) => {
     addSticker,
     editSticker,
     removeSticker,
+    addBundle,
+    editBundle,
+    removeBundle,
     addInvoicePhoto,
     replaceInvoicePhoto,
     removeInvoicePhoto,

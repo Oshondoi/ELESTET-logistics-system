@@ -17,6 +17,11 @@ const defaultValues = (): StickerFormValues => ({
   production_date: '',
   country: 'Кыргызстан',
   copies: 1,
+  icon_wash: true,
+  icon_iron: true,
+  icon_no_bleach: true,
+  icon_no_tumble_dry: true,
+  icon_eac: true,
 })
 
 interface StickerFormModalProps {
@@ -48,6 +53,11 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
           production_date: initialValues.production_date ?? '',
           country: initialValues.country,
           copies: initialValues.copies,
+          icon_wash: initialValues.icon_wash,
+          icon_iron: initialValues.icon_iron,
+          icon_no_bleach: initialValues.icon_no_bleach,
+          icon_no_tumble_dry: initialValues.icon_no_tumble_dry,
+          icon_eac: initialValues.icon_eac,
         })
       } else {
         setValues(defaultValues())
@@ -144,6 +154,36 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
             value={values.country}
             onChange={(e) => set('country', e.target.value)}
           />
+        </div>
+
+        <div>
+          <label className="mb-2 block text-xs font-medium text-slate-600">Иконки</label>
+          <div className="flex flex-wrap gap-3">
+            {([
+              { key: 'icon_wash',          src: '/icons/wash-30.svg' },
+              { key: 'icon_iron',          src: '/icons/iron.svg' },
+              { key: 'icon_no_bleach',     src: '/icons/no-bleach.svg' },
+              { key: 'icon_no_tumble_dry', src: '/icons/no-tumble-dry.svg' },
+              { key: 'icon_eac',           src: '/eac.svg' },
+            ] as { key: keyof StickerFormValues; src: string }[]).map(({ key, src }) => (
+              <label
+                key={key}
+                className={`flex cursor-pointer flex-col items-center gap-1 rounded-xl border-2 p-2 transition-colors ${
+                  (values[key] as boolean)
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-slate-200 bg-white opacity-40'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={values[key] as boolean}
+                  onChange={(e) => set(key, e.target.checked)}
+                  className="sr-only"
+                />
+                <img src={src} alt={key} className="h-8 w-8" />
+              </label>
+            ))}
+          </div>
         </div>
 
         <div>

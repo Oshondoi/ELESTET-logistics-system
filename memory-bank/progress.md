@@ -70,14 +70,29 @@ MVP в активной разработке. Шаг 0, Шаг 1, Шаг 2, Эт
 - Авто-выбор первого аккаунта при первом входе (новый браузер/устройство)
 - Env-переменные добавлены в Vercel
 
+### Наборы стикеров (завершен)
+- Таблица `sticker_bundles` в Supabase + RLS (`supabase/patch_sticker_bundles.sql`)
+- Поля иконок в `sticker_templates` (`supabase/patch_sticker_icons.sql`)
+- Типы `StickerBundle`, `StickerBundleItem` в `src/types/index.ts`
+- `stickerService.ts`: `fetchBundles` (устойчив к ошибке ТБ), `createBundle`, `updateBundle`, `deleteBundle`
+- `useAppData.ts`: состояние `bundles`, методы `addBundle`, `editBundle`, `removeBundle`
+- `App.tsx`: проброс всех пропс в `StickersPage`
+- `StickersPage.tsx`:
+  - Выбор через чекбоксы → кнопка «Создать набор» (активна при выборе)
+  - Модалка создания: название + индивидуальное кол-во для каждого стикера
+  - Модалка редактирования: только стикеры из набора
+  - Список наборов: название, кол стикеров, копий итого, дата; действия: предпросмотр, PDF, редактировать, удалить
+
+### Иконки ухода в стикере (завершен)
+- SVG: `wash-30`, `iron`, `no-bleach`, `no-tumble-dry`, `eac` — все векторные
+- Боолеан поля `icon_*` в `sticker_templates`, `StickerFormValues`, `StickerTemplate`
+- Визуальные тогглы в модалке создания/редактирования стикера
+- Иконки рисуются в PDF справа от строки «Страна:» (44px)
+
 ### Стикеры WB — багфикс (завершён)
-- Баг: средняя перекладина буквы Е в знаке ЕАС рисовалась на y=191 (тело стикера) вместо y=377 (подвал) — из-за приоритета операторов `oy + (ch-t) >> 1` вместо `oy + ((ch-t) >> 1)`
-- Знак ЕАС заменён на SVG-файл `public/eac.svg` с официальными пропорциями (по Wikipedia-источнику)
-- `stickerService.ts`: `.trim()` на всех строковых полях при create/update
-- `stickerPdf.ts`: regex-очистка краёв значений полей при рендере PDF
-- Знак ЕАС добавлен в правый верхний угол тела стикера (64px)
-- `StickerTemplate` тип в `src/types/index.ts`
-- `StickersPage.tsx` — таблица с чекбоксами, bulk preview/download, CRUD
+- Баг: средняя перекладина буквы Е в знаке ЕАС рисовалась вне блока — исправлено
+- EAC — SVG-файл `public/eac.svg`
+- Тестовые стикеры из seed имели невалидные EAN13 — исправлено через `supabase/fix_seed_barcodes.sql`
 - `StickerFormModal.tsx` — форма создания/редактирования шаблона стикера
 - `src/lib/stickerPdf.ts` — Canvas → PNG → jsPDF, EAN-13 баркод, EAC логотип, иконки по уходу
 - PDF раскладка: HEADER(штрихкод) / BODY(текст, полная ширина) / FOOTER(иконки 26px + ЕАС в ряд)

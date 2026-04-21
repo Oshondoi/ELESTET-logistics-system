@@ -104,6 +104,10 @@ function App() {
     addSticker,
     editSticker,
     removeSticker,
+    bundles,
+    addBundle,
+    editBundle,
+    removeBundle,
     isUsingSupabase,
     isLoading,
     error,
@@ -262,9 +266,13 @@ function App() {
               ) : activePage === 'stickers' ? (
                 <StickersPage
                   stickers={stickers}
+                  bundles={bundles}
                   onAdd={addSticker}
                   onEdit={editSticker}
                   onDelete={removeSticker}
+                  onAddBundle={addBundle}
+                  onEditBundle={editBundle}
+                  onDeleteBundle={removeBundle}
                 />
               ) : (
                 <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} />

@@ -46,11 +46,17 @@ MVP веб-приложения для логистики поставок на 
 ### Стикеры WB (58×40мм)
 - Таблица `sticker_templates` в Supabase — полный CRUD
 - Генерация PDF через Canvas + jsPDF + JsBarcode
-- Раскладка: Шапка (штрихкод EAN-13) / Тело (текст полная ширина + ЕАС справа) / Подвал (иконки ухода + ЕАС)
-- Знак ЕАС — SVG-файл `public/eac.svg` (официальные пропорции, векторный)
-- Предпросмотр в новой вкладке и скачивание `.pdf` (bulk или по одному)
+- Раскладка: Шапка (штрихкод EAN-13) / Тело (текст + ЕАС справа)
+- Иконки ухода (SVG): стирка, утюг, не отбеливать, не тумбинг — вкл/выкл через тоггл в модалке
+- Знак ЕАС — `public/eac.svg` (официальные пропорции, векторный)
+- Предпросмотр в новой вкладке и скачивание `.pdf` (один или bulk)
 - Чекбоксы для массовых операций
-- Пункт «Стикеры» в левом сайдбаре
+
+### Наборы стикеров
+- Выбрать несколько стикеров через чекбоксы → «Создать набор»
+- Каждому стикеру в наборе своё кол-во копий (не зависит от шаблона)
+- Список наборов: название, дата, предпросмотр/скачать PDF, редактировать, удалить
+- Хранится в `sticker_bundles` (jsonb `items`)
 
 ## Структура
 
@@ -78,8 +84,11 @@ supabase/
   trips.sql                     — таблицы trips, trip_lines, RLS, RPC
   patch_trip_functions.sql      — патч исправления FOR UPDATE
   carriers_warehouses.sql       — таблицы carriers, warehouses, RLS
-  patch_invoice_photos_v2.sql   — миграция invoice_photo_urls text[]
-  seed_trips.sql                — тестовый SQL-сид
+  patch_invoice_photos_v2.sql   — миграция invoice_photo_urls text[]  patch_stickers.sql            — таблица sticker_templates + RLS
+  patch_sticker_icons.sql       — колонки icon_* (иконки ухода + EAC)
+  patch_sticker_bundles.sql     — таблица sticker_bundles + RLS
+  seed_stickers.sql             — 3 тестовых стикера
+  fix_seed_barcodes.sql         — исправление EAN13 в тестовых данных  seed_trips.sql                — тестовый SQL-сид
   run_seed.mjs                  — тестовый Node.js сид
 memory-bank/
 ```
@@ -102,6 +111,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 6. supabase/patch_trip_functions.sql
 7. supabase/carriers_warehouses.sql
 8. supabase/patch_invoice_photos_v2.sql
+9. supabase/patch_stickers.sql
+10. supabase/patch_sticker_icons.sql
+11. supabase/patch_sticker_bundles.sql
 ```
 > Для dev без auth: `supabase/disable_rls_dev.sql`
 
@@ -117,7 +129,8 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | Деплой | ✅ Готово | Vercel + production RLS |
 | Шаг 1. Редактирование | ✅ Готово | Редактирование рейса и поставки |
 | 3. Справочники | ✅ Готово | UI управления carriers/warehouses |
-| Стикеры WB | ✅ Готово | CRUD шаблонов, PDF-генерация, предпросмотр |
+| Стикеры WB | ✅ Готово | CRUD шаблонов, PDF-генерация, иконки ухода, EAC |
+| Наборы стикеров | ✅ Готово | Создать/редактировать/удалить, индивидуальные копии, PDF |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
 
