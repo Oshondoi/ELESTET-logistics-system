@@ -19,20 +19,40 @@ begin
     raise exception 'Only owner can delete company';
   end if;
 
+  -- Строки рейсов (до рейсов и магазинов)
+  delete from public.trip_lines
+  where account_id = p_account_id;
+
+  -- Рейсы
+  delete from public.trips
+  where account_id = p_account_id;
+
+  -- Перевозчики и склады назначения
+  delete from public.carriers
+  where account_id = p_account_id;
+
+  delete from public.warehouses
+  where account_id = p_account_id;
+
+  -- История статусов отправлений
   delete from public.shipment_status_history h
   using public.shipments s
   where h.shipment_id = s.id
     and s.account_id = p_account_id;
 
+  -- Отправления
   delete from public.shipments
   where account_id = p_account_id;
 
+  -- Магазины (после trip_lines, shipments)
   delete from public.stores
   where account_id = p_account_id;
 
+  -- Участники аккаунта
   delete from public.account_members
   where account_id = p_account_id;
 
+  -- Сам аккаунт
   delete from public.accounts
   where id = p_account_id;
 

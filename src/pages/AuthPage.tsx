@@ -46,6 +46,11 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
     setSuccess(null)
 
     try {
+      if (mode === 'sign-up' && !values.fullName.trim()) {
+        setError('Введите имя')
+        return
+      }
+
       const passwordError = validatePassword(values.password)
 
       if (passwordError) {

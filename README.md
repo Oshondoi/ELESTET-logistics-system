@@ -4,6 +4,156 @@ MVP веб-приложения для логистики поставок на 
 
 ## Что уже есть
 
+- SaaS-структура данных: `profiles`, `accounts`, `account_members`, `stores`, `trips`, `trip_lines`, `carriers`, `warehouses`, `roles`
+- Supabase Auth: регистрация (Имя + Email + Пароль обязательны), вход, выход
+- Company flow: создание, список, switcher, сохранение в localStorage, удаление (FK-безопасное), редактирование названия
+- Деплой на Vercel: env переменные, email-подтверждение → Vercel-домен
+- Левый сайдбар: зафиксирован по высоте (`h-screen sticky`), бренд, company switcher (edit + delete), nav, выход
+- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / Роли
+
+### Роли
+- Таблица `roles` с RLS — привязана к компании
+- 10 переключателей доступов по 5 группам (Логистика, Магазины, Справочники, Стикеры, Администрирование)
+- Назначение пользователю: email или U{n} (короткий ID) — поля подтягивают друг друга по базе
+- Клонирование роли в другую компанию
+- Короткие ID пользователей: U1, U2, U3... (`profiles.short_id` — sequence)
+
+### Логистика — модель Рейсов
+- **Рейс** (#1, #2…) — верхний уровень: перевозчик, дата, статус, оплата
+- **Поставка** — строка рейса: магазин, склад, коробов, единиц
+- Таблица рейсов с раскрытием поставок по стрелке
+- Кнопка "+ Добавить поставку" (peek при hover, фиксирована при открытии)
+- Модалки создания и редактирования рейса и поставки
+- RPC: `create_trip`, `add_trip_line`
+- Удаление рейса / поставки с подтверждением
+- Массовое выделение и массовое удаление поставок
+- Дропдауны статусов рейса, поставки, оплаты
+
+### Фото накладных
+- Колонка `invoice_photo_urls text[]` в `trip_lines`
+- Хранилище: bucket `trip-invoices` (публичный) с RLS-политиками
+- Компонент `InvoicePhotoCell`: миниатюра → лайтбокс-карусель, клавиатурная навигация, scroll lock
+- Контекстное меню: Добавить / Заменить все / Удалить все
+
+### Магазины
+- Список магазинов + создание / редактирование / удаление
+- API-ключ: маска `••••` в edit-режиме, кнопка «Изменить»
+- store_code редактируем
+
+### Справочники
+- Страница Справочники: Перевозчики и Склады
+- Добавление/переименование/удаление с подтверждением
+- Динамические дропдауны перевозчика/склада в модалках (из Supabase)
+
+### Стикеры WB (58×40мм)
+- Таблица `sticker_templates` в Supabase — полный CRUD
+- Генерация PDF через Canvas + jsPDF + JsBarcode
+- Иконки ухода (SVG): стирка, утюг, не отбеливать, не тумбинг
+- Знак ЕАС — `public/eac.svg`
+- Предпросмотр и скачивание PDF (одиночный и bulk)
+
+### Наборы стикеров
+- Выбрать несколько стикеров через чекбоксы → «Создать набор»
+- Каждому стикеру в наборе своё кол-во копий
+- Список наборов: название, дата, предпросмотр/скачать PDF, редактировать, удалить
+
+## Структура
+
+```text
+src/
+  components/
+    layout/        — Sidebar, Topbar
+    trips/         — TripTable, TripLineFormModal, TripFormModal
+    stores/        — StoreList, StoreFormModal
+    accounts/      — AccountFormModal, DeleteAccountModal
+    roles/         — RoleFormModal
+    stickers/      — StickerFormModal
+    ui/            — Button, Badge, Card, Input, Modal, Select, Textarea, InvoicePhotoCell, DeleteConfirmModal
+  hooks/           — useAuth, useAccounts, useAppData, useRoles
+  lib/             — supabase, constants, utils, stickerPdf
+  pages/           — ShipmentsPage, StoresPage, HomePage, RolesPage, DirectoriesPage, StickersPage, AuthPage
+  services/        — tripService, shipmentService, storeService, directoriesService, roleService, accountService, stickerService
+  types/           — index.ts
+supabase/
+  schema.sql
+  bootstrap.sql
+  dev_access.sql
+  delete_account.sql
+  trips.sql
+  patch_trip_functions.sql
+  carriers_warehouses.sql
+  patch_invoice_photos_v2.sql
+  patch_stickers.sql
+  patch_sticker_icons.sql
+  patch_sticker_bundles.sql
+  patch_store_api_key.sql
+  patch_store_code_constraint.sql
+  patch_system_warehouses.sql
+  patch_roles.sql
+  patch_roles_user.sql
+  patch_profiles_short_id.sql
+memory-bank/
+```
+
+## Запуск
+
+1. `npm install`
+2. Создать `.env`:
+```bash
+VITE_SUPABASE_URL=your-project-url
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+3. Применить SQL в Supabase SQL Editor по порядку:
+```
+1.  schema.sql
+2.  bootstrap.sql
+3.  dev_access.sql
+4.  delete_account.sql
+5.  trips.sql
+6.  patch_trip_functions.sql
+7.  carriers_warehouses.sql
+8.  patch_invoice_photos_v2.sql
+9.  patch_stickers.sql
+10. patch_sticker_icons.sql
+11. patch_sticker_bundles.sql
+12. patch_store_api_key.sql
+13. patch_store_code_constraint.sql
+14. patch_system_warehouses.sql
+15. patch_roles.sql
+16. patch_roles_user.sql
+17. patch_profiles_short_id.sql
+```
+> Для dev без auth: `supabase/disable_rls_dev.sql`
+
+4. `npm run dev`
+
+## Roadmap
+
+| Этап | Статус | Описание |
+|------|--------|----------|
+| 1. Рейсы | ✅ Готово | trips/trip_lines, UI, RPC |
+| Фото накладных | ✅ Готово | invoice_photo_urls, лайтбокс, контекстное меню |
+| 2. Добавление поставки | ✅ Готово | Кнопка + модалка + add_trip_line |
+| Деплой | ✅ Готово | Vercel + email-подтверждение |
+| 1. Редактирование | ✅ Готово | Рейс и поставка |
+| 3. Справочники | ✅ Готово | UI управления carriers/warehouses |
+| Стикеры WB | ✅ Готово | CRUD шаблонов, PDF, иконки, EAC |
+| Наборы стикеров | ✅ Готово | Создать/редактировать/удалить, PDF |
+| Магазины CRUD | ✅ Готово | Редактирование, удаление, API-ключ |
+| Роли | ✅ Готово | CRUD, доступы, назначение пользователя, U{n} |
+| 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу |
+| Участники компании | 🔲 Следующий | Пригласить / удалить |
+| Будущее | 🔲 | Мобильное приложение React Native + Expo |
+
+## Правила внесения изменений
+
+- Выполнять работу строго по ТЗ
+- Не менять бизнес-логику, UX, визуальный стиль, тексты вне рамок задачи
+- Не делать попутные рефакторинги без явного запроса
+- Локальная и минимально достаточная правка
+
+## Что уже есть
+
 - SaaS-структура данных: `profiles`, `accounts`, `account_members`, `stores`, `trips`, `trip_lines`, `carriers`, `warehouses`
 - Supabase Auth: регистрация, вход, выход, блокировка интерфейса без сессии
 - Company flow: создание, список, switcher, сохранение в localStorage, удаление

@@ -1,7 +1,57 @@
 # Progress
 
 ## Current Status
-MVP в активной разработке. Шаг 0, Шаг 1, Шаг 2, Этап 3 завершены.
+MVP в активной разработке. Деплой на Vercel активен.
+
+## What Works
+
+- Project scaffolding is complete
+- Dev server runs successfully
+- Tailwind styling is active
+- Left sidebar navigation (зафиксирован по высоте — `h-screen sticky`)
+- Company switcher + редактирование названия компании
+- Auth page: вход / регистрация (Имя обязательно, JS-валидация)
+- Session-gated app shell
+- Company creation / switching / deletion (FK-безопасное) flow
+- Supabase client bootstrap
+
+### Роли (завершено)
+- Таблица `roles` с RLS, `assigned_user_id`
+- Короткие ID пользователей: U1, U2, U3 (`profiles.short_id`)
+- RPC `resolve_account_user` — поиск по email, UUID, U{n}
+- Страница Ролей: создание, редактирование, удаление, клонирование в другую компанию
+- Назначение роли пользователю: email или U{n} с автоподтягиванием второго поля
+- Список ролей показывает имя и U{n} пользователя
+
+### Магазины (завершено)
+- Список магазинов + создание / редактирование / удаление
+- API-ключ: маска в edit-режиме, кнопка «Изменить»
+- store_code редактируем
+
+### Рейсы / Логистика (завершено)
+- Таблицы `trips` и `trip_lines`, RPC, UI
+- Редактирование рейса и поставки
+- Добавление поставки в рейс
+- Фото накладных (лайтбокс-карусель, контекстное меню)
+- Дропдауны статусов
+
+### Справочники (завершено)
+- Перевозчики и склады, CRUD
+
+### Стикеры WB (завершено)
+- CRUD шаблонов, PDF-генерация
+- Иконки ухода, EAC
+- Наборы стикеров
+
+### Деплой (завершено)
+- Vercel: env переменные настроены
+- Supabase: Site URL и Redirect URLs → Vercel-домен
+- Email-подтверждение при регистрации работает
+
+## What's Left
+- Этап 5: Поиск и фильтры (Логистика)
+- Участники компании (Members)
+- Мобильное приложение React Native + Expo
 
 ## What Works
 - Project scaffolding is complete

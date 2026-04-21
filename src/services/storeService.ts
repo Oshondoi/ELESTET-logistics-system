@@ -53,10 +53,47 @@ export const createStoreInSupabase = async (values: StoreFormValues, accountId: 
     name: values.name.trim(),
     marketplace: values.marketplace,
     store_code: values.store_code?.trim() || undefined,
+    ...(values.api_key?.trim() ? { api_key: values.api_key.trim() } : {}),
   }
 
   const { data, error } = await supabase.from('stores').insert(payload).select().single()
 
   if (error) throw error
   return data as Store
+}
+
+export const updateStoreInSupabase = async (storeId: string, values: StoreFormValues) => {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured')
+  }
+
+  const payload: Record<string, unknown> = {
+    name: values.name.trim(),
+    marketplace: values.marketplace,
+    store_code: values.store_code?.trim() || null,
+  }
+
+  if (values.api_key !== undefined) {
+    payload.api_key = values.api_key.trim() || null
+  }
+
+  const { data, error } = await supabase
+    .from('stores')
+    .update(payload)
+    .eq('id', storeId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data as Store
+}
+
+export const deleteStoreInSupabase = async (storeId: string) => {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured')
+  }
+
+  const { error } = await supabase.from('stores').delete().eq('id', storeId)
+
+  if (error) throw error
 }

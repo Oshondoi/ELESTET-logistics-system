@@ -1,5 +1,58 @@
 export type MemberRole = 'owner' | 'admin' | 'manager' | 'operator' | 'viewer'
 
+// ─── Роли / Доступы ───────────────────────────────────────────
+
+export interface RolePermissions {
+  shipments_view: boolean
+  shipments_manage: boolean
+  stores_view: boolean
+  stores_manage: boolean
+  directories_view: boolean
+  directories_manage: boolean
+  stickers_view: boolean
+  stickers_manage: boolean
+  roles_manage: boolean
+  members_manage: boolean
+}
+
+export const DEFAULT_PERMISSIONS: RolePermissions = {
+  shipments_view: false,
+  shipments_manage: false,
+  stores_view: false,
+  stores_manage: false,
+  directories_view: false,
+  directories_manage: false,
+  stickers_view: false,
+  stickers_manage: false,
+  roles_manage: false,
+  members_manage: false,
+}
+
+export interface Role {
+  id: string
+  account_id: string
+  name: string
+  permissions: RolePermissions
+  assigned_user_id?: string | null
+  assigned_user_name?: string | null
+  assigned_user_email?: string | null
+  assigned_user_short_id?: number | null
+  created_at: string
+}
+
+export interface RoleFormValues {
+  name: string
+  permissions: RolePermissions
+  assigned_user_id?: string | null
+}
+
+export interface ResolvedUser {
+  user_id: string
+  email: string
+  full_name: string
+  short_id: number
+}
+
 export type ShipmentStatus =
   | 'Ожидает отправки'
   | 'В пути'
@@ -12,6 +65,7 @@ export interface Profile {
   id: string
   user_id: string
   full_name: string
+  short_id: number
   created_at: string
 }
 
@@ -35,6 +89,7 @@ export interface Store {
   store_code: string
   name: string
   marketplace: string
+  api_key?: string | null
   created_at: string
 }
 
@@ -91,6 +146,7 @@ export interface StoreFormValues {
   name: string
   marketplace: string
   store_code?: string
+  api_key?: string
 }
 
 export interface Carrier {

@@ -10,7 +10,8 @@ interface SidebarProps {
   accounts: Account[]
   activeAccount: Account | null
   onSelectAccount: (accountId: string) => void
-  onDeleteActiveCompany: () => void
+  onDeleteActiveCompany: (id: string) => void
+  onEditCompany: (account: Account) => void
 }
 
 const items = [
@@ -85,18 +86,6 @@ const items = [
     ),
   },
   {
-    key: 'roles',
-    label: 'Роли',
-    icon: (
-      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
-        <circle cx="9.5" cy="7" r="3.5" />
-        <path d="M20 8v6" />
-        <path d="M17 11h6" />
-      </svg>
-    ),
-  },
-  {
     key: 'stickers',
     label: 'Стикеры',
     icon: (
@@ -106,6 +95,18 @@ const items = [
         <path d="M7 12h10" />
         <path d="M7 17h6" />
         <path d="M13 7h4" />
+      </svg>
+    ),
+  },
+  {
+    key: 'roles',
+    label: 'Роли',
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+        <circle cx="9.5" cy="7" r="3.5" />
+        <path d="M20 8v6" />
+        <path d="M17 11h6" />
       </svg>
     ),
   },
@@ -120,6 +121,7 @@ export const Sidebar = ({
   activeAccount,
   onSelectAccount,
   onDeleteActiveCompany,
+  onEditCompany,
 }: SidebarProps) => {
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
   const companyRef = useRef<HTMLDivElement | null>(null)
@@ -142,7 +144,7 @@ export const Sidebar = ({
   }, [])
 
   return (
-    <aside className="flex min-h-screen w-[234px] shrink-0 flex-col border-r border-slate-200 bg-white/95">
+    <aside className="sticky top-0 flex h-screen w-[234px] shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white/95">
       <div className="border-b border-slate-200 px-5 py-4">
         <button type="button" className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-xs font-bold text-white">
@@ -159,7 +161,7 @@ export const Sidebar = ({
         </button>
       </div>
 
-      <div className="px-4 py-4">
+      <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="mb-5 rounded-[24px] bg-[#F7F8FC] py-[14px]">
           <div className="mb-2 px-[16px] text-[10px] font-semibold uppercase tracking-[0.18em] text-[#98A5CC]">
             Моя компания
@@ -215,8 +217,8 @@ export const Sidebar = ({
                         <span className="mt-0.5 block text-[12px] text-[#61729E]">{listCompanyIdLabel}</span>
                       </span>
 
-                      {isSelected ? (
-                        <span className="relative flex h-6 w-6 items-center justify-center">
+                      <span className="relative flex h-6 w-16 items-center justify-end">
+                        {isSelected ? (
                           <svg
                             viewBox="0 0 24 24"
                             className="h-4 w-4 text-[#4A73FF] transition-opacity group-hover:opacity-0"
@@ -226,34 +228,49 @@ export const Sidebar = ({
                           >
                             <path d="m5 13 4 4L19 7" />
                           </svg>
-                          <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
-                            <button
-                              type="button"
-                              aria-label="Удалить компанию"
-                              title="Удалить компанию"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                onDeleteActiveCompany()
-                              }}
-                              className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[10px] bg-[#FFF1F1] text-[#FF5B5B] transition hover:bg-[#FFE7E7]"
+                        ) : null}
+                      <span className={`absolute inset-0 flex items-center justify-center gap-1 transition-opacity ${isSelected ? 'opacity-0 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                          <button
+                            type="button"
+                            aria-label="Редактировать компанию"
+                            title="Редактировать"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setIsCompanyOpen(false)
+                              onEditCompany(account)
+                            }}
+                            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[10px] bg-[#EEF5FF] text-[#4A73FF] transition hover:bg-[#D8E8FF]"
+                          >
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Удалить компанию"
+                            title="Удалить компанию"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onDeleteActiveCompany(account.id)
+                            }}
+                            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[10px] bg-[#FFF1F1] text-[#FF5B5B] transition hover:bg-[#FFE7E7]"
+                          >
+                            <svg
+                              viewBox="0 0 24 24"
+                              className="h-4 w-4"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
                             >
-                              <svg
-                                viewBox="0 0 24 24"
-                                className="h-4 w-4"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                              >
-                                <path d="M9 4h6" />
-                                <path d="M5 7h14" />
-                                <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
-                                <path d="M10 11v4" />
-                                <path d="M14 11v4" />
-                              </svg>
-                            </button>
-                          </span>
+                              <path d="M9 4h6" />
+                              <path d="M5 7h14" />
+                              <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+                              <path d="M10 11v4" />
+                              <path d="M14 11v4" />
+                            </svg>
+                          </button>
                         </span>
-                      ) : null}
+                      </span>
                     </button>
                   )
                 })}

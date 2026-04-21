@@ -154,40 +154,74 @@ export const StickersPage = ({ stickers, bundles, onAdd, onEdit, onDelete, onAdd
     if (toPrint.length > 0) previewStickerPdf(toPrint)
   }
 
+  const [activeTab, setActiveTab] = useState<'stickers' | 'bundles' | 'import'>('stickers')
+
   const allSelected = stickers.length > 0 && selected.size === stickers.length
   const printCount = selected.size > 0 ? selected.size : stickers.length
 
   return (
     <>
       <Card className="overflow-hidden rounded-3xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-semibold text-slate-900">Стикеры</span>
-            <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{stickers.length}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              disabled={selected.size === 0}
-              onClick={() => {
-                const init: Record<string, { checked: boolean; copies: number }> = {}
-                stickers.filter((s) => selected.has(s.id)).forEach((s) => { init[s.id] = { checked: true, copies: 1 } })
-                setBundleItems(init)
-                setBundleName('')
-                setEditingBundle(null)
-                setBundleSaveError(null)
-                setBundleModalOpen(true)
-              }}
-              className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs"
+        {/* Tab bar */}
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setActiveTab('stickers')}
+              className={`text-sm font-semibold transition-colors ${
+                activeTab === 'stickers' ? 'text-slate-900' : 'text-slate-300 hover:text-slate-900'
+              }`}
             >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-                <polyline points="17 21 17 13 7 13 7 21" />
-                <polyline points="7 3 7 8 15 8" />
-              </svg>
-              Создать набор
-            </Button>
+              Стикеры
+              <span className="ml-1.5 text-xs font-normal text-slate-400">{stickers.length}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('import')}
+              className={`text-sm font-semibold transition-colors ${
+                activeTab === 'import' ? 'text-slate-900' : 'text-slate-300 hover:text-slate-900'
+              }`}
+            >
+              Импорт
+              <span className="ml-1.5 text-xs font-normal text-violet-400">WB</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('bundles')}
+              className={`text-sm font-semibold transition-colors ${
+                activeTab === 'bundles' ? 'text-slate-900' : 'text-slate-300 hover:text-slate-900'
+              }`}
+            >
+              Наборы
+              <span className="ml-1.5 text-xs font-normal text-slate-400">{bundles.length}</span>
+            </button>
+          </div>
+
+          {/* Actions per tab */}
+          <div className="flex items-center gap-2">
+            {activeTab === 'stickers' ? (
+              <>
+                <Button
+                  variant="secondary"
+                  disabled={selected.size === 0}
+                  onClick={() => {
+                    const init: Record<string, { checked: boolean; copies: number }> = {}
+                    stickers.filter((s) => selected.has(s.id)).forEach((s) => { init[s.id] = { checked: true, copies: 1 } })
+                    setBundleItems(init)
+                    setBundleName('')
+                    setEditingBundle(null)
+                    setBundleSaveError(null)
+                    setBundleModalOpen(true)
+                  }}
+                  className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs"
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                    <polyline points="17 21 17 13 7 13 7 21" />
+                    <polyline points="7 3 7 8 15 8" />
+                  </svg>
+                  Создать набор
+                </Button>
             <Button
               variant="secondary"
               disabled={isPreviewing || stickers.length === 0}
@@ -219,11 +253,66 @@ export const StickersPage = ({ stickers, bundles, onAdd, onEdit, onDelete, onAdd
             >
               + Создать стикер
             </Button>
+              </>
+            ) : activeTab === 'bundles' ? (
+              <Button
+                onClick={() => {
+                  const init: Record<string, { checked: boolean; copies: number }> = {}
+                  stickers.forEach((s) => { init[s.id] = { checked: true, copies: 1 } })
+                  setBundleItems(init)
+                  setBundleName('')
+                  setEditingBundle(null)
+                  setBundleSaveError(null)
+                  setBundleModalOpen(true)
+                }}
+                className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs"
+              >
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 5v14" /><path d="M5 12h14" />
+                </svg>
+                Создать набор
+              </Button>
+            ) : activeTab === 'import' ? (
+              <Button
+                disabled
+                className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs opacity-50 cursor-not-allowed"
+              >
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M23 4v6h-6" />
+                  <path d="M1 20v-6h6" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                  <path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+                Обновить
+              </Button>
+            ) : null}
           </div>
         </div>
 
-        {/* Table */}
-        {stickers.length === 0 ? (
+        {/* Content */}
+        {activeTab === 'import' ? (
+          <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-50">
+              <svg viewBox="0 0 24 24" className="h-7 w-7 text-violet-400" fill="none" stroke="currentColor" strokeWidth="1.7">
+                <path d="M12 3v13" />
+                <path d="m8 12 4 4 4-4" />
+                <path d="M4 17v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-700">Импорт из Wildberries</p>
+              <p className="mt-1 text-xs text-slate-400">Подключите WB API для загрузки стикеров и данных о товарах</p>
+            </div>
+            <button
+              type="button"
+              disabled
+              className="mt-2 cursor-not-allowed rounded-xl bg-violet-100 px-4 py-2 text-xs font-medium text-violet-400"
+            >
+              В разработке
+            </button>
+          </div>
+        ) : activeTab === 'stickers' ? (
+          stickers.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-sm text-slate-400">
             Стикеров нет. Создайте первый.
           </div>
@@ -325,103 +414,99 @@ export const StickersPage = ({ stickers, bundles, onAdd, onEdit, onDelete, onAdd
               </tbody>
             </table>
           </div>
+        )
+        ) : (
+          bundles.length === 0 ? (
+            <div className="flex items-center justify-center py-12 text-sm text-slate-400">
+              Наборов нет. Создайте первый набор.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-[13px]">
+                <thead className="border-b border-slate-100 text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                  <tr>
+                    <th className="px-4 py-2">Название</th>
+                    <th className="px-4 py-2">Стикеров</th>
+                    <th className="px-4 py-2">Копий итого</th>
+                    <th className="px-4 py-2">Создан</th>
+                    <th className="w-32 px-4 py-2" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {bundles.map((b) => {
+                    const totalCopies = b.items.reduce((sum, it) => sum + it.copies, 0)
+                    return (
+                      <tr key={b.id} className="align-middle text-slate-700 transition-colors hover:bg-slate-50">
+                        <td className="px-4 py-2.5 font-medium text-slate-800">{b.name}</td>
+                        <td className="px-4 py-2.5 text-slate-500">{b.items.length}</td>
+                        <td className="px-4 py-2.5 text-slate-500">{totalCopies}</td>
+                        <td className="px-4 py-2.5 text-xs text-slate-400">{new Date(b.created_at).toLocaleDateString('ru-RU')}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center justify-end gap-0.5">
+                            <button
+                              type="button"
+                              title="Предпросмотр"
+                              onClick={() => handlePreviewBundle(b)}
+                              className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                <circle cx="12" cy="12" r="3" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              title="Скачать PDF"
+                              onClick={() => handlePrintBundle(b)}
+                              className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                <path d="M6 9V2h12v7" />
+                                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                                <path d="M6 14h12v8H6z" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              title="Редактировать"
+                              onClick={() => {
+                                const init: Record<string, { checked: boolean; copies: number }> = {}
+                                b.items.forEach((it) => { init[it.sticker_id] = { checked: true, copies: it.copies } })
+                                setBundleItems(init)
+                                setBundleName(b.name)
+                                setEditingBundle(b)
+                                setBundleSaveError(null)
+                                setBundleModalOpen(true)
+                              }}
+                              className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              title="Удалить набор"
+                              onClick={() => setDeleteBundleTarget(b)}
+                              className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                <path d="M9 4h6" /><path d="M5 7h14" />
+                                <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+                                <path d="M10 11v4" /><path d="M14 11v4" />
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
         )}
       </Card>
-
-      {/* ── Наборы ───────────────────────────────────────────── */}
-      {bundles.length > 0 && (
-        <Card className="overflow-hidden rounded-3xl">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold text-slate-900">Наборы</span>
-              <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{bundles.length}</span>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-[13px]">
-              <thead className="border-b border-slate-100 text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
-                <tr>
-                  <th className="px-4 py-2">Название</th>
-                  <th className="px-4 py-2">Стикеров</th>
-                  <th className="px-4 py-2">Копий итого</th>
-                  <th className="px-4 py-2">Создан</th>
-                  <th className="w-32 px-4 py-2" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {bundles.map((b) => {
-                  const totalCopies = b.items.reduce((sum, it) => sum + it.copies, 0)
-                  return (
-                    <tr key={b.id} className="align-middle text-slate-700 transition-colors hover:bg-slate-50">
-                      <td className="px-4 py-2.5 font-medium text-slate-800">{b.name}</td>
-                      <td className="px-4 py-2.5 text-slate-500">{b.items.length}</td>
-                      <td className="px-4 py-2.5 text-slate-500">{totalCopies}</td>
-                      <td className="px-4 py-2.5 text-slate-400 text-xs">{new Date(b.created_at).toLocaleDateString('ru-RU')}</td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center justify-end gap-0.5">
-                          <button
-                            type="button"
-                            title="Предпросмотр"
-                            onClick={() => handlePreviewBundle(b)}
-                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
-                          >
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                          </button>
-                          <button
-                            type="button"
-                            title="Скачать PDF"
-                            onClick={() => handlePrintBundle(b)}
-                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
-                          >
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                              <path d="M6 9V2h12v7" />
-                              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-                              <path d="M6 14h12v8H6z" />
-                            </svg>
-                          </button>
-                          <button
-                            type="button"
-                            title="Редактировать"
-                            onClick={() => {
-                              const init: Record<string, { checked: boolean; copies: number }> = {}
-                              b.items.forEach((it) => { init[it.sticker_id] = { checked: true, copies: it.copies } })
-                              setBundleItems(init)
-                              setBundleName(b.name)
-                              setEditingBundle(b)
-                              setBundleSaveError(null)
-                              setBundleModalOpen(true)
-                            }}
-                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500"
-                          >
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                            </svg>
-                          </button>
-                          <button
-                            type="button"
-                            title="Удалить набор"
-                            onClick={() => setDeleteBundleTarget(b)}
-                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
-                          >
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                              <path d="M9 4h6" /><path d="M5 7h14" />
-                              <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
-                              <path d="M10 11v4" /><path d="M14 11v4" />
-                            </svg>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
 
       <StickerFormModal
         open={modalOpen}

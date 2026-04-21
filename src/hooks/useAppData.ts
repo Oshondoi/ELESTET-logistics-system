@@ -9,6 +9,8 @@ import {
   listStores,
   fetchStoresFromSupabase,
   createStoreInSupabase,
+  updateStoreInSupabase,
+  deleteStoreInSupabase,
 } from '../services/storeService'
 import {
   fetchTrips,
@@ -144,6 +146,25 @@ export const useAppData = (accountId: string | null) => {
     const store = await createStoreInSupabase(values, accountId)
     setStores((current) => [store, ...current])
     return store
+  }
+
+  const updateStore = async (storeId: string, values: StoreFormValues) => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase не настроен')
+    }
+
+    const updated = await updateStoreInSupabase(storeId, values)
+    setStores((current) => current.map((s) => (s.id === storeId ? updated : s)))
+    return updated
+  }
+
+  const removeStore = async (storeId: string) => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase не настроен')
+    }
+
+    await deleteStoreInSupabase(storeId)
+    setStores((current) => current.filter((s) => s.id !== storeId))
   }
 
   const addShipment = async (values: ShipmentFormValues): Promise<ShipmentWithStore> => {
@@ -400,6 +421,8 @@ export const useAppData = (accountId: string | null) => {
     isLoading,
     error,
     addStore,
+    updateStore,
+    removeStore,
     addShipment,
     addTrip,
     addTripLine,

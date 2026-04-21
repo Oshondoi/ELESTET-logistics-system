@@ -38,6 +38,22 @@ export const deleteAccountWithOwnerInSupabase = async (accountId: string) => {
   return Boolean(data)
 }
 
+export const updateAccountInSupabase = async (accountId: string, name: string) => {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured')
+  }
+
+  const { data, error } = await supabase
+    .from('accounts')
+    .update({ name: name.trim() })
+    .eq('id', accountId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data as import('../types').Account
+}
+
 export const deleteAccountInSupabase = async (accountId: string) => {
   if (!supabase) {
     throw new Error('Supabase client is not configured')

@@ -4,6 +4,7 @@ import {
   createAccountWithOwnerInSupabase,
   deleteAccountWithOwnerInSupabase,
   fetchAccountsFromSupabase,
+  updateAccountInSupabase,
 } from '../services/accountService'
 import type { Account } from '../types'
 
@@ -48,12 +49,19 @@ export const useAccounts = (enabled: boolean) => {
     setAccounts((current) => current.filter((account) => account.id !== accountId))
   }
 
+  const updateAccount = async (accountId: string, name: string) => {
+    const updated = await updateAccountInSupabase(accountId, name)
+    setAccounts((current) => current.map((a) => (a.id === accountId ? updated : a)))
+    return updated
+  }
+
   return {
     accounts,
     isLoading,
     error,
     createAccount,
     deleteAccount,
+    updateAccount,
     reload,
   }
 }

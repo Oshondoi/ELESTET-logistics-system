@@ -1,7 +1,79 @@
 # Active Context
 
 ## Current Focus
-Исправлены TypeScript build-ошибки Vercel. Следующий: Этап 5 — Поиск и фильтры.
+Страница Роли реализована. Сайдбар зафиксирован по высоте. Деплой на Vercel активен. Следующий: Этап 5 — Поиск и фильтры.
+
+## What Was Recently Done
+
+### Страница Ролей (завершена)
+- SQL: таблица `roles` с RLS (`patch_roles.sql`)
+- SQL: колонка `assigned_user_id` + RPC `resolve_account_user` (`patch_roles_user.sql`)
+- SQL: `short_id` (U1, U2, U3...) в `profiles` + обновлённый RPC с `p_short_id` (`patch_profiles_short_id.sql`)
+- Типы: `Role`, `RolePermissions`, `DEFAULT_PERMISSIONS`, `ResolvedUser` в `index.ts`
+- `roleService.ts` — CRUD + клонирование + `resolveAccountUser` (email / UUID / U{n})
+- `useRoles.ts` — хук загрузки, `addRole`, `updateRole`, `removeRole`, `cloneRoleToAccount`
+- `RoleFormModal.tsx` — создание/редактирование роли:
+  - 10 переключателей доступов по 5 группам
+  - Секция "Назначить пользователю": email или U{n}/UUID, резолв на blur, мэтчинг обоих полей
+  - Кнопка "Применить к другой компании" (CloneModal)
+- `RolesPage.tsx` — список ролей с карточками, имя пользователя + `U{n}`, иконки edit/delete
+- `App.tsx` — `useRoles` подключён, пропсы переданы в `RolesPage`
+
+### Сайдбар зафиксирован по высоте (завершено)
+- `min-h-screen` → `h-screen sticky top-0 overflow-hidden`
+- Средняя секция (компания + nav) → `flex-1 overflow-y-auto`
+- Логотип и кнопка Выход всегда видны
+
+### Магазины — полный CRUD (завершено)
+- Редактирование магазина (StoreFormModal с `initialValues`)
+- Удаление с подтверждением (DeleteConfirmModal)
+- Поле API-ключа: скрыто в edit-режиме (маска `••••`), кнопка «Изменить»
+- `store_code` редактируем, ограничение формата снято (`patch_store_code_constraint.sql`)
+- Иконки edit/delete в стиле DirectoriesPage (всегда видны)
+
+### Редактирование названия компании (завершено)
+- Иконка карандаша в дропдауне компании в сайдбаре
+- `EditAccountModal` — inline в `App.tsx`
+- `updateAccount` в `useAccounts` + `updateAccountInSupabase` в `accountService`
+
+### Удаление компании — FK-безопасное (завершено)
+- `delete_account.sql` обновлён: сначала `trip_lines`, `trips`, `carriers`, `warehouses`
+
+### Порядок в сайдбаре
+- Стикеры → Роли (поменяны местами)
+
+### Регистрация
+- Обязательная JS-валидация поля Имя (не только HTML required)
+
+## Present UI State
+- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / Роли
+- Деплой: Vercel (main ветка), env переменные настроены
+- Supabase: Site URL и Redirect URLs настроены на Vercel-домен
+
+## SQL патчи — порядок применения
+```
+1. schema.sql
+2. bootstrap.sql
+3. dev_access.sql
+4. delete_account.sql
+5. trips.sql
+6. patch_trip_functions.sql
+7. carriers_warehouses.sql
+8. patch_invoice_photos_v2.sql
+9. patch_stickers.sql
+10. patch_sticker_icons.sql
+11. patch_sticker_bundles.sql
+12. patch_store_api_key.sql
+13. patch_store_code_constraint.sql
+14. patch_system_warehouses.sql
+15. patch_roles.sql
+16. patch_roles_user.sql
+17. patch_profiles_short_id.sql
+```
+
+## Immediate Next Steps
+1. **Этап 5:** Текстовый поиск + фильтр по статусу на странице Логистика
+2. Участники компании (Members) — пригласить / удалить
 
 ## What Was Recently Done
 

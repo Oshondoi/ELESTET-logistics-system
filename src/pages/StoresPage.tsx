@@ -6,9 +6,11 @@ import type { Store } from '../types'
 interface StoresPageProps {
   stores: Store[]
   onOpenCreate: () => void
+  onEdit: (store: Store) => void
+  onDelete: (storeId: string) => Promise<void>
 }
 
-export const StoresPage = ({ stores, onOpenCreate }: StoresPageProps) => (
+export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete }: StoresPageProps) => (
   <div className="space-y-4">
     <Card className="rounded-3xl p-2.5">
       <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
@@ -26,6 +28,6 @@ export const StoresPage = ({ stores, onOpenCreate }: StoresPageProps) => (
       </div>
     </Card>
 
-    <StoreList stores={stores} />
+    <StoreList stores={stores} onEdit={onEdit} onDelete={onDelete} />
   </div>
 )
