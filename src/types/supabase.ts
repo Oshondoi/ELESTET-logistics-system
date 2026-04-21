@@ -10,6 +10,7 @@ export interface Database {
           store_code: string
           name: string
           marketplace: string
+          api_key: string | null
           created_at: string
         }
         Insert: {
@@ -18,6 +19,7 @@ export interface Database {
           store_code?: string
           name: string
           marketplace?: string
+          api_key?: string | null
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['stores']['Insert']>
@@ -106,12 +108,14 @@ export interface Database {
           id: string
           user_id: string
           full_name: string
+          short_id: number | null
           created_at: string
         }
         Insert: {
           id?: string
           user_id: string
           full_name: string
+          short_id?: number | null
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['profiles']['Insert']>
@@ -307,6 +311,26 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['sticker_bundles']['Insert']>
         Relationships: []
       }
+      roles: {
+        Row: {
+          id: string
+          account_id: string
+          name: string
+          permissions: Json
+          assigned_user_id: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          name: string
+          permissions?: Json
+          assigned_user_id?: string | null
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['roles']['Insert']>
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -378,6 +402,29 @@ export interface Database {
           p_status: string
         }
         Returns: Database['public']['Tables']['trips']['Row']
+      }
+      resolve_account_user: {
+        Args: {
+          p_account_id: string
+          p_email?: string | null
+          p_user_id?: string | null
+          p_short_id?: number | null
+        }
+        Returns: Array<{
+          user_id: string
+          email: string
+          full_name: string
+          short_id: number | null
+        }>
+      }
+      get_my_accounts: {
+        Args: Record<string, never>
+        Returns: Array<{
+          id: string
+          name: string
+          created_at: string
+          my_role: string
+        }>
       }
     }
     Enums: {

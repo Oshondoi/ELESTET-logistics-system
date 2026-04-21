@@ -73,6 +73,7 @@ export interface Account {
   id: string
   name: string
   created_at: string
+  my_role?: MemberRole
 }
 
 export interface AccountMember {

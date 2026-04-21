@@ -202,6 +202,8 @@ export const Sidebar = ({
                   const isSelected = activeAccount?.id === account.id
                   const listCompanyIdLabel = `ID: ${account.id.slice(0, 8)}`
 
+                  const isOwner = account.my_role === 'owner'
+
                   return (
                     <button
                       type="button"
@@ -221,7 +223,7 @@ export const Sidebar = ({
                         {isSelected ? (
                           <svg
                             viewBox="0 0 24 24"
-                            className="h-4 w-4 text-[#4A73FF] transition-opacity group-hover:opacity-0"
+                            className={cn('h-4 w-4 text-[#4A73FF]', isOwner ? 'transition-opacity group-hover:opacity-0' : '')}
                             fill="none"
                             stroke="currentColor"
                             strokeWidth="2"
@@ -229,7 +231,8 @@ export const Sidebar = ({
                             <path d="m5 13 4 4L19 7" />
                           </svg>
                         ) : null}
-                      <span className={`absolute inset-0 flex items-center justify-center gap-1 transition-opacity ${isSelected ? 'opacity-0 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                      {isOwner ? (
+                        <span className={`absolute inset-0 flex items-center justify-center gap-1 transition-opacity ${isSelected ? 'opacity-0 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                           <button
                             type="button"
                             aria-label="Редактировать компанию"
@@ -270,6 +273,7 @@ export const Sidebar = ({
                             </svg>
                           </button>
                         </span>
+                      ) : null}
                       </span>
                     </button>
                   )

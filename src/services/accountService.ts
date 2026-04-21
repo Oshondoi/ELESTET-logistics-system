@@ -6,7 +6,7 @@ export const fetchAccountsFromSupabase = async () => {
     throw new Error('Supabase client is not configured')
   }
 
-  const { data, error } = await supabase.from('accounts').select('*').order('created_at', { ascending: false })
+  const { data, error } = await supabase.rpc('get_my_accounts')
 
   if (error) throw error
   return (data ?? []) as Account[]

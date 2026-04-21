@@ -69,6 +69,7 @@
 15. patch_roles.sql
 16. patch_roles_user.sql
 17. patch_profiles_short_id.sql
+18. patch_role_member_sync.sql
 ```
 
 ## Immediate Next Steps

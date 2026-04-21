@@ -124,7 +124,7 @@ interface RolesPageProps {
   onAdd: (values: RoleFormValues) => Promise<Role>
   onUpdate: (roleId: string, values: Partial<RoleFormValues>) => Promise<Role>
   onDelete: (roleId: string) => Promise<void>
-  onClone: (role: Role, targetAccountId: string) => Promise<Role>
+  onClone: (role: Role, targetAccountId: string) => Promise<void>
 }
 
 export const RolesPage = ({

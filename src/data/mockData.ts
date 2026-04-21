@@ -10,6 +10,7 @@ export const mockProfile: Profile = {
   id: 'profile-1',
   user_id: 'user-1',
   full_name: 'Азамат Нурбеков',
+  short_id: 1,
   created_at: '2026-04-09T08:30:00.000Z',
 }
 
