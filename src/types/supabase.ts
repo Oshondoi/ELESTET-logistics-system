@@ -11,6 +11,8 @@ export interface Database {
           name: string
           marketplace: string
           api_key: string | null
+          supplier: string | null
+          address: string | null
           created_at: string
         }
         Insert: {
@@ -20,6 +22,8 @@ export interface Database {
           name: string
           marketplace?: string
           api_key?: string | null
+          supplier?: string | null
+          address?: string | null
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['stores']['Insert']>
@@ -329,6 +333,70 @@ export interface Database {
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['roles']['Insert']>
+        Relationships: []
+      }
+      products: {
+        Row: {
+          id: string
+          account_id: string
+          store_id: string
+          nm_id: number
+          vendor_code: string | null
+          name: string | null
+          brand: string | null
+          category: string | null
+          color: string | null
+          composition: string | null
+          country: string | null
+          barcodes: Json | null
+          photos: Json | null
+          sizes: Json | null
+          raw_data: Json | null
+          synced_at: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          store_id: string
+          nm_id: number
+          vendor_code?: string | null
+          name?: string | null
+          brand?: string | null
+          category?: string | null
+          color?: string | null
+          composition?: string | null
+          country?: string | null
+          barcodes?: Json | null
+          photos?: Json | null
+          sizes?: Json | null
+          raw_data?: Json | null
+          synced_at?: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['products']['Insert']>
+        Relationships: []
+      }
+      store_sync_log: {
+        Row: {
+          id: string
+          store_id: string
+          account_id: string
+          synced_at: string
+          product_count: number | null
+          status: string | null
+          error: string | null
+        }
+        Insert: {
+          id?: string
+          store_id: string
+          account_id: string
+          synced_at?: string
+          product_count?: number | null
+          status?: string | null
+          error?: string | null
+        }
+        Update: Partial<Database['public']['Tables']['store_sync_log']['Insert']>
         Relationships: []
       }
     }
