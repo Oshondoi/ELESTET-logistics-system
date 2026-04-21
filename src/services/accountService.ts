@@ -6,10 +6,19 @@ export const fetchAccountsFromSupabase = async () => {
     throw new Error('Supabase client is not configured')
   }
 
+  // Пробуем RPC get_my_accounts (возвращает my_role)
   const { data, error } = await supabase.rpc('get_my_accounts')
 
-  if (error) throw error
-  return (data ?? []) as Account[]
+  if (!error) return (data ?? []) as Account[]
+
+  // Fallback: прямой select через RLS (если SQL-патч ещё не применён)
+  const { data: fallbackData, error: fallbackError } = await supabase
+    .from('accounts')
+    .select('*')
+    .order('created_at', { ascending: false })
+
+  if (fallbackError) throw fallbackError
+  return (fallbackData ?? []) as Account[]
 }
 
 export const createAccountWithOwnerInSupabase = async (name: string) => {
