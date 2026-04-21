@@ -17,6 +17,7 @@ import { isSupabaseConfigured } from './lib/supabase'
 import { AuthPage } from './pages/AuthPage'
 import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
+import { ProductsPage } from './pages/ProductsPage'
 import { RolesPage } from './pages/RolesPage'
 import { ShipmentsPage } from './pages/ShipmentsPage'
 import { StoresPage } from './pages/StoresPage'
@@ -27,6 +28,7 @@ import type { Shipment, ShipmentWithStore } from './types'
 type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles' | 'stickers'
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
+const ACTIVE_STORE_ID_STORAGE_KEY = 'elestet-active-store-id'
 
 const toRawShipments = (shipments: ShipmentWithStore[]): Shipment[] =>
   shipments.map(({ store, ...shipment }) => shipment)
@@ -115,6 +117,9 @@ function App() {
   const [activeAccountId, setActiveAccountId] = useState<string | null>(() => {
     return window.localStorage.getItem(ACTIVE_ACCOUNT_STORAGE_KEY)
   })
+  const [activeStoreId, setActiveStoreId] = useState<string>(
+    () => window.localStorage.getItem(ACTIVE_STORE_ID_STORAGE_KEY) ?? ''
+  )
   const [accountModalOpen, setAccountModalOpen] = useState(false)
   const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState(false)
   const [isDeletingAccount, setIsDeletingAccount] = useState(false)
@@ -134,6 +139,7 @@ function App() {
       setActiveAccountId(accounts[0].id)
     }
   }, [accounts, isAccountsLoading, activeAccountId])
+
   const {
     shipments,
     stores,
@@ -177,6 +183,22 @@ function App() {
 
   const carrierNames = carriers.map((c) => c.name)
   const warehouseNames = warehouses.map((w) => w.name)
+
+  const storesWithApiKey = useMemo(() => stores.filter((s) => s.api_key), [stores])
+
+  useEffect(() => {
+    if (!activeStoreId && storesWithApiKey.length > 0) {
+      setActiveStoreId(storesWithApiKey[0].id)
+    }
+  }, [storesWithApiKey, activeStoreId])
+
+  useEffect(() => {
+    if (activeStoreId) {
+      window.localStorage.setItem(ACTIVE_STORE_ID_STORAGE_KEY, activeStoreId)
+    } else {
+      window.localStorage.removeItem(ACTIVE_STORE_ID_STORAGE_KEY)
+    }
+  }, [activeStoreId])
 
   const rawShipments = useMemo(() => toRawShipments(shipments), [shipments])
 
@@ -269,6 +291,27 @@ function App() {
     setStoreModalOpen(true)
   }
 
+  const handleSyncStore = async (store: import('./types').Store) => {
+    if (!store.api_key) return
+    const resp = await fetch('https://common-api.wildberries.ru/api/v1/seller-info', {
+      headers: { Authorization: store.api_key },
+    })
+    if (!resp.ok) {
+      if (resp.status === 429) throw new Error('Много запросов')
+      throw new Error(`Ошибка WB API: ${resp.status} ${resp.statusText}`)
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await resp.json() as any
+    // API возвращает только: name, sid, tin, tradeMark — адреса нет
+    await updateStore(store.id, {
+      name: store.name,
+      marketplace: store.marketplace,
+      store_code: store.store_code,
+      supplier: (data.name ?? store.supplier ?? '').trim(),
+      address: store.address ?? '',
+    })
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="flex min-h-screen">
@@ -313,7 +356,7 @@ function App() {
                   onRemoveInvoicePhoto={removeInvoicePhoto}
                 />
               ) : activePage === 'stores' ? (
-                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} />
+                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} />
               ) : activePage === 'directories' ? (
                 <DirectoriesPage
                   carriers={carriers}
@@ -326,16 +369,7 @@ function App() {
                   onRenameWarehouse={renameWarehouse}
                 />
               ) : activePage === 'products' ? (
-                <RolesPage
-                  roles={roles}
-                  accounts={accounts}
-                  activeAccountId={activeAccount?.id ?? ''}
-                  isLoading={isRolesLoading}
-                  onAdd={addRole}
-                  onUpdate={updateRole}
-                  onDelete={removeRole}
-                  onClone={cloneRoleToAccount}
-                />
+                <ProductsPage stores={stores} activeAccountId={activeAccount?.id ?? ''} selectedStoreId={activeStoreId} onStoreChange={setActiveStoreId} />
               ) : activePage === 'roles' ? (
                 <RolesPage
                   roles={roles}
@@ -351,6 +385,9 @@ function App() {
                 <StickersPage
                   stickers={stickers}
                   bundles={bundles}
+                  stores={stores}
+                  selectedStoreId={activeStoreId}
+                  onStoreChange={setActiveStoreId}
                   onAdd={addSticker}
                   onEdit={editSticker}
                   onDelete={removeSticker}
@@ -359,7 +396,7 @@ function App() {
                   onDeleteBundle={removeBundle}
                 />
               ) : (
-                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} />
+                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} />
               )
             ) : null}
           </div>
@@ -400,7 +437,7 @@ function App() {
 
       <StoreFormModal
         open={storeModalOpen}
-        initialValues={editingStore ? { name: editingStore.name, marketplace: editingStore.marketplace, store_code: editingStore.store_code } : undefined}
+        initialValues={editingStore ? { name: editingStore.name, marketplace: editingStore.marketplace, store_code: editingStore.store_code, supplier: editingStore.supplier ?? '', address: editingStore.address ?? '' } : undefined}
         hasApiKey={Boolean(editingStore?.api_key)}
         onClose={() => { setStoreModalOpen(false); setEditingStore(null) }}
         onSubmit={(values) => editingStore ? updateStore(editingStore.id, values) : addStore(values)}

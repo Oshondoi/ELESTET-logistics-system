@@ -19,6 +19,8 @@ const DEFAULT_VALUES: StoreFormValues = {
   marketplace: 'Wildberries',
   store_code: '',
   api_key: '',
+  supplier: '',
+  address: '',
 }
 
 export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubmit }: StoreFormModalProps) => {
@@ -36,7 +38,6 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
-    // В режиме редактирования — передаём api_key только если пользователь ввёл новый
     const submitValues: StoreFormValues = {
       ...values,
       api_key: (isEditing && !changingKey) ? undefined : (values.api_key?.trim() || undefined),
@@ -133,6 +134,22 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
             hint="Необязательно. После сохранения ключ нельзя будет прочитать."
           />
         )}
+
+        {/* Поставщик и адрес */}
+        <div className="grid gap-3">
+          <Input
+            label="Поставщик"
+            placeholder="Название юрлица или ИП"
+            value={values.supplier ?? ''}
+            onChange={(e) => setValues((c) => ({ ...c, supplier: e.target.value }))}
+          />
+          <Input
+            label="Адрес"
+            placeholder="Юридический или фактический адрес"
+            value={values.address ?? ''}
+            onChange={(e) => setValues((c) => ({ ...c, address: e.target.value }))}
+          />
+        </div>
 
         <div className="flex justify-end gap-3 pt-2">
           <Button type="button" variant="secondary" onClick={onClose}>

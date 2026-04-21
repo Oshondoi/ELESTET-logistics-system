@@ -8,9 +8,10 @@ interface StoresPageProps {
   onOpenCreate: () => void
   onEdit: (store: Store) => void
   onDelete: (storeId: string) => Promise<void>
+  onSync: (store: Store) => Promise<void>
 }
 
-export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete }: StoresPageProps) => (
+export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete, onSync }: StoresPageProps) => (
   <div className="space-y-4">
     <Card className="rounded-3xl p-2.5">
       <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
@@ -28,6 +29,6 @@ export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete }: StoresPag
       </div>
     </Card>
 
-    <StoreList stores={stores} onEdit={onEdit} onDelete={onDelete} />
+    <StoreList stores={stores} onEdit={onEdit} onDelete={onDelete} onSync={onSync} />
   </div>
 )

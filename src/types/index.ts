@@ -1,5 +1,41 @@
 export type MemberRole = 'owner' | 'admin' | 'manager' | 'operator' | 'viewer'
 
+// ─── Товары ───────────────────────────────────────────────────
+
+export interface Product {
+  id: string
+  account_id: string
+  store_id: string
+  nm_id: number          // WB артикул (nmID)
+  vendor_code: string | null
+  name: string | null
+  brand: string | null
+  category: string | null
+  color: string | null
+  composition: string | null
+  country: string | null
+  barcodes: string[]
+  photos: unknown | null
+  sizes: unknown | null
+  raw_data: unknown | null
+  synced_at: string
+  created_at: string
+}
+
+export interface StoreSyncLog {
+  id: string
+  store_id: string
+  synced_at: string
+  products_count: number | null
+  status: 'ok' | 'error'
+  error_message: string | null
+}
+
+export interface SyncResult {
+  success: boolean
+  count: number
+}
+
 // ─── Роли / Доступы ───────────────────────────────────────────
 
 export interface RolePermissions {
@@ -91,6 +127,8 @@ export interface Store {
   name: string
   marketplace: string
   api_key?: string | null
+  supplier?: string | null
+  address?: string | null
   created_at: string
 }
 
@@ -148,6 +186,8 @@ export interface StoreFormValues {
   marketplace: string
   store_code?: string
   api_key?: string
+  supplier?: string
+  address?: string
 }
 
 export interface Carrier {

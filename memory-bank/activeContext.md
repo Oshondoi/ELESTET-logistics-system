@@ -1,7 +1,63 @@
 # Active Context
 
 ## Current Focus
-Страница Роли реализована. Сайдбар зафиксирован по высоте. Деплой на Vercel активен. Следующий: Этап 5 — Поиск и фильтры.
+Страница Товары полностью реализована. Магазины расширены синком с WB API. Следующие шаги: функциональность фото товаров (клик/просмотр), участники компании (Members), мобильное приложение.
+
+## What Was Recently Done
+
+### Страница Товары — ProductsPage (завершена)
+- Таблица товаров с аккордеон-раскрытием по строке (клик на строку)
+- Анимация раскрытия: `gridTemplateRows: '1fr' / '0fr'`, `transition: 220ms ease` (как в LogisticsPage)
+- Вложенная таблица размеров: колонки «Размер» (badge) и «Баркод»
+- Сортировка размеров по убыванию: 2XL → XL → L → M → S → числовые
+- Кнопка «Развернуть все / Свернуть все» (двойная стрелка, стиль Logistics)
+- Поиск по артикулу WB, артикулу продавца, названию, бренду
+- Выбор магазина: дропдаун, только магазины с API-ключом
+- Синхронизация товаров через Edge Function `sync-store-products`
+- Время последней синхронизации в шапке карточки
+- **Колонка фото**: 2-я колонка (после стрелки), миниатюра 36×36 с rounded-lg
+- **Превью по наведению**: 288×384px, позиционирование с учётом краёв экрана (зеркалится если не влезает справа, прижимается если уходит за низ)
+- Плейсхолдер если фото нет (серый квадрат с иконкой)
+
+### Магазины — синк с WB API (завершено)
+- `StoreList.tsx`: добавлены колонки «API ключ» (зелёный badge / прочерк), «Поставщик», «Адрес», «Создан»
+- `StoreList.tsx`: кнопка синка (rotating arrows icon, зелёный hover), `animate-spin` во время загрузки
+- `StoreList.tsx`: ошибка синка показывается над кнопками
+- `StoresPage.tsx`: prop `onSync: (store: Store) => Promise<void>` передаётся в StoreList
+- `App.tsx`: `handleSyncStore` — вызывает WB `/api/v1/seller-info`, сохраняет `data.name` в поле `supplier`
+- WB API ограничения: только `{name, sid, tin, tradeMark}` — адреса нет. Rate limit: 1 req/24h (429 → «Много запросов»)
+- `StoreFormModal.tsx`: кнопка «Из WB» удалена (мёртвый код)
+
+### Ролей / Справочников изменений не было
+
+## Present UI State
+- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / Роли
+- Деплой: Vercel (main ветка), env переменные настроены
+- Суpabase: Site URL и Redirect URLs настроены на Vercel-домен
+
+## SQL патчи — порядок применения
+```
+1.  schema.sql
+2.  bootstrap.sql
+3.  dev_access.sql
+4.  delete_account.sql
+5.  trips.sql
+6.  patch_trip_functions.sql
+7.  carriers_warehouses.sql
+8.  patch_invoice_photos_v2.sql
+9.  patch_stickers.sql
+10. patch_sticker_icons.sql
+11. patch_sticker_bundles.sql
+12. patch_store_api_key.sql
+13. patch_store_code_constraint.sql
+14. patch_system_warehouses.sql
+15. patch_roles.sql
+16. patch_roles_user.sql
+17. patch_profiles_short_id.sql
+18. patch_role_member_sync.sql
+```
+
+⚠️ `patch_system_warehouses.sql` (#14) — нужно применить в продакшн Supabase SQL Editor, чтобы системные склады WB вернулись на странице Справочники.
 
 ## What Was Recently Done
 
@@ -71,6 +127,26 @@
 17. patch_profiles_short_id.sql
 18. patch_role_member_sync.sql
 ```
+
+### Продакшн деплой — полная настройка БД (завершено)
+- Применены все 18 SQL-патчей в продакшн Supabase
+- Восстановлены RLS политики (были дропнуты при переприменении схемы):
+  - `stores`, `shipments`, `sticker_templates`, `trips`, `trip_lines`, `roles`
+- Добавлен `patch_role_member_sync.sql` (#18): триггер синхронизации account_members, RPC `get_my_accounts`, бэкфилл
+- Storage политики для `trip-invoices` bucket восстановлены
+- `account_members` заполнен — sydykovsam как owner в обеих компаниях
+
+### Баркод в форме стикера (завершено)
+- `StickerFormValues.barcode: string` добавлен в типы
+- Поле баркода первым в `StickerFormModal` (генерируется через `generateEAN13()` по умолчанию)
+- `stickerService` передаёт barcode при create и update
+
+### PDF стикер — финальные визуальные правки (завершено)
+- Шрифт тела 21px, начальный отступ 20px
+- Значения полей `font-weight: 500` (тоньше меток `600`)
+
+### Страница Товары (заглушка)
+- Показывает «Скоро» вместо RolesPage
 
 ## Immediate Next Steps
 1. **Этап 5:** Текстовый поиск + фильтр по статусу на странице Логистика
