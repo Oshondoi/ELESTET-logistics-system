@@ -131,6 +131,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | 3. Справочники | ✅ Готово | UI управления carriers/warehouses |
 | Стикеры WB | ✅ Готово | CRUD шаблонов, PDF-генерация, иконки ухода, EAC |
 | Наборы стикеров | ✅ Готово | Создать/редактировать/удалить, индивидуальные копии, PDF |
+| TS build fix | ✅ Готово | supabase.ts + Topbar + App + TripLineFormModal + stickerPdf + stickerService |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
 

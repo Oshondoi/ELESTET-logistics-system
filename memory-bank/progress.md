@@ -70,6 +70,14 @@ MVP в активной разработке. Шаг 0, Шаг 1, Шаг 2, Эт
 - Авто-выбор первого аккаунта при первом входе (новый браузер/устройство)
 - Env-переменные добавлены в Vercel
 
+### TypeScript build-ошибки (2-й раунд, завершён, коммит 8791a70)
+- `src/types/supabase.ts` — добавлены `carriers`, `warehouses`, `sticker_templates`, `sticker_bundles`
+- `Topbar.tsx` — `title: string` вместо жёсткого union
+- `App.tsx` — `products` добавлен в guard сохранённой страницы
+- `TripLineFormModal.tsx` — `makeDefaults(stores, warehouses)` (был пропущен 2-й аргумент)
+- `stickerPdf.ts` — `as unknown as string` для bloburl
+- `stickerService.ts` — `as unknown as Json` для `StickerBundleItem[]` при insert/update
+
 ### Наборы стикеров (завершен)
 - Таблица `sticker_bundles` в Supabase + RLS (`supabase/patch_sticker_bundles.sql`)
 - Поля иконок в `sticker_templates` (`supabase/patch_sticker_icons.sql`)

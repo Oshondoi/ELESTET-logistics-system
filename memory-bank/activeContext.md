@@ -1,7 +1,7 @@
 # Active Context
 
 ## Current Focus
-Наборы стикеров — завершены. Следующий: Этап 5 — Поиск и фильтры.
+Исправлены TypeScript build-ошибки Vercel. Следующий: Этап 5 — Поиск и фильтры.
 
 ## What Was Recently Done
 
@@ -39,6 +39,14 @@
 
 ## Immediate Next Steps
 1. **Этап 5:** Текстовый поиск + фильтр по статусу на странице Логистика
+
+### TypeScript build-ошибки Vercel (завершен)
+- `src/types/supabase.ts` — добавлены таблицы `carriers`, `warehouses`, `sticker_templates`, `sticker_bundles`
+- `Topbar.tsx` — тип `title` расширен до `string` (раньше был union с 6 значениями)
+- `App.tsx` — `products` добавлен в guard `storedPage` (был пропущен)
+- `TripLineFormModal.tsx` — исправлен вызов `makeDefaults(stores, warehouses)` (был без 2-го аргумента)
+- `stickerPdf.ts` — `output('bloburl') as unknown as string` (TS2352)
+- `stickerService.ts` — `StickerBundleItem[]` → `as unknown as Json` при insert/update
 
 ## Important Implementation Notes
 - `fetchBundles` возвращает `[]` при ошибке (не крашит апп если таблица не создана)
