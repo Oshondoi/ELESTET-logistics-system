@@ -4,9 +4,11 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
 import { Textarea } from '../ui/Textarea'
+import { generateEAN13 } from '../../lib/ean13'
 
 const defaultValues = (): StickerFormValues => ({
-  name: '',
+  barcode: generateEAN13(),
+  name: '',,
   composition: '',
   article: '',
   brand: '',
@@ -42,6 +44,7 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
       setError(null)
       if (initialValues) {
         setValues({
+          barcode: initialValues.barcode,
           name: initialValues.name,
           composition: initialValues.composition ?? '',
           article: initialValues.article ?? '',
@@ -82,6 +85,13 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
   return (
     <Modal open={open} onClose={onClose} title={isEdit ? 'Редактировать стикер' : 'Новый стикер'}>
       <form className="grid min-w-0 gap-4" onSubmit={handleSubmit}>
+
+        <Input
+          label="Баркод (EAN-13)"
+          placeholder="2006154540254"
+          value={values.barcode}
+          onChange={(e) => set('barcode', e.target.value)}
+        />
 
         <Input
           label="Наименование товара *"

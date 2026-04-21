@@ -18,7 +18,7 @@ export const createSticker = async (
   values: StickerFormValues,
 ): Promise<StickerTemplate> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const barcode = generateEAN13()
+  const barcode = values.barcode.trim() || generateEAN13()
   const { data, error } = await supabase
     .from('sticker_templates')
     .insert({
@@ -56,6 +56,7 @@ export const updateSticker = async (
   const { data, error } = await supabase
     .from('sticker_templates')
     .update({
+      barcode: values.barcode.trim(),
       name: values.name.trim(),
       composition: values.composition.trim() || null,
       article: values.article.trim() || null,

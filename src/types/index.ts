@@ -271,6 +271,7 @@ export interface StickerBundle {
 }
 
 export interface StickerFormValues {
+  barcode: string
   name: string
   composition: string
   article: string
