@@ -33,7 +33,7 @@ const boldLabel = (
   ctx.font = `bold ${fontSize}px Arial, sans-serif`
   const lw = ctx.measureText(label).width
   ctx.fillText(label, px, py)
-  ctx.font = `${fontSize}px Arial, sans-serif`
+  ctx.font = `500 ${fontSize}px Arial, sans-serif`
   const clean = value.replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
   let val = clean
   while (ctx.measureText(val).width > maxX - px - lw && val.length > 2) val = val.slice(0, -1)
@@ -170,7 +170,7 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   ctx.rect(0, BODY_Y, W_PX, BODY_H)
   ctx.clip()
 
-  let y = BODY_Y + 18
+  let y = BODY_Y + 20
   const maxX = W_PX - PAD
 
   /* Наименование — жирное */
@@ -182,34 +182,34 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   ctx.fillText(nm, PAD, y)
   y += 38
 
-  if (tpl.composition)      y = boldLabel(ctx, 'Состав: ',             tpl.composition,      PAD, y, 20, maxX)
-  if (tpl.article)          y = boldLabel(ctx, 'Артикул: ',            tpl.article,          PAD, y, 20, maxX)
-  if (tpl.brand)            y = boldLabel(ctx, 'Бренд: ',              tpl.brand,            PAD, y, 20, maxX)
+  if (tpl.composition)      y = boldLabel(ctx, 'Состав: ',             tpl.composition,      PAD, y, 21, maxX)
+  if (tpl.article)          y = boldLabel(ctx, 'Артикул: ',            tpl.article,          PAD, y, 21, maxX)
+  if (tpl.brand)            y = boldLabel(ctx, 'Бренд: ',              tpl.brand,            PAD, y, 21, maxX)
 
   if (tpl.size || tpl.color) {
     ctx.fillStyle = '#111'
     let cx = PAD
     const pair = (lbl: string, val: string) => {
-      ctx.font = `bold 20px Arial, sans-serif`
+      ctx.font = `bold 21px Arial, sans-serif`
       ctx.fillText(lbl, cx, y); cx += ctx.measureText(lbl).width
-      ctx.font = `20px Arial, sans-serif`
+      ctx.font = `500 21px Arial, sans-serif`
       ctx.fillText(val, cx, y); cx += ctx.measureText(val).width + 20
     }
     if (tpl.size)  pair('Размер: ', tpl.size)
     if (tpl.color) pair('Цвет: ',   tpl.color)
-    y += Math.round(20 * 1.38)
+    y += Math.round(21 * 1.38)
   }
 
-  if (tpl.supplier)         y = boldLabel(ctx, 'Поставщик: ',         tpl.supplier,         PAD, y, 20, maxX)
-  if (tpl.supplier_address) y = boldLabel(ctx, 'Адрес поставщика: ',  tpl.supplier_address, PAD, y, 20, maxX)
-  if (tpl.production_date)  y = boldLabel(ctx, 'Дата производства: ', tpl.production_date,  PAD, y, 20, maxX)
+  if (tpl.supplier)         y = boldLabel(ctx, 'Поставщик: ',         tpl.supplier,         PAD, y, 21, maxX)
+  if (tpl.supplier_address) y = boldLabel(ctx, 'Адрес поставщика: ',  tpl.supplier_address, PAD, y, 21, maxX)
+  if (tpl.production_date)  y = boldLabel(ctx, 'Дата производства: ', tpl.production_date,  PAD, y, 21, maxX)
 
   /* Страна + иконки по уходу на одной строке */
   ctx.fillStyle = '#111'
-  ctx.font = 'bold 20px Arial, sans-serif'
+  ctx.font = 'bold 21px Arial, sans-serif'
   const countryLabel = 'Страна: '
   ctx.fillText(countryLabel, PAD, y)
-  ctx.font = '20px Arial, sans-serif'
+  ctx.font = '500 21px Arial, sans-serif'
   const countryVal = (tpl.country || '').replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
   ctx.fillText(countryVal, PAD + ctx.measureText(countryLabel).width, y)
 

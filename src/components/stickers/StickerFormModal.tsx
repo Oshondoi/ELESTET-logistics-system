@@ -8,7 +8,7 @@ import { generateEAN13 } from '../../lib/ean13'
 
 const defaultValues = (): StickerFormValues => ({
   barcode: generateEAN13(),
-  name: '',,
+  name: '',
   composition: '',
   article: '',
   brand: '',
