@@ -225,7 +225,7 @@ export const RoleFormModal = ({
     }
   }, [open, initialValues]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const doResolve = async (params: { email?: string; userId?: string }, otherValue?: string) => {
+  const doResolve = async (params: { email?: string; userId?: string; shortId?: number }, otherValue?: string) => {
     const key = params.email ?? params.userId ?? ''
     if (!key) return
     setIsResolving(true)

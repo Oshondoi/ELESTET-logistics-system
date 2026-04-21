@@ -57,8 +57,8 @@ export const useRoles = (accountId: string | null) => {
     setRoles((prev) => prev.filter((r) => r.id !== roleId))
   }
 
-  const cloneRoleToAccount = async (role: Role, targetAccountId: string): Promise<Role> => {
-    return cloneRoleToAccountInSupabase(role, targetAccountId)
+  const cloneRoleToAccount = async (role: Role, targetAccountId: string): Promise<void> => {
+    await cloneRoleToAccountInSupabase(role, targetAccountId)
   }
 
   return {

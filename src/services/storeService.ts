@@ -67,14 +67,11 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
     throw new Error('Supabase client is not configured')
   }
 
-  const payload: Record<string, unknown> = {
+  const payload = {
     name: values.name.trim(),
     marketplace: values.marketplace,
     store_code: values.store_code?.trim() || null,
-  }
-
-  if (values.api_key !== undefined) {
-    payload.api_key = values.api_key.trim() || null
+    ...(values.api_key !== undefined ? { api_key: values.api_key.trim() || null } : {}),
   }
 
   const { data, error } = await supabase

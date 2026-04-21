@@ -11,7 +11,7 @@ export const fetchRolesFromSupabase = async (accountId: string): Promise<Role[]>
     .order('created_at', { ascending: true })
 
   if (error) throw new Error(error.message)
-  const roles = (data ?? []) as Role[]
+  const roles = (data ?? []) as unknown as Role[]
 
   // Подтягиваем профили назначенных пользователей
   const userIds = roles.map((r) => r.assigned_user_id).filter(Boolean) as string[]
@@ -43,23 +43,24 @@ export const createRoleInSupabase = async (accountId: string, values: RoleFormVa
     .insert({
       account_id: accountId,
       name: values.name.trim(),
-      permissions: values.permissions,
+      permissions: values.permissions as unknown as import('../types/supabase').Json,
       assigned_user_id: values.assigned_user_id ?? null,
     })
     .select()
     .single()
 
   if (error) throw new Error(error.message)
-  return data as Role
+  return data as unknown as Role
 }
 
 export const updateRoleInSupabase = async (roleId: string, values: Partial<RoleFormValues>): Promise<Role> => {
   if (!supabase) throw new Error('Supabase не настроен')
 
-  const payload: Record<string, unknown> = {}
-  if (values.name !== undefined) payload.name = values.name.trim()
-  if (values.permissions !== undefined) payload.permissions = values.permissions
-  if ('assigned_user_id' in values) payload.assigned_user_id = values.assigned_user_id ?? null
+  const payload = {
+    ...(values.name !== undefined ? { name: values.name.trim() } : {}),
+    ...(values.permissions !== undefined ? { permissions: values.permissions as unknown as import('../types/supabase').Json } : {}),
+    ...('assigned_user_id' in values ? { assigned_user_id: values.assigned_user_id ?? null } : {}),
+  }
 
   const { data, error } = await supabase
     .from('roles')
@@ -69,7 +70,7 @@ export const updateRoleInSupabase = async (roleId: string, values: Partial<RoleF
     .single()
 
   if (error) throw new Error(error.message)
-  return data as Role
+  return data as unknown as Role
 }
 
 export const deleteRoleFromSupabase = async (roleId: string): Promise<void> => {
@@ -88,12 +89,12 @@ export const cloneRoleToAccountInSupabase = async (
 
   const { data, error } = await supabase
     .from('roles')
-    .insert({ account_id: targetAccountId, name: role.name, permissions: role.permissions })
+    .insert({ account_id: targetAccountId, name: role.name, permissions: role.permissions as unknown as import('../types/supabase').Json })
     .select()
     .single()
 
   if (error) throw new Error(error.message)
-  return data as Role
+  return data as unknown as Role
 }
 
 // Ищет пользователя по email, UUID или U{n} (короткий ID)
