@@ -70,7 +70,7 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
   const payload = {
     name: values.name.trim(),
     marketplace: values.marketplace,
-    store_code: values.store_code?.trim() || null,
+    store_code: values.store_code?.trim() || undefined,
     ...(values.api_key !== undefined ? { api_key: values.api_key.trim() || null } : {}),
   }
 
