@@ -49,6 +49,7 @@ function App() {
       storedPage === 'shipments' ||
       storedPage === 'stores' ||
       storedPage === 'directories' ||
+      storedPage === 'products' ||
       storedPage === 'roles' ||
       storedPage === 'stickers'
     ) {

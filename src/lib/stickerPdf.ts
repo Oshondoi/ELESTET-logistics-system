@@ -270,6 +270,6 @@ export const downloadStickerPdf = (templates: StickerTemplate[]): void => {
 
 export const previewStickerPdf = (templates: StickerTemplate[]): void => {
   if (templates.length === 0) return
-  const url = buildPdf(templates).output('bloburl') as string
+  const url = buildPdf(templates).output('bloburl') as unknown as string
   window.open(url, '_blank')
 }

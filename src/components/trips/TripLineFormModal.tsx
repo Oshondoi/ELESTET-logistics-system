@@ -51,7 +51,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
     setIsSubmitting(true)
     void onSubmit(values)
       .then(() => {
-        setValues(makeDefaults(stores))
+        setValues(makeDefaults(stores, warehouses))
         onClose()
       })
       .finally(() => setIsSubmitting(false))

@@ -1,5 +1,5 @@
 interface TopbarProps {
-  title: 'Главная' | 'Фулфилмент' | 'Логистика' | 'Магазины' | 'Товары' | 'Роли'
+  title: string
 }
 
 export const Topbar = ({ title }: TopbarProps) => (

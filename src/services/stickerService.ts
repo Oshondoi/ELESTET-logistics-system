@@ -102,7 +102,7 @@ export const fetchBundles = async (accountId: string): Promise<StickerBundle[]> 
     .order('created_at', { ascending: false })
   // Если таблица ещё не создана — не крашим всё приложение
   if (error) return []
-  return (data ?? []) as StickerBundle[]
+  return (data ?? []) as unknown as StickerBundle[]
 }
 
 export const createBundle = async (
@@ -113,11 +113,11 @@ export const createBundle = async (
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase
     .from('sticker_bundles')
-    .insert({ account_id: accountId, name: name.trim(), items })
+    .insert({ account_id: accountId, name: name.trim(), items: items as unknown as import('../types/supabase').Json })
     .select()
     .single()
   if (error) throw error
-  return data as StickerBundle
+  return data as unknown as StickerBundle
 }
 
 export const updateBundle = async (
@@ -129,13 +129,13 @@ export const updateBundle = async (
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase
     .from('sticker_bundles')
-    .update({ name: name.trim(), items })
+    .update({ name: name.trim(), items: items as unknown as import('../types/supabase').Json })
     .eq('id', bundleId)
     .eq('account_id', accountId)
     .select()
     .single()
   if (error) throw error
-  return data as StickerBundle
+  return data as unknown as StickerBundle
 }
 
 export const deleteBundle = async (accountId: string, bundleId: string): Promise<void> => {

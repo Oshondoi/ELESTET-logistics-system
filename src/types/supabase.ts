@@ -209,6 +209,104 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['trip_lines']['Insert']>
         Relationships: []
       }
+      carriers: {
+        Row: {
+          id: string
+          account_id: string
+          name: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          name: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['carriers']['Insert']>
+        Relationships: []
+      }
+      warehouses: {
+        Row: {
+          id: string
+          account_id: string
+          name: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          name: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['warehouses']['Insert']>
+        Relationships: []
+      }
+      sticker_templates: {
+        Row: {
+          id: string
+          account_id: string
+          barcode: string
+          name: string
+          composition: string | null
+          article: string | null
+          brand: string | null
+          size: string | null
+          color: string | null
+          supplier: string | null
+          supplier_address: string | null
+          production_date: string | null
+          country: string
+          copies: number
+          icon_wash: boolean
+          icon_iron: boolean
+          icon_no_bleach: boolean
+          icon_no_tumble_dry: boolean
+          icon_eac: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          barcode: string
+          name: string
+          composition?: string | null
+          article?: string | null
+          brand?: string | null
+          size?: string | null
+          color?: string | null
+          supplier?: string | null
+          supplier_address?: string | null
+          production_date?: string | null
+          country?: string
+          copies?: number
+          icon_wash?: boolean
+          icon_iron?: boolean
+          icon_no_bleach?: boolean
+          icon_no_tumble_dry?: boolean
+          icon_eac?: boolean
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['sticker_templates']['Insert']>
+        Relationships: []
+      }
+      sticker_bundles: {
+        Row: {
+          id: string
+          account_id: string
+          name: string
+          items: Json
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          name: string
+          items?: Json
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['sticker_bundles']['Insert']>
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
