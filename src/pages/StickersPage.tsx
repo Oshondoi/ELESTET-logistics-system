@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { StickerFormValues, StickerTemplate, StickerBundle, StickerBundleItem, Store, Product } from '../types'
 import { StickerFormModal } from '../components/stickers/StickerFormModal'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
@@ -8,6 +8,33 @@ import { Modal } from '../components/ui/Modal'
 import { downloadStickerPdf, previewStickerPdf } from '../lib/stickerPdf'
 import { generateEAN13 } from '../lib/ean13'
 import { fetchProducts } from '../services/productService'
+
+// ── Хелперы для размеров (Import WB) ─────────────────────
+interface SizeRowImp { techSize: string; barcode: string; rowKey: string }
+const LETTER_SIZE_ORDER_IMP: Record<string, number> = {
+  'XXS': 1, 'XS': 2, 'S': 3, 'M': 4, 'L': 5, 'XL': 6,
+  '2XL': 7, 'XXL': 7, '3XL': 8, 'XXXL': 8, '4XL': 9, '5XL': 10, '6XL': 11,
+}
+function sizeWeightImp(techSize: string): number {
+  const s = techSize.trim().toUpperCase()
+  if (LETTER_SIZE_ORDER_IMP[s] !== undefined) return LETTER_SIZE_ORDER_IMP[s]
+  const n = parseFloat(s)
+  return isNaN(n) ? -1 : n
+}
+function getSizeRowsImp(product: import('../types').Product): SizeRowImp[] {
+  const sizes = (product.sizes ?? []) as Array<{ techSize?: string; skus?: string[] }>
+  if (sizes.length === 0) return [{ techSize: '—', barcode: (product.barcodes as string[])[0] ?? '—', rowKey: `${product.id}-0` }]
+  const rows: SizeRowImp[] = []
+  sizes.forEach((s, si) => {
+    const skus = s.skus ?? []
+    if (skus.length === 0) {
+      rows.push({ techSize: s.techSize ?? '—', barcode: '—', rowKey: `${product.id}-${si}` })
+    } else {
+      skus.forEach((sku, ki) => rows.push({ techSize: s.techSize ?? '—', barcode: sku, rowKey: `${product.id}-${si}-${ki}` }))
+    }
+  })
+  return rows.sort((a, b) => sizeWeightImp(a.techSize) - sizeWeightImp(b.techSize))
+}
 
 interface StickersPageProps {
   stickers: StickerTemplate[]
@@ -29,6 +56,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const [deleteTarget, setDeleteTarget] = useState<StickerTemplate | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deleteMassOpen, setDeleteMassOpen] = useState(false)
+  const [isDeletingMass, setIsDeletingMass] = useState(false)
+  const [deleteMassError, setDeleteMassError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [isPrinting, setIsPrinting] = useState(false)
   const [isPreviewing, setIsPreviewing] = useState(false)
@@ -81,6 +111,22 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       previewStickerPdf(toPrint)
     } finally {
       setIsPreviewing(false)
+    }
+  }
+
+  const handleConfirmDeleteMass = async () => {
+    setIsDeletingMass(true)
+    setDeleteMassError(null)
+    try {
+      for (const id of Array.from(selected)) {
+        await onDelete(id)
+      }
+      setSelected(new Set())
+      setDeleteMassOpen(false)
+    } catch (err) {
+      setDeleteMassError(err instanceof Error ? err.message : 'Ошибка удаления')
+    } finally {
+      setIsDeletingMass(false)
     }
   }
 
@@ -180,6 +226,19 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const [importDone, setImportDone] = useState<number | null>(null)
   const [importStoreDropdownOpen, setImportStoreDropdownOpen] = useState(false)
   const importStoreDropdownRef = useRef<HTMLDivElement | null>(null)
+  const [importExpandedIds, setImportExpandedIds] = useState<Set<string>>(new Set())
+  const [importExpandAll, setImportExpandAll] = useState(false)
+
+  const handleImportToggleAll = () => {
+    if (importExpandAll) {
+      setImportExpandedIds(new Set())
+      setImportExpandAll(false)
+    } else {
+      setImportExpandedIds(new Set(importProducts.map((p) => p.id)))
+      setImportExpandAll(true)
+    }
+  }
+  const [importPhotoPreview, setImportPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
 
   useEffect(() => {
     const handler = (e: PointerEvent) => {
@@ -204,39 +263,63 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
     if (activeTab === 'import') void loadImportProducts(selectedStoreId)
   }, [activeTab, selectedStoreId, loadImportProducts])
 
+  const allImportSizeRows = useMemo(
+    () => importProducts.flatMap((p) => getSizeRowsImp(p)),
+    [importProducts]
+  )
+
   const handleImportCreate = async () => {
-    const toCreate = importProducts.filter((p) => importSelected.has(p.id))
+    const toCreate = allImportSizeRows
+      .filter((row) => importSelected.has(row.rowKey))
+      .map((row) => {
+        const product = importProducts.find((p) => row.rowKey.startsWith(p.id))!
+        return { product, row }
+      })
     if (toCreate.length === 0) return
     setIsImporting(true)
     setImportError(null)
     setImportDone(null)
-    let count = 0
+    const createdIds: string[] = []
     try {
-      for (const p of toCreate) {
-        const barcode = p.barcodes[0] ?? generateEAN13()
-        await onAdd({
-          barcode,
-          name: p.name ?? '',
-          article: p.vendor_code ?? '',
-          brand: p.brand ?? '',
-          size: '',
-          color: '',
-          composition: '',
-          supplier: '',
-          supplier_address: '',
-          production_date: '',
-          country: '',
-          copies: 1,
-          icon_wash: false,
-          icon_iron: false,
-          icon_no_bleach: false,
-          icon_no_tumble_dry: false,
-          icon_eac: true,
-        })
-        count++
+      for (const { product: p, row } of toCreate) {
+        const barcode = row.barcode !== '—' ? row.barcode : generateEAN13()
+        try {
+          const result = await onAdd({
+            barcode,
+            name: p.name ?? p.vendor_code ?? barcode,
+            article: p.vendor_code ?? '',
+            brand: p.brand ?? '',
+            size: row.techSize !== '—' ? row.techSize : '',
+            color: '',
+            composition: '',
+            supplier: '',
+            supplier_address: '',
+            production_date: '',
+            country: '',
+            copies: 1,
+            icon_wash: false,
+            icon_iron: false,
+            icon_no_bleach: false,
+            icon_no_tumble_dry: false,
+            icon_eac: true,
+          }) as { id: string } | undefined
+          if (result?.id) createdIds.push(result.id)
+        } catch {
+          // пропускаем дубли (уже существующий баркод)
+        }
       }
-      setImportDone(count)
       setImportSelected(new Set())
+      if (createdIds.length > 0) {
+        const init: Record<string, { checked: boolean; copies: number }> = {}
+        createdIds.forEach((id) => { init[id] = { checked: true, copies: 1 } })
+        setBundleItems(init)
+        setBundleName('')
+        setEditingBundle(null)
+        setBundleSaveError(null)
+        setBundleModalOpen(true)
+      } else {
+        setImportError('Все выбранные стикеры уже существуют')
+      }
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Ошибка создания стикеров')
     } finally {
@@ -296,6 +379,41 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                   )}
                 </div>
               )}
+              <button
+                type="button"
+                onClick={handleImportToggleAll}
+                aria-pressed={importExpandAll}
+                aria-label={importExpandAll ? 'Свернуть все' : 'Развернуть все'}
+                title={importExpandAll ? 'Свернуть все' : 'Развернуть все'}
+                className={[
+                  'flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition',
+                  importExpandAll
+                    ? 'bg-[#E3EAF6] text-slate-700 hover:bg-[#d6e0f5]'
+                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
+                ].join(' ')}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-[15px] w-[15px] shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  {importExpandAll ? (
+                    <>
+                      <path d="m7.5 11 4.5-4.5 4.5 4.5" />
+                      <path d="m7.5 17 4.5-4.5 4.5 4.5" />
+                    </>
+                  ) : (
+                    <>
+                      <path d="m7.5 7 4.5 4.5 4.5-4.5" />
+                      <path d="m7.5 13 4.5 4.5 4.5-4.5" />
+                    </>
+                  )}
+                </svg>
+              </button>
               {importDone !== null && <span className="text-xs text-emerald-600">✓ Создано стикеров: {importDone}</span>}
               {importError && <span className="text-xs text-rose-500">{importError}</span>}
             </div>
@@ -366,7 +484,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
           ) : activeTab === 'import' ? (
             <>
               <Button className="shrink-0 rounded-2xl px-5 py-2.5" disabled={isImporting || importSelected.size === 0} onClick={() => void handleImportCreate()}>
-                {isImporting ? 'Создание…' : `Создать стикеры${importSelected.size > 0 ? ` (${importSelected.size})` : ''}`}
+                {isImporting ? 'Создание…' : `Создать набор${importSelected.size > 0 ? ` (${importSelected.size})` : ''}`}
               </Button>
             </>
           ) : null}
@@ -405,41 +523,133 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="min-w-full text-[13px]">
-                  <thead className="border-b border-slate-100 text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
-                    <tr>
-                      <th className="w-9 px-3 py-2">
-                        <input type="checkbox"
-                          checked={importSelected.size === importProducts.length && importProducts.length > 0}
-                          onChange={(e) => setImportSelected(e.target.checked ? new Set(importProducts.map((p) => p.id)) : new Set())}
-                          className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
-                        />
-                      </th>
-                      <th className="px-3 py-2">Баркод</th>
-                      <th className="px-3 py-2">Арт. WB</th>
-                      <th className="px-3 py-2">Арт. продавца</th>
-                      <th className="px-3 py-2">Название</th>
-                      <th className="px-3 py-2">Бренд</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {importProducts.map((p) => (
-                      <tr key={p.id} className={`align-middle transition-colors hover:bg-slate-50 ${importSelected.has(p.id) ? 'bg-blue-50/40' : ''}`}>
-                        <td className="px-3 py-2.5">
-                          <input type="checkbox"
-                            checked={importSelected.has(p.id)}
-                            onChange={() => setImportSelected((prev) => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n })}
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 bg-slate-50">
+                      <th className="w-8 px-3 py-2.5" />
+                      <th className="w-9 px-3 py-2.5">
+                        {allImportSizeRows.length > 0 && (
+                          <input
+                            type="checkbox"
+                            checked={allImportSizeRows.every((r) => importSelected.has(r.rowKey))}
+                            onChange={(e) => setImportSelected(e.target.checked ? new Set(allImportSizeRows.map((r) => r.rowKey)) : new Set())}
                             className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
                           />
-                        </td>
-                        <td className="px-3 py-2.5 font-mono text-xs text-slate-400">{p.barcodes[0] ?? '—'}</td>
-                        <td className="px-3 py-2.5 font-mono text-xs text-slate-500">{p.nm_id}</td>
-                        <td className="px-3 py-2.5 text-slate-600">{p.vendor_code ?? '—'}</td>
-                        <td className="px-3 py-2.5 font-medium text-slate-800">{p.name ?? '—'}</td>
-                        <td className="px-3 py-2.5 text-slate-500">{p.brand ?? '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
+                        )}
+                      </th>
+                      <th className="w-12 px-2 py-2.5" />
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Артикул WB</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Артикул продавца</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Название</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Бренд</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Категория</th>
+                    </tr>
+                  </thead>
+                  {importProducts.map((product) => {
+                    const isExpanded = importExpandAll || importExpandedIds.has(product.id)
+                    const sizeRows = getSizeRowsImp(product)
+                    const productRowKeys = sizeRows.map((r) => r.rowKey)
+                    const allProductSelected = productRowKeys.length > 0 && productRowKeys.every((k) => importSelected.has(k))
+                    const photos = product.photos as Array<{ c246x328?: string; big?: string }> | null
+                    const photoUrl = photos?.[0]?.c246x328 ?? photos?.[0]?.big ?? null
+                    return (
+                      <tbody key={product.id} className="divide-y divide-slate-50">
+                        <tr
+                          className="cursor-pointer align-middle transition-colors duration-150 hover:bg-slate-50"
+                          onClick={() => setImportExpandedIds((prev) => { const n = new Set(prev); n.has(product.id) ? n.delete(product.id) : n.add(product.id); return n })}
+                        >
+                          <td className="px-3 py-3 text-slate-400">
+                            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
+                              <path d="m9 18 6-6-6-6" />
+                            </svg>
+                          </td>
+                          <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={allProductSelected}
+                              onChange={(e) => setImportSelected((prev) => {
+                                const n = new Set(prev)
+                                productRowKeys.forEach((k) => e.target.checked ? n.add(k) : n.delete(k))
+                                return n
+                              })}
+                              className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            {photoUrl ? (
+                              <img
+                                src={photoUrl}
+                                alt=""
+                                className="h-9 w-9 cursor-zoom-in rounded-lg object-cover"
+                                onMouseEnter={(e) => {
+                                  const rect = (e.currentTarget as HTMLImageElement).getBoundingClientRect()
+                                  const popW = 288, popH = 384, gap = 12
+                                  const x = rect.right + gap + popW > window.innerWidth ? rect.left - gap - popW : rect.right + gap
+                                  const y = Math.min(rect.top, window.innerHeight - popH - gap)
+                                  setImportPhotoPreview({ url: photoUrl, x, y })
+                                }}
+                                onMouseLeave={() => setImportPhotoPreview(null)}
+                              />
+                            ) : (
+                              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100">
+                                <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                  <rect x="3" y="3" width="18" height="18" rx="3" />
+                                  <circle cx="8.5" cy="8.5" r="1.5" />
+                                  <path d="m21 15-5-5L5 21" />
+                                </svg>
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-400">{product.nm_id}</td>
+                          <td className="px-4 py-3 text-xs text-slate-600">{product.vendor_code ?? '—'}</td>
+                          <td className="px-4 py-3 font-medium text-slate-800">{product.name ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{product.brand ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-400">{product.category ?? '—'}</td>
+                        </tr>
+                        <tr>
+                          <td className="p-0" colSpan={8}>
+                            <div style={{ display: 'grid', gridTemplateRows: isExpanded ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
+                              <div className="overflow-hidden">
+                                <div className="border-t border-slate-100 bg-slate-50/70">
+                                  <table className="min-w-full text-[13px]">
+                                    <thead className="text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                                      <tr>
+                                        <th className="w-9 px-3 py-2" />
+                                        <th className="px-4 py-2 font-semibold" colSpan={2}>Размер</th>
+                                        <th className="px-4 py-2 font-semibold" colSpan={3}>Баркод</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100/80">
+                                      {sizeRows.map((row) => (
+                                        <tr key={row.rowKey} className={`align-middle transition-colors ${importSelected.has(row.rowKey) ? 'bg-blue-50/50' : ''}`}>
+                                          <td className="px-3 py-2">
+                                            <input
+                                              type="checkbox"
+                                              checked={importSelected.has(row.rowKey)}
+                                              onChange={() => setImportSelected((prev) => { const n = new Set(prev); n.has(row.rowKey) ? n.delete(row.rowKey) : n.add(row.rowKey); return n })}
+                                              className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                                            />
+                                          </td>
+                                          <td colSpan={2} className="px-4 py-2">
+                                            {row.techSize !== '—' ? (
+                                              <span className="rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-600">{row.techSize}</span>
+                                            ) : (
+                                              <span className="text-xs text-slate-300">—</span>
+                                            )}
+                                          </td>
+                                          <td colSpan={3} className="px-4 py-2 font-mono text-xs text-slate-500">{row.barcode}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    )
+                  })}
                 </table>
               </div>
             )}
@@ -469,6 +679,21 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                   <th className="px-3 py-2">Размер / Цвет</th>
                   <th className="px-3 py-2">Копий</th>
                   <th className="w-20 px-3 py-2" />
+                  <th className="w-10 px-2 py-2">
+                    <button
+                      type="button"
+                      title="Удалить выбранные"
+                      disabled={selected.size === 0 || isDeletingMass}
+                      onClick={() => setDeleteMassOpen(true)}
+                      className="flex h-7 w-7 items-center justify-center rounded-xl transition disabled:pointer-events-none disabled:opacity-30 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                        <path d="M9 4h6" /><path d="M5 7h14" />
+                        <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+                        <path d="M10 11v4" /><path d="M14 11v4" />
+                      </svg>
+                    </button>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -528,19 +753,21 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                             <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                           </svg>
                         </button>
-                        <button
-                          type="button"
-                          title="Удалить"
-                          onClick={() => setDeleteTarget(s)}
-                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
-                        >
-                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                            <path d="M9 4h6" /><path d="M5 7h14" />
-                            <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
-                            <path d="M10 11v4" /><path d="M14 11v4" />
-                          </svg>
-                        </button>
                       </div>
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <button
+                        type="button"
+                        title="Удалить"
+                        onClick={() => setDeleteTarget(s)}
+                        className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                          <path d="M9 4h6" /><path d="M5 7h14" />
+                          <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+                          <path d="M10 11v4" /><path d="M14 11v4" />
+                        </svg>
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -655,6 +882,16 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       />
 
       <DeleteConfirmModal
+        open={deleteMassOpen}
+        title={`Удалить ${selected.size} стикеров?`}
+        description="Выбранные стикеры будут удалены. Действие необратимо."
+        isSubmitting={isDeletingMass}
+        error={deleteMassError}
+        onClose={() => { if (!isDeletingMass) { setDeleteMassError(null); setDeleteMassOpen(false) } }}
+        onConfirm={() => void handleConfirmDeleteMass()}
+      />
+
+      <DeleteConfirmModal
         open={Boolean(deleteTarget)}
         title="Удалить стикер?"
         description={`«${deleteTarget?.name ?? ''}» (${deleteTarget?.barcode ?? ''}) будет удалён.`}
@@ -738,6 +975,16 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
         onClose={() => { if (!isDeletingBundle) { setDeleteBundleError(null); setDeleteBundleTarget(null) } }}
         onConfirm={() => void handleConfirmDeleteBundle()}
       />
+
+      {/* Превью фото при наведении (Import WB) */}
+      {importPhotoPreview && (
+        <div
+          className="pointer-events-none fixed z-50 overflow-hidden rounded-2xl shadow-2xl ring-1 ring-slate-200"
+          style={{ left: importPhotoPreview.x, top: importPhotoPreview.y }}
+        >
+          <img src={importPhotoPreview.url} alt="" className="h-96 w-72 object-cover" />
+        </div>
+      )}
     </div>
   )
 }

@@ -54,7 +54,7 @@ function getSizeRows(product: Product): SizeRow[] {
     }
   })
   // Сортировка: крупные размеры сверху, мелкие снизу
-  return rows.sort((a, b) => sizeWeight(b.techSize) - sizeWeight(a.techSize))
+  return rows.sort((a, b) => sizeWeight(a.techSize) - sizeWeight(b.techSize))
 }
 
 export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: ProductsPageProps) => {
@@ -326,6 +326,14 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
             {!isLoadingProducts && (
               <span className="ml-2 rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
                 {filtered.length}
+              </span>
+            )}
+            {!isLoadingProducts && (
+              <span className="ml-3 text-sm font-semibold text-slate-900">
+                Артикул
+                <span className="ml-2 rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+                  {new Set(filtered.map((p) => p.vendor_code).filter(Boolean)).size}
+                </span>
               </span>
             )}
           </span>
