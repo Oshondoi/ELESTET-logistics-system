@@ -64,6 +64,19 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   members_manage: false,
 }
 
+export const FULL_PERMISSIONS: RolePermissions = {
+  shipments_view: true,
+  shipments_manage: true,
+  stores_view: true,
+  stores_manage: true,
+  directories_view: true,
+  directories_manage: true,
+  stickers_view: true,
+  stickers_manage: true,
+  roles_manage: true,
+  members_manage: true,
+}
+
 export interface Role {
   id: string
   account_id: string

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '../../lib/utils'
-import type { Account } from '../../types'
+import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
   activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles' | 'stickers'
@@ -12,12 +12,14 @@ interface SidebarProps {
   onSelectAccount: (accountId: string) => void
   onDeleteActiveCompany: (id: string) => void
   onEditCompany: (account: Account) => void
+  permissions: RolePermissions
 }
 
 const items = [
   {
     key: 'home',
     label: 'Главная',
+    permKey: null,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M3 10.5 12 4l9 6.5" />
@@ -29,6 +31,7 @@ const items = [
   {
     key: 'fulfillment',
     label: 'Фулфилмент',
+    permKey: 'shipments_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M12 3 4.5 7v10L12 21l7.5-4V7L12 3Z" />
@@ -40,6 +43,7 @@ const items = [
   {
     key: 'shipments',
     label: 'Логистика',
+    permKey: 'shipments_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M4 7h16" />
@@ -51,6 +55,7 @@ const items = [
   {
     key: 'stores',
     label: 'Магазины',
+    permKey: 'stores_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M4 10.5 6 5h12l2 5.5" />
@@ -62,6 +67,7 @@ const items = [
   {
     key: 'products',
     label: 'Товары',
+    permKey: 'stores_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M3 6h18" />
@@ -76,6 +82,7 @@ const items = [
   {
     key: 'directories',
     label: 'Справочники',
+    permKey: 'directories_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M4 6h16" />
@@ -88,6 +95,7 @@ const items = [
   {
     key: 'stickers',
     label: 'Стикеры',
+    permKey: 'stickers_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -101,6 +109,7 @@ const items = [
   {
     key: 'roles',
     label: 'Роли',
+    permKey: 'roles_manage' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
@@ -122,6 +131,7 @@ export const Sidebar = ({
   onSelectAccount,
   onDeleteActiveCompany,
   onEditCompany,
+  permissions,
 }: SidebarProps) => {
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
   const companyRef = useRef<HTMLDivElement | null>(null)
@@ -292,7 +302,7 @@ export const Sidebar = ({
         </div>
 
         <nav className="flex flex-col gap-0.5">
-          {items.map((item) => (
+          {items.filter((item) => item.permKey === null || permissions[item.permKey]).map((item) => (
             <button
               type="button"
               key={item.key}

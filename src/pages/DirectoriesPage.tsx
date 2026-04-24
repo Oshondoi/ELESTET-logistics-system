@@ -10,9 +10,10 @@ interface DirectoryPanelProps {
   onAdd: (name: string) => Promise<unknown>
   onDelete: (id: string) => Promise<void>
   onUpdate: (id: string, name: string) => Promise<void>
+  canManage?: boolean
 }
 
-const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate }: DirectoryPanelProps) => {
+const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = true }: DirectoryPanelProps) => {
   const [inputValue, setInputValue] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
@@ -83,6 +84,7 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate }: DirectoryPa
           <span className="text-xs text-slate-400">{items.length}</span>
         </div>
 
+        {canManage && (
         <form onSubmit={(e) => void handleAdd(e)} className="flex gap-2 border-b border-slate-100 px-4 py-3">
           <input
             type="text"
@@ -95,6 +97,7 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate }: DirectoryPa
             {isAdding ? '…' : '+ Добавить'}
           </Button>
         </form>
+        )}
         {addError && <p className="px-4 pb-2 text-xs text-rose-500">{addError}</p>}
 
         {items.length > 0 ? (
@@ -135,6 +138,7 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate }: DirectoryPa
                         <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-violet-50 text-violet-400">WB</span>
                       )}
                     </div>
+                    {canManage && (
                     <div className="flex items-center">
                       {!item.is_system && (
                         <button
@@ -165,6 +169,7 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate }: DirectoryPa
                         </button>
                       )}
                     </div>
+                    )}
                   </>
                 )}
               </li>
@@ -199,6 +204,7 @@ interface DirectoriesPageProps {
   onAddWarehouse: (name: string) => Promise<unknown>
   onDeleteWarehouse: (id: string) => Promise<void>
   onRenameWarehouse: (id: string, name: string) => Promise<void>
+  canManage?: boolean
 }
 
 export const DirectoriesPage = ({
@@ -210,6 +216,7 @@ export const DirectoriesPage = ({
   onAddWarehouse,
   onDeleteWarehouse,
   onRenameWarehouse,
+  canManage = true,
 }: DirectoriesPageProps) => (
   <div className="space-y-4">
     <div className="grid gap-4 lg:grid-cols-2">
@@ -219,6 +226,7 @@ export const DirectoriesPage = ({
         onAdd={onAddCarrier}
         onDelete={onDeleteCarrier}
         onUpdate={onRenameCarrier}
+        canManage={canManage}
       />
       <DirectoryPanel
         title="Склады назначения"
@@ -226,6 +234,7 @@ export const DirectoriesPage = ({
         onAdd={onAddWarehouse}
         onDelete={onDeleteWarehouse}
         onUpdate={onRenameWarehouse}
+        canManage={canManage}
       />
     </div>
   </div>

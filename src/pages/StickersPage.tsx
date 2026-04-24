@@ -48,9 +48,10 @@ interface StickersPageProps {
   onAddBundle: (name: string, items: StickerBundleItem[]) => Promise<StickerBundle>
   onEditBundle: (id: string, name: string, items: StickerBundleItem[]) => Promise<StickerBundle>
   onDeleteBundle: (id: string) => Promise<void>
+  canManage?: boolean
 }
 
-export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle }: StickersPageProps) => {
+export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true }: StickersPageProps) => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingSticker, setEditingSticker] = useState<StickerTemplate | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<StickerTemplate | null>(null)
@@ -463,11 +464,14 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                 </svg>
                 {isPrinting ? 'Генерация…' : `Скачать PDF${selected.size > 0 ? ` (${printCount})` : ''}`}
               </Button>
+              {canManage && (
               <Button onClick={() => { setEditingSticker(null); setModalOpen(true) }} className="shrink-0 rounded-2xl px-5 py-2.5">
                 + Создать стикер
               </Button>
+              )}
             </>
           ) : activeTab === 'bundles' ? (
+            canManage ? (
             <Button
               onClick={() => {
                 const init: Record<string, { checked: boolean; copies: number }> = {}
@@ -481,6 +485,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
               </svg>
               Создать набор
             </Button>
+            ) : null
           ) : activeTab === 'import' ? (
             <>
               <Button className="shrink-0 rounded-2xl px-5 py-2.5" disabled={isImporting || importSelected.size === 0} onClick={() => void handleImportCreate()}>
@@ -743,6 +748,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                             <path d="M6 14h12v8H6z" />
                           </svg>
                         </button>
+                        {canManage && (
                         <button
                           type="button"
                           title="Редактировать"
@@ -753,9 +759,11 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                             <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                           </svg>
                         </button>
+                        )}
                       </div>
                     </td>
                     <td className="px-2 py-2.5">
+                      {canManage && (
                       <button
                         type="button"
                         title="Удалить"
@@ -768,6 +776,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                           <path d="M10 11v4" /><path d="M14 11v4" />
                         </svg>
                       </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -826,6 +835,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                 <path d="M6 14h12v8H6z" />
                               </svg>
                             </button>
+                            {canManage && (
                             <button
                               type="button"
                               title="Редактировать"
@@ -844,6 +854,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                 <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                               </svg>
                             </button>
+                            )}
+                            {canManage && (
                             <button
                               type="button"
                               title="Удалить набор"
@@ -856,6 +868,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                 <path d="M10 11v4" /><path d="M14 11v4" />
                               </svg>
                             </button>
+                            )}
                           </div>
                         </td>
                       </tr>

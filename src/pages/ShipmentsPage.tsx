@@ -37,6 +37,7 @@ interface ShipmentsPageProps {
   onAddInvoicePhoto: (tripId: string, lineId: string, file: File) => Promise<void>
   onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
   onRemoveInvoicePhoto: (tripId: string, lineId: string, index: number) => Promise<void>
+  canManage?: boolean
 }
 
 export const ShipmentsPage = ({
@@ -56,6 +57,7 @@ export const ShipmentsPage = ({
   onAddInvoicePhoto,
   onReplaceInvoicePhoto,
   onRemoveInvoicePhoto,
+  canManage = true,
 }: ShipmentsPageProps) => {
   const [expandAllTrips, setExpandAllTrips] = useState(false)
   const [selectedTripIds, setSelectedTripIds] = useState<Set<string>>(new Set())
@@ -275,9 +277,11 @@ export const ShipmentsPage = ({
               <Button variant="secondary" className="rounded-2xl px-4 py-2.5">
                 Обновить
               </Button>
-              <Button className="rounded-2xl px-5 py-2.5 shadow-sm" onClick={onOpenCreate}>
-                + Создать рейс
-              </Button>
+              {canManage && (
+                <Button className="rounded-2xl px-5 py-2.5 shadow-sm" onClick={onOpenCreate}>
+                  + Создать рейс
+                </Button>
+              )}
             </div>
           </div>
         </Card>
@@ -307,6 +311,7 @@ export const ShipmentsPage = ({
           onAddInvoicePhoto={onAddInvoicePhoto}
           onReplaceInvoicePhoto={onReplaceInvoicePhoto}
           onRemoveInvoicePhoto={onRemoveInvoicePhoto}
+          canManage={canManage}
         />
       </div>
 

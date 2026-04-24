@@ -12,6 +12,7 @@ import { Modal } from './components/ui/Modal'
 import { useAccounts } from './hooks/useAccounts'
 import { useAppData } from './hooks/useAppData'
 import { useAuth } from './hooks/useAuth'
+import { useMyPermissions } from './hooks/useMyPermissions'
 import { useRoles } from './hooks/useRoles'
 import { isSupabaseConfigured } from './lib/supabase'
 import { AuthPage } from './pages/AuthPage'
@@ -133,6 +134,7 @@ function App() {
   const { accounts, isLoading: isAccountsLoading, createAccount, deleteAccount, updateAccount } = useAccounts(Boolean(session))
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
   const { roles, isLoading: isRolesLoading, addRole, updateRole, removeRole, cloneRoleToAccount } = useRoles(activeAccount?.id ?? null)
+  const { permissions } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
 
   useEffect(() => {
     if (!isAccountsLoading && accounts.length > 0 && !activeAccountId) {
@@ -183,6 +185,27 @@ function App() {
 
   const carrierNames = carriers.map((c) => c.name)
   const warehouseNames = warehouses.map((w) => w.name)
+
+  // Карта: страница → ключ разрешения (null = всегда доступна)
+  const pagePermKey: Record<PageKey, keyof typeof permissions | null> = {
+    home: null,
+    fulfillment: 'shipments_view',
+    shipments: 'shipments_view',
+    stores: 'stores_view',
+    products: 'stores_view',
+    directories: 'directories_view',
+    stickers: 'stickers_view',
+    roles: 'roles_manage',
+  }
+
+  // Если текущая страница недоступна по правам — переключиться на home
+  useEffect(() => {
+    const key = pagePermKey[activePage]
+    if (key !== null && !permissions[key]) {
+      setActivePage('home')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [permissions, activePage])
 
   const storesWithApiKey = useMemo(() => stores.filter((s) => s.api_key), [stores])
 
@@ -325,6 +348,7 @@ function App() {
           onSelectAccount={setActiveAccountId}
           onDeleteActiveCompany={handleDeleteCompany}
           onEditCompany={(account) => { setEditingAccount(account); setEditAccountModalOpen(true) }}
+          permissions={permissions}
         />
 
         <main className="flex flex-1 flex-col">
@@ -354,9 +378,10 @@ function App() {
                   onAddInvoicePhoto={addInvoicePhoto}
                   onReplaceInvoicePhoto={replaceInvoicePhoto}
                   onRemoveInvoicePhoto={removeInvoicePhoto}
+                  canManage={permissions.shipments_manage}
                 />
               ) : activePage === 'stores' ? (
-                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} />
+                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} canManage={permissions.stores_manage} />
               ) : activePage === 'directories' ? (
                 <DirectoriesPage
                   carriers={carriers}
@@ -367,6 +392,7 @@ function App() {
                   onAddWarehouse={addWarehouse}
                   onDeleteWarehouse={removeWarehouse}
                   onRenameWarehouse={renameWarehouse}
+                  canManage={permissions.directories_manage}
                 />
               ) : activePage === 'products' ? (
                 <ProductsPage stores={stores} activeAccountId={activeAccount?.id ?? ''} selectedStoreId={activeStoreId} onStoreChange={setActiveStoreId} />
@@ -380,6 +406,7 @@ function App() {
                   onUpdate={updateRole}
                   onDelete={removeRole}
                   onClone={cloneRoleToAccount}
+                  canManage={permissions.roles_manage}
                 />
               ) : activePage === 'stickers' ? (
                 <StickersPage
@@ -394,6 +421,7 @@ function App() {
                   onAddBundle={addBundle}
                   onEditBundle={editBundle}
                   onDeleteBundle={removeBundle}
+                  canManage={permissions.stickers_manage}
                 />
               ) : (
                 <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} />

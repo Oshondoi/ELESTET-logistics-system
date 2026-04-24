@@ -50,6 +50,7 @@ interface TripTableProps {
   onAddInvoicePhoto: (tripId: string, lineId: string, file: File) => Promise<void>
   onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
   onRemoveInvoicePhoto: (tripId: string, lineId: string, index: number) => Promise<void>
+  canManage?: boolean
 }
 
 const tripStatusTone = {
@@ -97,6 +98,7 @@ export const TripTable = ({
   onAddInvoicePhoto,
   onReplaceInvoicePhoto,
   onRemoveInvoicePhoto,
+  canManage = true,
 }: TripTableProps) => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
@@ -238,15 +240,17 @@ export const TripTable = ({
             <thead className="bg-slate-50/80 text-left text-[11px] uppercase tracking-[0.14em] text-slate-400">
               <tr>
                 <th className="w-[34px] px-2 py-2.5">
-                  <div className="flex items-center justify-center">
-                    <input
-                      type="checkbox"
-                      checked={allTripsSelected}
-                      onChange={(event) => onToggleAllTripsSelection(event.target.checked)}
-                      aria-label="Выбрать все рейсы"
-                      className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0"
-                    />
-                  </div>
+                  {canManage ? (
+                    <div className="flex items-center justify-center">
+                      <input
+                        type="checkbox"
+                        checked={allTripsSelected}
+                        onChange={(event) => onToggleAllTripsSelection(event.target.checked)}
+                        aria-label="Выбрать все рейсы"
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0"
+                      />
+                    </div>
+                  ) : null}
                 </th>
                 <th className="w-8 px-3 py-2.5" />
                 <th className="px-3 py-2.5">Рейс</th>
@@ -257,45 +261,47 @@ export const TripTable = ({
                 <th className="min-w-[192px] px-3 py-2.5">Оплата</th>
                 <th className="px-3 py-2.5">Комментарий</th>
                 <th className="w-24 px-3 py-2.5">
-                  <div className="flex items-center justify-end gap-0.5">
-                    <button
-                      type="button"
-                      disabled={!hasBulkSelection}
-                      aria-label="Редактировать выбранные"
-                      title="Редактировать выбранные"
-                      className={[
-                        'flex h-7 w-7 items-center justify-center rounded-xl transition',
-                        hasBulkSelection
-                          ? 'cursor-pointer bg-blue-50 text-blue-500 hover:bg-blue-100'
-                          : 'pointer-events-none text-slate-200',
-                      ].join(' ')}
-                    >
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!hasBulkSelection}
-                      onClick={onBulkDelete}
-                      aria-label="Удалить выбранные"
-                      title="Удалить выбранные"
-                      className={[
-                        'flex h-7 w-7 items-center justify-center rounded-xl transition',
-                        hasBulkSelection
-                          ? 'cursor-pointer bg-rose-50 text-rose-500 hover:bg-rose-100'
-                          : 'pointer-events-none text-slate-200',
-                      ].join(' ')}
-                    >
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                        <path d="M9 4h6" />
-                        <path d="M5 7h14" />
-                        <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
-                        <path d="M10 11v4" />
-                        <path d="M14 11v4" />
-                      </svg>
-                    </button>
-                  </div>
+                  {canManage ? (
+                    <div className="flex items-center justify-end gap-0.5">
+                      <button
+                        type="button"
+                        disabled={!hasBulkSelection}
+                        aria-label="Редактировать выбранные"
+                        title="Редактировать выбранные"
+                        className={[
+                          'flex h-7 w-7 items-center justify-center rounded-xl transition',
+                          hasBulkSelection
+                            ? 'cursor-pointer bg-blue-50 text-blue-500 hover:bg-blue-100'
+                            : 'pointer-events-none text-slate-200',
+                        ].join(' ')}
+                      >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!hasBulkSelection}
+                        onClick={onBulkDelete}
+                        aria-label="Удалить выбранные"
+                        title="Удалить выбранные"
+                        className={[
+                          'flex h-7 w-7 items-center justify-center rounded-xl transition',
+                          hasBulkSelection
+                            ? 'cursor-pointer bg-rose-50 text-rose-500 hover:bg-rose-100'
+                            : 'pointer-events-none text-slate-200',
+                        ].join(' ')}
+                      >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                          <path d="M9 4h6" />
+                          <path d="M5 7h14" />
+                          <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+                          <path d="M10 11v4" />
+                          <path d="M14 11v4" />
+                        </svg>
+                      </button>
+                    </div>
+                  ) : null}
                 </th>
               </tr>
             </thead>
@@ -322,15 +328,17 @@ export const TripTable = ({
                     onMouseLeave={() => setHoveredTripId(null)}
                   >
                     <td className="w-[34px] px-2 py-3.5" onClick={(event) => event.stopPropagation()}>
-                      <div className="flex items-center justify-center">
-                        <input
-                          type="checkbox"
-                          checked={selectedTripIds.has(trip.id)}
-                          onChange={(event) => onToggleTripSelection(trip.id, event.target.checked)}
-                          aria-label={trip.trip_number ? `Выбрать рейс ${trip.trip_number}` : `Выбрать черновик-${trip.draft_number}`}
-                          className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0"
-                        />
-                      </div>
+                      {canManage ? (
+                        <div className="flex items-center justify-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedTripIds.has(trip.id)}
+                            onChange={(event) => onToggleTripSelection(trip.id, event.target.checked)}
+                            aria-label={trip.trip_number ? `Выбрать рейс ${trip.trip_number}` : `Выбрать черновик-${trip.draft_number}`}
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0"
+                          />
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-3.5 text-slate-400">
                       <svg
@@ -357,7 +365,7 @@ export const TripTable = ({
                       {trip.lines.length}
                     </td>
                     <td className="px-3 py-3.5">
-                      <div className="inline-block" onClick={(event) => event.stopPropagation()}>
+                      <div className={canManage ? 'inline-block' : 'pointer-events-none inline-block'} onClick={(event) => event.stopPropagation()}>
                         <StatusDropdown<TripStatus>
                           value={trip.status}
                           options={tripStatuses}
@@ -376,38 +384,41 @@ export const TripTable = ({
                       {trip.comment || '—'}
                     </td>
                     <td className="px-3 py-3.5" onClick={(event) => event.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-0.5">
-                        <button
-                          type="button"
-                          aria-label={trip.trip_number ? `Редактировать рейс ${trip.trip_number}` : `Редактировать черновик-${trip.draft_number}`}
-                          title={trip.trip_number ? `Редактировать рейс ${trip.trip_number}` : `Редактировать черновик-${trip.draft_number}`}
-                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500"
-                          onClick={(event) => { event.stopPropagation(); setEditingTrip(trip) }}
-                        >
-                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
-                          title={trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
-                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
-                          onClick={event => handleDeleteTripClick(trip, event)}
-                        >
-                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                            <path d="M9 4h6" />
-                            <path d="M5 7h14" />
-                            <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
-                            <path d="M10 11v4" />
-                            <path d="M14 11v4" />
-                          </svg>
-                        </button>
-                      </div>
+                      {canManage ? (
+                        <div className="flex items-center justify-end gap-0.5">
+                          <button
+                            type="button"
+                            aria-label={trip.trip_number ? `Редактировать рейс ${trip.trip_number}` : `Редактировать черновик-${trip.draft_number}`}
+                            title={trip.trip_number ? `Редактировать рейс ${trip.trip_number}` : `Редактировать черновик-${trip.draft_number}`}
+                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500"
+                            onClick={(event) => { event.stopPropagation(); setEditingTrip(trip) }}
+                          >
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
+                            title={trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
+                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
+                            onClick={event => handleDeleteTripClick(trip, event)}
+                          >
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                              <path d="M9 4h6" />
+                              <path d="M5 7h14" />
+                              <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+                              <path d="M10 11v4" />
+                              <path d="M14 11v4" />
+                            </svg>
+                          </button>
+                        </div>
+                      ) : null}
                     </td>
                   </tr>
 
                   {/* ── Строка кнопки ── peek при hover, фиксирована при открытии ── */}
+                  {canManage ? (
                   <tr>
                     <td className="p-0" colSpan={10}>
                       <div
@@ -431,6 +442,7 @@ export const TripTable = ({
                       </div>
                     </td>
                   </tr>
+                  ) : null}
 
                   {/* ── Строки поставок внутри рейса ── */}
                   <tr>
@@ -448,15 +460,17 @@ export const TripTable = ({
                             <thead className="text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
                               <tr>
                                 <th className="w-[34px] px-2 py-2">
-                                  <div className="flex items-center justify-center">
-                                    <input
-                                      type="checkbox"
-                                      checked={areAllTripLinesSelected}
-                                      onChange={(event) => onToggleTripLinesSelection(trip.id, event.target.checked)}
-                                      aria-label={trip.trip_number ? `Выбрать все поставки рейса ${trip.trip_number}` : `Выбрать все поставки черновика-${trip.draft_number}`}
-                                      className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0"
-                                    />
-                                  </div>
+                                  {canManage ? (
+                                    <div className="flex items-center justify-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={areAllTripLinesSelected}
+                                        onChange={(event) => onToggleTripLinesSelection(trip.id, event.target.checked)}
+                                        aria-label={trip.trip_number ? `Выбрать все поставки рейса ${trip.trip_number}` : `Выбрать все поставки черновика-${trip.draft_number}`}
+                                        className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0"
+                                      />
+                                    </div>
+                                  ) : null}
                                 </th>
                                 <th className="py-2 pl-14 pr-3 font-semibold">Магазин</th>
                                 <th className="px-3 py-2 font-semibold">Поставка</th>
@@ -475,15 +489,17 @@ export const TripTable = ({
                                   className={cn('align-middle text-slate-600 transition-colors duration-150', hoveredTripId === trip.id ? 'bg-blue-50' : '')}
                                 >
                                   <td className="w-[34px] px-2 py-2.5">
-                                    <div className="flex items-center justify-center">
-                                      <input
-                                        type="checkbox"
-                                        checked={selectedLineIds.has(line.id)}
-                                        onChange={(event) => onToggleLineSelection(line.id, event.target.checked)}
-                                        aria-label={`Выбрать поставку ${line.shipment_number}`}
-                                        className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0"
-                                      />
-                                    </div>
+                                    {canManage ? (
+                                      <div className="flex items-center justify-center">
+                                        <input
+                                          type="checkbox"
+                                          checked={selectedLineIds.has(line.id)}
+                                          onChange={(event) => onToggleLineSelection(line.id, event.target.checked)}
+                                          aria-label={`Выбрать поставку ${line.shipment_number}`}
+                                          className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0"
+                                        />
+                                      </div>
+                                    ) : null}
                                   </td>
                                   <td className="py-2.5 pl-14 pr-3">
                                     <div className="flex flex-col leading-tight">
@@ -504,7 +520,7 @@ export const TripTable = ({
                                       {line.box_qty} коробов · {line.units_qty} ед.
                                     </span>
                                   </td>
-                                  <td className="px-3 py-2.5">
+                                  <td className={canManage ? 'px-3 py-2.5' : 'pointer-events-none px-3 py-2.5'}>
                                     <StatusDropdown<ShipmentStatus>
                                       value={line.status}
                                       options={shipmentStatuses}
@@ -514,17 +530,19 @@ export const TripTable = ({
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <div className="flex items-center gap-2">
-                                      <StatusDropdown<PaymentStatus>
-                                        value={line.payment_status}
-                                        options={paymentStatuses}
-                                        toneMap={paymentTone}
-                                        onChange={(ps) => onChangeTripLinePaymentStatus(trip.id, line.id, ps)}
-                                      />
+                                      <div className={canManage ? '' : 'pointer-events-none'}>
+                                        <StatusDropdown<PaymentStatus>
+                                          value={line.payment_status}
+                                          options={paymentStatuses}
+                                          toneMap={paymentTone}
+                                          onChange={(ps) => onChangeTripLinePaymentStatus(trip.id, line.id, ps)}
+                                        />
+                                      </div>
                                       <InvoicePhotoCell
                                         photoUrls={line.invoice_photo_urls}
-                                        onAdd={(file) => onAddInvoicePhoto(trip.id, line.id, file)}
-                                        onReplace={(idx, file) => onReplaceInvoicePhoto(trip.id, line.id, idx, file)}
-                                        onRemove={(idx) => onRemoveInvoicePhoto(trip.id, line.id, idx)}
+                                        onAdd={canManage ? (file) => onAddInvoicePhoto(trip.id, line.id, file) : undefined}
+                                        onReplace={canManage ? (idx, file) => onReplaceInvoicePhoto(trip.id, line.id, idx, file) : undefined}
+                                        onRemove={canManage ? (idx) => onRemoveInvoicePhoto(trip.id, line.id, idx) : undefined}
                                       />
                                     </div>
                                   </td>
@@ -532,39 +550,41 @@ export const TripTable = ({
                                     {line.comment || '—'}
                                   </td>
                                   <td className="px-3 py-2.5">
-                                    <div className="flex items-center justify-end gap-0.5">
-                                      <button
-                                        type="button"
-                                        aria-label={`Редактировать поставку ${line.shipment_number}`}
-                                        title={`Редактировать поставку ${line.shipment_number}`}
-                                        className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500"
-                                        onClick={(event) => { event.stopPropagation(); setEditingTripLine({ tripId: trip.id, line }) }}
-                                      >
-                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                                          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                                        </svg>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        aria-label={`Удалить поставку ${line.shipment_number}`}
-                                        title={`Удалить поставку ${line.shipment_number}`}
-                                        className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
-                                        onClick={event => handleDeleteTripLineClick(
-                                          trip.id,
-                                          line.id,
-                                          line.shipment_number,
-                                          event,
-                                        )}
-                                      >
-                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                                          <path d="M9 4h6" />
-                                          <path d="M5 7h14" />
-                                          <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
-                                          <path d="M10 11v4" />
-                                          <path d="M14 11v4" />
-                                        </svg>
-                                      </button>
-                                    </div>
+                                    {canManage ? (
+                                      <div className="flex items-center justify-end gap-0.5">
+                                        <button
+                                          type="button"
+                                          aria-label={`Редактировать поставку ${line.shipment_number}`}
+                                          title={`Редактировать поставку ${line.shipment_number}`}
+                                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500"
+                                          onClick={(event) => { event.stopPropagation(); setEditingTripLine({ tripId: trip.id, line }) }}
+                                        >
+                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                                          </svg>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label={`Удалить поставку ${line.shipment_number}`}
+                                          title={`Удалить поставку ${line.shipment_number}`}
+                                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
+                                          onClick={event => handleDeleteTripLineClick(
+                                            trip.id,
+                                            line.id,
+                                            line.shipment_number,
+                                            event,
+                                          )}
+                                        >
+                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                            <path d="M9 4h6" />
+                                            <path d="M5 7h14" />
+                                            <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+                                            <path d="M10 11v4" />
+                                            <path d="M14 11v4" />
+                                          </svg>
+                                        </button>
+                                      </div>
+                                    ) : null}
                                   </td>
                                 </tr>
                               )) : (

@@ -4,9 +4,9 @@ import { cn } from '../../lib/utils'
 
 interface InvoicePhotoCellProps {
   photoUrls: string[]
-  onAdd: (file: File) => Promise<void>
-  onReplace: (index: number, file: File) => Promise<void>
-  onRemove: (index: number) => Promise<void>
+  onAdd?: (file: File) => Promise<void>
+  onReplace?: (index: number, file: File) => Promise<void>
+  onRemove?: (index: number) => Promise<void>
 }
 
 export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: InvoicePhotoCellProps) => {
@@ -70,13 +70,13 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
   }
 
   const handleAddFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return
+    const file = e.target.files?.[0]; if (!file || !onAdd) return
     await withLoading(() => onAdd(file))
     e.target.value = ''
   }
 
   const handleReplaceFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file || replaceTargetIndex === null) return
+    const file = e.target.files?.[0]; if (!file || replaceTargetIndex === null || !onReplace || !onRemove) return
     const idx = replaceTargetIndex
     e.target.value = ''
     setReplaceTargetIndex(null)
@@ -118,7 +118,7 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
   }
 
   const confirmRemove = async () => {
-    if (confirmDeleteIndex === null) return
+    if (confirmDeleteIndex === null || !onRemove) return
     const idx = confirmDeleteIndex
     setConfirmDeleteIndex(null)
     setLightboxOpen(false)
@@ -259,6 +259,7 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
 
             {/* Панель снизу */}
             <div className="mt-3 flex items-center gap-2">
+              {onRemove && (
               <button
                 type="button"
                 onClick={() => triggerRemove(lightboxIndex)}
@@ -269,6 +270,8 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
                 </svg>
                 Удалить
               </button>
+              )}
+              {onReplace && (
               <button
                 type="button"
                 onClick={() => triggerReplace(lightboxIndex)}
@@ -280,6 +283,8 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
                 </svg>
                 Заменить
               </button>
+              )}
+              {onAdd && (
               <button
                 type="button"
                 onClick={() => { setLightboxOpen(false); addInputRef.current?.click() }}
@@ -290,6 +295,7 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
                 </svg>
                 Добавить
               </button>
+              )}
             </div>
           </div>
         </div>,
@@ -355,6 +361,7 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
               {extra > 0 && (
                 <span className="text-[11px] font-medium text-slate-400">+{extra}</span>
               )}
+              {onAdd && (
               <button
                 ref={menuBtnRef}
                 type="button"
@@ -373,9 +380,10 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
                   <circle cx="12" cy="19" r="1" fill="currentColor" />
                 </svg>
               </button>
+              )}
             </div>
           </>
-        ) : (
+        ) : onAdd ? (
           // Нет фото — кнопка добавить
           <button
             ref={menuBtnRef}
@@ -393,7 +401,7 @@ export const InvoicePhotoCell = ({ photoUrls, onAdd, onReplace, onRemove }: Invo
               <circle cx="12" cy="13" r="4" />
             </svg>
           </button>
-        )}
+        ) : null}
 
         {error && (
           <div className="absolute left-full top-0 z-10 ml-2 max-w-[180px] rounded-lg bg-rose-50 px-2 py-1 text-[11px] text-rose-600 shadow">

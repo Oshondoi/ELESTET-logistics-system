@@ -8,9 +8,10 @@ interface StoreListProps {
   onEdit: (store: Store) => void
   onDelete: (storeId: string) => Promise<void>
   onSync: (store: Store) => Promise<void>
+  canManage?: boolean
 }
 
-export const StoreList = ({ stores, onEdit, onDelete, onSync }: StoreListProps) => {
+export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }: StoreListProps) => {
   const [deleteTarget, setDeleteTarget] = useState<Store | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -91,6 +92,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync }: StoreListProps) 
                     </td>
                     <td className="px-3 py-3.5">
                       {err && <p className="mb-1 text-[10px] text-rose-500">{err}</p>}
+                      {canManage ? (
                       <div className="flex items-center">
                         {/* Синхронизация из WB */}
                         <button
@@ -138,6 +140,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync }: StoreListProps) 
                           </svg>
                         </button>
                       </div>
+                      ) : null}
                     </td>
                   </tr>
                 )

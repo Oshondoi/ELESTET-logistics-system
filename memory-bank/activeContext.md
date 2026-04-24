@@ -1,7 +1,81 @@
 # Active Context
 
 ## Current Focus
-Страница Стикеры полностью завершена (Кастомная + Импорт WB + Наборы). Следующие шаги: функциональность фото товаров (клик/просмотр), участники компании (Members), мобильное приложение.
+RBAC (ролевой контроль доступа) полностью реализован на фронтенде. Следующие шаги: фото товаров (клик/просмотр), участники компании (Members), мобильное приложение.
+
+## What Was Recently Done
+
+### RBAC — Ролевой контроль доступа (завершено)
+- `src/types/index.ts`: добавлена константа `FULL_PERMISSIONS` (все флаги `true`)
+- `src/hooks/useMyPermissions.ts` (новый файл): хук загружает эффективные права текущего пользователя
+  - `owner` / `admin` → автоматически `FULL_PERMISSIONS` (без запроса к БД)
+  - остальные → запрос в таблицу `roles` по `assigned_user_id + account_id`
+  - если роль не найдена → `DEFAULT_PERMISSIONS` (все `false`)
+- `src/components/layout/Sidebar.tsx`: принимает `permissions: RolePermissions`; каждый nav-пункт имеет `permKey`; фильтрация `.filter(item => item.permKey === null || permissions[item.permKey])`
+- `src/App.tsx`: подключён `useMyPermissions`; `pagePermKey` map + `useEffect` редирект на главную если страница недоступна; `permissions` передаётся в Sidebar и все страницы как `canManage`
+- `ShipmentsPage` + `TripTable`: `canManage` скрывает «+ Создать рейс», чекбоксы, bulk-кнопки, дропдауны статусов (pointer-events-none), кнопки редактирования/удаления рейсов и строк, строку «Добавить поставку», фото накладных (onAdd/onReplace/onRemove = undefined)
+- `InvoicePhotoCell`: все три обработчика `onAdd?/onReplace?/onRemove?` стали опциональными; кнопки лайтбокса и контекстное меню скрыты когда обработчик не передан
+- `StoresPage` + `StoreList`: `canManage` скрывает «+ Создать магазин», кнопки sync/edit/delete строки
+- `DirectoriesPage` + `DirectoryPanel`: `canManage` скрывает форму добавления и кнопки редактировать/удалить каждого пункта
+- `StickersPage`: `canManage` скрывает «+ Создать стикер», «Создать набор», кнопки редактировать/удалить стикеры и наборы
+- `RolesPage` + `RoleRow`: `canManage` скрывает «+ Создать роль» (топ-бар + пустой state), кнопки редактировать/удалить каждой роли
+- Все `canManage` props имеют `default = true` — обратная совместимость сохранена
+
+### Стикеры — Import WB аккордеон + массовые операции (завершено)
+- Вкладка «Импорт WB» полностью перестроена в аккордеон (аналог ProductsPage)
+- Анимация раскрытия: `gridTemplateRows: '1fr' / '0fr'`, `transition: 220ms ease`
+- Колонка фото (миниатюра 36×36), превью по наведению (288×384px, умное позиционирование)
+- Чекбокс глобальный в `<thead>` — выбирает ВСЕ size-строки по всем товарам
+- Чекбокс на каждой строке товара — выбирает все его размеры / снимает их
+- Чекбокс на каждой строке размера — отдельный выбор
+- Кнопка «Развернуть/Свернуть все» — двойная стрелка
+- «Создать набор» — создаёт стикеры для всех выбранных строк (skip дублей по баркоду), затем открывает модалку набора с pre-fill
+- Уведомление «Все выбранные стикеры уже существуют» если все дубли
+
+### Стикеры — Кастомная вкладка: массовое удаление (завершено)
+- Колонка удаления выделена в отдельный `<th w-10>` правее колонки действий (eye/print/edit)
+- Шапка колонки: иконка-корзина, неактивна (`opacity-30`) пока не выбрана хотя бы 1 строка
+- При выборе 1+ строк кнопка активируется и открывает `<DeleteConfirmModal>` с количеством
+
+### Страница Товары — ProductsPage (завершена)
+- Таблица товаров с аккордеон-раскрытием по строке (клик на строку)
+- Вложенная таблица размеров: колонки «Размер» (badge) и «Баркод»
+- Сортировка размеров по убыванию: 2XL → XL → L → M → S → числовые
+- Поиск по артикулу WB, артикулу продавца, названию, бренду
+- Выбор магазина: дропдаун, только магазины с API-ключом
+- Синхронизация товаров через Edge Function `sync-store-products`
+- Колонка фото: 2-я колонка, миниатюра 36×36 с rounded-lg, превью по наведению 288×384px
+
+## Present UI State
+- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / Роли
+- Деплой: Vercel (main ветка), env переменные настроены
+- Supabase: Site URL и Redirect URLs настроены на Vercel-домен
+- RBAC: все страницы и action-кнопки защищены по правам из таблицы `roles`
+
+## SQL патчи — порядок применения
+```
+1.  schema.sql
+2.  bootstrap.sql
+3.  dev_access.sql
+4.  delete_account.sql
+5.  trips.sql
+6.  patch_trip_functions.sql
+7.  carriers_warehouses.sql
+8.  patch_invoice_photos_v2.sql
+9.  patch_stickers.sql
+10. patch_sticker_icons.sql
+11. patch_sticker_bundles.sql
+12. patch_store_api_key.sql
+13. patch_store_code_constraint.sql
+14. patch_system_warehouses.sql
+15. patch_roles.sql
+16. patch_roles_user.sql
+17. patch_profiles_short_id.sql
+18. patch_role_member_sync.sql
+19. patch_draft_number.sql
+```
+
+⚠️ `patch_system_warehouses.sql` (#14) — нужно применить в продакшн Supabase SQL Editor, чтобы системные склады WB вернулись на странице Справочники.
 
 ## What Was Recently Done
 

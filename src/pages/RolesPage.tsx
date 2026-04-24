@@ -34,9 +34,10 @@ interface RoleRowProps {
   role: Role
   onEdit: (role: Role) => void
   onDelete: (role: Role) => void
+  canManage?: boolean
 }
 
-const RoleRow = ({ role, onEdit, onDelete }: RoleRowProps) => {
+const RoleRow = ({ role, onEdit, onDelete, canManage = true }: RoleRowProps) => {
   const enabledPerms = Object.entries(role.permissions)
     .filter(([, v]) => v)
     .map(([k]) => permLabels[k] ?? k)
@@ -82,6 +83,8 @@ const RoleRow = ({ role, onEdit, onDelete }: RoleRowProps) => {
       </div>
 
       <div className="flex h-7 flex-shrink-0 items-center gap-1">
+        {canManage && (
+        <>
         {/* Редактировать */}
         <button
           type="button"
@@ -109,6 +112,8 @@ const RoleRow = ({ role, onEdit, onDelete }: RoleRowProps) => {
             <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
           </svg>
         </button>
+        </>
+        )}
       </div>
     </div>
   )
@@ -125,6 +130,7 @@ interface RolesPageProps {
   onUpdate: (roleId: string, values: Partial<RoleFormValues>) => Promise<Role>
   onDelete: (roleId: string) => Promise<void>
   onClone: (role: Role, targetAccountId: string) => Promise<void>
+  canManage?: boolean
 }
 
 export const RolesPage = ({
@@ -136,6 +142,7 @@ export const RolesPage = ({
   onUpdate,
   onDelete,
   onClone,
+  canManage = true,
 }: RolesPageProps) => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<Role | null>(null)
@@ -187,9 +194,11 @@ export const RolesPage = ({
                 : `${roles.length} ${roles.length === 1 ? 'роль' : roles.length < 5 ? 'роли' : 'ролей'}`}
             </div>
             <div className="flex items-center gap-2.5">
+              {canManage && (
               <Button className="rounded-2xl px-5 py-2.5" onClick={handleOpenCreate}>
                 + Создать роль
               </Button>
+              )}
             </div>
           </div>
         </Card>
@@ -209,9 +218,11 @@ export const RolesPage = ({
                   Создайте роль и настройте доступы для участников компании
                 </p>
               </div>
+              {canManage && (
               <Button className="mt-1 rounded-2xl px-5 py-2.5" onClick={handleOpenCreate}>
                 + Создать роль
               </Button>
+              )}
             </div>
           ) : (
             roles.map((role) => (
@@ -219,8 +230,7 @@ export const RolesPage = ({
                 key={role.id}
                 role={role}
                 onEdit={handleOpenEdit}
-                onDelete={setDeleteTarget}
-              />
+                onDelete={setDeleteTarget}                canManage={canManage}              />
             ))
           )}
         </Card>

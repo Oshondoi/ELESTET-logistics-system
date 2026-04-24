@@ -9,9 +9,10 @@ interface StoresPageProps {
   onEdit: (store: Store) => void
   onDelete: (storeId: string) => Promise<void>
   onSync: (store: Store) => Promise<void>
+  canManage?: boolean
 }
 
-export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete, onSync }: StoresPageProps) => (
+export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete, onSync, canManage = true }: StoresPageProps) => (
   <div className="space-y-4">
     <Card className="rounded-3xl p-2.5">
       <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
@@ -22,13 +23,15 @@ export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete, onSync }: S
           <Button variant="secondary" className="rounded-2xl px-4 py-2.5">
             Обновить
           </Button>
-          <Button className="rounded-2xl px-5 py-2.5" onClick={onOpenCreate}>
-            + Создать магазин
-          </Button>
+          {canManage && (
+            <Button className="rounded-2xl px-5 py-2.5" onClick={onOpenCreate}>
+              + Создать магазин
+            </Button>
+          )}
         </div>
       </div>
     </Card>
 
-    <StoreList stores={stores} onEdit={onEdit} onDelete={onDelete} onSync={onSync} />
+    <StoreList stores={stores} onEdit={onEdit} onDelete={onDelete} onSync={onSync} canManage={canManage} />
   </div>
 )

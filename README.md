@@ -17,7 +17,11 @@ MVP веб-приложения для логистики поставок на 
 - Назначение пользователю: email или U{n} (короткий ID) — поля подтягивают друг друга по базе
 - Клонирование роли в другую компанию
 - Короткие ID пользователей: U1, U2, U3... (`profiles.short_id` — sequence)
-
+### RBAC — ролевой контроль доступа
+- `useMyPermissions` хук: owner/admin → полные права (без запроса к БД); остальные → запрос в таблицу `roles` по `assigned_user_id + account_id`
+- Sidebar скрывает пункты меню по `permKey` из `RolePermissions`
+- App.tsx: автоматический редирект на главную если страница недоступна
+- Все страницы принимают `canManage?: boolean` и скрывают кнопки создания/редактирования/удаления при недостаточных правах
 ### Логистика — модель Рейсов
 - **Рейс** (#1, #2…) — верхний уровень: перевозчик, дата, статус, оплата
 - **Поставка** — строка рейса: магазин, склад, коробов, единиц
@@ -71,11 +75,11 @@ src/
     roles/         — RoleFormModal
     stickers/      — StickerFormModal
     ui/            — Button, Badge, Card, Input, Modal, Select, Textarea, InvoicePhotoCell, DeleteConfirmModal
-  hooks/           — useAuth, useAccounts, useAppData, useRoles
-  lib/             — supabase, constants, utils, stickerPdf
-  pages/           — ShipmentsPage, StoresPage, HomePage, RolesPage, DirectoriesPage, StickersPage, AuthPage
+  hooks/           — useAuth, useAccounts, useAppData, useRoles, useMyPermissions
+  lib/             — supabase, constants, utils, stickerPdf, ean13
+  pages/           — ShipmentsPage, StoresPage, HomePage, RolesPage, DirectoriesPage, StickersPage, ProductsPage, AuthPage
   services/        — tripService, shipmentService, storeService, directoriesService, roleService, accountService, stickerService
-  types/           — index.ts
+  types/           — index.ts (RolePermissions, FULL_PERMISSIONS, DEFAULT_PERMISSIONS)
 supabase/
   schema.sql
   bootstrap.sql
@@ -94,6 +98,8 @@ supabase/
   patch_roles.sql
   patch_roles_user.sql
   patch_profiles_short_id.sql
+  patch_role_member_sync.sql
+  patch_draft_number.sql
 memory-bank/
 ```
 
