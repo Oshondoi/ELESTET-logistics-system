@@ -68,20 +68,25 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
   const [search, setSearch] = useState('')
   const [storeDropdownOpen, setStoreDropdownOpen] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
-  const [expandAll, setExpandAll] = useState(false)
+  const [expandAll, setExpandAll] = useState(() => localStorage.getItem('elestet-products-expand-all') === 'true')
+  const [anyExpanded, setAnyExpanded] = useState(false)
   const [photoPreview, setPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
   const storeDropdownRef = useRef<HTMLDivElement | null>(null)
 
   const toggle = (id: string) =>
-    setExpandedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+    setExpandedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); setAnyExpanded(n.size > 0); return n })
 
   const handleToggleAll = () => {
-    if (expandAll) {
+    if (anyExpanded) {
       setExpandedIds(new Set())
       setExpandAll(false)
+      setAnyExpanded(false)
+      localStorage.setItem('elestet-products-expand-all', 'false')
     } else {
       setExpandedIds(new Set(filtered.map((p) => p.id)))
       setExpandAll(true)
+      setAnyExpanded(true)
+      localStorage.setItem('elestet-products-expand-all', 'true')
     }
   }
 
@@ -219,16 +224,15 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
             <button
               type="button"
               onClick={handleToggleAll}
-              aria-pressed={expandAll}
-              aria-label={expandAll ? 'Свернуть все товары' : 'Развернуть все товары'}
-              title={expandAll ? 'Свернуть все товары' : 'Развернуть все товары'}
+              aria-pressed={anyExpanded}
+              aria-label={anyExpanded ? 'Свернуть все товары' : 'Развернуть все товары'}
+              title={anyExpanded ? 'Свернуть все товары' : 'Развернуть все товары'}
               className={[
                 'flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition',
-                expandAll
+                anyExpanded
                   ? 'bg-[#E3EAF6] text-slate-700 hover:bg-[#d6e0f5]'
                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
-              ].join(' ')}
-            >
+              ].join(' ')}>
               <svg
                 viewBox="0 0 24 24"
                 className="h-[15px] w-[15px] shrink-0"
@@ -238,7 +242,7 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                {expandAll ? (
+                {anyExpanded ? (
                   <>
                     <path d="m7.5 11 4.5-4.5 4.5 4.5" />
                     <path d="m7.5 17 4.5-4.5 4.5 4.5" />

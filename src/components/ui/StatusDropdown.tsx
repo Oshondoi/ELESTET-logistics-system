@@ -33,6 +33,10 @@ export function StatusDropdown<T extends string>({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
+  // Самая длинная опция — используется как невидимый спейсер внутри кнопки
+  // чтобы ширина не прыгала при смене значения (без DOM-измерений)
+  const longestOption = options.reduce((a, b) => (a.length >= b.length ? a : b), '')
+
   // Recalculate position on open
   useLayoutEffect(() => {
     if (!isOpen || !triggerRef.current) return
@@ -132,14 +136,14 @@ export function StatusDropdown<T extends string>({
   )
 
   return (
-    <div className="inline-block">
+    <div className="inline-block whitespace-nowrap">
       <button
         ref={triggerRef}
         type="button"
         disabled={disabled || isLoading}
         onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          'inline-flex items-center gap-1 rounded-full px-2.5 py-1',
+          'relative inline-flex items-center gap-1 rounded-full px-2.5 py-1 whitespace-nowrap',
           toneClasses[toneMap[value]],
           isLoading ? 'cursor-wait opacity-60' : 'cursor-pointer',
           !isLoading && !disabled && 'transition-opacity duration-100 hover:opacity-75',
@@ -148,22 +152,30 @@ export function StatusDropdown<T extends string>({
         aria-haspopup="listbox"
         aria-expanded={isOpen}
       >
-        <span className="text-xs font-medium">{value}</span>
-        {isLoading ? (
-          <svg className="h-3 w-3 animate-spin opacity-60" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeDasharray="28 56" />
-          </svg>
-        ) : (
-          <svg
-            className={cn('h-3 w-3 opacity-60 transition-transform duration-150', isOpen && 'rotate-180')}
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-          >
-            <path d="m6 9 6 6 6-6" />
-          </svg>
-        )}
+        {/* Невидимый спейсер по самой длинной опции + иконка — фиксирует ширину кнопки */}
+        <span aria-hidden className="invisible flex select-none items-center gap-1 text-xs font-medium">
+          {longestOption}
+          <svg className="h-3 w-3" viewBox="0 0 24 24" />
+        </span>
+        {/* Поверх — реальный контент */}
+        <span className="absolute inset-0 flex items-center gap-1 px-2.5">
+          <span className="text-xs font-medium">{value}</span>
+          {isLoading ? (
+            <svg className="h-3 w-3 animate-spin opacity-60" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeDasharray="28 56" />
+            </svg>
+          ) : (
+            <svg
+              className={cn('h-3 w-3 opacity-60 transition-transform duration-150', isOpen && 'rotate-180')}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          )}
+        </span>
       </button>
 
       {createPortal(menu, document.body)}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AccountFormModal } from './components/accounts/AccountFormModal'
 import { DeleteAccountModal } from './components/accounts/DeleteAccountModal'
+import { ProfileModal } from './components/accounts/ProfileModal'
 import { Sidebar } from './components/layout/Sidebar'
 import { Topbar } from './components/layout/Topbar'
 import { TripFormModal } from './components/trips/TripFormModal'
@@ -131,10 +132,17 @@ function App() {
   const [editingStore, setEditingStore] = useState<import('./types').Store | null>(null)
   const [editingAccount, setEditingAccount] = useState<import('./types').Account | null>(null)
   const [editAccountModalOpen, setEditAccountModalOpen] = useState(false)
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [profileUserName, setProfileUserName] = useState<string>(
+    (session?.user?.user_metadata?.full_name as string) ?? ''
+  )
+  useEffect(() => {
+    setProfileUserName((session?.user?.user_metadata?.full_name as string) ?? '')
+  }, [session?.user?.id])
   const { accounts, isLoading: isAccountsLoading, createAccount, deleteAccount, updateAccount } = useAccounts(Boolean(session))
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
   const { roles, isLoading: isRolesLoading, addRole, updateRole, removeRole, cloneRoleToAccount } = useRoles(activeAccount?.id ?? null)
-  const { permissions } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
+  const { permissions, isLoading: isPermissionsLoading } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
 
   useEffect(() => {
     if (!isAccountsLoading && accounts.length > 0 && !activeAccountId) {
@@ -165,6 +173,8 @@ function App() {
     changeTripLinePaymentStatus,
     editTrip,
     editTripLine,
+    updateTripCustomFields,
+    updateLineCustomFields,
     addCarrier,
     removeCarrier,
     renameCarrier,
@@ -198,14 +208,15 @@ function App() {
     roles: 'roles_manage',
   }
 
-  // Если текущая страница недоступна по правам — переключиться на home
-  useEffect(() => {
+  // Если текущая страница недоступна по правам — показываем home.
+  // Используем вычисляемое значение (не useEffect), чтобы избежать race condition:
+  // useEffect читает stale state из той же фазы рендера и не видит обновлений permissions.
+  const effectivePage: PageKey = (() => {
+    if (isAccountsLoading || isPermissionsLoading) return activePage
     const key = pagePermKey[activePage]
-    if (key !== null && !permissions[key]) {
-      setActivePage('home')
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [permissions, activePage])
+    if (key !== null && !permissions[key]) return 'home'
+    return activePage
+  })()
 
   const storesWithApiKey = useMemo(() => stores.filter((s) => s.api_key), [stores])
 
@@ -336,10 +347,10 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="flex min-h-screen">
+    <div className="h-screen overflow-hidden bg-slate-50 text-slate-900">
+      <div className="flex h-full">
         <Sidebar
-          activePage={activePage}
+          activePage={effectivePage}
           onSelectPage={setActivePage}
           onOpenAddCompany={() => setAccountModalOpen(true)}
           onSignOut={() => void signOut()}
@@ -351,16 +362,22 @@ function App() {
           permissions={permissions}
         />
 
-        <main className="flex flex-1 flex-col">
-          <Topbar title={pageTitles[activePage]} />
+        <main className="flex flex-1 flex-col overflow-hidden">
+          <Topbar
+            title={pageTitles[effectivePage]}
+            userName={profileUserName}
+            userEmail={session?.user?.email ?? ''}
+            onProfileClick={() => setProfileModalOpen(true)}
+            onSignOut={() => void signOut()}
+          />
 
-          <div className="flex-1 p-3 lg:p-4">
+          <div className="flex-1 overflow-y-scroll p-3 lg:p-4">
             {!isLoading && !error ? (
-              activePage === 'home' ? (
+              effectivePage === 'home' ? (
                 <HomePage shipments={shipments} rawShipments={rawShipments} stores={stores} />
-              ) : activePage === 'fulfillment' ? (
+              ) : effectivePage === 'fulfillment' ? (
                 <FulfillmentPage />
-              ) : activePage === 'shipments' ? (
+              ) : effectivePage === 'shipments' ? (
                 <ShipmentsPage
                   trips={trips}
                   stores={stores}
@@ -379,10 +396,13 @@ function App() {
                   onReplaceInvoicePhoto={replaceInvoicePhoto}
                   onRemoveInvoicePhoto={removeInvoicePhoto}
                   canManage={permissions.shipments_manage}
+                  accountId={activeAccount?.id ?? ''}
+                  onUpdateTripCustomFields={updateTripCustomFields}
+                  onUpdateLineCustomFields={updateLineCustomFields}
                 />
-              ) : activePage === 'stores' ? (
+              ) : effectivePage === 'stores' ? (
                 <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} canManage={permissions.stores_manage} />
-              ) : activePage === 'directories' ? (
+              ) : effectivePage === 'directories' ? (
                 <DirectoriesPage
                   carriers={carriers}
                   warehouses={warehouses}
@@ -394,9 +414,9 @@ function App() {
                   onRenameWarehouse={renameWarehouse}
                   canManage={permissions.directories_manage}
                 />
-              ) : activePage === 'products' ? (
+              ) : effectivePage === 'products' ? (
                 <ProductsPage stores={stores} activeAccountId={activeAccount?.id ?? ''} selectedStoreId={activeStoreId} onStoreChange={setActiveStoreId} />
-              ) : activePage === 'roles' ? (
+              ) : effectivePage === 'roles' ? (
                 <RolesPage
                   roles={roles}
                   accounts={accounts}
@@ -408,7 +428,7 @@ function App() {
                   onClone={cloneRoleToAccount}
                   canManage={permissions.roles_manage}
                 />
-              ) : activePage === 'stickers' ? (
+              ) : effectivePage === 'stickers' ? (
                 <StickersPage
                   stickers={stickers}
                   bundles={bundles}
@@ -476,6 +496,15 @@ function App() {
         account={editingAccount}
         onClose={() => { setEditAccountModalOpen(false); setEditingAccount(null) }}
         onSubmit={async (name) => { if (editingAccount) await updateAccount(editingAccount.id, name) }}
+      />
+
+      <ProfileModal
+        open={profileModalOpen}
+        onClose={() => setProfileModalOpen(false)}
+        userEmail={session?.user?.email ?? ''}
+        userName={profileUserName}
+        userId={session?.user?.id ?? ''}
+        onNameChange={(name) => setProfileUserName(name)}
       />
     </div>
   )

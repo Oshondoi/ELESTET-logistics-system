@@ -49,8 +49,22 @@ export const TripFormModal = ({ open, onClose, onSubmit, initialValues, carrierN
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={isEdit ? 'Редактировать рейс' : 'Новый рейс'}>
-      <form className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={isEdit ? 'Редактировать рейс' : 'Новый рейс'}
+      footer={
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <Button type="button" variant="secondary" onClick={onClose} className="w-full sm:w-auto" disabled={isSubmitting}>
+            Отмена
+          </Button>
+          <Button type="submit" form="trip-form" disabled={isSubmitting} className="w-full sm:w-auto">
+            {isSubmitting ? (isEdit ? 'Сохранение…' : 'Создание…') : (isEdit ? 'Сохранить' : 'Создать рейс')}
+          </Button>
+        </div>
+      }
+    >
+      <form id="trip-form" className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
         <Select
           label="Перевозчик"
           value={values.carrier}
@@ -74,17 +88,6 @@ export const TripFormModal = ({ open, onClose, onSubmit, initialValues, carrierN
           value={values.comment}
           onChange={(e) => set('comment', e.target.value)}
         />
-
-        <div className="sticky bottom-0 -mx-4 border-t border-slate-200 bg-white px-4 pt-4 pb-1 sm:-mx-6 sm:px-6">
-          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <Button type="button" variant="secondary" onClick={onClose} className="w-full sm:w-auto">
-              Отмена
-            </Button>
-            <Button type="submit" disabled={isSubmitting} className="w-full sm:w-auto">
-              {isSubmitting ? (isEdit ? 'Сохранение…' : 'Создание…') : (isEdit ? 'Сохранить' : 'Создать рейс')}
-            </Button>
-          </div>
-        </div>
       </form>
     </Modal>
   )

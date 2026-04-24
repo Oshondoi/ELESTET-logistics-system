@@ -83,8 +83,22 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={isEdit ? 'Редактировать стикер' : 'Новый стикер'}>
-      <form className="grid min-w-0 gap-4" onSubmit={handleSubmit}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={isEdit ? 'Редактировать стикер' : 'Новый стикер'}
+      footer={
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <Button type="button" variant="secondary" onClick={onClose} className="w-full sm:w-auto" disabled={isSubmitting}>
+            Отмена
+          </Button>
+          <Button type="submit" form="sticker-form" disabled={isSubmitting} className="w-full sm:w-auto">
+            {isSubmitting ? (isEdit ? 'Сохранение…' : 'Создание…') : (isEdit ? 'Сохранить' : 'Создать стикер')}
+          </Button>
+        </div>
+      }
+    >
+      <form id="sticker-form" className="grid min-w-0 gap-4" onSubmit={handleSubmit}>
 
         <Input
           label="Баркод (EAN-13)"
@@ -209,19 +223,6 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
         </div>
 
         {error && <p className="text-xs text-rose-500">{error}</p>}
-
-        <div className="sticky bottom-0 -mx-4 border-t border-slate-200 bg-white px-4 pt-4 pb-1 sm:-mx-6 sm:px-6">
-          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <Button type="button" variant="secondary" onClick={onClose} className="w-full sm:w-auto">
-              Отмена
-            </Button>
-            <Button type="submit" disabled={isSubmitting} className="w-full sm:w-auto">
-              {isSubmitting
-                ? (isEdit ? 'Сохранение…' : 'Создание…')
-                : (isEdit ? 'Сохранить' : 'Создать стикер')}
-            </Button>
-          </div>
-        </div>
       </form>
     </Modal>
   )

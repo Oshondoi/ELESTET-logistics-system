@@ -76,8 +76,18 @@ export const ShipmentFormModal = ({
       open={open}
       onClose={onClose}
       title="Новая поставка"
+      footer={
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <Button type="button" variant="secondary" onClick={onClose} className="w-full sm:w-auto">
+            Отмена
+          </Button>
+          <Button type="submit" form="shipment-form" className="w-full sm:w-auto">
+            Создать поставку
+          </Button>
+        </div>
+      }
     >
-      <form className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
+      <form id="shipment-form" className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
         <div className="grid min-w-0 gap-4 md:grid-cols-2">
           <Select
             label="Магазин"
@@ -124,17 +134,6 @@ export const ShipmentFormModal = ({
           value={values.comment}
           onChange={(event) => handleChange('comment', event.target.value)}
         />
-
-        <div className="sticky bottom-0 -mx-4 border-t border-slate-200 bg-white px-4 pt-4 pb-1 sm:-mx-6 sm:px-6">
-          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <Button type="button" variant="secondary" onClick={onClose} className="w-full sm:w-auto">
-              Отмена
-            </Button>
-            <Button type="submit" className="w-full sm:w-auto">
-              Создать поставку
-            </Button>
-          </div>
-        </div>
       </form>
     </Modal>
   )

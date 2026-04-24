@@ -25,7 +25,12 @@ import {
   updateTripLine as updateTripLineInSupabase,
   uploadInvoicePhoto as uploadInvoicePhotoInSupabase,
   updateTripLineInvoicePhotos as updateTripLineInvoicePhotosInSupabase,
+  bulkArriveTripLines as bulkArriveTripLinesInSupabase,
 } from '../services/tripService'
+import {
+  updateTripCustomFieldsInSupabase,
+  updateLineCustomFieldsInSupabase,
+} from '../services/columnConfigService'
 import {
   fetchCarriers,
   createCarrier as createCarrierInSupabase,
@@ -229,22 +234,48 @@ export const useAppData = (accountId: string | null) => {
   const changeTripStatus = async (tripId: string, status: TripStatus) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const updatedTrip = await updateTripStatusInSupabase(accountId, tripId, status)
-    setTrips((current) =>
-      current.map((trip) =>
-        trip.id === tripId
-          ? { ...trip, status: updatedTrip.status, trip_number: updatedTrip.trip_number }
-          : trip,
-      ),
-    )
+    if (status === 'Прибыл') {
+      const today = new Date().toISOString().slice(0, 10)
+      await bulkArriveTripLinesInSupabase(accountId, tripId, today)
+      setTrips((current) =>
+        current.map((trip) =>
+          trip.id === tripId
+            ? {
+                ...trip,
+                status: updatedTrip.status,
+                trip_number: updatedTrip.trip_number,
+                lines: trip.lines.map((line) =>
+                  line.status === 'Ожидает отправки' || line.status === 'В пути'
+                    ? { ...line, status: 'Прибыл', arrival_date: line.arrival_date ?? today }
+                    : line,
+                ),
+              }
+            : trip,
+        ),
+      )
+    } else {
+      setTrips((current) =>
+        current.map((trip) =>
+          trip.id === tripId
+            ? { ...trip, status: updatedTrip.status, trip_number: updatedTrip.trip_number }
+            : trip,
+        ),
+      )
+    }
   }
 
   const changeTripLineStatus = async (tripId: string, lineId: string, status: ShipmentStatus) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
-    await updateTripLineStatusInSupabase(accountId, lineId, status)
+    const currentLine = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
+    const { arrival_date, shipped_date } = await updateTripLineStatusInSupabase(
+      accountId, lineId, status,
+      currentLine?.arrival_date ?? null,
+      currentLine?.shipped_date ?? null,
+    )
     setTrips((current) =>
       current.map((trip) =>
         trip.id === tripId
-          ? { ...trip, lines: trip.lines.map((line) => line.id === lineId ? { ...line, status } : line) }
+          ? { ...trip, lines: trip.lines.map((line) => line.id === lineId ? { ...line, status, arrival_date, shipped_date } : line) }
           : trip,
       ),
     )
@@ -285,6 +316,31 @@ export const useAppData = (accountId: string | null) => {
               ...trip,
               lines: trip.lines.map((line) =>
                 line.id === lineId ? { ...updatedLine, store } : line,
+              ),
+            }
+          : trip,
+      ),
+    )
+  }
+
+  const updateTripCustomFields = async (tripId: string, fields: Record<string, unknown>) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    await updateTripCustomFieldsInSupabase(tripId, fields)
+    setTrips((current) =>
+      current.map((trip) => (trip.id === tripId ? { ...trip, custom_fields: fields } : trip)),
+    )
+  }
+
+  const updateLineCustomFields = async (tripId: string, lineId: string, fields: Record<string, unknown>) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    await updateLineCustomFieldsInSupabase(lineId, fields)
+    setTrips((current) =>
+      current.map((trip) =>
+        trip.id === tripId
+          ? {
+              ...trip,
+              lines: trip.lines.map((line) =>
+                line.id === lineId ? { ...line, custom_fields: fields } : line,
               ),
             }
           : trip,
@@ -433,6 +489,8 @@ export const useAppData = (accountId: string | null) => {
     changeTripLinePaymentStatus,
     editTrip,
     editTripLine,
+    updateTripCustomFields,
+    updateLineCustomFields,
     addCarrier,
     removeCarrier,
     renameCarrier,

@@ -1,5 +1,8 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { cn, formatDate } from '../../lib/utils'
+import { createPortal } from 'react-dom'
+import { cn, formatDate, pluralRu } from '../../lib/utils'
+import type { ColumnConfig, CustomColDef } from '../../services/columnConfigService'
+import { DEFAULT_COLUMN_CONFIG } from '../../services/columnConfigService'
 import type { PaymentStatus, ShipmentStatus, Store, TripFormValues, TripLineFormValues, TripLineWithStore, TripStatus, TripWithLines } from '../../types'
 import { tripStatuses, shipmentStatuses, paymentStatuses } from '../../lib/constants'
 import { Badge } from '../ui/Badge'
@@ -51,6 +54,14 @@ interface TripTableProps {
   onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
   onRemoveInvoicePhoto: (tripId: string, lineId: string, index: number) => Promise<void>
   canManage?: boolean
+  focusMode?: boolean
+  hoverAddMode?: boolean
+  onExpandedCountChange?: (count: number) => void
+  collapseAllSignal?: number
+  tripConfig?: ColumnConfig
+  lineConfig?: ColumnConfig
+  onUpdateTripCustomFields?: (tripId: string, fields: Record<string, unknown>) => Promise<void>
+  onUpdateLineCustomFields?: (tripId: string, lineId: string, fields: Record<string, unknown>) => Promise<void>
 }
 
 const tripStatusTone = {
@@ -99,8 +110,29 @@ export const TripTable = ({
   onReplaceInvoicePhoto,
   onRemoveInvoicePhoto,
   canManage = true,
+  focusMode = false,
+  hoverAddMode = true,
+  onExpandedCountChange,
+  collapseAllSignal = 0,
+  tripConfig = DEFAULT_COLUMN_CONFIG,
+  lineConfig = DEFAULT_COLUMN_CONFIG,
+  onUpdateTripCustomFields,
+  onUpdateLineCustomFields,
 }: TripTableProps) => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    onExpandedCountChange?.(expandedIds.size)
+  }, [expandedIds, onExpandedCountChange])
+
+  // Принудительное схлопывание — срабатывает даже когда expandAll уже false
+  const prevCollapseSignalRef = useRef(collapseAllSignal)
+  useEffect(() => {
+    if (collapseAllSignal !== prevCollapseSignalRef.current) {
+      prevCollapseSignalRef.current = collapseAllSignal
+      setExpandedIds(new Set())
+    }
+  }, [collapseAllSignal])
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -108,7 +140,95 @@ export const TripTable = ({
   const [editingTrip, setEditingTrip] = useState<TripWithLines | null>(null)
   const [editingTripLine, setEditingTripLine] = useState<{ tripId: string; line: TripLineWithStore } | null>(null)
   const [hoveredTripId, setHoveredTripId] = useState<string | null>(null)
+  const [editingCustomCell, setEditingCustomCell] = useState<{ entityId: string; colKey: string } | null>(null)
   const previousExpandAllRef = useRef(expandAll)
+
+  const tripHidden = new Set(tripConfig.hiddenBuiltin)
+  const lineHidden = new Set(lineConfig.hiddenBuiltin)
+  const outerColCount =
+    4 +
+    (tripHidden.has('carrier') ? 0 : 1) +
+    (tripHidden.has('departure_date') ? 0 : 1) +
+    (tripHidden.has('lines_count') ? 0 : 1) +
+    (tripHidden.has('status') ? 0 : 1) +
+    (tripHidden.has('payment') ? 0 : 1) +
+    (tripHidden.has('comment') ? 0 : 1) +
+    tripConfig.customCols.length
+  const innerColCount =
+    3 +
+    (lineHidden.has('shipment') ? 0 : 1) +
+    (lineHidden.has('volume') ? 0 : 1) +
+    (lineHidden.has('reception_date') ? 0 : 1) +
+    (lineHidden.has('status') ? 0 : 1) +
+    (lineHidden.has('arrival_date') ? 0 : 1) +
+    (lineHidden.has('shipped_date') ? 0 : 1) +
+    (lineHidden.has('marketplace_delivery_date') ? 0 : 1) +
+    (lineHidden.has('payment') ? 0 : 1) +
+    (lineHidden.has('comment') ? 0 : 1) +
+    lineConfig.customCols.length
+
+  const renderCustomCell = (
+    entityId: string,
+    customFields: Record<string, unknown>,
+    col: CustomColDef,
+    onSave: (fields: Record<string, unknown>) => void,
+    canEdit: boolean,
+  ) => {
+    if (col.type === 'boolean') {
+      return (
+        <input
+          type="checkbox"
+          checked={Boolean(customFields[col.key])}
+          disabled={!canEdit}
+          onChange={(e) => {
+            if (canEdit) onSave({ ...customFields, [col.key]: e.target.checked })
+          }}
+          className="h-3.5 w-3.5 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-0 focus:ring-offset-0 disabled:cursor-default"
+        />
+      )
+    }
+
+    const isEditing = editingCustomCell?.entityId === entityId && editingCustomCell?.colKey === col.key
+
+    if (isEditing && canEdit) {
+      return (
+        <input
+          type={col.type === 'date' ? 'date' : col.type === 'number' ? 'number' : 'text'}
+          autoFocus
+          defaultValue={String(customFields[col.key] ?? '')}
+          className="w-full min-w-[80px] rounded border border-blue-300 bg-white px-1.5 py-0.5 text-xs outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+          onBlur={(e) => {
+            const raw = e.target.value
+            const val = col.type === 'number' ? (raw === '' ? null : Number(raw)) : raw || null
+            onSave({ ...customFields, [col.key]: val })
+            setEditingCustomCell(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+            if (e.key === 'Escape') setEditingCustomCell(null)
+          }}
+        />
+      )
+    }
+
+    const val = customFields[col.key]
+    const display = val != null && val !== '' ? String(val) : '—'
+    return (
+      <span
+        className={cn('cursor-default', canEdit && 'cursor-text hover:text-blue-500')}
+        onClick={
+          canEdit
+            ? (e) => {
+                e.stopPropagation()
+                setEditingCustomCell({ entityId, colKey: col.key })
+              }
+            : undefined
+        }
+      >
+        {display}
+      </span>
+    )
+  }
 
   useEffect(() => {
     setExpandedIds((current) => {
@@ -234,6 +354,13 @@ export const TripTable = ({
 
   return (
     <>
+      {/* Оверлей — размывает всё снаружи таблицы (топбар, сайдбар, карточки) при хавере рейса */}
+      {focusMode && hoveredTripId !== null && createPortal(
+        <div className="pointer-events-none fixed inset-0 z-10 bg-slate-900/60 transition-all duration-200" />,
+        document.body,
+      )}
+      {/* При активном хавере таблица поднимается над оверлеем (z-20 > z-10) — сама таблица остаётся чёткой */}
+      <div className={cn('transition-all duration-200', focusMode && hoveredTripId !== null ? 'relative z-20' : '')}>
       <Card className="overflow-hidden rounded-3xl">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-[13px]">
@@ -254,13 +381,16 @@ export const TripTable = ({
                 </th>
                 <th className="w-8 px-3 py-2.5" />
                 <th className="px-3 py-2.5">Рейс</th>
-                <th className="px-3 py-2.5">Перевозчик</th>
-                <th className="px-3 py-2.5">Дата отправки</th>
-                <th className="px-3 py-2.5">Поставок</th>
-                <th className="min-w-[160px] px-3 py-2.5">Статус</th>
-                <th className="min-w-[192px] px-3 py-2.5">Оплата</th>
-                <th className="px-3 py-2.5">Комментарий</th>
-                <th className="w-24 px-3 py-2.5">
+                {!tripHidden.has('carrier') && <th className="px-3 py-2.5">Перевозчик</th>}
+                {!tripHidden.has('departure_date') && <th className="px-3 py-2.5">Дата отправки</th>}
+                {!tripHidden.has('lines_count') && <th className="px-3 py-2.5">Поставок</th>}
+                {!tripHidden.has('status') && <th className="min-w-[160px] px-3 py-2.5">Статус</th>}
+                {!tripHidden.has('payment') && <th className="min-w-[192px] px-3 py-2.5">Оплата</th>}
+                {!tripHidden.has('comment') && <th className="px-3 py-2.5">Комментарий</th>}
+                {tripConfig.customCols.map((col) => (
+                  <th key={col.key} className="px-3 py-2.5">{col.name}</th>
+                ))}
+                <th className="px-3 py-2.5">
                   {canManage ? (
                     <div className="flex items-center justify-end gap-0.5">
                       <button
@@ -268,12 +398,7 @@ export const TripTable = ({
                         disabled={!hasBulkSelection}
                         aria-label="Редактировать выбранные"
                         title="Редактировать выбранные"
-                        className={[
-                          'flex h-7 w-7 items-center justify-center rounded-xl transition',
-                          hasBulkSelection
-                            ? 'cursor-pointer bg-blue-50 text-blue-500 hover:bg-blue-100'
-                            : 'pointer-events-none text-slate-200',
-                        ].join(' ')}
+                        className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500 disabled:pointer-events-none disabled:opacity-30"
                       >
                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
                           <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
@@ -285,12 +410,7 @@ export const TripTable = ({
                         onClick={onBulkDelete}
                         aria-label="Удалить выбранные"
                         title="Удалить выбранные"
-                        className={[
-                          'flex h-7 w-7 items-center justify-center rounded-xl transition',
-                          hasBulkSelection
-                            ? 'cursor-pointer bg-rose-50 text-rose-500 hover:bg-rose-100'
-                            : 'pointer-events-none text-slate-200',
-                        ].join(' ')}
+                        className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500 disabled:pointer-events-none disabled:opacity-30"
                       >
                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
                           <path d="M9 4h6" />
@@ -319,13 +439,21 @@ export const TripTable = ({
                       : 'Частично оплачено'
                   : null
                 return (
-                  <tbody key={trip.id} className="group/row divide-y divide-slate-100">
+                  <tbody
+                    key={trip.id}
+                    className={cn(
+                      'group/row divide-y divide-slate-100 transition-all duration-200',
+                      focusMode && hoveredTripId !== null && hoveredTripId !== trip.id
+                        ? 'opacity-10'
+                        : '',
+                    )}
+                    onMouseEnter={() => focusMode && isExpanded && setHoveredTripId(trip.id)}
+                    onMouseLeave={() => setHoveredTripId(null)}
+                  >
                   {/* ── Строка рейса ── */}
                   <tr
                     className="cursor-pointer align-middle text-slate-700 transition-colors duration-150 hover:bg-slate-100"
-                    onClick={() => toggle(trip.id)}
-                    onMouseEnter={() => isExpanded && setHoveredTripId(trip.id)}
-                    onMouseLeave={() => setHoveredTripId(null)}
+                    onClick={() => { toggle(trip.id); if (focusMode && !isExpanded) setHoveredTripId(trip.id); else setHoveredTripId(null) }}
                   >
                     <td className="w-[34px] px-2 py-3.5" onClick={(event) => event.stopPropagation()}>
                       {canManage ? (
@@ -351,38 +479,58 @@ export const TripTable = ({
                         <path d="m9 18 6-6-6-6" />
                       </svg>
                     </td>
-                    <td className="px-3 py-3.5">
-                      {trip.trip_number
+                    <td className="px-3 py-3.5">{trip.trip_number
                         ? <span className="font-bold text-slate-900">Рейс {trip.trip_number}</span>
                         : <span className="font-medium text-slate-400">Черновик-{trip.draft_number}</span>
                       }
                     </td>
-                    <td className="px-3 py-3.5">{trip.carrier}</td>
-                    <td className="px-3 py-3.5 text-slate-600">
-                      {formatDate(trip.departure_date)}
-                    </td>
-                    <td className="px-3 py-3.5 text-slate-500">
-                      {trip.lines.length}
-                    </td>
-                    <td className="px-3 py-3.5">
-                      <div className={canManage ? 'inline-block' : 'pointer-events-none inline-block'} onClick={(event) => event.stopPropagation()}>
-                        <StatusDropdown<TripStatus>
-                          value={trip.status}
-                          options={tripStatuses}
-                          toneMap={tripStatusTone}
-                          onChange={(status) => onChangeTripStatus(trip.id, status)}
-                        />
-                      </div>
-                    </td>
-                    <td className="px-3 py-3.5">
-                      {derivedPaymentStatus !== null
-                        ? <Badge tone={paymentTone[derivedPaymentStatus]}>{derivedPaymentStatus}</Badge>
-                        : <Badge tone={paymentTone[trip.payment_status]}>{trip.payment_status}</Badge>
-                      }
-                    </td>
-                    <td className="max-w-[220px] px-3 py-3.5 text-slate-500">
-                      {trip.comment || '—'}
-                    </td>
+                    {!tripHidden.has('carrier') && <td className="px-3 py-3.5">{trip.carrier}</td>}
+                    {!tripHidden.has('departure_date') && (
+                      <td className="px-3 py-3.5 text-slate-600">
+                        {formatDate(trip.departure_date)}
+                      </td>
+                    )}
+                    {!tripHidden.has('lines_count') && (
+                      <td className="px-3 py-3.5 text-slate-500">
+                        {trip.lines.length}
+                      </td>
+                    )}
+                    {!tripHidden.has('status') && (
+                      <td className="px-3 py-3.5">
+                        <div className={canManage ? 'inline-block' : 'pointer-events-none inline-block'} onClick={(event) => event.stopPropagation()}>
+                          <StatusDropdown<TripStatus>
+                            value={trip.status}
+                            options={tripStatuses}
+                            toneMap={tripStatusTone}
+                            onChange={(status) => onChangeTripStatus(trip.id, status)}
+                          />
+                        </div>
+                      </td>
+                    )}
+                    {!tripHidden.has('payment') && (
+                      <td className="px-3 py-3.5">
+                        {derivedPaymentStatus !== null
+                          ? <Badge tone={paymentTone[derivedPaymentStatus]}>{derivedPaymentStatus}</Badge>
+                          : <Badge tone={paymentTone[trip.payment_status]}>{trip.payment_status}</Badge>
+                        }
+                      </td>
+                    )}
+                    {!tripHidden.has('comment') && (
+                      <td className="max-w-[220px] px-3 py-3.5 text-slate-500">
+                        {trip.comment || '—'}
+                      </td>
+                    )}
+                    {tripConfig.customCols.map((col) => (
+                      <td key={col.key} className="px-3 py-3.5" onClick={(e) => e.stopPropagation()}>
+                        {renderCustomCell(
+                          trip.id,
+                          trip.custom_fields,
+                          col,
+                          (fields) => void onUpdateTripCustomFields?.(trip.id, fields),
+                          canManage,
+                        )}
+                      </td>
+                    ))}
                     <td className="px-3 py-3.5" onClick={(event) => event.stopPropagation()}>
                       {canManage ? (
                         <div className="flex items-center justify-end gap-0.5">
@@ -420,11 +568,11 @@ export const TripTable = ({
                   {/* ── Строка кнопки ── peek при hover, фиксирована при открытии ── */}
                   {canManage ? (
                   <tr>
-                    <td className="p-0" colSpan={10}>
+                    <td className="p-0" colSpan={outerColCount}>
                       <div
                         className={cn(
                           'overflow-hidden transition-all duration-200',
-                          isExpanded ? 'h-[26px]' : 'h-0 group-hover/row:h-[26px]',
+                          isExpanded ? 'h-[26px]' : hoverAddMode ? 'h-0 group-hover/row:h-[26px]' : 'h-0',
                         )}
                       >
                         <div className="flex items-center border-t border-slate-100 bg-slate-50/60">
@@ -446,7 +594,7 @@ export const TripTable = ({
 
                   {/* ── Строки поставок внутри рейса ── */}
                   <tr>
-                    <td className="p-0" colSpan={10}>
+                    <td className="p-0" colSpan={outerColCount}>
                       <div
                         style={{
                           display: 'grid',
@@ -472,21 +620,27 @@ export const TripTable = ({
                                     </div>
                                   ) : null}
                                 </th>
-                                <th className="py-2 pl-14 pr-3 font-semibold">Магазин</th>
-                                <th className="px-3 py-2 font-semibold">Поставка</th>
-                                <th className="px-3 py-2 font-semibold">Склад</th>
-                                <th className="px-3 py-2 font-semibold">Объём</th>
-                                <th className="min-w-[192px] px-3 py-2 font-semibold">Статус</th>
-                                <th className="min-w-[192px] px-3 py-2 font-semibold">Оплата</th>
-                                <th className="px-3 py-2 font-semibold">Комментарий</th>
+                                <th className="px-3 py-2 font-semibold">Магазин</th>
+                                {!lineHidden.has('shipment') && <th className="px-3 py-2 font-semibold">Поставка</th>}
+                                {!lineHidden.has('volume') && <th className="px-3 py-2 font-semibold">Объём</th>}
+                                {!lineHidden.has('reception_date') && <th className="px-3 py-2 font-semibold">Дата приёма</th>}
+                                {!lineHidden.has('status') && <th className="px-3 py-2 font-semibold">Статус</th>}
+                                {!lineHidden.has('arrival_date') && <th className="px-3 py-2 font-semibold">Прибыл</th>}
+                                {!lineHidden.has('shipped_date') && <th className="px-3 py-2 font-semibold">Отгружено</th>}
+                                {!lineHidden.has('marketplace_delivery_date') && <th className="px-3 py-2 font-semibold">Дата МП</th>}
+                                {!lineHidden.has('payment') && <th className="px-3 py-2 font-semibold">Оплата</th>}
+                                {!lineHidden.has('comment') && <th className="px-3 py-2 font-semibold">Комментарий</th>}
+                                {lineConfig.customCols.map((col) => (
+                                  <th key={col.key} className="px-3 py-2 font-semibold">{col.name}</th>
+                                ))}
                                 <th className="w-20 px-3 py-2" />
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-slate-100/80">
+                            <tbody className="divide-y divide-slate-200">
                               {trip.lines.length > 0 ? trip.lines.map((line) => (
                                 <tr
                                   key={line.id}
-                                  className={cn('align-middle text-slate-600 transition-colors duration-150', hoveredTripId === trip.id ? 'bg-blue-50' : '')}
+                                  className="align-middle text-slate-600"
                                 >
                                   <td className="w-[34px] px-2 py-2.5">
                                     {canManage ? (
@@ -501,7 +655,7 @@ export const TripTable = ({
                                       </div>
                                     ) : null}
                                   </td>
-                                  <td className="py-2.5 pl-14 pr-3">
+                                  <td className="px-3 py-2.5">
                                     <div className="flex flex-col leading-tight">
                                       <span className="font-medium text-slate-800">
                                         {line.store?.name ?? '—'}
@@ -511,44 +665,85 @@ export const TripTable = ({
                                       )}
                                     </div>
                                   </td>
-                                  <td className="px-3 py-2.5 text-slate-500">
-                                    Поставка {line.shipment_number}
-                                  </td>
-                                  <td className="px-3 py-2.5">{line.destination_warehouse}</td>
-                                  <td className="px-3 py-2.5">
-                                    <span className="text-xs text-slate-500">
-                                      {line.box_qty} коробов · {line.units_qty} ед.
-                                    </span>
-                                  </td>
-                                  <td className={canManage ? 'px-3 py-2.5' : 'pointer-events-none px-3 py-2.5'}>
-                                    <StatusDropdown<ShipmentStatus>
-                                      value={line.status}
-                                      options={shipmentStatuses}
-                                      toneMap={lineTone}
-                                      onChange={(status) => onChangeTripLineStatus(trip.id, line.id, status)}
-                                    />
-                                  </td>
-                                  <td className="px-3 py-2.5">
-                                    <div className="flex items-center gap-2">
-                                      <div className={canManage ? '' : 'pointer-events-none'}>
-                                        <StatusDropdown<PaymentStatus>
-                                          value={line.payment_status}
-                                          options={paymentStatuses}
-                                          toneMap={paymentTone}
-                                          onChange={(ps) => onChangeTripLinePaymentStatus(trip.id, line.id, ps)}
+                                  {!lineHidden.has('shipment') && (
+                                    <td className="px-3 py-2.5">
+                                      <div className="flex flex-col leading-tight">
+                                        <span className="font-medium text-slate-800">{line.destination_warehouse}</span>
+                                        <span className="text-[11px] text-slate-400">Поставка {line.shipment_number}</span>
+                                      </div>
+                                    </td>
+                                  )}
+                                  {!lineHidden.has('volume') && (
+                                    <td className="px-3 py-2.5">
+                                      <div className="flex flex-col leading-tight">
+                                        <span className="font-medium text-slate-800">
+                                          {line.box_qty} {pluralRu(line.box_qty, 'короб', 'короба', 'коробов')}
+                                        </span>
+                                        <span className="text-[11px] text-slate-400">
+                                          {line.units_qty} {pluralRu(line.units_qty, 'единица', 'единицы', 'единиц')}
+                                          {line.weight ? ` · ${line.weight} кг` : ''}
+                                        </span>
+                                      </div>
+                                    </td>
+                                  )}
+                                  {!lineHidden.has('reception_date') && (
+                                    <td className="px-3 py-2.5 text-slate-500">{line.reception_date ? formatDate(line.reception_date) : '—'}</td>
+                                  )}
+                                  {!lineHidden.has('status') && (
+                                    <td className={canManage ? 'px-3 py-2.5' : 'pointer-events-none px-3 py-2.5'}>
+                                      <StatusDropdown<ShipmentStatus>
+                                        value={line.status}
+                                        options={shipmentStatuses}
+                                        toneMap={lineTone}
+                                        onChange={(status) => onChangeTripLineStatus(trip.id, line.id, status)}
+                                      />
+                                    </td>
+                                  )}
+                                  {!lineHidden.has('arrival_date') && (
+                                    <td className="px-3 py-2.5 text-slate-500">{line.arrival_date ? formatDate(line.arrival_date) : '—'}</td>
+                                  )}
+                                  {!lineHidden.has('shipped_date') && (
+                                    <td className="px-3 py-2.5 text-slate-500">{line.shipped_date ? formatDate(line.shipped_date) : '—'}</td>
+                                  )}
+                                  {!lineHidden.has('marketplace_delivery_date') && (
+                                    <td className="px-3 py-2.5 text-slate-500">{line.planned_marketplace_delivery_date ? formatDate(line.planned_marketplace_delivery_date) : '—'}</td>
+                                  )}
+                                  {!lineHidden.has('payment') && (
+                                    <td className="px-3 py-2.5">
+                                      <div className="flex items-center gap-2">
+                                        <div className={canManage ? '' : 'pointer-events-none'}>
+                                          <StatusDropdown<PaymentStatus>
+                                            value={line.payment_status}
+                                            options={paymentStatuses}
+                                            toneMap={paymentTone}
+                                            onChange={(ps) => onChangeTripLinePaymentStatus(trip.id, line.id, ps)}
+                                          />
+                                        </div>
+                                        <InvoicePhotoCell
+                                          photoUrls={line.invoice_photo_urls}
+                                          onAdd={canManage ? (file) => onAddInvoicePhoto(trip.id, line.id, file) : undefined}
+                                          onReplace={canManage ? (idx, file) => onReplaceInvoicePhoto(trip.id, line.id, idx, file) : undefined}
+                                          onRemove={canManage ? (idx) => onRemoveInvoicePhoto(trip.id, line.id, idx) : undefined}
                                         />
                                       </div>
-                                      <InvoicePhotoCell
-                                        photoUrls={line.invoice_photo_urls}
-                                        onAdd={canManage ? (file) => onAddInvoicePhoto(trip.id, line.id, file) : undefined}
-                                        onReplace={canManage ? (idx, file) => onReplaceInvoicePhoto(trip.id, line.id, idx, file) : undefined}
-                                        onRemove={canManage ? (idx) => onRemoveInvoicePhoto(trip.id, line.id, idx) : undefined}
-                                      />
-                                    </div>
-                                  </td>
-                                  <td className="max-w-[220px] px-3 py-2.5 text-slate-400">
-                                    {line.comment || '—'}
-                                  </td>
+                                    </td>
+                                  )}
+                                  {!lineHidden.has('comment') && (
+                                    <td className="max-w-[220px] px-3 py-2.5 text-slate-400">
+                                      {line.comment || '—'}
+                                    </td>
+                                  )}
+                                  {lineConfig.customCols.map((col) => (
+                                    <td key={col.key} className="px-3 py-2.5">
+                                      {renderCustomCell(
+                                        line.id,
+                                        line.custom_fields,
+                                        col,
+                                        (fields) => void onUpdateLineCustomFields?.(trip.id, line.id, fields),
+                                        canManage,
+                                      )}
+                                    </td>
+                                  ))}
                                   <td className="px-3 py-2.5">
                                     {canManage ? (
                                       <div className="flex items-center justify-end gap-0.5">
@@ -589,7 +784,7 @@ export const TripTable = ({
                                 </tr>
                               )) : (
                                 <tr className="text-slate-400">
-                                  <td className="py-3 text-center" colSpan={9}>
+                                  <td className="py-3 text-center" colSpan={innerColCount}>
                                     Поставок нет.
                                   </td>
                                 </tr>
@@ -670,6 +865,7 @@ export const TripTable = ({
           setEditingTripLine(null)
         }}
       />
+      </div>
     </>
   )
 }

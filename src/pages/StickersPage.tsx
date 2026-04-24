@@ -228,15 +228,20 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const [importStoreDropdownOpen, setImportStoreDropdownOpen] = useState(false)
   const importStoreDropdownRef = useRef<HTMLDivElement | null>(null)
   const [importExpandedIds, setImportExpandedIds] = useState<Set<string>>(new Set())
-  const [importExpandAll, setImportExpandAll] = useState(false)
+  const [importExpandAll, setImportExpandAll] = useState(() => localStorage.getItem('elestet-stickers-expand-all') === 'true')
+  const [importAnyExpanded, setImportAnyExpanded] = useState(false)
 
   const handleImportToggleAll = () => {
-    if (importExpandAll) {
+    if (importAnyExpanded) {
       setImportExpandedIds(new Set())
       setImportExpandAll(false)
+      setImportAnyExpanded(false)
+      localStorage.setItem('elestet-stickers-expand-all', 'false')
     } else {
       setImportExpandedIds(new Set(importProducts.map((p) => p.id)))
       setImportExpandAll(true)
+      setImportAnyExpanded(true)
+      localStorage.setItem('elestet-stickers-expand-all', 'true')
     }
   }
   const [importPhotoPreview, setImportPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
@@ -383,12 +388,12 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
               <button
                 type="button"
                 onClick={handleImportToggleAll}
-                aria-pressed={importExpandAll}
-                aria-label={importExpandAll ? 'Свернуть все' : 'Развернуть все'}
-                title={importExpandAll ? 'Свернуть все' : 'Развернуть все'}
+                aria-pressed={importAnyExpanded}
+                aria-label={importAnyExpanded ? 'Свернуть все' : 'Развернуть все'}
+                title={importAnyExpanded ? 'Свернуть все' : 'Развернуть все'}
                 className={[
                   'flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition',
-                  importExpandAll
+                  importAnyExpanded
                     ? 'bg-[#E3EAF6] text-slate-700 hover:bg-[#d6e0f5]'
                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
                 ].join(' ')}
@@ -402,7 +407,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 >
-                  {importExpandAll ? (
+                  {importAnyExpanded ? (
                     <>
                       <path d="m7.5 11 4.5-4.5 4.5 4.5" />
                       <path d="m7.5 17 4.5-4.5 4.5 4.5" />
@@ -561,7 +566,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                       <tbody key={product.id} className="divide-y divide-slate-50">
                         <tr
                           className="cursor-pointer align-middle transition-colors duration-150 hover:bg-slate-50"
-                          onClick={() => setImportExpandedIds((prev) => { const n = new Set(prev); n.has(product.id) ? n.delete(product.id) : n.add(product.id); return n })}
+                          onClick={() => setImportExpandedIds((prev) => { const n = new Set(prev); n.has(product.id) ? n.delete(product.id) : n.add(product.id); setImportAnyExpanded(n.size > 0); return n })}
                         >
                           <td className="px-3 py-3 text-slate-400">
                             <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">

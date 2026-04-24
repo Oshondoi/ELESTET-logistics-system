@@ -10,7 +10,7 @@ import type { Account } from '../types'
 
 export const useAccounts = (enabled: boolean) => {
   const [accounts, setAccounts] = useState<Account[]>([])
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(enabled && isSupabaseConfigured)
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {

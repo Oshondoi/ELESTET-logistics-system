@@ -154,7 +154,7 @@ export const Sidebar = ({
   }, [])
 
   return (
-    <aside className="sticky top-0 flex h-screen w-[234px] shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white/95">
+    <aside className="flex h-full w-[234px] shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white/95">
       <div className="border-b border-slate-200 px-5 py-4">
         <button type="button" className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-xs font-bold text-white">

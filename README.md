@@ -24,14 +24,20 @@ MVP веб-приложения для логистики поставок на 
 - Все страницы принимают `canManage?: boolean` и скрывают кнопки создания/редактирования/удаления при недостаточных правах
 ### Логистика — модель Рейсов
 - **Рейс** (#1, #2…) — верхний уровень: перевозчик, дата, статус, оплата
-- **Поставка** — строка рейса: магазин, склад, коробов, единиц
+- **Поставка** — строка рейса: магазин, склад, коробов, единиц, вес (кг)
 - Таблица рейсов с раскрытием поставок по стрелке
 - Кнопка "+ Добавить поставку" (peek при hover, фиксирована при открытии)
 - Модалки создания и редактирования рейса и поставки
-- RPC: `create_trip`, `add_trip_line`
+- RPC: `create_trip`, `add_trip_line` (с `reception_date`, `shipped_date`, `weight`, `payment_status`)
 - Удаление рейса / поставки с подтверждением
 - Массовое выделение и массовое удаление поставок
 - Дропдауны статусов рейса, поставки, оплаты
+- **Колонки поставки**: Магазин, Поставка, Объём (коробов + единиц + кг), Дата приёма, Статус, Прибыл, Отгружено, Дата МП, Оплата, Комментарий
+- **Автодаты**: `arrival_date` → авто при «Прибыл»; `shipped_date` → авто при «Отгружен»
+- **Массовое «Прибыл»**: смена статуса рейса затрагивает все не-«Отгружен» поставки
+- **Глобальная нумерация** поставок по компании (`account_id`)
+- **Настройка колонок**: показ/скрытие builtin и custom колонок через `columnConfigService`
+- **Режим фокуса**: затемняет всё кроме активного рейса
 
 ### Фото накладных
 - Колонка `invoice_photo_urls text[]` в `trip_lines`
@@ -71,7 +77,7 @@ src/
     layout/        — Sidebar, Topbar
     trips/         — TripTable, TripLineFormModal, TripFormModal
     stores/        — StoreList, StoreFormModal
-    accounts/      — AccountFormModal, DeleteAccountModal
+    accounts/      — AccountFormModal, DeleteAccountModal, ProfileModal
     roles/         — RoleFormModal
     stickers/      — StickerFormModal
     ui/            — Button, Badge, Card, Input, Modal, Select, Textarea, InvoicePhotoCell, DeleteConfirmModal
@@ -154,6 +160,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | Баркод в стикере | ✅ Готово | Поле в форме, генерация EAN-13, PDF |
 | Товары | ✅ Готово | Аккордеон, размеры, фото, превью по hover, синхронизация |
 | Магазины — синк WB | ✅ Готово | Колонки API ключ/Поставщик/Адрес, синк seller-info |
+| Профиль пользователя | ✅ Готово | Topbar дропдаун + ProfileModal (имя, пароль) |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
@@ -164,6 +171,21 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 - Не менять бизнес-логику, UX, визуальный стиль, тексты вне рамок задачи
 - Не делать попутные рефакторинги без явного запроса
 - Локальная и минимально достаточная правка
+
+## Известные паттерны / ловушки
+
+### Сброс активной страницы на home при обновлении
+Активная страница сохраняется в `localStorage` (`elestet-active-page`). **Проблема:** редирект на `home` по правам доступа срабатывал до загрузки прав из БД — `permissions = DEFAULT_PERMISSIONS` (все `false`) сбрасывал страницу.
+
+**Обязательный паттерн в App.tsx:**
+```ts
+const { permissions, isLoading: isPermissionsLoading } = useMyPermissions(...)
+useEffect(() => {
+  if (isPermissionsLoading) return  // ← без этого страница всегда сбрасывается на home
+  const key = pagePermKey[activePage]
+  if (key !== null && !permissions[key]) setActivePage('home')
+}, [permissions, activePage, isPermissionsLoading])
+```
 
 ## Что уже есть
 
@@ -312,6 +334,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | Стикеры WB | ✅ Готово | CRUD шаблонов, PDF-генерация, иконки ухода, EAC |
 | Наборы стикеров | ✅ Готово | Создать/редактировать/удалить, индивидуальные копии, PDF |
 | TS build fix | ✅ Готово | supabase.ts + Topbar + App + TripLineFormModal + stickerPdf + stickerService |
+| Профиль пользователя | ✅ Готово | Topbar дропдаун + ProfileModal (имя, пароль) |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
 

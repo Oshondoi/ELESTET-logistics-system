@@ -232,6 +232,7 @@ export interface Trip {
   status: TripStatus
   payment_status: PaymentStatus
   comment: string
+  custom_fields: Record<string, unknown>
   created_at: string
   updated_at: string
 }
@@ -247,12 +248,16 @@ export interface TripLine {
   units_qty: number
   units_total: number
   arrived_box_qty: number
+  weight: number | null
   planned_marketplace_delivery_date: string | null
   arrival_date: string | null
+  reception_date: string | null
+  shipped_date: string | null
   status: ShipmentStatus
   payment_status: PaymentStatus
   invoice_photo_urls: string[]
   comment: string
+  custom_fields: Record<string, unknown>
   created_at: string
   updated_at: string
 }
@@ -278,8 +283,11 @@ export interface TripLineFormValues {
   units_qty: number
   units_total: number
   arrived_box_qty: number
+  weight: number
   planned_marketplace_delivery_date: string
   arrival_date: string
+  reception_date: string
+  shipped_date: string
   status: ShipmentStatus
   payment_status: PaymentStatus
   comment: string

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { shipmentStatuses, paymentStatuses } from '../../lib/constants'
-import type { Store, TripLineFormValues } from '../../types'
+import type { Store, TripLineFormValues, TripWithLines } from '../../types'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
@@ -14,6 +14,9 @@ interface TripLineFormModalProps {
   onSubmit: (values: TripLineFormValues) => Promise<void>
   initialValues?: TripLineFormValues
   warehouseNames?: string[]
+  /** Если передан — показывает селект «Рейс» первым полем (режим создания без привязки к рейсу) */
+  trips?: TripWithLines[]
+  onSubmitWithTrip?: (tripId: string, values: TripLineFormValues) => Promise<void>
 }
 
 const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues => ({
@@ -23,22 +26,28 @@ const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues
   units_qty: 0,
   units_total: 0,
   arrived_box_qty: 0,
+  weight: 0,
   planned_marketplace_delivery_date: '',
+  reception_date: '',
   arrival_date: '',
+  shipped_date: '',
   status: 'Ожидает отправки',
   payment_status: 'Не оплачено',
   comment: '',
 })
 
-export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames }: TripLineFormModalProps) => {
+export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames, trips, onSubmitWithTrip }: TripLineFormModalProps) => {
   const isEdit = Boolean(initialValues)
   const warehouses = warehouseNames ?? []
   const [values, setValues] = useState<TripLineFormValues>(() => initialValues ?? makeDefaults(stores, warehouses))
+  const [selectedTripId, setSelectedTripId] = useState<string>(() => trips?.[0]?.id ?? '')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
       setValues(initialValues ?? makeDefaults(stores, warehouses))
+      setSelectedTripId(trips?.[0]?.id ?? '')
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialValues, stores])
@@ -49,10 +58,23 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
     setIsSubmitting(true)
-    void onSubmit(values)
+    setSubmitError(null)
+    const submit = trips && onSubmitWithTrip
+      ? onSubmitWithTrip(selectedTripId, values)
+      : onSubmit(values)
+    void submit
       .then(() => {
         setValues(makeDefaults(stores, warehouses))
         onClose()
+      })
+      .catch((err: unknown) => {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'object' && err !== null && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : String(err)
+        setSubmitError(msg)
       })
       .finally(() => setIsSubmitting(false))
   }
@@ -63,8 +85,33 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
   }))
 
   return (
-    <Modal open={open} onClose={onClose} title={isEdit ? 'Редактировать поставку' : 'Новая поставка'}>
-      <form className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={isEdit ? 'Редактировать поставку' : 'Новая поставка'}
+      footer={
+        <div className="flex justify-end gap-3">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={isSubmitting}>
+            Отмена
+          </Button>
+          <Button type="submit" form="trip-line-form" disabled={isSubmitting || !values.store_id || (Boolean(trips) && !selectedTripId)}>
+            {isSubmitting ? 'Сохранение…' : (isEdit ? 'Сохранить' : 'Добавить поставку')}
+          </Button>
+        </div>
+      }
+    >
+      <form id="trip-line-form" className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
+        {trips && (
+          <Select
+            label="Рейс"
+            value={selectedTripId}
+            onChange={(e) => setSelectedTripId(e.target.value)}
+            options={trips.map((t) => ({
+              label: t.trip_number ? `Рейс ${t.trip_number}` : `Черновик-${t.draft_number}`,
+              value: t.id,
+            }))}
+          />
+        )}
         <div className="grid min-w-0 gap-4 md:grid-cols-2">
           <Select
             label="Магазин"
@@ -86,37 +133,43 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
             onChange={(e) => set('box_qty', Number(e.target.value))}
           />
           <Input
-            label="Единиц (план)"
+            label="Единиц"
             type="number"
             min={0}
             value={values.units_qty}
             onChange={(e) => set('units_qty', Number(e.target.value))}
           />
           <Input
-            label="Единиц (итого)"
+            label="Вес (кг)"
             type="number"
             min={0}
-            value={values.units_total}
-            onChange={(e) => set('units_total', Number(e.target.value))}
+            step={0.1}
+            value={values.weight}
+            onChange={(e) => set('weight', Number(e.target.value))}
           />
           <Input
-            label="Коробов фактически"
-            type="number"
-            min={0}
-            value={values.arrived_box_qty}
-            onChange={(e) => set('arrived_box_qty', Number(e.target.value))}
-          />
-          <Input
-            label="Плановая дата доставки"
+            label="Дата приёма"
             type="date"
-            value={values.planned_marketplace_delivery_date}
-            onChange={(e) => set('planned_marketplace_delivery_date', e.target.value)}
+            value={values.reception_date}
+            onChange={(e) => set('reception_date', e.target.value)}
           />
           <Input
-            label="Дата прибытия"
+            label="Прибыл"
             type="date"
             value={values.arrival_date}
             onChange={(e) => set('arrival_date', e.target.value)}
+          />
+          <Input
+            label="Отгружено"
+            type="date"
+            value={values.shipped_date}
+            onChange={(e) => set('shipped_date', e.target.value)}
+          />
+          <Input
+            label="Дата МП"
+            type="date"
+            value={values.planned_marketplace_delivery_date}
+            onChange={(e) => set('planned_marketplace_delivery_date', e.target.value)}
           />
           <Select
             label="Статус"
@@ -139,17 +192,9 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
           value={values.comment}
           onChange={(e) => set('comment', e.target.value)}
         />
-
-        <div className="sticky bottom-0 -mx-4 border-t border-slate-200 bg-white px-4 pt-4 pb-1 sm:-mx-6 sm:px-6">
-          <div className="flex justify-end gap-3">
-            <Button type="button" variant="secondary" onClick={onClose} disabled={isSubmitting}>
-              Отмена
-            </Button>
-            <Button type="submit" disabled={isSubmitting || !values.store_id}>
-              {isSubmitting ? 'Сохранение…' : (isEdit ? 'Сохранить' : 'Добавить поставку')}
-            </Button>
-          </div>
-        </div>
+        {submitError && (
+          <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-600">{submitError}</p>
+        )}
       </form>
     </Modal>
   )

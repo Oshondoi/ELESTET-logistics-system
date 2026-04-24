@@ -34,7 +34,7 @@ export const fetchTrips = async (accountId: string, stores: Store[]): Promise<Tr
     .from('trip_lines')
     .select('*')
     .in('trip_id', tripIds)
-    .order('shipment_number', { ascending: true })
+    .order('shipment_number', { ascending: false })
 
   if (linesError) throw linesError
 
@@ -76,9 +76,13 @@ export const addTripLine = async (
     p_units_qty: values.units_qty,
     p_units_total: values.units_total,
     p_arrived_box_qty: values.arrived_box_qty,
+    p_weight: values.weight || null,
     p_planned_marketplace_delivery_date: values.planned_marketplace_delivery_date || null,
     p_arrival_date: values.arrival_date || null,
+    p_reception_date: values.reception_date || null,
+    p_shipped_date: values.shipped_date || null,
     p_status: values.status,
+    p_payment_status: values.payment_status,
     p_comment: values.comment,
   })
 
@@ -136,15 +140,55 @@ export const updateTripLineStatus = async (
   accountId: string,
   lineId: string,
   status: ShipmentStatus,
-): Promise<void> => {
+  currentArrivalDate: string | null,
+  currentShippedDate: string | null,
+): Promise<{ arrival_date: string | null; shipped_date: string | null }> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  const today = new Date().toISOString().slice(0, 10)
+  const arrival_date =
+    status === 'Прибыл' && !currentArrivalDate ? today : currentArrivalDate
+  const shipped_date =
+    status === 'Отгружен' && !currentShippedDate ? today : currentShippedDate
+  const patch: Record<string, unknown> = { status }
+  if (status === 'Прибыл' && !currentArrivalDate) patch.arrival_date = arrival_date
+  if (status === 'Отгружен' && !currentShippedDate) patch.shipped_date = shipped_date
   const { error } = await supabase
     .from('trip_lines')
-    .update({ status })
+    .update(patch)
     .eq('id', lineId)
     .eq('account_id', accountId)
 
   if (error) throw error
+  return { arrival_date, shipped_date }
+}
+
+// Массово переводит поставки рейса в «Прибыл», кроме «Отгружен» (статус впереди по логике)
+export const bulkArriveTripLines = async (
+  accountId: string,
+  tripId: string,
+  today: string,
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const toArrive: ShipmentStatus[] = ['Ожидает отправки', 'В пути']
+
+  // Обновляем статус
+  const { error: e1 } = await supabase
+    .from('trip_lines')
+    .update({ status: 'Прибыл' })
+    .eq('trip_id', tripId)
+    .eq('account_id', accountId)
+    .in('status', toArrive)
+  if (e1) throw e1
+
+  // Проставляем дату прибытия там, где её ещё нет
+  const { error: e2 } = await supabase
+    .from('trip_lines')
+    .update({ arrival_date: today })
+    .eq('trip_id', tripId)
+    .eq('account_id', accountId)
+    .eq('status', 'Прибыл')
+    .is('arrival_date', null)
+  if (e2) throw e2
 }
 
 export const updateTripLinePaymentStatus = async (
@@ -218,8 +262,11 @@ export const updateTripLine = async (
       units_qty: values.units_qty,
       units_total: values.units_total,
       arrived_box_qty: values.arrived_box_qty,
+      weight: values.weight || null,
       planned_marketplace_delivery_date: values.planned_marketplace_delivery_date || null,
       arrival_date: values.arrival_date || null,
+      reception_date: values.reception_date || null,
+      shipped_date: values.shipped_date || null,
       status: values.status,
       payment_status: values.payment_status,
       comment: values.comment,
