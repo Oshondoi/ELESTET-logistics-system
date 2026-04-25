@@ -233,14 +233,16 @@ export async function loadFeedbackRowsFromDb(
   isAnswered: boolean,
 ): Promise<WbFeedbackRow[]> {
   if (!supabase) throw new Error('Supabase not configured')
-  const { data, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
     .from('wb_feedbacks')
     .select('id, store_id, account_id, data, is_answered, ai_reply, ai_reply_status, reply_sent_at, synced_at')
     .eq('store_id', storeId)
     .eq('is_answered', isAnswered)
     .order('created_date', { ascending: false })
   if (error) throw error
-  return (data ?? []).map((row) => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (data ?? []).map((row: any) => ({
     id: row.id as string,
     store_id: row.store_id as string,
     account_id: row.account_id as string,
@@ -255,7 +257,8 @@ export async function loadFeedbackRowsFromDb(
 
 export async function saveAiReply(feedbackId: string, text: string): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  const { error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
     .from('wb_feedbacks')
     .update({ ai_reply: text, ai_reply_status: 'generated' })
     .eq('id', feedbackId)
@@ -264,7 +267,8 @@ export async function saveAiReply(feedbackId: string, text: string): Promise<voi
 
 export async function markReplySent(feedbackId: string): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  const { error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
     .from('wb_feedbacks')
     .update({
       is_answered: true,
@@ -279,7 +283,8 @@ export async function markReplySent(feedbackId: string): Promise<void> {
 
 export async function getAiSettings(accountId: string): Promise<AiSettings | null> {
   if (!supabase) throw new Error('Supabase not configured')
-  const { data, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
     .from('account_ai_settings')
     .select('*')
     .eq('account_id', accountId)
@@ -296,7 +301,8 @@ export async function saveAiSettings(
   values: AiSettingsFormValues,
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  const { error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
     .from('account_ai_settings')
     .upsert({
       account_id: accountId,
