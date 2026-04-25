@@ -1,5 +1,8 @@
 import { supabase } from '../lib/supabase'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const db = supabase as any
+
 export interface CustomColDef {
   key: string
   name: string
@@ -42,7 +45,8 @@ export async function fetchColumnConfig(
   accountId: string,
   entityType: 'trip' | 'trip_line',
 ): Promise<ColumnConfig> {
-  const { data, error } = await supabase
+  if (!supabase) return DEFAULT_COLUMN_CONFIG
+  const { data, error } = await db
     .from('column_configs')
     .select('hidden_builtin, custom_cols')
     .eq('account_id', accountId)
@@ -63,7 +67,8 @@ export async function upsertColumnConfig(
   entityType: 'trip' | 'trip_line',
   config: ColumnConfig,
 ): Promise<void> {
-  const { error } = await supabase.from('column_configs').upsert(
+  if (!supabase) return
+  const { error } = await db.from('column_configs').upsert(
     {
       account_id: accountId,
       entity_type: entityType,
@@ -79,7 +84,8 @@ export async function updateTripCustomFieldsInSupabase(
   tripId: string,
   fields: Record<string, unknown>,
 ): Promise<void> {
-  const { error } = await supabase
+  if (!supabase) return
+  const { error } = await db
     .from('trips')
     .update({ custom_fields: fields })
     .eq('id', tripId)
@@ -90,7 +96,8 @@ export async function updateLineCustomFieldsInSupabase(
   lineId: string,
   fields: Record<string, unknown>,
 ): Promise<void> {
-  const { error } = await supabase
+  if (!supabase) return
+  const { error } = await db
     .from('trip_lines')
     .update({ custom_fields: fields })
     .eq('id', lineId)

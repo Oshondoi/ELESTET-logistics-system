@@ -154,7 +154,8 @@ export const updateTripLineStatus = async (
   if (status === 'Отгружен' && !currentShippedDate) patch.shipped_date = shipped_date
   const { error } = await supabase
     .from('trip_lines')
-    .update(patch)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update(patch as any)
     .eq('id', lineId)
     .eq('account_id', accountId)
 
@@ -255,6 +256,7 @@ export const updateTripLine = async (
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase
     .from('trip_lines')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .update({
       store_id: values.store_id,
       destination_warehouse: values.destination_warehouse,
@@ -270,7 +272,7 @@ export const updateTripLine = async (
       status: values.status,
       payment_status: values.payment_status,
       comment: values.comment,
-    })
+    } as any)
     .eq('id', lineId)
     .eq('account_id', accountId)
     .select()
