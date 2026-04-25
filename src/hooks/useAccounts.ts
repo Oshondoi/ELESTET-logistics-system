@@ -40,8 +40,9 @@ export const useAccounts = (enabled: boolean) => {
 
   const createAccount = async (name: string) => {
     const account = await createAccountWithOwnerInSupabase(name)
-    setAccounts((current) => [account, ...current])
-    return account
+    const accountWithRole = { ...account, my_role: 'owner' as const }
+    setAccounts((current) => [accountWithRole, ...current])
+    return accountWithRole
   }
 
   const deleteAccount = async (accountId: string) => {

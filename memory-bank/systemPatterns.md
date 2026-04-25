@@ -32,6 +32,13 @@ Layers:
 
 ## Domain Patterns
 
+### Account / Company Model (КРИТИЧНО)
+- **Account** = то, что пользователь видит как «Компания» в UI.
+- Каждый пользователь может зарегистрироваться и создать свой account (компанию) независимо — это SaaS.
+- `accounts.my_role` — роль текущего пользователя в этом account. Заполняется RPC `get_my_accounts`.
+- После `createAccountWithOwnerInSupabase` объект возвращается **без `my_role`** — нужно вручную добавить `my_role: 'owner'` в `useAccounts.ts`.
+- `useMyPermissions` полностью зависит от `my_role`: если undefined → `DEFAULT_PERMISSIONS` → пользователь видит только Главную.
+
 ### Multi-Tenant Boundary
 `account_id` is the main tenant boundary for all business data.
 

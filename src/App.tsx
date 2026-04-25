@@ -25,9 +25,10 @@ import { ShipmentsPage } from './pages/ShipmentsPage'
 import { StoresPage } from './pages/StoresPage'
 import { DirectoriesPage } from './pages/DirectoriesPage'
 import { StickersPage } from './pages/StickersPage'
+import { ReviewsPage } from './pages/ReviewsPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles' | 'stickers'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers'
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
 const ACTIVE_STORE_ID_STORAGE_KEY = 'elestet-active-store-id'
@@ -92,8 +93,9 @@ const pageTitles: Record<PageKey, string> = {
   stores: 'Магазины',
   directories: 'Справочники',
   products: 'Товары',
-  roles: 'Роли',
   stickers: 'Стикеры',
+  reviews: 'Отзывы',
+  roles: 'Роли',
 }
 
 function App() {
@@ -108,6 +110,7 @@ function App() {
       storedPage === 'stores' ||
       storedPage === 'directories' ||
       storedPage === 'products' ||
+      storedPage === 'reviews' ||
       storedPage === 'roles' ||
       storedPage === 'stickers'
     ) {
@@ -205,6 +208,7 @@ function App() {
     products: 'stores_view',
     directories: 'directories_view',
     stickers: 'stickers_view',
+    reviews: null,
     roles: 'roles_manage',
   }
 
@@ -442,6 +446,13 @@ function App() {
                   onEditBundle={editBundle}
                   onDeleteBundle={removeBundle}
                   canManage={permissions.stickers_manage}
+                />
+              ) : effectivePage === 'reviews' ? (
+                <ReviewsPage
+                  stores={stores}
+                  activeAccountId={activeAccount?.id ?? ''}
+                  selectedStoreId={activeStoreId}
+                  onStoreChange={setActiveStoreId}
                 />
               ) : (
                 <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} />

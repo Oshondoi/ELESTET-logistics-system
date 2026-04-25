@@ -3,8 +3,8 @@ import { cn } from '../../lib/utils'
 import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles' | 'stickers'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'roles' | 'stickers') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -103,6 +103,18 @@ const items = [
         <path d="M7 12h10" />
         <path d="M7 17h6" />
         <path d="M13 7h4" />
+      </svg>
+    ),
+  },
+  {
+    key: 'reviews',
+    label: 'Отзывы',
+    permKey: null,
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        <path d="M8 10h8" />
+        <path d="M8 14h5" />
       </svg>
     ),
   },

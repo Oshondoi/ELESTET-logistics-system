@@ -15,6 +15,13 @@ The product is being created to manage logistics operations for shipments going 
 - Admins / account owners
 - Internal teams working inside one business account
 
+## SaaS Account Model (КРИТИЧНО)
+- **Аккаунт** — высшая сущность. В UI называется «Компания». Это tenant-граница.
+- **Компания (account)** — каждый пользователь может зарегистрироваться и создать свою компанию самостоятельно, без приглашений.
+- Пользователь может быть членом нескольких компаний (account_members).
+- `my_role` на объекте Account — роль текущего пользователя в этой компании. Берётся из RPC `get_my_accounts`.
+- **Аккаунт ≠ профиль пользователя.** Один user может иметь несколько аккаунтов/компаний или быть invited в чужие.
+
 ## UX Expectations
 - Russian-language UI
 - Compact and business-like
@@ -30,6 +37,8 @@ The product is being created to manage logistics operations for shipments going 
 - UI is being tuned toward a denser SaaS dashboard style
 - Access is now blocked behind auth; user must sign in before seeing the app
 - Company is a first-class entity in the product and is selected via sidebar switcher
+- Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / **Отзывы** / Роли
+- Отзывы WB: загрузка через WB Feedbacks API (лимит 1 запрос/мин), шаблоны ответов, авто-ответ
 
 ## Important Semantic Rules
 - `Прибыл` means cargo reached the required city/country and is ready for next dispatch step

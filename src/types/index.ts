@@ -350,3 +350,45 @@ export interface StickerFormValues {
   icon_no_tumble_dry: boolean
   icon_eac: boolean
 }
+
+// ─── Отзывы WB ────────────────────────────────────────────────
+
+export interface WbFeedback {
+  id: string
+  text: string
+  productValuation: number // 1–5
+  createdDate: string
+  userName: string | null
+  isAnswered: boolean
+  answer?: { text: string } | null
+  productDetails?: {
+    nmId: number
+    productName: string
+    imtId?: number
+    supplierArticle?: string
+    brandName?: string
+    category?: string
+    color?: string
+  } | null
+  photoLinks?: string[] | null
+}
+
+export interface ReviewTemplate {
+  id: string
+  account_id: string
+  name: string
+  text: string
+  trigger_ratings: number[]   // [] = any rating
+  trigger_keywords: string[]  // [] = no keyword filter
+  is_auto: boolean
+  sort_order: number
+  created_at: string
+}
+
+export interface ReviewTemplateFormValues {
+  name: string
+  text: string
+  trigger_ratings: number[]
+  trigger_keywords: string[]
+  is_auto: boolean
+}
