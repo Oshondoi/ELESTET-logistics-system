@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
+import { AiSettingsModal } from '../components/reviews/AiSettingsModal'
 import { Button } from '../components/ui/Button'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
 import { Input } from '../components/ui/Input'
@@ -6,18 +7,29 @@ import { Modal } from '../components/ui/Modal'
 import { Textarea } from '../components/ui/Textarea'
 import { cn } from '../lib/utils'
 import {
+  WbRateLimitError,
+  callOpenAi,
   createReviewTemplate,
   deleteReviewTemplate,
   fetchReviewTemplates,
-  fetchWbFeedbacks,
+  getAiSettings,
+  loadFeedbackRowsFromDb,
+  markReplySent,
+  saveAiReply,
+  saveAiSettings,
   sendWbReply,
+  syncFeedbacksFromWb,
   updateReviewTemplate,
 } from '../services/reviewsService'
-import type { ReviewTemplate, ReviewTemplateFormValues, Store, WbFeedback } from '../types'
-
-// ── Constants ──────────────────────────────────────────────────
-// WB Feedbacks GET endpoint: 1 request per minute per API key
-const COOLDOWN_SEC = 60
+import type {
+  AiSettings,
+  AiSettingsFormValues,
+  ReviewTemplate,
+  ReviewTemplateFormValues,
+  Store,
+  WbFeedback,
+  WbFeedbackRow,
+} from '../types'
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -28,31 +40,6 @@ function applyTemplate(text: string, fb: WbFeedback): string {
     .replace(/\{buyer_name\}/g, buyer)
     .replace(/\{product_name\}/g, product)
     .replace(/\{stars\}/g, String(fb.productValuation))
-}
-
-function matchTemplate(fb: WbFeedback, templates: ReviewTemplate[]): ReviewTemplate | null {
-  const active = templates.filter((t) => t.is_auto)
-  const reviewText = (fb.text ?? '').toLowerCase()
-
-  // Priority 1: keyword match
-  for (const tpl of active) {
-    if (tpl.trigger_keywords.length > 0) {
-      const hit = tpl.trigger_keywords.some(
-        (kw) => kw.trim() && reviewText.includes(kw.trim().toLowerCase()),
-      )
-      if (hit) return tpl
-    }
-  }
-  // Priority 2: rating match
-  for (const tpl of active) {
-    if (tpl.trigger_ratings.length > 0 && tpl.trigger_ratings.includes(fb.productValuation)) {
-      return tpl
-    }
-  }
-  // Priority 3: universal
-  return (
-    active.find((t) => t.trigger_ratings.length === 0 && t.trigger_keywords.length === 0) ?? null
-  )
 }
 
 // ── Stars ──────────────────────────────────────────────────────
@@ -202,8 +189,8 @@ const TemplateFormModal = ({ open, initial, onClose, onSubmit }: TemplateFormMod
             />
           </div>
           <div>
-            <div className="text-sm font-medium text-slate-800">Авто-ответ</div>
-            <div className="text-xs text-slate-500">Использовать при запуске авто-ответа</div>
+            <div className="text-sm font-medium text-slate-800">Авто-ответ (legacy)</div>
+            <div className="text-xs text-slate-500">Использовать в будущем авто-режиме</div>
           </div>
         </label>
 
@@ -222,6 +209,41 @@ const TemplateFormModal = ({ open, initial, onClose, onSubmit }: TemplateFormMod
   )
 }
 
+// ── NegativeSendModal ─────────────────────────────────────────
+
+interface NegativeSendModalProps {
+  open: boolean
+  isLoading: boolean
+  onConfirm: () => void
+  onClose: () => void
+}
+
+const NegativeSendModal = ({ open, isLoading, onConfirm, onClose }: NegativeSendModalProps) => (
+  <Modal open={open} onClose={onClose} title="Негативный отзыв — подтвердите отправку">
+    <div className="grid gap-5">
+      <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+        <svg viewBox="0 0 24 24" className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="m10.29 3.86-8.27 14.3A1 1 0 0 0 2.9 20h16.2a1 1 0 0 0 .88-1.84l-8.27-14.3a1 1 0 0 0-1.72 0z" />
+          <line x1="12" y1="9" x2="12" y2="13" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+        <p className="text-sm text-amber-800">
+          Это отзыв с низкой оценкой (1–3★). Убедитесь, что ответ корректен и не навредит
+          репутации магазина. Ответ на отзыв нельзя изменить после отправки.
+        </p>
+      </div>
+      <div className="flex justify-end gap-3">
+        <Button type="button" variant="secondary" onClick={onClose} disabled={isLoading}>
+          Отмена
+        </Button>
+        <Button type="button" onClick={onConfirm} disabled={isLoading}>
+          {isLoading ? 'Отправка...' : 'Всё верно, отправить'}
+        </Button>
+      </div>
+    </div>
+  </Modal>
+)
+
 // ── ReviewsPage ────────────────────────────────────────────────
 
 interface ReviewsPageProps {
@@ -231,7 +253,7 @@ interface ReviewsPageProps {
   onStoreChange: (id: string) => void
 }
 
-type Tab = 'queue' | 'answered' | 'templates'
+type Tab = 'queue' | 'answered' | 'templates' | 'test'
 
 export const ReviewsPage = ({
   stores,
@@ -245,25 +267,47 @@ export const ReviewsPage = ({
 
   const [tab, setTab] = useState<Tab>('queue')
 
-  // null = ещё не загружали, [] = загрузили, но пусто
-  // Кэш: не обнуляется при переключении вкладок, только при смене магазина
-  const [queueFeedbacks, setQueueFeedbacks] = useState<WbFeedback[] | null>(null)
-  const [answeredFeedbacks, setAnsweredFeedbacks] = useState<WbFeedback[] | null>(null)
+  // Rows from DB (include ai_reply fields). null = not yet loaded.
+  const [queueRows, setQueueRows] = useState<WbFeedbackRow[] | null>(null)
+  const [answeredRows, setAnsweredRows] = useState<WbFeedbackRow[] | null>(null)
   const [countUnanswered, setCountUnanswered] = useState(0)
 
   const [isFetching, setIsFetching] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
-  // Cooldown: WB разрешает 1 запрос к GET /feedbacks в минуту
-  const [lastFetchAt, setLastFetchAt] = useState<number | null>(null)
-  const [cooldownLeft, setCooldownLeft] = useState(0)
+  // Cooldown — храним в localStorage чтобы переживал перезагрузку
+  const LS_KEY = 'wb_feedbacks_cooldown_end'
+  const [cooldownEndAt, setCooldownEndAtState] = useState<number | null>(() => {
+    const stored = localStorage.getItem(LS_KEY)
+    if (!stored) return null
+    const val = parseInt(stored, 10)
+    return val > Date.now() ? val : null
+  })
+  const [cooldownLeft, setCooldownLeft] = useState<number>(() => {
+    const stored = localStorage.getItem(LS_KEY)
+    if (!stored) return 0
+    const val = parseInt(stored, 10)
+    return val > Date.now() ? Math.ceil((val - Date.now()) / 1000) : 0
+  })
 
-  // Reply state
-  const [replyTexts, setReplyTexts] = useState<Record<string, string>>({})
-  const [replyingIds, setReplyingIds] = useState<Set<string>>(new Set())
-  const [repliedIds, setRepliedIds] = useState<Set<string>>(new Set())
+  const setCooldownEndAt = (endAt: number | null) => {
+    if (endAt) localStorage.setItem(LS_KEY, String(endAt))
+    else localStorage.removeItem(LS_KEY)
+    setCooldownEndAtState(endAt)
+  }
+
+  // Per-feedback state
+  const [localTexts, setLocalTexts] = useState<Record<string, string>>({})
   const [openReplyIds, setOpenReplyIds] = useState<Set<string>>(new Set())
-  const [replyErrors, setReplyErrors] = useState<Record<string, string>>({})
+  const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set())
+  const [sendingIds, setSendingIds] = useState<Set<string>>(new Set())
+  const [genErrors, setGenErrors] = useState<Record<string, string>>({})
+  const [sendErrors, setSendErrors] = useState<Record<string, string>>({})
+  const [negativePending, setNegativePending] = useState<WbFeedbackRow | null>(null)
+
+  // AI settings
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
+  const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
 
   // Templates
   const [templates, setTemplates] = useState<ReviewTemplate[]>([])
@@ -273,74 +317,84 @@ export const ReviewsPage = ({
   const [deletingTemplate, setDeletingTemplate] = useState<ReviewTemplate | null>(null)
   const [isDeletingTemplate, setIsDeletingTemplate] = useState(false)
 
-  // Auto-run
-  const [isAutoRunning, setIsAutoRunning] = useState(false)
-  const [autoRunProgress, setAutoRunProgress] = useState<{ current: number; total: number } | null>(null)
-  const [autoRunResult, setAutoRunResult] = useState<{ sent: number; failed: number } | null>(null)
+  // Test tab
+  const [testText, setTestText] = useState('')
+  const [testRating, setTestRating] = useState(5)
+  const [testProduct, setTestProduct] = useState('')
+  const [testResult, setTestResult] = useState<string | null>(null)
+  const [isTestGenerating, setIsTestGenerating] = useState(false)
+  const [testError, setTestError] = useState<string | null>(null)
 
   // Store dropdown
   const [storeDropdownOpen, setStoreDropdownOpen] = useState(false)
   const storeDropdownRef = useRef<HTMLDivElement | null>(null)
 
-  // ── Load feedbacks (не зависит от tab – кэшируем по isAnswered)
-  const loadFeedbacks = async (isAnswered: boolean) => {
-    if (!activeStore?.api_key) return
-    setIsFetching(true)
-    setFetchError(null)
-    try {
-      const result = await fetchWbFeedbacks(activeStore.api_key, isAnswered)
-      const now = Date.now()
-      setLastFetchAt(now)
-      setCooldownLeft(COOLDOWN_SEC)
-      setCountUnanswered(result.countUnanswered)
-      if (isAnswered) setAnsweredFeedbacks(result.feedbacks)
-      else setQueueFeedbacks(result.feedbacks)
-    } catch (err) {
-      setFetchError(err instanceof Error ? err.message : 'Ошибка загрузки')
-    } finally {
-      setIsFetching(false)
-    }
-  }
-
-  // ── При смене магазина – сбрасываем весь кэш
+  // ── Load AI settings on mount / account change
   useEffect(() => {
-    setQueueFeedbacks(null)
-    setAnsweredFeedbacks(null)
+    if (!activeAccountId) return
+    getAiSettings(activeAccountId).then(setAiSettings).catch(() => {})
+  }, [activeAccountId])
+
+  // ── When rows load: init localTexts from existing ai_reply + auto-open
+  useEffect(() => {
+    if (!queueRows) return
+    setLocalTexts((prev) => {
+      const next = { ...prev }
+      for (const row of queueRows) {
+        if (row.ai_reply && !next[row.id]) next[row.id] = row.ai_reply
+      }
+      return next
+    })
+    setOpenReplyIds((prev) => {
+      const n = new Set(prev)
+      for (const row of queueRows) {
+        if (row.ai_reply_status === 'generated') n.add(row.id)
+      }
+      return n
+    })
+  }, [queueRows])
+
+  // ── Reset per-feedback state on store change + immediate DB load
+  useEffect(() => {
+    setQueueRows(null)
+    setAnsweredRows(null)
     setFetchError(null)
     setCountUnanswered(0)
-    setLastFetchAt(null)
-    setCooldownLeft(0)
-    setRepliedIds(new Set())
+    setLocalTexts({})
     setOpenReplyIds(new Set())
-    setReplyTexts({})
-    setReplyErrors({})
-    setAutoRunResult(null)
+    setGeneratingIds(new Set())
+    setSendingIds(new Set())
+    setGenErrors({})
+    setSendErrors({})
+    setTestResult(null)
+    setTestError(null)
+    if (activeStore?.id && tab !== 'templates' && tab !== 'test') {
+      void loadFromDb(tab === 'answered')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStore?.id])
 
-  // ── Авто-загрузка: только если данных ещё нет (не при каждом переключении вкладки!)
+  // ── Auto-load from DB on tab switch (only if not yet cached)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (tab === 'templates') return
+    if (tab === 'templates' || tab === 'test') return
     const isAnswered = tab === 'answered'
-    const cached = isAnswered ? answeredFeedbacks : queueFeedbacks
-    if (cached === null && activeStore?.api_key) {
-      void loadFeedbacks(isAnswered)
-    }
-  }, [tab, activeStore?.id])
+    const cached = isAnswered ? answeredRows : queueRows
+    if (cached === null && activeStore?.id) void loadFromDb(isAnswered)
+  }, [tab])
 
-  // ── Таймер обратного отсчёта cooldown
+  // ── Cooldown countdown timer
   useEffect(() => {
-    if (!lastFetchAt) return
+    if (!cooldownEndAt) return
     const timer = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - lastFetchAt) / 1000)
-      const left = Math.max(0, COOLDOWN_SEC - elapsed)
+      const left = Math.max(0, Math.ceil((cooldownEndAt - Date.now()) / 1000))
       setCooldownLeft(left)
-      if (left === 0) clearInterval(timer)
+      if (left === 0) { clearInterval(timer); setFetchError(null) }
     }, 1000)
     return () => clearInterval(timer)
-  }, [lastFetchAt])
+  }, [cooldownEndAt])
 
-  // Load templates
+  // ── Load templates
   useEffect(() => {
     if (!activeAccountId) return
     setIsLoadingTemplates(true)
@@ -350,7 +404,7 @@ export const ReviewsPage = ({
       .finally(() => setIsLoadingTemplates(false))
   }, [activeAccountId])
 
-  // Close store dropdown on outside click
+  // ── Close store dropdown on outside click
   useEffect(() => {
     const handler = (e: PointerEvent) => {
       if (!storeDropdownRef.current?.contains(e.target as Node)) setStoreDropdownOpen(false)
@@ -359,91 +413,121 @@ export const ReviewsPage = ({
     return () => window.removeEventListener('pointerdown', handler)
   }, [])
 
-  const currentFeedbacks = tab === 'answered' ? answeredFeedbacks : queueFeedbacks
   const canRefresh = !isFetching && cooldownLeft === 0
-  const autoTemplatesCount = templates.filter((t) => t.is_auto).length
 
-  // ── Toggle reply area + auto-fill template
-  const handleToggleReply = (fb: WbFeedback) => {
-    setOpenReplyIds((prev) => {
-      const n = new Set(prev)
-      if (n.has(fb.id)) { n.delete(fb.id); return n }
-      n.add(fb.id)
-      return n
-    })
-    if (!replyTexts[fb.id]) {
-      const tpl = matchTemplate(fb, templates)
-      if (tpl) setReplyTexts((prev) => ({ ...prev, [fb.id]: applyTemplate(tpl.text, fb) }))
-    }
-  }
-
-  // ── Send single reply
-  const handleSendReply = async (fb: WbFeedback) => {
-    if (!activeStore?.api_key) return
-    const text = replyTexts[fb.id]?.trim()
-    if (!text) return
-    setReplyingIds((prev) => new Set(prev).add(fb.id))
-    setReplyErrors((prev) => { const n = { ...prev }; delete n[fb.id]; return n })
+  // ── Load rows from DB
+  const loadFromDb = async (isAnswered: boolean) => {
+    if (!activeStore?.id) return
+    setIsFetching(true)
+    setFetchError(null)
     try {
-      await sendWbReply(activeStore.api_key, fb.id, text)
-      setRepliedIds((prev) => new Set(prev).add(fb.id))
-      setQueueFeedbacks((prev) => prev ? prev.filter((f) => f.id !== fb.id) : prev)
-      setOpenReplyIds((prev) => { const n = new Set(prev); n.delete(fb.id); return n })
+      const rows = await loadFeedbackRowsFromDb(activeStore.id, isAnswered)
+      if (isAnswered) setAnsweredRows(rows)
+      else { setQueueRows(rows); setCountUnanswered(rows.length) }
     } catch (err) {
-      setReplyErrors((prev) => ({
-        ...prev,
-        [fb.id]: err instanceof Error ? err.message : 'Ошибка отправки',
-      }))
+      setFetchError(err instanceof Error ? err.message : 'Ошибка загрузки')
     } finally {
-      setReplyingIds((prev) => { const n = new Set(prev); n.delete(fb.id); return n })
+      setIsFetching(false)
     }
   }
 
-  // ── Auto-reply run
-  const handleAutoRun = async () => {
-    if (!activeStore?.api_key) return
-    const pending = (queueFeedbacks ?? []).filter((f) => !repliedIds.has(f.id))
-    const toSend: Array<{ fb: WbFeedback; text: string }> = []
-    for (const fb of pending) {
-      const tpl = matchTemplate(fb, templates)
-      if (tpl) toSend.push({ fb, text: applyTemplate(tpl.text, fb) })
-    }
-    if (toSend.length === 0) {
-      alert(
-        autoTemplatesCount === 0
-          ? 'Нет шаблонов с включённым авто-ответом. Создайте шаблон и включите «Авто-ответ».'
-          : 'Нет подходящих шаблонов для оставшихся отзывов.',
+  // ── Sync from WB API → upsert DB → reload rows with AI fields
+  const syncFromWb = async (isAnswered: boolean) => {
+    if (!activeStore?.api_key || !activeStore?.id) return
+    setIsFetching(true)
+    setFetchError(null)
+    try {
+      const result = await syncFeedbacksFromWb(
+        activeStore.api_key,
+        activeStore.id,
+        activeAccountId,
+        isAnswered,
       )
+      // Reload from DB to get full rows including existing ai_reply fields
+      const rows = await loadFeedbackRowsFromDb(activeStore.id, isAnswered)
+      const endAt = Date.now() + result.retryAfterSec * 1000
+      setCooldownEndAt(endAt)
+      setCooldownLeft(result.retryAfterSec)
+      setCountUnanswered(result.countUnanswered)
+      if (isAnswered) setAnsweredRows(rows)
+      else setQueueRows(rows)
+    } catch (err) {
+      if (err instanceof WbRateLimitError) {
+        const endAt = Date.now() + err.retryAfterSec * 1000
+        setCooldownEndAt(endAt)
+        setCooldownLeft(err.retryAfterSec)
+      }
+      setFetchError(err instanceof Error ? err.message : 'Ошибка синхронизации')
+    } finally {
+      setIsFetching(false)
+    }
+  }
+
+  // ── Generate AI reply for a feedback
+  const handleGenerate = async (row: WbFeedbackRow) => {
+    if (!aiSettings?.openai_key) {
+      setGenErrors((prev) => ({
+        ...prev,
+        [row.id]: 'OpenAI API-ключ не настроен. Нажмите кнопку «⚙ Настройки ИИ».',
+      }))
       return
     }
-    const skipped = pending.length - toSend.length
-    const ok = window.confirm(
-      `Отправить авто-ответы на ${toSend.length} из ${pending.length} отзывов?` +
-        (skipped > 0 ? `\n\n${skipped} отзывов без подходящего шаблона будут пропущены.` : ''),
-    )
-    if (!ok) return
-
-    setIsAutoRunning(true)
-    setAutoRunResult(null)
-    setAutoRunProgress({ current: 0, total: toSend.length })
-
-    let sent = 0; let failed = 0
-    for (let i = 0; i < toSend.length; i++) {
-      const { fb, text } = toSend[i]
-      setAutoRunProgress({ current: i + 1, total: toSend.length })
-      try {
-        await sendWbReply(activeStore.api_key, fb.id, text)
-        setRepliedIds((prev) => new Set(prev).add(fb.id))
-        setQueueFeedbacks((prev) => prev ? prev.filter((f) => f.id !== fb.id) : prev)
-        sent++
-      } catch (_) {
-        failed++
-      }
-      if (i < toSend.length - 1) await new Promise((r) => setTimeout(r, 500))
+    setGeneratingIds((prev) => new Set(prev).add(row.id))
+    setGenErrors((prev) => { const n = { ...prev }; delete n[row.id]; return n })
+    try {
+      const text = await callOpenAi(aiSettings, {
+        text: row.data.text,
+        productValuation: row.data.productValuation,
+        userName: row.data.userName,
+        productName: row.data.productDetails?.productName ?? null,
+      })
+      await saveAiReply(row.id, text)
+      setLocalTexts((prev) => ({ ...prev, [row.id]: text }))
+      setQueueRows((prev) =>
+        prev
+          ? prev.map((r) =>
+              r.id === row.id ? { ...r, ai_reply: text, ai_reply_status: 'generated' as const } : r,
+            )
+          : prev,
+      )
+      setOpenReplyIds((prev) => new Set(prev).add(row.id))
+    } catch (err) {
+      setGenErrors((prev) => ({
+        ...prev,
+        [row.id]: err instanceof Error ? err.message : 'Ошибка генерации',
+      }))
+    } finally {
+      setGeneratingIds((prev) => { const n = new Set(prev); n.delete(row.id); return n })
     }
-    setAutoRunProgress(null)
-    setAutoRunResult({ sent, failed })
-    setIsAutoRunning(false)
+  }
+
+  // ── Send reply (negative reviews require extra confirmation)
+  const handleSendReply = async (row: WbFeedbackRow, confirmed = false) => {
+    if (!activeStore?.api_key) return
+    const text = localTexts[row.id]?.trim()
+    if (!text) return
+
+    // For 1–3★ require confirmation via modal
+    if (!confirmed && row.data.productValuation <= 3) {
+      setNegativePending(row)
+      return
+    }
+
+    setSendingIds((prev) => new Set(prev).add(row.id))
+    setSendErrors((prev) => { const n = { ...prev }; delete n[row.id]; return n })
+    try {
+      await sendWbReply(activeStore.api_key, row.id, text)
+      await markReplySent(row.id)
+      setQueueRows((prev) => (prev ? prev.filter((r) => r.id !== row.id) : prev))
+      setOpenReplyIds((prev) => { const n = new Set(prev); n.delete(row.id); return n })
+    } catch (err) {
+      setSendErrors((prev) => ({
+        ...prev,
+        [row.id]: err instanceof Error ? err.message : 'Ошибка отправки',
+      }))
+    } finally {
+      setSendingIds((prev) => { const n = new Set(prev); n.delete(row.id); return n })
+    }
   }
 
   // ── Template CRUD
@@ -469,6 +553,46 @@ export const ReviewsPage = ({
     }
   }
 
+  // ── Save AI settings
+  const handleSaveAiSettings = async (values: AiSettingsFormValues) => {
+    await saveAiSettings(activeAccountId, values)
+    setAiSettings((prev) => ({
+      account_id: activeAccountId,
+      ...(prev ?? { updated_at: new Date().toISOString() }),
+      ...values,
+      system_prompt: values.system_prompt.trim() || null,
+      updated_at: new Date().toISOString(),
+    }))
+  }
+
+  // ── Test generate (dry-run, nothing saved or sent)
+  const handleTestGenerate = async () => {
+    if (!aiSettings?.openai_key) {
+      setTestError('Сначала настройте OpenAI API-ключ (кнопка «⚙ Настройки ИИ»).')
+      return
+    }
+    if (!testText.trim()) {
+      setTestError('Введите текст отзыва.')
+      return
+    }
+    setIsTestGenerating(true)
+    setTestError(null)
+    setTestResult(null)
+    try {
+      const text = await callOpenAi(aiSettings, {
+        text: testText,
+        productValuation: testRating,
+        productName: testProduct.trim() || null,
+        userName: null,
+      })
+      setTestResult(text)
+    } catch (err) {
+      setTestError(err instanceof Error ? err.message : 'Ошибка')
+    } finally {
+      setIsTestGenerating(false)
+    }
+  }
+
   // ── No stores with API key
   if (storesWithKey.length === 0) {
     return (
@@ -486,6 +610,8 @@ export const ReviewsPage = ({
     )
   }
 
+  const currentRows = tab === 'answered' ? answeredRows : queueRows
+
   // ── Render
   return (
     <div className="flex flex-col gap-4">
@@ -497,9 +623,8 @@ export const ReviewsPage = ({
           <path d="M12 16v-4M12 8h.01" />
         </svg>
         <span>
-          Для загрузки отзывов API-ключ WB должен иметь разрешение{' '}
-          <strong>«Вопросы и отзывы»</strong>. Создайте или отредактируйте ключ в кабинете WB-продавца.
-          {' '}Лимит WB API: <strong>1 запрос в минуту</strong> — кнопка «Обновить» активна раз в 60 секунд.
+          API-ключ WB должен иметь разрешение <strong>«Вопросы и отзывы»</strong>.{' '}
+          Лимит WB API: <strong>3 запроса за 30 сек</strong>.
         </span>
       </div>
 
@@ -528,10 +653,7 @@ export const ReviewsPage = ({
                 <button
                   key={s.id}
                   type="button"
-                  onClick={() => {
-                    onStoreChange(s.id)
-                    setStoreDropdownOpen(false)
-                  }}
+                  onClick={() => { onStoreChange(s.id); setStoreDropdownOpen(false) }}
                   className={cn(
                     'flex w-full items-center px-4 py-2 text-sm transition-colors hover:bg-slate-50',
                     s.id === activeStore?.id ? 'font-semibold text-blue-600' : 'text-slate-700',
@@ -544,61 +666,60 @@ export const ReviewsPage = ({
           )}
         </div>
 
-        {/* Unanswered badge from WB */}
-        {tab === 'queue' && countUnanswered > 0 && (
-          <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-600">
-            {countUnanswered} без ответа
-          </span>
-        )}
+        {/* Unanswered badge — always rendered to reserve space */}
+        <span
+          className={cn(
+            'rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-600',
+            !(tab === 'queue' && countUnanswered > 0) && 'invisible',
+          )}
+        >
+          {countUnanswered} без ответа
+        </span>
 
-        {/* Spacer */}
         <div className="ml-auto flex items-center gap-2">
-          {/* Auto-run info */}
-          {tab === 'queue' && (
-            <>
-              {isAutoRunning && autoRunProgress && (
-                <span className="text-xs text-slate-500">
-                  Отправка {autoRunProgress.current}/{autoRunProgress.total}...
-                </span>
-              )}
-              {autoRunResult && !isAutoRunning && (
-                <span className="text-xs text-slate-500">
-                  Отправлено: {autoRunResult.sent}
-                  {autoRunResult.failed > 0 && `, ошибок: ${autoRunResult.failed}`}
-                </span>
-              )}
-              <Button
-                variant="secondary"
-                onClick={() => void handleAutoRun()}
-                disabled={isAutoRunning || isFetching || !queueFeedbacks?.length || autoTemplatesCount === 0}
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                </svg>
-                {isAutoRunning ? 'Отправка...' : 'Авто-ответ'}
-              </Button>
-            </>
-          )}
 
-          {/* Refresh with cooldown */}
-          {tab !== 'templates' && (
-            <Button
-              variant="secondary"
-              onClick={() => void loadFeedbacks(tab === 'answered')}
-              disabled={!canRefresh}
-              title={cooldownLeft > 0 ? `WB разрешает 1 запрос в минуту. Осталось ${cooldownLeft}с` : ''}
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="23 4 23 10 17 10" />
-                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-              </svg>
-              {isFetching
-                ? '...'
+          {/* AI Settings button */}
+          <button
+            type="button"
+            onClick={() => setAiSettingsModalOpen(true)}
+            title="Настройки ИИ-ответов"
+            className={cn(
+              'flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm transition-colors',
+              aiSettings?.openai_key
+                ? 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300'
+                : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300',
+            )}
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+            {aiSettings?.openai_key ? 'ИИ настроен' : 'Настройки ИИ'}
+          </button>
+
+          {/* Sync button — always visible, disabled on templates/test */}
+          <Button
+            variant="secondary"
+            onClick={() => void syncFromWb(tab === 'answered')}
+            disabled={!canRefresh || !activeStore?.api_key || tab === 'templates' || tab === 'test'}
+            title={
+              !activeStore?.api_key
+                ? 'Нет API-ключа'
                 : cooldownLeft > 0
-                  ? `Обновить (${cooldownLeft}с)`
-                  : 'Обновить'}
-            </Button>
-          )}
+                  ? `Осталось ${cooldownLeft} с`
+                  : ''
+            }
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+            {isFetching
+              ? '...'
+              : cooldownLeft > 0
+                ? `Синхронизировать (${cooldownLeft}с)`
+                : 'Синхронизировать'}
+          </Button>
         </div>
       </div>
 
@@ -608,10 +729,8 @@ export const ReviewsPage = ({
           [
             { key: 'queue' as Tab, label: 'Без ответа' },
             { key: 'answered' as Tab, label: 'Отвечено' },
-            {
-              key: 'templates' as Tab,
-              label: `Шаблоны${templates.length > 0 ? ` (${templates.length})` : ''}`,
-            },
+            { key: 'templates' as Tab, label: `Шаблоны${templates.length > 0 ? ` (${templates.length})` : ''}` },
+            { key: 'test' as Tab, label: '🧪 Тест ИИ-ответа' },
           ] as const
         ).map(({ key, label }) => (
           <button
@@ -620,9 +739,7 @@ export const ReviewsPage = ({
             onClick={() => setTab(key)}
             className={cn(
               'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-colors',
-              tab === key
-                ? 'bg-white text-slate-900 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700',
+              tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700',
             )}
           >
             {label}
@@ -630,12 +747,121 @@ export const ReviewsPage = ({
         ))}
       </div>
 
-      {/* ── Queue / Answered */}
-      {tab !== 'templates' && (
+      {/* ── Test tab (dry-run, nothing sent) */}
+      {tab === 'test' && (
+        <div className="flex flex-col gap-4">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <strong>Режим теста — ничего не сохраняется и не отправляется.</strong>{' '}
+            Введите тестовый отзыв, нажмите «Сгенерировать» — ИИ покажет пример ответа.
+          </div>
+
+          {!aiSettings?.openai_key && (
+            <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
+              </svg>
+              <span className="text-sm text-slate-600">
+                OpenAI API-ключ не настроен.{' '}
+                <button
+                  type="button"
+                  onClick={() => setAiSettingsModalOpen(true)}
+                  className="font-semibold text-blue-600 hover:underline"
+                >
+                  Настроить →
+                </button>
+              </span>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="grid gap-4">
+
+              {/* Rating */}
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-slate-700">Оценка</label>
+                <div className="flex gap-2">
+                  {[1, 2, 3, 4, 5].map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setTestRating(r)}
+                      className={cn(
+                        'flex h-9 w-9 flex-col items-center justify-center rounded-xl border text-sm font-semibold transition-colors',
+                        testRating === r
+                          ? 'border-amber-400 bg-amber-50 text-amber-700'
+                          : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300',
+                      )}
+                    >
+                      {r}
+                      <span className="text-[8px] leading-none">★</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Product name */}
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-slate-700">
+                  Название товара <span className="font-normal text-slate-400">(необязательно)</span>
+                </label>
+                <input
+                  type="text"
+                  value={testProduct}
+                  onChange={(e) => setTestProduct(e.target.value)}
+                  placeholder="Например: Футболка мужская базовая"
+                  className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none"
+                />
+              </div>
+
+              {/* Review text */}
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-slate-700">Текст отзыва</label>
+                <textarea
+                  value={testText}
+                  onChange={(e) => setTestText(e.target.value)}
+                  rows={4}
+                  placeholder="Товар пришёл быстро, качество хорошее, размер соответствует..."
+                  className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none"
+                />
+              </div>
+
+              {testError && <p className="text-sm text-rose-500">{testError}</p>}
+
+              <Button
+                onClick={() => void handleTestGenerate()}
+                disabled={isTestGenerating || !testText.trim()}
+                className="w-full justify-center"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                </svg>
+                {isTestGenerating ? 'Генерация...' : 'Сгенерировать ИИ-ответ'}
+              </Button>
+            </div>
+          </div>
+
+          {testResult && (
+            <div className="rounded-2xl border border-violet-200 bg-violet-50 p-5">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-semibold text-violet-700">
+                  <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                  </svg>
+                  ИИ-ответ (тест — не отправляется)
+                </span>
+              </div>
+              <p className="text-sm leading-relaxed text-slate-800">{testResult}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Queue / Answered tabs */}
+      {tab !== 'templates' && tab !== 'test' && (
         <div className="flex flex-col gap-3">
 
           {/* Loading */}
-          {isFetching && currentFeedbacks === null && (
+          {isFetching && currentRows === null && (
             <div className="py-14 text-center text-sm text-slate-400">Загрузка отзывов...</div>
           )}
 
@@ -646,32 +872,48 @@ export const ReviewsPage = ({
             </div>
           )}
 
-          {/* Empty – loaded but no reviews */}
-          {!isFetching && !fetchError && currentFeedbacks !== null && currentFeedbacks.length === 0 && (
+          {/* Empty */}
+          {!isFetching && !fetchError && currentRows !== null && currentRows.length === 0 && (
             <div className="py-16 text-center text-sm text-slate-400">
-              {tab === 'queue'
-                ? 'Все отзывы отвечены — отличная работа!'
-                : 'Отвеченных отзывов нет.'}
+              {tab === 'queue' ? 'Все отзывы отвечены — отличная работа!' : 'Отвеченных отзывов нет.'}
+            </div>
+          )}
+
+          {/* AI key notice (queue only, when reviews present) */}
+          {tab === 'queue' && !aiSettings?.openai_key && (currentRows ?? []).length > 0 && (
+            <div className="flex items-center gap-3 rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-violet-400" fill="none" stroke="currentColor" strokeWidth="2">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+              </svg>
+              <span className="text-sm text-violet-700">
+                ИИ-ответы недоступны — OpenAI ключ не настроен.{' '}
+                <button
+                  type="button"
+                  onClick={() => setAiSettingsModalOpen(true)}
+                  className="font-semibold underline"
+                >
+                  Настроить →
+                </button>
+              </span>
             </div>
           )}
 
           {/* Feedback cards */}
-          {(currentFeedbacks ?? []).map((fb) => {
-            const isReplying = replyingIds.has(fb.id)
-            const isReplied = repliedIds.has(fb.id)
-            const replyOpen = openReplyIds.has(fb.id)
-            const replyError = replyErrors[fb.id]
-            const autoMatch = matchTemplate(fb, templates)
+          {(currentRows ?? []).map((row) => {
+            const fb = row.data
+            const isGenerating = generatingIds.has(row.id)
+            const isSending = sendingIds.has(row.id)
+            const replyOpen = openReplyIds.has(row.id)
+            const genError = genErrors[row.id]
+            const sendError = sendErrors[row.id]
+            const hasAiReply = Boolean(row.ai_reply)
 
             return (
               <div
-                key={fb.id}
-                className={cn(
-                  'rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-opacity',
-                  isReplied && 'opacity-40',
-                )}
+                key={row.id}
+                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
               >
-                {/* Top row */}
+                {/* Top row: review content */}
                 <div className="flex items-start gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="mb-1.5 flex flex-wrap items-center gap-2">
@@ -693,9 +935,7 @@ export const ReviewsPage = ({
                       )}
                     </div>
                     <p className="text-sm leading-relaxed text-slate-700">
-                      {fb.text
-                        ? fb.text
-                        : <span className="italic text-slate-400">Отзыв без текста</span>}
+                      {fb.text || <span className="italic text-slate-400">Отзыв без текста</span>}
                     </p>
                     {fb.answer?.text && (
                       <div className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
@@ -723,14 +963,41 @@ export const ReviewsPage = ({
                   </div>
                 )}
 
-                {/* Reply area (queue only) */}
-                {tab === 'queue' && !isReplied && (
+                {/* Reply area — queue tab only */}
+                {tab === 'queue' && (
                   <div className="mt-3 border-t border-slate-100 pt-3">
                     {!replyOpen ? (
+                      /* Collapsed: action buttons */
                       <div className="flex flex-wrap items-center gap-2">
+                        {/* AI generate */}
                         <button
                           type="button"
-                          onClick={() => handleToggleReply(fb)}
+                          onClick={() => void handleGenerate(row)}
+                          disabled={isGenerating}
+                          title={!aiSettings?.openai_key ? 'Настройте OpenAI ключ (кнопка «⚙ Настройки ИИ»)' : ''}
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition-colors',
+                            aiSettings?.openai_key
+                              ? 'bg-violet-100 text-violet-700 hover:bg-violet-200 disabled:opacity-60'
+                              : 'cursor-not-allowed bg-slate-100 text-slate-400',
+                          )}
+                        >
+                          {isGenerating ? (
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                            </svg>
+                          )}
+                          {isGenerating ? 'Генерация...' : 'ИИ-ответ'}
+                        </button>
+
+                        {/* Manual write */}
+                        <button
+                          type="button"
+                          onClick={() => setOpenReplyIds((prev) => new Set(prev).add(row.id))}
                           className="flex items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-200"
                         >
                           <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
@@ -738,24 +1005,35 @@ export const ReviewsPage = ({
                           </svg>
                           Ответить
                         </button>
-                        {autoMatch ? (
-                          <span className="text-xs text-slate-400">
-                            Авто: <span className="text-blue-500">{autoMatch.name}</span>
-                          </span>
-                        ) : (
-                          autoTemplatesCount > 0 && (
-                            <span className="text-xs italic text-slate-400">нет подходящего шаблона</span>
-                          )
-                        )}
+
+                        {genError && <span className="text-xs text-rose-500">{genError}</span>}
                       </div>
                     ) : (
+                      /* Expanded: textarea + controls */
                       <div className="flex flex-col gap-2.5">
+                        {/* AI badge */}
+                        {hasAiReply && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2.5 py-0.5 text-[11px] font-semibold text-violet-700">
+                              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                              </svg>
+                              ИИ-ответ
+                            </span>
+                            {fb.productValuation <= 3 && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
+                                ⚠ Требует проверки (негативный)
+                              </span>
+                            )}
+                          </div>
+                        )}
+
                         <textarea
-                          value={replyTexts[fb.id] ?? ''}
+                          value={localTexts[row.id] ?? ''}
                           onChange={(e) =>
-                            setReplyTexts((prev) => ({ ...prev, [fb.id]: e.target.value }))
+                            setLocalTexts((prev) => ({ ...prev, [row.id]: e.target.value }))
                           }
-                          rows={3}
+                          rows={4}
                           placeholder="Текст ответа..."
                           className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:outline-none"
                         />
@@ -769,17 +1047,12 @@ export const ReviewsPage = ({
                                 key={tpl.id}
                                 type="button"
                                 onClick={() =>
-                                  setReplyTexts((prev) => ({
+                                  setLocalTexts((prev) => ({
                                     ...prev,
-                                    [fb.id]: applyTemplate(tpl.text, fb),
+                                    [row.id]: applyTemplate(tpl.text, fb),
                                   }))
                                 }
-                                className={cn(
-                                  'rounded-full border px-2.5 py-0.5 text-[11px] transition-colors',
-                                  autoMatch?.id === tpl.id
-                                    ? 'border-blue-300 bg-blue-50 text-blue-600'
-                                    : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-600',
-                                )}
+                                className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-600"
                               >
                                 {tpl.name}
                               </button>
@@ -787,27 +1060,60 @@ export const ReviewsPage = ({
                           </div>
                         )}
 
-                        {replyError && <p className="text-xs text-rose-500">{replyError}</p>}
+                        {genError && <p className="text-xs text-rose-500">{genError}</p>}
+                        {sendError && <p className="text-xs text-rose-500">{sendError}</p>}
 
                         <div className="flex items-center gap-2">
+                          {/* Regenerate */}
+                          {aiSettings?.openai_key && (
+                            <button
+                              type="button"
+                              onClick={() => void handleGenerate(row)}
+                              disabled={isGenerating}
+                              className="flex items-center gap-1 text-xs text-violet-500 transition-colors hover:text-violet-700 disabled:opacity-50"
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                className={cn('h-3.5 w-3.5', isGenerating && 'animate-spin')}
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                              >
+                                <polyline points="23 4 23 10 17 10" />
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                              </svg>
+                              {isGenerating ? 'Генерация...' : hasAiReply ? 'Перегенерировать' : 'Сгенерировать ИИ'}
+                            </button>
+                          )}
+
                           <button
                             type="button"
                             onClick={() =>
                               setOpenReplyIds((prev) => {
-                                const n = new Set(prev); n.delete(fb.id); return n
+                                const n = new Set(prev); n.delete(row.id); return n
                               })
                             }
                             className="text-xs text-slate-400 transition-colors hover:text-slate-600"
                           >
                             Отмена
                           </button>
+
                           <button
                             type="button"
-                            onClick={() => void handleSendReply(fb)}
-                            disabled={isReplying || !replyTexts[fb.id]?.trim()}
-                            className="ml-auto rounded-xl bg-blue-500 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-50"
+                            onClick={() => void handleSendReply(row)}
+                            disabled={isSending || !localTexts[row.id]?.trim()}
+                            className={cn(
+                              'ml-auto rounded-xl px-4 py-1.5 text-xs font-semibold text-white transition-colors disabled:opacity-50',
+                              fb.productValuation <= 3
+                                ? 'bg-amber-500 hover:bg-amber-600'
+                                : 'bg-blue-500 hover:bg-blue-600',
+                            )}
                           >
-                            {isReplying ? 'Отправка...' : 'Отправить'}
+                            {isSending
+                              ? 'Отправка...'
+                              : fb.productValuation <= 3
+                                ? '⚠ Отправить ответ'
+                                : 'Отправить ответ'}
                           </button>
                         </div>
                       </div>
@@ -815,17 +1121,24 @@ export const ReviewsPage = ({
                   </div>
                 )}
 
-                {isReplied && (
-                  <div className="mt-2 text-xs font-medium text-green-600">✓ Ответ отправлен</div>
+                {/* Answered badge (answered tab) */}
+                {tab === 'answered' && fb.answer?.text && (
+                  <div className="mt-3 border-t border-slate-100 pt-3">
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      Ответ отправлен
+                    </span>
+                  </div>
                 )}
               </div>
             )
           })}
 
-          {/* Showing only 100 */}
-          {(currentFeedbacks ?? []).length >= 100 && (
+          {(currentRows ?? []).length >= 100 && (
             <p className="py-2 text-center text-xs text-slate-400">
-              Показаны 100 последних отзывов. Для полного списка используйте кабинет WB-продавца.
+              Показаны 100 последних отзывов.
             </p>
           )}
         </div>
@@ -836,7 +1149,7 @@ export const ReviewsPage = ({
         <div className="flex flex-col gap-3">
           <div className="flex items-start justify-between gap-4">
             <p className="max-w-lg text-sm text-slate-500">
-              Шаблоны используются при ручном ответе и авто-ответе.{' '}
+              Шаблоны для ручного заполнения ответа.{' '}
               <strong className="text-slate-600">Приоритет:</strong> ключевые слова → оценка → универсальный.
             </p>
             <Button
@@ -854,9 +1167,7 @@ export const ReviewsPage = ({
           {!isLoadingTemplates && templates.length === 0 && (
             <div className="rounded-2xl border border-dashed border-slate-200 py-16 text-center">
               <p className="mb-1 text-sm font-medium text-slate-600">Шаблонов пока нет</p>
-              <p className="text-xs text-slate-400">
-                Создайте шаблон и включите «Авто-ответ» для автоматической отправки.
-              </p>
+              <p className="text-xs text-slate-400">Создайте шаблон для быстрого заполнения ответа.</p>
             </div>
           )}
 
@@ -922,6 +1233,23 @@ export const ReviewsPage = ({
       )}
 
       {/* ── Modals */}
+      <AiSettingsModal
+        open={aiSettingsModalOpen}
+        initial={aiSettings}
+        onClose={() => setAiSettingsModalOpen(false)}
+        onSubmit={handleSaveAiSettings}
+      />
+
+      <NegativeSendModal
+        open={negativePending !== null}
+        isLoading={negativePending ? sendingIds.has(negativePending.id) : false}
+        onConfirm={() => {
+          if (negativePending) void handleSendReply(negativePending, true)
+          setNegativePending(null)
+        }}
+        onClose={() => setNegativePending(null)}
+      />
+
       <TemplateFormModal
         open={templateModalOpen}
         initial={editingTemplate}

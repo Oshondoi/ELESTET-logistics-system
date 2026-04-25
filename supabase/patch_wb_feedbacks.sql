@@ -22,6 +22,6 @@ CREATE POLICY "Members can manage their account feedbacks"
   FOR ALL
   USING (
     account_id IN (
-      SELECT account_id FROM role_members WHERE user_id = auth.uid()
+      SELECT account_id FROM account_members WHERE user_id = auth.uid()
     )
   );

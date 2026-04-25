@@ -353,6 +353,38 @@ export interface StickerFormValues {
 
 // ─── Отзывы WB ────────────────────────────────────────────────
 
+export type AiReplyStatus = 'none' | 'generated' | 'sent'
+export type AiTone = 'polite' | 'neutral' | 'friendly'
+export type AiModel = 'gpt-4o-mini' | 'gpt-4o' | 'gpt-3.5-turbo'
+
+export interface AiSettings {
+  account_id: string
+  openai_key: string
+  model: AiModel
+  tone: AiTone
+  system_prompt: string | null
+  updated_at: string
+}
+
+export interface AiSettingsFormValues {
+  openai_key: string
+  model: AiModel
+  tone: AiTone
+  system_prompt: string
+}
+
+export interface WbFeedbackRow {
+  id: string
+  store_id: string
+  account_id: string
+  data: WbFeedback
+  is_answered: boolean
+  ai_reply: string | null
+  ai_reply_status: AiReplyStatus
+  reply_sent_at: string | null
+  synced_at: string
+}
+
 export interface WbFeedback {
   id: string
   text: string

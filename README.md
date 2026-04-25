@@ -45,6 +45,28 @@ MVP веб-приложения для логистики поставок на 
 - Компонент `InvoicePhotoCell`: миниатюра → лайтбокс-карусель, клавиатурная навигация, scroll lock
 - Контекстное меню: Добавить / Заменить все / Удалить все
 
+### Отзывы WB
+- Таблица `wb_feedbacks` в Supabase — синхронизация с WB Feedbacks API
+- **DB-first**: данные грузятся из БД; WB API вызывается только кнопкой «Синхронизировать»
+- **Cooldown** в localStorage — пережигает page refresh; exponential backoff 60→120→240→480→600с
+- **Шаблоны авто-ответа** (`review_templates`): CRUD, приоритет ключевые слова → оценка → универсальный, флаг «Авто»
+- Переменные в шаблоне: `{buyer_name}`, `{product_name}`, `{stars}`
+- **Ручные ответы**: textarea + chips шаблонов → PATCH WB API
+- **Вкладка «Тест авто-ответа»** (dry-run): видно какой шаблон совпадёт с каждым отзывом и итоговый текст ответа — ничего не отправляется
+- Итоговая статистика: «Будет отвечено: X из Y / Без шаблона: Z»
+
+### ИИ-ответы на отзывы WB
+- Ключ OpenAI хранится в таблице `account_ai_settings` с RLS — каждый клиент использует свой ключ
+- **`callOpenAi`**: вызов OpenAI ChatCompletion API напрямую из браузера, модели: `gpt-4o-mini`, `gpt-4o`, `gpt-3.5-turbo`
+- **Тон ответа**: вежливый / нейтральный / дружелюбный
+- **Кастомный system prompt**: настраивается в `AiSettingsModal`
+- **Генерация**: кнопка «⚡ ИИ-ответ» на каждой карточке, текст сохраняется в `wb_feedbacks.ai_reply`
+- **Правка перед отправкой**: textarea редактируема после генерации
+- **NegativeSendModal**: дополнительное подтверждение для отзывов 1–3★
+- **Статусы**: `none` → `generated` → `sent`; `reply_sent_at` записывается при отправке
+- **Вкладка «🧪 Тест ИИ-ответа»**: dry-run с произвольным текстом/оценкой — ничего не сохраняется
+- ⚠️ Требует применения `supabase/patch_ai_reviews.sql` в Supabase SQL Editor
+
 ### Магазины
 - Список магазинов + создание / редактирование / удаление
 - API-ключ: маска `••••` в edit-режиме, кнопка «Изменить»
@@ -80,12 +102,13 @@ src/
     accounts/      — AccountFormModal, DeleteAccountModal, ProfileModal
     roles/         — RoleFormModal
     stickers/      — StickerFormModal
+    reviews/       — AiSettingsModal
     ui/            — Button, Badge, Card, Input, Modal, Select, Textarea, InvoicePhotoCell, DeleteConfirmModal
   hooks/           — useAuth, useAccounts, useAppData, useRoles, useMyPermissions
   lib/             — supabase, constants, utils, stickerPdf, ean13
-  pages/           — ShipmentsPage, StoresPage, HomePage, RolesPage, DirectoriesPage, StickersPage, ProductsPage, AuthPage
-  services/        — tripService, shipmentService, storeService, directoriesService, roleService, accountService, stickerService
-  types/           — index.ts (RolePermissions, FULL_PERMISSIONS, DEFAULT_PERMISSIONS)
+  pages/           — ShipmentsPage, StoresPage, HomePage, RolesPage, DirectoriesPage, StickersPage, ProductsPage, ReviewsPage, AuthPage
+  services/        — tripService, shipmentService, storeService, directoriesService, roleService, accountService, stickerService, reviewsService
+  types/           — index.ts (RolePermissions, FULL_PERMISSIONS, AiSettings, WbFeedbackRow, ...)
 supabase/
   schema.sql
   bootstrap.sql
@@ -140,6 +163,8 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 19. patch_draft_number.sql
 20. patch_review_templates.sql
 21. patch_wb_feedbacks.sql
+22. patch_fix_wb_feedbacks_rls.sql
+23. patch_ai_reviews.sql            ← ИИ-ответы: поля в wb_feedbacks + account_ai_settings
 ```
 > Для dev без auth: `supabase/disable_rls_dev.sql`
 
@@ -159,12 +184,13 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | Наборы стикеров | ✅ Готово | Создать/редактировать/удалить, PDF |
 | Магазины CRUD | ✅ Готово | Редактирование, удаление, API-ключ |
 | Роли | ✅ Готово | CRUD, доступы, назначение пользователя, U{n} |
-| Продакшн БД | ✅ Готово | Все 21 SQL-патчей, RLS восстановлены, данные видны |
+| Продакшн БД | ✅ Готово | Все 23 SQL-патчей, RLS восстановлены, данные видны |
 | Баркод в стикере | ✅ Готово | Поле в форме, генерация EAN-13, PDF |
 | Товары | ✅ Готово | Аккордеон, размеры, фото, превью, синхронизация |
 | Магазины — синк WB | ✅ Готово | Колонки API ключ/Поставщик/Адрес, синк seller-info |
 | Профиль пользователя | ✅ Готово | Topbar дропдаун + ProfileModal (имя, пароль) |
-| **Отзывы WB** | ✅ Готово | WB Feedbacks API, шаблоны, авто-ответ, cooldown 60с |
+| **Отзывы WB** | ✅ Готово | WB API, DB-first, шаблоны, cooldown, dry-run вкладка «Тест» |
+| **ИИ-ответы на отзывы** | ✅ Готово | OpenAI интеграция, генерация/правка/отправка, 1–3★ подтверждение, Тест-вкладка |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |

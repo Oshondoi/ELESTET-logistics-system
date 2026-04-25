@@ -1,9 +1,33 @@
 # Active Context
 
 ## Current Focus
-Логистика: добавлены колонки `reception_date`, `arrival_date`, `shipped_date`, `weight` в `trip_lines`. Режим фокуса улучшен. Следующие шаги: поиск/фильтры на странице Логистика, участники компании (Members), мобильное приложение.
+ИИ-ответы на отзывы WB реализованы полностью (фаза 1): OpenAI интеграция с ключом пользователя, генерация + ручная правка + отправка, дополнительное подтверждение для 1–3★, вкладка «Тест ИИ-ответа» (dry-run). SQL-патч `patch_ai_reviews.sql` нужно применить в Supabase SQL Editor. Следующие шаги: поиск/фильтры на странице Логистика, участники компании (Members), мобильное приложение.
 
 ## What Was Recently Done
+
+### ИИ-ответы на отзывы WB (26.04.2026)
+- **`supabase/patch_ai_reviews.sql`**: новые поля `ai_reply`, `ai_reply_status`, `reply_sent_at` в `wb_feedbacks`; новая таблица `account_ai_settings` (RLS по `account_members`)
+- **`src/types/index.ts`**: добавлены `AiReplyStatus`, `AiTone`, `AiModel`, `AiSettings`, `AiSettingsFormValues`, `WbFeedbackRow`
+- **`src/services/reviewsService.ts`**: добавлены `loadFeedbackRowsFromDb`, `saveAiReply`, `markReplySent`, `getAiSettings`, `saveAiSettings`, `callOpenAi`
+- **`src/components/reviews/AiSettingsModal.tsx`**: модалка настройки OpenAI (ключ, модель, тон, system prompt)
+- **`src/pages/ReviewsPage.tsx`**: полный рефакторинг — 4 вкладки (Без ответа / Отвечено / Шаблоны / Тест ИИ-ответа); `NegativeSendModal` для 1–3★; генерация через `callOpenAi` + сохранение в БД; отправка через WB API; кнопка «⚙ Настройки ИИ» (фиолетовая когда ключ настроен)
+- **Архитектура**: ключ OpenAI хранится в `account_ai_settings` с RLS, вызовы идут напрямую из браузера
+- **UI-фикс**: header row (кнопки «Настройки ИИ» + «Синхронизировать») — всегда рендерятся на всех вкладках → высота строки не прыгает при переключении
+- **Загрузка при смене магазина**: `loadFromDb` вызывается сразу в reset-эффекте → данные из БД появляются немедленно
+
+### Отзывы WB — полная реализация (26.04.2026)
+- **DB-first архитектура**: данные грузятся из `wb_feedbacks` (Supabase), кнопка «Синхронизировать» — единственная точка обращения к WB API
+- **Cooldown в localStorage**: ключи `wb_feedbacks_cooldown_end` + `wb_feedbacks_fail_count` — пережигают page refresh
+- **Exponential backoff**: база 60с, удваивается при 429, максимум 600с (10 мин)
+- **UPSERT вместо DELETE+INSERT**: данные в БД не разрушаются при сбое синхронизации
+- **RLS-фикс**: политика `wb_feedbacks` ссылалась на несуществующую таблицу `role_members` вместо `account_members` — исправлено в `patch_fix_wb_feedbacks_rls.sql` и применено в продакшн
+- **WB Feedbacks API**: `GET /api/v1/feedbacks` — заголовки rate-limit всегда null, поэтому используется exponential backoff
+- **Шаблоны**: CRUD в таблице `review_templates`; приоритет: ключевые слова → оценка → универсальный; флаг `is_auto`
+- **matchTemplate / applyTemplate**: подстановка `{buyer_name}`, `{product_name}`, `{stars}`
+- **Ручные ответы**: textarea + chips шаблонов по каждому отзыву → PATCH WB API
+- **Вкладки**: Без ответа / Отвечено / Шаблоны / 🧪 Тест авто-ответа
+- **Вкладка «Тест»** (dry-run): показывает для каждого отзыва из «Без ответа» — какой шаблон совпал (по ключевым словам / оценке / универсальный) и итоговый текст ответа после подстановки переменных. Ничего не отправляется. Итоговая строка: «Будет отвечено: X из Y / Без шаблона: Z»
+- **Файлы**: `src/services/reviewsService.ts`, `src/pages/ReviewsPage.tsx`, `supabase/patch_wb_feedbacks.sql`, `supabase/patch_review_templates.sql`
 
 ### Логистика — новые поля и поведение (25.04.2026)
 - **Колонки trip_lines**: `reception_date` (Дата приёма), `arrival_date` (Прибыл), `shipped_date` (Отгружено), `weight` (Вес кг, numeric)
@@ -49,10 +73,12 @@
 17. patch_profiles_short_id.sql
 18. patch_role_member_sync.sql
 19. patch_draft_number.sql
-20. patch_all_in_one.sql  ← новый, заменяет отдельные патчи для trip_lines
+20. patch_all_in_one.sql
+21. patch_review_templates.sql
+22. patch_wb_feedbacks.sql
+23. patch_fix_wb_feedbacks_rls.sql  ← фикс RLS (account_members вместо role_members)
+24. patch_ai_reviews.sql             ← ИИ-ответы: поля в wb_feedbacks + account_ai_settings
 ```
-
-⚠️ `patch_all_in_one.sql` (#20) — нужно применить в продакшн Supabase SQL Editor.
 
 ## What Was Recently Done
 
