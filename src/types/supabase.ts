@@ -399,6 +399,54 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['store_sync_log']['Insert']>
         Relationships: []
       }
+      review_templates: {
+        Row: {
+          id: string
+          account_id: string
+          name: string
+          text: string
+          trigger_ratings: number[]
+          trigger_keywords: string[]
+          is_auto: boolean
+          sort_order: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          name: string
+          text: string
+          trigger_ratings?: number[]
+          trigger_keywords?: string[]
+          is_auto?: boolean
+          sort_order?: number
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['review_templates']['Insert']>
+        Relationships: []
+      }
+      wb_feedbacks: {
+        Row: {
+          id: string
+          store_id: string
+          account_id: string
+          data: Record<string, unknown>
+          is_answered: boolean
+          created_date: string | null
+          synced_at: string
+        }
+        Insert: {
+          id: string
+          store_id: string
+          account_id: string
+          data: Record<string, unknown>
+          is_answered?: boolean
+          created_date?: string | null
+          synced_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['wb_feedbacks']['Insert']>
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

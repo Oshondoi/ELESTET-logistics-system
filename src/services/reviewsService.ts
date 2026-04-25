@@ -63,6 +63,7 @@ export async function sendWbReply(
 // ─── Supabase — шаблоны ───────────────────────────────────────
 
 export async function fetchReviewTemplates(accountId: string): Promise<ReviewTemplate[]> {
+  if (!supabase) throw new Error('Supabase not configured')
   const { data, error } = await supabase
     .from('review_templates')
     .select('*')
@@ -77,6 +78,7 @@ export async function createReviewTemplate(
   accountId: string,
   values: ReviewTemplateFormValues,
 ): Promise<ReviewTemplate> {
+  if (!supabase) throw new Error('Supabase not configured')
   const { data, error } = await supabase
     .from('review_templates')
     .insert({ account_id: accountId, sort_order: 0, ...values })
@@ -90,6 +92,7 @@ export async function updateReviewTemplate(
   id: string,
   values: Partial<ReviewTemplateFormValues>,
 ): Promise<void> {
+  if (!supabase) throw new Error('Supabase not configured')
   const { error } = await supabase
     .from('review_templates')
     .update(values)
@@ -98,6 +101,7 @@ export async function updateReviewTemplate(
 }
 
 export async function deleteReviewTemplate(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase not configured')
   const { error } = await supabase
     .from('review_templates')
     .delete()
