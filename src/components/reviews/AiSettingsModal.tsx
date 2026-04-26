@@ -92,18 +92,18 @@ const PromptAddEditModal = ({ open, title, hint, initial, onSave, onClose }: Pro
 
   return (
     <div className="fixed inset-0 z-70 flex items-center justify-center bg-slate-950/50 p-4">
-      <div className="relative flex w-full max-w-2xl flex-col rounded-2xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+      <div className="relative flex w-full max-w-3xl flex-col rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-7 py-5">
+          <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
         </div>
-        <div className="flex flex-col gap-3 px-6 py-4">
+        <div className="flex flex-col gap-4 px-7 py-6">
           <Input
             label="Название (необязательно)"
             placeholder="Например: Тон для негативных отзывов"
             value={titleVal}
             onChange={(e) => setTitleVal(e.target.value)}
           />
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium text-slate-700">Содержимое промпта</label>
             <textarea
               ref={ref}
@@ -111,16 +111,17 @@ const PromptAddEditModal = ({ open, title, hint, initial, onSave, onClose }: Pro
               onChange={(e) => {
                 setContent(e.target.value)
                 e.target.style.height = 'auto'
-                e.target.style.height = Math.min(e.target.scrollHeight, 400) + 'px'
+                e.target.style.height = Math.min(e.target.scrollHeight, 600) + 'px'
               }}
               placeholder="Введите текст промпта..."
-              rows={6}
-              className="w-full resize-none overflow-y-auto rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none"
+              rows={12}
+              className="w-full resize-none overflow-y-auto rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none"
+              style={{ minHeight: '240px' }}
             />
             <p className="text-[11px] text-slate-400">{hint}</p>
           </div>
         </div>
-        <div className="flex justify-end gap-3 border-t border-slate-200 px-6 py-4">
+        <div className="flex justify-end gap-3 border-t border-slate-200 px-7 py-5">
           <Button type="button" variant="secondary" onClick={onClose} disabled={isSaving}>Отмена</Button>
           <Button type="button" onClick={() => void handleSave()} disabled={!content.trim() || isSaving}>
             {isSaving ? 'Сохранение...' : 'Сохранить'}
@@ -155,22 +156,22 @@ const PromptListModal = ({ open, title, hint, prompts, onAdd, onEdit, onDelete, 
 
   return (
     <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-950/50 p-4">
-      <div className="relative flex w-full max-w-2xl flex-col rounded-2xl bg-white shadow-xl max-h-[80vh]">
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+      <div className="relative flex w-full max-w-3xl flex-col rounded-2xl bg-white shadow-xl" style={{ maxHeight: '90vh', minHeight: '520px' }}>
+        <div className="flex items-center justify-between border-b border-slate-200 px-7 py-5">
           <div>
-            <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+            <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
             <p className="mt-0.5 text-[11px] text-slate-400">{hint}</p>
           </div>
           <button type="button" onClick={onClose} className="text-sm text-slate-400 hover:text-slate-600 transition">Закрыть</button>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
+        <div className="flex-1 overflow-y-auto px-7 py-5 space-y-3">
           {prompts.length === 0 ? (
-            <p className="py-6 text-center text-sm text-slate-400">Промптов нет. Нажмите «Добавить».</p>
+            <p className="py-10 text-center text-sm text-slate-400">Промптов нет. Нажмите «Добавить».</p>
           ) : prompts.map((p) => (
-            <div key={p.id} className="flex items-start gap-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div key={p.id} className="flex items-start gap-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
               <div className="flex-1 min-w-0">
-                {p.title && <p className="text-sm font-medium text-slate-800 mb-0.5">{p.title}</p>}
-                <p className="text-sm text-slate-500 line-clamp-3 whitespace-pre-wrap break-words">{p.content}</p>
+                {p.title && <p className="text-sm font-semibold text-slate-800 mb-1">{p.title}</p>}
+                <p className="text-sm text-slate-600 whitespace-pre-wrap break-words">{p.content}</p>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0 pt-0.5">
                 <button
@@ -200,11 +201,11 @@ const PromptListModal = ({ open, title, hint, prompts, onAdd, onEdit, onDelete, 
             </div>
           ))}
         </div>
-        <div className="border-t border-slate-200 px-6 py-4">
+        <div className="border-t border-slate-200 px-7 py-5">
           <button
             type="button"
             onClick={onAdd}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-500 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
           >
             <span className="text-lg leading-none">+</span>
             Добавить промпт
@@ -298,6 +299,8 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, systemPromp
   const [addEditOpen, setAddEditOpen] = useState(false)
   const [addEditType, setAddEditType] = useState<'system' | 'store'>('system')
   const [editingPrompt, setEditingPrompt] = useState<AiPrompt | null>(null)
+  // Unsaved changes guard
+  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false)
 
   useEffect(() => {
     if (open) {
@@ -314,8 +317,27 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, systemPromp
       setSystemListOpen(false)
       setStoreListOpen(false)
       setAddEditOpen(false)
+      setConfirmCloseOpen(false)
     }
   }, [open, initial, initialStorePrompt])
+
+  const isDirty =
+    openaiKey !== '' ||
+    openaiKeyDeleted ||
+    claudeKey !== '' ||
+    claudeKeyDeleted ||
+    model !== (initial?.model ?? 'gpt-4o-mini') ||
+    claudeModel !== (initial?.claude_model ?? 'claude-sonnet-4-6') ||
+    tone !== (initial?.tone ?? 'polite') ||
+    activeProvider !== (initial?.provider ?? 'openai')
+
+  const handleClose = () => {
+    if (isDirty) {
+      setConfirmCloseOpen(true)
+    } else {
+      onClose()
+    }
+  }
 
   const openAddModal = (type: 'system' | 'store') => {
     setAddEditType(type)
@@ -361,7 +383,7 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, systemPromp
 
   const footer = (
     <div className="flex justify-end gap-3">
-      <Button type="button" variant="secondary" onClick={onClose} disabled={isSaving} form="ai-settings-form">
+      <Button type="button" variant="secondary" onClick={handleClose} disabled={isSaving} form="ai-settings-form">
         Отмена
       </Button>
       <Button type="submit" disabled={isSaving} form="ai-settings-form">
@@ -372,7 +394,7 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, systemPromp
 
   return (
     <>
-      <Modal open={open} onClose={onClose} title="Настройки ИИ-ответов" footer={footer}>
+      <Modal open={open} onClose={handleClose} title="Настройки ИИ-ответов" footer={footer}>
         <form id="ai-settings-form" className="grid gap-5" onSubmit={(e) => void handleSubmit(e)}>
 
           {/* Provider Tabs */}
@@ -662,6 +684,27 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, systemPromp
         onSave={handleSavePrompt}
         onClose={() => setAddEditOpen(false)}
       />
+
+      {confirmCloseOpen && (
+        <div className="fixed inset-0 z-80 flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+            <h3 className="text-base font-semibold text-slate-900">Закрыть без сохранения?</h3>
+            <p className="mt-1.5 text-sm text-slate-500">Изменения не будут сохранены.</p>
+            <div className="mt-5 flex justify-end gap-3">
+              <Button type="button" variant="secondary" onClick={() => setConfirmCloseOpen(false)}>
+                Продолжить редактирование
+              </Button>
+              <button
+                type="button"
+                onClick={() => { setConfirmCloseOpen(false); onClose() }}
+                className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-600"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
