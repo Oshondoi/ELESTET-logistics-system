@@ -93,9 +93,6 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
       <div className="w-full max-w-[440px] rounded-[28px] border border-slate-200 bg-white p-7 shadow-sm min-h-[506px]">
         <div className="mb-6">
           <div className="text-[30px] font-black uppercase leading-none tracking-tight text-slate-900">ELESTET</div>
-          <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-            Supply Logistics
-          </div>
         </div>
 
         <div className="mb-5 flex rounded-2xl bg-slate-100 p-1">

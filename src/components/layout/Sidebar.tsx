@@ -176,9 +176,6 @@ export const Sidebar = ({
             <div className="text-[28px] font-black uppercase leading-none tracking-tight text-slate-900">
               ELESTET
             </div>
-            <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-              Supply Logistics
-            </div>
           </div>
         </button>
       </div>

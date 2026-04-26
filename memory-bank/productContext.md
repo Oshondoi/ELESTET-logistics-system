@@ -40,6 +40,14 @@ The product is being created to manage logistics operations for shipments going 
 - Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / **Отзывы** / Роли
 - Отзывы WB: загрузка через WB Feedbacks API (лимит 1 запрос/мин), шаблоны ответов, авто-ответ
 
+## AI Prompt Architecture (Отзывы)
+- ИИ обрабатывает отзыв в контексте конкретного магазина.
+- **Системный промпт** — глобальный для всей Компании (account). Читается первым. Если задан — полностью заменяет стандартный промпт ИИ.
+- **Промпт магазина** — привязан к конкретному магазину. Читается вторым, после системного.
+- Порядок: ИИ определяет магазин → читает системный промпт → читает промпт магазина.
+- Хранится в таблице `ai_prompts` (поля: `account_id`, `store_id` nullable, `type`: `'system'|'store'`).
+- Каждого типа может быть несколько промптов (список). Все активны одновременно — конкатенируются.
+
 ## Important Semantic Rules
 - `Прибыл` means cargo reached the required city/country and is ready for next dispatch step
 - `planned_marketplace_delivery_date` is the expected date for marketplace delivery
