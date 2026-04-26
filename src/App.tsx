@@ -150,7 +150,13 @@ function App() {
   useEffect(() => {
     if (!isAccountsLoading && accounts.length > 0) {
       const found = accounts.find((a) => a.id === activeAccountId)
-      if (!found) setActiveAccountId(accounts[0].id)
+      if (!found) {
+        // Fallback: prefer oldest (primary) account
+        const oldest = [...accounts].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+        )[0]
+        setActiveAccountId(oldest.id)
+      }
     }
   }, [accounts, isAccountsLoading])
 
