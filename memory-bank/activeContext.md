@@ -1,7 +1,22 @@
 # Active Context
 
 ## Current Focus
-ИИ-ответы на отзывы WB — Claude и OpenAI полностью рабочие. Модели Claude обновлены на актуальные (Claude 4). SQL-патчи `patch_ai_providers.sql` и `patch_store_ai_prompt.sql` применены в Supabase. Следующие шаги: поиск/фильтры на странице Логистика, участники компании (Members), мобильное приложение.
+ИИ-ответы на отзывы WB — мульти-промпт система реализована и задеплоена. Промпты хранятся в `ai_prompts`, разделены на системные (глобальные) и магазинные (per-store). UI переработан. Следующие шаги: применить `patch_ai_prompts_list.sql` в Supabase, затем — поиск/фильтры на Логистике, участники компании (Members), мобильное приложение.
+
+## What Was Recently Done
+
+### Мульти-промпт UI + защита от случайного закрытия (27.04.2026)
+- **`AiSettingsModal.tsx`**:
+  - Кнопки промптов: `[список][+]` пара для системного и магазинного типов, бейдж с количеством
+  - `PromptListModal` (z-60, max-w-3xl, 90vh): список промптов с полным текстом, кнопки редакт/удал на каждом, «Добавить промпт» снизу
+  - `PromptAddEditModal` (z-70, max-w-3xl): поле названия + textarea `rows=12`, `minHeight: 240px`
+  - `isDirty` флаг: отслеживает изменения ключей, моделей, тона, провайдера
+  - При попытке закрыть с `isDirty=true` → диалог «Закрыть без сохранения?» (z-80)
+- **`ReviewsPage.tsx`**: стейт `systemPrompts`/`storePrompts`, useEffect загрузки, хендлеры CRUD, передача `extraSystemPrompts`/`extraStorePrompts` в генерацию
+- **`reviewsService.ts`**: `fetchAiPrompts`, `createAiPrompt`, `updateAiPrompt`, `deleteAiPrompt`; `buildAiPromptParts` конкатенирует все промпты обоих типов
+- **`types/index.ts`**: добавлены `AiPrompt`, `AiPromptFormValues`
+- **`supabase/patch_ai_prompts_list.sql`**: создаёт таблицу `ai_prompts` с RLS — **требует применения в Supabase SQL Editor**
+- **Бренд**: убран субтитл «Supply Logistics» из Sidebar и AuthPage — логотип теперь только «ELESTET»
 
 ## What Was Recently Done
 
