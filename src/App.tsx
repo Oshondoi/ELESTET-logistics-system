@@ -354,6 +354,7 @@ function App() {
       store_code: store.store_code,
       supplier: (data.name ?? store.supplier ?? '').trim(),
       address: store.address ?? '',
+      inn: (data.tin ?? store.inn ?? '').trim(),
     })
   }
 
@@ -503,7 +504,7 @@ function App() {
 
       <StoreFormModal
         open={storeModalOpen}
-        initialValues={editingStore ? { name: editingStore.name, marketplace: editingStore.marketplace, store_code: editingStore.store_code, supplier: editingStore.supplier ?? '', address: editingStore.address ?? '' } : undefined}
+        initialValues={editingStore ? { name: editingStore.name, marketplace: editingStore.marketplace, store_code: editingStore.store_code, supplier: editingStore.supplier ?? '', address: editingStore.address ?? '', inn: editingStore.inn ?? '' } : undefined}
         hasApiKey={Boolean(editingStore?.api_key)}
         onClose={() => { setStoreModalOpen(false); setEditingStore(null) }}
         onSubmit={(values) => editingStore ? updateStore(editingStore.id, values) : addStore(values)}

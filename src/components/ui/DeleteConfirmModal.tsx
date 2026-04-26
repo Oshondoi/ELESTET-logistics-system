@@ -1,4 +1,5 @@
 import { Button } from './Button'
+import { Input } from './Input'
 import { Modal } from './Modal'
 
 interface DeleteConfirmModalProps {
@@ -9,6 +10,9 @@ interface DeleteConfirmModalProps {
   error?: string | null
   onClose: () => void
   onConfirm: () => void
+  requirePassword?: boolean
+  passwordValue?: string
+  onPasswordChange?: (value: string) => void
 }
 
 export const DeleteConfirmModal = ({
@@ -19,6 +23,9 @@ export const DeleteConfirmModal = ({
   error,
   onClose,
   onConfirm,
+  requirePassword,
+  passwordValue,
+  onPasswordChange,
 }: DeleteConfirmModalProps) => (
   <Modal
     open={open}
@@ -33,6 +40,17 @@ export const DeleteConfirmModal = ({
         </div>
       ) : null}
 
+      {requirePassword && (
+        <Input
+          label="Введите пароль для подтверждения"
+          type="password"
+          placeholder="Ваш пароль"
+          value={passwordValue ?? ''}
+          onChange={(e) => onPasswordChange?.(e.target.value)}
+          autoComplete="current-password"
+        />
+      )}
+
       <div className="flex justify-center gap-3">
         <Button type="button" variant="secondary" onClick={onClose} disabled={isSubmitting}>
           Отмена
@@ -40,7 +58,7 @@ export const DeleteConfirmModal = ({
         <button
           type="button"
           onClick={onConfirm}
-          disabled={isSubmitting}
+          disabled={isSubmitting || (requirePassword && !passwordValue?.trim())}
           className="inline-flex items-center justify-center rounded-xl border border-[#FF5B5B] bg-[#FF5B5B] px-4 py-2 text-sm font-medium text-white transition hover:border-[#F04444] hover:bg-[#F04444] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSubmitting ? 'Удаление...' : 'Удалить'}

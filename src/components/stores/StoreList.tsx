@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Store } from '../../types'
+import { supabase } from '../../lib/supabase'
 import { Card } from '../ui/Card'
 import { DeleteConfirmModal } from '../ui/DeleteConfirmModal'
 
@@ -15,16 +16,23 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
   const [deleteTarget, setDeleteTarget] = useState<Store | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deletePassword, setDeletePassword] = useState('')
   const [syncingId, setSyncingId] = useState<string | null>(null)
   const [syncError, setSyncError] = useState<{ id: string; msg: string } | null>(null)
 
   const handleConfirmDelete = async () => {
-    if (!deleteTarget) return
+    if (!deleteTarget || !supabase) return
     setIsDeleting(true)
     setDeleteError(null)
     try {
+      const { data: userData } = await supabase.auth.getUser()
+      const email = userData.user?.email
+      if (!email) throw new Error('Не удалось определить пользователя')
+      const { error: authError } = await supabase.auth.signInWithPassword({ email, password: deletePassword })
+      if (authError) throw new Error('Неверный пароль')
       await onDelete(deleteTarget.id)
       setDeleteTarget(null)
+      setDeletePassword('')
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Ошибка удаления')
     } finally {
@@ -156,8 +164,11 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
         description={`Магазин «${deleteTarget?.name ?? ''}» будет удалён. Это действие нельзя отменить.`}
         isSubmitting={isDeleting}
         error={deleteError}
-        onClose={() => { if (!isDeleting) { setDeleteTarget(null); setDeleteError(null) } }}
+        onClose={() => { if (!isDeleting) { setDeleteTarget(null); setDeleteError(null); setDeletePassword('') } }}
         onConfirm={() => void handleConfirmDelete()}
+        requirePassword
+        passwordValue={deletePassword}
+        onPasswordChange={setDeletePassword}
       />
     </>
   )

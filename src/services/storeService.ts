@@ -56,6 +56,7 @@ export const createStoreInSupabase = async (values: StoreFormValues, accountId: 
     ...(values.api_key?.trim() ? { api_key: values.api_key.trim() } : {}),
     supplier: values.supplier?.trim() || null,
     address: values.address?.trim() || null,
+    inn: values.inn?.trim() || null,
   }
 
   const { data, error } = await supabase.from('stores').insert(payload).select().single()
@@ -76,6 +77,7 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
     ...(values.api_key !== undefined ? { api_key: values.api_key.trim() || null } : {}),
     supplier: values.supplier?.trim() || null,
     address: values.address?.trim() || null,
+    inn: values.inn?.trim() || null,
   }
 
   const { data, error } = await supabase

@@ -21,6 +21,7 @@ const DEFAULT_VALUES: StoreFormValues = {
   api_key: '',
   supplier: '',
   address: '',
+  inn: '',
 }
 
 export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubmit }: StoreFormModalProps) => {
@@ -135,13 +136,19 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
           />
         )}
 
-        {/* Поставщик и адрес */}
+        {/* Поставщик, ИНН и адрес */}
         <div className="grid gap-3">
           <Input
             label="Поставщик"
             placeholder="Название юрлица или ИП"
             value={values.supplier ?? ''}
             onChange={(e) => setValues((c) => ({ ...c, supplier: e.target.value }))}
+          />
+          <Input
+            label="ИНН"
+            placeholder="Например, 7701234567"
+            value={values.inn ?? ''}
+            onChange={(e) => setValues((c) => ({ ...c, inn: e.target.value }))}
           />
           <Input
             label="Адрес"

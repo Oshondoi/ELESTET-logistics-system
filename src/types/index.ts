@@ -142,6 +142,7 @@ export interface Store {
   api_key?: string | null
   supplier?: string | null
   address?: string | null
+  inn?: string | null
   ai_prompt?: string | null
   created_at: string
 }
@@ -202,6 +203,7 @@ export interface StoreFormValues {
   api_key?: string
   supplier?: string
   address?: string
+  inn?: string
 }
 
 export interface Carrier {
