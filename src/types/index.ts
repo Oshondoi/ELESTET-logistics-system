@@ -435,3 +435,19 @@ export interface ReviewTemplateFormValues {
   trigger_keywords: string[]
   is_auto: boolean
 }
+
+export interface AiPrompt {
+  id: string
+  account_id: string
+  store_id: string | null
+  type: 'system' | 'store'
+  title: string
+  content: string
+  sort_order: number
+  created_at: string
+}
+
+export interface AiPromptFormValues {
+  title: string
+  content: string
+}

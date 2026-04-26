@@ -11,6 +11,10 @@ import {
   callOpenAi,
   cancelAiReply,
   saveStorePrompt,
+  createAiPrompt,
+  updateAiPrompt,
+  deleteAiPrompt,
+  fetchAiPrompts,
   createReviewTemplate,
   deleteReviewTemplate,
   fetchReviewTemplates,
@@ -24,6 +28,8 @@ import {
   updateReviewTemplate,
 } from '../services/reviewsService'
 import type {
+  AiPrompt,
+  AiPromptFormValues,
   AiSettings,
   AiSettingsFormValues,
   ReviewTemplate,
@@ -326,6 +332,8 @@ export const ReviewsPage = ({
   // AI settings
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
+  const [systemPrompts, setSystemPrompts] = useState<AiPrompt[]>([])
+  const [storePrompts, setStorePrompts] = useState<AiPrompt[]>([])
 
   // Templates
   const [templates, setTemplates] = useState<ReviewTemplate[]>([])
@@ -351,7 +359,14 @@ export const ReviewsPage = ({
   useEffect(() => {
     if (!activeAccountId) return
     getAiSettings(activeAccountId).then(setAiSettings).catch(() => {})
+    fetchAiPrompts(activeAccountId, 'system').then(setSystemPrompts).catch(() => {})
   }, [activeAccountId])
+
+  // ── Load store prompts when active store changes
+  useEffect(() => {
+    if (!activeAccountId || !activeStore?.id) { setStorePrompts([]); return }
+    fetchAiPrompts(activeAccountId, 'store', activeStore.id).then(setStorePrompts).catch(() => {})
+  }, [activeAccountId, activeStore?.id])
 
   // ── When rows load: init localTexts from existing ai_reply + auto-open
   useEffect(() => {
@@ -501,6 +516,8 @@ export const ReviewsPage = ({
         productName: row.data.productDetails?.productName ?? null,
         photoLinks: row.data.photoLinks ?? null,
         storePrompt: activeStore?.ai_prompt ?? undefined,
+        extraSystemPrompts: systemPrompts.map((p) => p.content),
+        extraStorePrompts: storePrompts.map((p) => p.content),
       })
       await saveAiReply(row.id, text)
       setLocalTexts((prev) => ({ ...prev, [row.id]: text }))
@@ -574,10 +591,33 @@ export const ReviewsPage = ({
     }
   }
 
-  // ── Save store prompt
+  // ── Save store prompt (legacy single field)
   const handleSaveStorePrompt = async (prompt: string) => {
     if (!activeStore?.id) return
     await saveStorePrompt(activeStore.id, prompt)
+  }
+
+  // ── Prompt list CRUD
+  const handleCreatePrompt = async (type: 'system' | 'store', values: AiPromptFormValues): Promise<AiPrompt> => {
+    const storeId = type === 'store' ? activeStore?.id : undefined
+    const created = await createAiPrompt(activeAccountId, type, values, storeId)
+    if (type === 'system') setSystemPrompts((prev) => [...prev, created])
+    else setStorePrompts((prev) => [...prev, created])
+    return created
+  }
+
+  const handleUpdatePrompt = async (id: string, values: AiPromptFormValues) => {
+    await updateAiPrompt(id, values)
+    const updater = (prev: AiPrompt[]) =>
+      prev.map((p) => (p.id === id ? { ...p, title: values.title, content: values.content } : p))
+    setSystemPrompts(updater)
+    setStorePrompts(updater)
+  }
+
+  const handleDeletePrompt = async (id: string) => {
+    await deleteAiPrompt(id)
+    setSystemPrompts((prev) => prev.filter((p) => p.id !== id))
+    setStorePrompts((prev) => prev.filter((p) => p.id !== id))
   }
 
   // ── Save AI settings
@@ -1302,9 +1342,14 @@ export const ReviewsPage = ({
         open={aiSettingsModalOpen}
         initial={aiSettings}
         initialStorePrompt={activeStore?.ai_prompt ?? ''}
+        systemPrompts={systemPrompts}
+        storePrompts={storePrompts}
         onClose={() => setAiSettingsModalOpen(false)}
         onSubmit={handleSaveAiSettings}
         onSaveStorePrompt={handleSaveStorePrompt}
+        onCreatePrompt={handleCreatePrompt}
+        onUpdatePrompt={handleUpdatePrompt}
+        onDeletePrompt={handleDeletePrompt}
       />
 
       <NegativeSendModal

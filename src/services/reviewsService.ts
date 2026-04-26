@@ -1,6 +1,8 @@
 import { supabase } from '../lib/supabase'
 import type {
   AiModel,
+  AiPrompt,
+  AiPromptFormValues,
   AiReplyStatus,
   AiSettings,
   AiSettingsFormValues,
@@ -288,6 +290,65 @@ export async function cancelAiReply(feedbackId: string): Promise<void> {
   // Ошибки игнорируем — это фоновая операция, UI уже закрыт
 }
 
+// ─── AI Prompts (multi-prompt list) ──────────────────────────
+
+export async function fetchAiPrompts(
+  accountId: string,
+  type: 'system' | 'store',
+  storeId?: string,
+): Promise<AiPrompt[]> {
+  if (!supabase) throw new Error('Supabase not configured')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let q = (supabase as any)
+    .from('ai_prompts')
+    .select('*')
+    .eq('account_id', accountId)
+    .eq('type', type)
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true })
+  if (type === 'store' && storeId) q = q.eq('store_id', storeId)
+  const { data, error } = await q
+  if (error) throw error
+  return (data ?? []) as AiPrompt[]
+}
+
+export async function createAiPrompt(
+  accountId: string,
+  type: 'system' | 'store',
+  values: AiPromptFormValues,
+  storeId?: string,
+): Promise<AiPrompt> {
+  if (!supabase) throw new Error('Supabase not configured')
+  const payload = {
+    account_id: accountId,
+    type,
+    title: values.title.trim(),
+    content: values.content.trim(),
+    ...(type === 'store' && storeId ? { store_id: storeId } : {}),
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).from('ai_prompts').insert(payload).select().single()
+  if (error) throw error
+  return data as AiPrompt
+}
+
+export async function updateAiPrompt(id: string, values: AiPromptFormValues): Promise<void> {
+  if (!supabase) throw new Error('Supabase not configured')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
+    .from('ai_prompts')
+    .update({ title: values.title.trim(), content: values.content.trim() })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function deleteAiPrompt(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase not configured')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any).from('ai_prompts').delete().eq('id', id)
+  if (error) throw error
+}
+
 export async function saveStorePrompt(storeId: string, prompt: string): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -360,6 +421,8 @@ interface AiFeedbackInput {
   productName?: string | null
   photoLinks?: { fullSize: string; miniSize: string }[] | null
   storePrompt?: string | null
+  extraSystemPrompts?: string[]
+  extraStorePrompts?: string[]
 }
 
 /** Конвертирует URL изображения в base64 data URL */
@@ -395,11 +458,17 @@ function buildAiPromptParts(settings: AiSettings, feedback: AiFeedbackInput): { 
 Ответ должен быть кратким (2–4 предложения), конкретным, без шаблонных фраз.
 Не используй смайлы и восклицательные знаки. Обращайся на «Вы».`
 
-  const systemContent = feedback.storePrompt?.trim()
-    ? `${baseSystem}
+  // Extra system prompts from ai_prompts table (concat after base)
+  const allSystemParts = [baseSystem, ...(feedback.extraSystemPrompts ?? [])].filter(Boolean)
+  const fullBaseSystem = allSystemParts.join('\n\n')
 
-${feedback.storePrompt.trim()}`
-    : baseSystem
+  // Store prompt: legacy field + extra store prompts from ai_prompts table
+  const allStoreParts = [feedback.storePrompt, ...(feedback.extraStorePrompts ?? [])].filter(Boolean)
+  const fullStorePrompt = allStoreParts.join('\n\n')
+
+  const systemContent = fullStorePrompt
+    ? `${fullBaseSystem}\n\n${fullStorePrompt}`
+    : fullBaseSystem
 
   const parts: string[] = [`Оценка: ${feedback.productValuation}/5`]
   if (feedback.productName) parts.push(`Товар: ${feedback.productName}`)
