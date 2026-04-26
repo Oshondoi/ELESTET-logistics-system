@@ -281,7 +281,7 @@ const DEFAULT_AUTO_SETTINGS: AutoSettings = {
   dailyLimit: 50,
   targetRatings: [1, 2, 3, 4, 5],
   requireText: false,
-  delaySeconds: 5,
+  delaySeconds: 10,
   storeIds: [],
 }
 
@@ -1484,10 +1484,10 @@ export const ReviewsPage = ({
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
-                    min={0}
+                    min={10}
                     max={300}
                     value={autoSettings.delaySeconds}
-                    onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(0, parseInt(e.target.value) || 0) })}
+                    onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, parseInt(e.target.value) || 10) })}
                     className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
                   />
                   <span className="text-xs text-slate-400">секунд</span>
