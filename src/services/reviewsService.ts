@@ -15,7 +15,7 @@ import type {
 const WB_FB_BASE = 'https://feedbacks-api.wildberries.ru'
 // WB не возвращает заголовки Retry-After при 429 — реальный лимит неизвестен.
 // Используем exponential backoff: базовый 60с, максимум 10 минут.
-const WB_COOLDOWN_BASE = 56
+const WB_COOLDOWN_BASE = 4
 const WB_COOLDOWN_MAX = 600
 const WB_LS_FAIL_COUNT = 'wb_feedbacks_fail_count'
 
