@@ -547,6 +547,35 @@ export const ReviewsPage = ({
     }
   }
 
+  // ── Синх всех отзывов (unanswered + answered)
+  const syncAll = async () => {
+    if (!activeStore?.api_key || !activeStore?.id) return
+    setIsFetching(true)
+    setFetchError(null)
+    try {
+      const r1 = await syncFeedbacksFromWb(activeStore.api_key, activeStore.id, activeAccountId, false)
+      const qRows = await loadFeedbackRowsFromDb(activeStore.id, false)
+      setQueueRows(qRows)
+      setCountUnanswered(r1.countUnanswered)
+      const r2 = await syncFeedbacksFromWb(activeStore.api_key, activeStore.id, activeAccountId, true)
+      const aRows = await loadFeedbackRowsFromDb(activeStore.id, true)
+      setAnsweredRows(aRows)
+      const retryAfter = Math.max(r1.retryAfterSec, r2.retryAfterSec)
+      const endAt = Date.now() + retryAfter * 1000
+      setCooldownEndAt(endAt)
+      setCooldownLeft(retryAfter)
+    } catch (err) {
+      if (err instanceof WbRateLimitError) {
+        const endAt = Date.now() + err.retryAfterSec * 1000
+        setCooldownEndAt(endAt)
+        setCooldownLeft(err.retryAfterSec)
+      }
+      setFetchError(err instanceof Error ? err.message : 'Ошибка синхронизации')
+    } finally {
+      setIsFetching(false)
+    }
+  }
+
   // ── Generate AI reply for a feedback
   const handleGenerate = async (row: WbFeedbackRow) => {
     if (!aiSettings || !isAiConfigured) {
@@ -924,7 +953,7 @@ export const ReviewsPage = ({
           {/* Sync button — always visible, disabled on templates/test */}
           <Button
             variant="secondary"
-            onClick={() => void syncFromWb(tab === 'answered')}
+            onClick={() => void syncAll()}
             disabled={!canRefresh || !activeStore?.api_key || tab === 'templates' || tab === 'test'}
             title={
               !activeStore?.api_key
@@ -1467,70 +1496,80 @@ export const ReviewsPage = ({
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-slate-600">Лимит ответов в сутки</label>
-                <label className="flex cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={autoSettings.dailyLimit === 0}
-                    onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: e.target.checked ? 0 : 50 })}
-                    className="h-4 w-4 accent-blue-500"
-                  />
-                  <span className="text-xs text-slate-600">Без лимита</span>
-                </label>
-                {autoSettings.dailyLimit !== 0 && (
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  {autoSettings.dailyLimit !== 0 && (
+                    <>
+                      <input
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={autoSettings.dailyLimit}
+                        onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
+                        className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                      />
+                      <span className="text-xs text-slate-400">ответов / день</span>
+                    </>
+                  )}
+                  <label className="flex cursor-pointer items-center gap-1.5">
                     <input
-                      type="number"
-                      min={1}
-                      max={500}
-                      value={autoSettings.dailyLimit}
-                      onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
-                      className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                      type="checkbox"
+                      checked={autoSettings.dailyLimit === 0}
+                      onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: e.target.checked ? 0 : 50 })}
+                      className="h-4 w-4 accent-blue-500"
                     />
-                    <span className="text-xs text-slate-400">ответов / день</span>
-                  </div>
-                )}
+                    <span className="text-xs text-slate-600">Без лимита</span>
+                  </label>
+                </div>
                 <p className="text-[11px] text-slate-400">
                   Сегодня отправлено: <strong>{autoSentToday}</strong>{autoSettings.dailyLimit !== 0 && ` из ${autoSettings.dailyLimit}`}
                 </p>
               </div>
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-slate-600">Пауза между ответами</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number" min={0} max={23}
-                    value={Math.floor(autoSettings.delaySeconds / 3600)}
-                    onChange={(e) => {
-                      const h = Math.max(0, Math.min(23, parseInt(e.target.value) || 0))
-                      const rest = autoSettings.delaySeconds % 3600
-                      saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + rest) })
-                    }}
-                    className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-                  />
-                  <span className="text-xs text-slate-400">ч</span>
-                  <input
-                    type="number" min={0} max={59}
-                    value={Math.floor((autoSettings.delaySeconds % 3600) / 60)}
-                    onChange={(e) => {
-                      const m = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
-                      const h = Math.floor(autoSettings.delaySeconds / 3600)
-                      const s = autoSettings.delaySeconds % 60
-                      saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + m * 60 + s) })
-                    }}
-                    className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-                  />
-                  <span className="text-xs text-slate-400">мин</span>
-                  <input
-                    type="number" min={0} max={59}
-                    value={autoSettings.delaySeconds % 60}
-                    onChange={(e) => {
-                      const s = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
-                      const h = Math.floor(autoSettings.delaySeconds / 3600)
-                      const m = Math.floor((autoSettings.delaySeconds % 3600) / 60)
-                      saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + m * 60 + s) })
-                    }}
-                    className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-                  />
-                  <span className="text-xs text-slate-400">сек</span>
+                <div className="flex items-end gap-1">
+                  <div className="flex flex-col items-center gap-0.5">
+                    <input
+                      type="number" min={0} max={23}
+                      value={Math.floor(autoSettings.delaySeconds / 3600)}
+                      onChange={(e) => {
+                        const h = Math.max(0, Math.min(23, parseInt(e.target.value) || 0))
+                        const rest = autoSettings.delaySeconds % 3600
+                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + rest) })
+                      }}
+                      className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400">часы</span>
+                  </div>
+                  <span className="mb-5 text-slate-300">:</span>
+                  <div className="flex flex-col items-center gap-0.5">
+                    <input
+                      type="number" min={0} max={59}
+                      value={Math.floor((autoSettings.delaySeconds % 3600) / 60)}
+                      onChange={(e) => {
+                        const m = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
+                        const h = Math.floor(autoSettings.delaySeconds / 3600)
+                        const s = autoSettings.delaySeconds % 60
+                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + m * 60 + s) })
+                      }}
+                      className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400">минуты</span>
+                  </div>
+                  <span className="mb-5 text-slate-300">:</span>
+                  <div className="flex flex-col items-center gap-0.5">
+                    <input
+                      type="number" min={0} max={59}
+                      value={autoSettings.delaySeconds % 60}
+                      onChange={(e) => {
+                        const s = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
+                        const h = Math.floor(autoSettings.delaySeconds / 3600)
+                        const m = Math.floor((autoSettings.delaySeconds % 3600) / 60)
+                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + m * 60 + s) })
+                      }}
+                      className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400">секунды</span>
+                  </div>
                 </div>
                 <p className="text-[11px] text-slate-400">Минимум 10 секунд</p>
               </div>
