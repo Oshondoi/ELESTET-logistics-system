@@ -1497,21 +1497,18 @@ export const ReviewsPage = ({
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-slate-600">Лимит ответов в сутки</label>
                 <div className="flex items-center gap-2">
-                  {autoSettings.dailyLimit !== 0 && (
-                    <>
-                      <div className="flex flex-col items-center gap-0.5">
-                        <input
-                          type="number"
-                          min={1}
-                          max={500}
-                          value={autoSettings.dailyLimit}
-                          onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
-                          className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-                        />
-                        <span className="text-[10px] text-slate-800">ответов / день</span>
-                      </div>
-                    </>
-                  )}
+                  <div className="flex flex-col items-center gap-0.5">
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      disabled={autoSettings.dailyLimit === 0}
+                      value={autoSettings.dailyLimit === 0 ? 50 : autoSettings.dailyLimit}
+                      onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
+                      className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+                    />
+                    <span className="text-[10px] text-slate-800">ответов / день</span>
+                  </div>
                   <label className="flex cursor-pointer items-center gap-1.5">
                     <input
                       type="checkbox"
