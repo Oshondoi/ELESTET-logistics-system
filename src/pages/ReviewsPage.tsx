@@ -396,6 +396,8 @@ export const ReviewsPage = ({
   const [isAutoRunning, setIsAutoRunning] = useState(false)
   const [autoProgress, setAutoProgress] = useState<{ done: number; total: number } | null>(null)
   const [autoLog, setAutoLog] = useState<string[]>([])
+  const [autoQueueRows, setAutoQueueRows] = useState<WbFeedbackRow[]>([])
+  const [isLoadingAutoQueue, setIsLoadingAutoQueue] = useState(false)
 
   // Store modal
   const [storeModalOpen, setStoreModalOpen] = useState(false)
@@ -404,6 +406,22 @@ export const ReviewsPage = ({
   // Store dropdown
   const [storeDropdownOpen, setStoreDropdownOpen] = useState(false)
   const storeDropdownRef = useRef<HTMLDivElement | null>(null)
+
+  // ── Load auto queue rows from all selected stores
+  const loadAutoQueue = async (storeIds: string[]) => {
+    if (storeIds.length === 0) { setAutoQueueRows([]); return }
+    setIsLoadingAutoQueue(true)
+    try {
+      const results = await Promise.all(storeIds.map((id) => loadFeedbackRowsFromDb(id, false)))
+      setAutoQueueRows(results.flat())
+    } catch {}
+    finally { setIsLoadingAutoQueue(false) }
+  }
+
+  useEffect(() => {
+    if (tab === 'templates') void loadAutoQueue(autoSettings.storeIds)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, autoSettings.storeIds.join(',')])
 
   // ── Load AI settings on mount / account change
   useEffect(() => {
@@ -707,8 +725,7 @@ export const ReviewsPage = ({
 
   // ── Auto-run: generate + send for all pending reviews
   const handleAutoRun = async () => {
-    if (!activeStore?.api_key || !queueRows) return
-    if (isAutoRunning) return
+    if (!activeStore?.api_key || isAutoRunning) return
     if (autoSettings.storeIds.length === 0) {
       setAutoLog(['Выберите магазины в настройках автоматизации.'])
       return
@@ -720,12 +737,12 @@ export const ReviewsPage = ({
       return
     }
 
-    const candidates = queueRows.filter((row) => {
-      if (!autoSettings.storeIds.includes(row.data.storeId ?? '')) return false
+    const candidates = autoQueueRows.filter((row) => {
+      if (!autoSettings.storeIds.includes(row.store_id)) return false
       if (autoSettings.requireText && !row.data.text?.trim()) return false
       if (!autoSettings.targetRatings.includes(row.data.productValuation)) return false
       return true
-    }).slice(0, remaining)
+    }).slice(0, remaining === Infinity ? undefined : remaining)
 
     if (candidates.length === 0) {
       setAutoLog(['Нет подходящих отзывов в очереди.'])
@@ -1619,7 +1636,7 @@ export const ReviewsPage = ({
               <div>
                 <h3 className="text-sm font-semibold text-slate-800">Запуск автоответа</h3>
                 <p className="mt-0.5 text-xs text-slate-400">
-                  В очереди: <strong className="text-slate-600">{queueRows?.filter((r) => autoSettings.targetRatings.includes(r.data.productValuation) && (!autoSettings.requireText || r.data.text?.trim())).length ?? 0}</strong> подходящих отзывов
+                  В очереди: <strong className="text-slate-600">{isLoadingAutoQueue ? '...' : autoQueueRows.filter((r) => autoSettings.storeIds.includes(r.store_id) && autoSettings.targetRatings.includes(r.data.productValuation) && (!autoSettings.requireText || r.data.text?.trim())).length}</strong> подходящих отзывов
                 </p>
               </div>
               <button
