@@ -9,6 +9,8 @@ import { cn } from '../lib/utils'
 import {
   WbRateLimitError,
   callOpenAi,
+  cancelAiReply,
+  saveStorePrompt,
   createReviewTemplate,
   deleteReviewTemplate,
   fetchReviewTemplates,
@@ -253,7 +255,15 @@ interface ReviewsPageProps {
   onStoreChange: (id: string) => void
 }
 
+const REVIEWS_TAB_KEY = 'reviews_active_tab'
+
 type Tab = 'queue' | 'answered' | 'templates' | 'test'
+
+const getSavedTab = (): Tab => {
+  const saved = localStorage.getItem(REVIEWS_TAB_KEY)
+  if (saved === 'queue' || saved === 'answered' || saved === 'templates' || saved === 'test') return saved
+  return 'queue'
+}
 
 export const ReviewsPage = ({
   stores,
@@ -265,7 +275,12 @@ export const ReviewsPage = ({
   const activeStore =
     storesWithKey.find((s) => s.id === selectedStoreId) ?? storesWithKey[0] ?? null
 
-  const [tab, setTab] = useState<Tab>('queue')
+  const [tab, setTabState] = useState<Tab>(getSavedTab)
+
+  const setTab = (t: Tab) => {
+    localStorage.setItem(REVIEWS_TAB_KEY, t)
+    setTabState(t)
+  }
 
   // Rows from DB (include ai_reply fields). null = not yet loaded.
   const [queueRows, setQueueRows] = useState<WbFeedbackRow[] | null>(null)
@@ -304,6 +319,9 @@ export const ReviewsPage = ({
   const [genErrors, setGenErrors] = useState<Record<string, string>>({})
   const [sendErrors, setSendErrors] = useState<Record<string, string>>({})
   const [negativePending, setNegativePending] = useState<WbFeedbackRow | null>(null)
+
+  // Photo preview on hover
+  const [photoPreview, setPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
 
   // AI settings
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
@@ -480,6 +498,8 @@ export const ReviewsPage = ({
         productValuation: row.data.productValuation,
         userName: row.data.userName,
         productName: row.data.productDetails?.productName ?? null,
+        photoLinks: row.data.photoLinks ?? null,
+        storePrompt: activeStore?.ai_prompt ?? undefined,
       })
       await saveAiReply(row.id, text)
       setLocalTexts((prev) => ({ ...prev, [row.id]: text }))
@@ -551,6 +571,12 @@ export const ReviewsPage = ({
     } finally {
       setIsDeletingTemplate(false)
     }
+  }
+
+  // ── Save store prompt
+  const handleSaveStorePrompt = async (prompt: string) => {
+    if (!activeStore?.id) return
+    await saveStorePrompt(activeStore.id, prompt)
   }
 
   // ── Save AI settings
@@ -957,8 +983,27 @@ export const ReviewsPage = ({
                 {/* Photos */}
                 {(fb.photoLinks ?? []).length > 0 && (
                   <div className="mt-2.5 flex flex-wrap gap-1.5">
-                    {(fb.photoLinks ?? []).slice(0, 6).map((url, i) => (
-                      <img key={i} src={url} alt="" className="h-14 w-14 rounded-xl object-cover" />
+                    {(fb.photoLinks ?? []).slice(0, 6).map((photo, i) => (
+                      <a key={i} href={photo.fullSize} target="_blank" rel="noopener noreferrer">
+                        <img
+                          src={photo.miniSize}
+                          alt=""
+                          className="h-14 w-14 cursor-zoom-in rounded-xl object-cover hover:opacity-90 transition-opacity"
+                          onMouseEnter={(e) => {
+                            const rect = (e.currentTarget as HTMLImageElement).getBoundingClientRect()
+                            const popW = 288
+                            const popH = 384
+                            const gap = 12
+                            const x = rect.right + gap + popW > window.innerWidth
+                              ? rect.left - gap - popW
+                              : rect.right + gap
+                            const y = Math.min(rect.top, window.innerHeight - popH - gap)
+                            setPhotoPreview({ url: photo.fullSize, x, y })
+                          }}
+                          onMouseLeave={() => setPhotoPreview(null)}
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                        />
+                      </a>
                     ))}
                   </div>
                 )}
@@ -1029,13 +1074,21 @@ export const ReviewsPage = ({
                         )}
 
                         <textarea
+                          ref={(el) => {
+                            if (el) {
+                              el.style.height = 'auto'
+                              el.style.height = Math.min(el.scrollHeight, 240) + 'px'
+                            }
+                          }}
                           value={localTexts[row.id] ?? ''}
-                          onChange={(e) =>
+                          onChange={(e) => {
                             setLocalTexts((prev) => ({ ...prev, [row.id]: e.target.value }))
-                          }
-                          rows={4}
+                            e.target.style.height = 'auto'
+                            e.target.style.height = Math.min(e.target.scrollHeight, 240) + 'px'
+                          }}
                           placeholder="Текст ответа..."
-                          className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:outline-none"
+                          style={{ minHeight: '80px', maxHeight: '240px' }}
+                          className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:outline-none overflow-y-auto"
                         />
 
                         {/* Template chips */}
@@ -1088,11 +1141,22 @@ export const ReviewsPage = ({
 
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={() => {
                               setOpenReplyIds((prev) => {
                                 const n = new Set(prev); n.delete(row.id); return n
                               })
-                            }
+                              // Сбросить ai_reply в БД чтобы при reload не открывалось снова
+                              void cancelAiReply(row.id)
+                              setQueueRows((prev) =>
+                                prev
+                                  ? prev.map((r) =>
+                                      r.id === row.id
+                                        ? { ...r, ai_reply: null, ai_reply_status: 'none' as const }
+                                        : r,
+                                    )
+                                  : prev,
+                              )
+                            }}
                             className="text-xs text-slate-400 transition-colors hover:text-slate-600"
                           >
                             Отмена
@@ -1236,8 +1300,10 @@ export const ReviewsPage = ({
       <AiSettingsModal
         open={aiSettingsModalOpen}
         initial={aiSettings}
+        initialStorePrompt={activeStore?.ai_prompt ?? ''}
         onClose={() => setAiSettingsModalOpen(false)}
         onSubmit={handleSaveAiSettings}
+        onSaveStorePrompt={handleSaveStorePrompt}
       />
 
       <NegativeSendModal
@@ -1265,6 +1331,16 @@ export const ReviewsPage = ({
         onClose={() => setDeletingTemplate(null)}
         onConfirm={() => void handleDeleteTemplate()}
       />
+
+      {/* Превью фото при наведении */}
+      {photoPreview && (
+        <div
+          className="pointer-events-none fixed z-50 overflow-hidden rounded-2xl shadow-2xl ring-1 ring-slate-200"
+          style={{ left: photoPreview.x, top: photoPreview.y }}
+        >
+          <img src={photoPreview.url} alt="" className="h-96 w-72 object-cover" />
+        </div>
+      )}
     </div>
   )
 }

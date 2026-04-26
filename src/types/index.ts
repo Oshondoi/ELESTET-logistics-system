@@ -142,6 +142,7 @@ export interface Store {
   api_key?: string | null
   supplier?: string | null
   address?: string | null
+  ai_prompt?: string | null
   created_at: string
 }
 
@@ -354,21 +355,29 @@ export interface StickerFormValues {
 // ─── Отзывы WB ────────────────────────────────────────────────
 
 export type AiReplyStatus = 'none' | 'generated' | 'sent'
-export type AiTone = 'polite' | 'neutral' | 'friendly'
+export type AiTone = 'polite' | 'neutral' | 'friendly' | 'professional'
+export type AiProvider = 'openai' | 'claude'
 export type AiModel = 'gpt-4o-mini' | 'gpt-4o' | 'gpt-3.5-turbo'
+export type ClaudeModel = 'claude-3-5-sonnet-20241022' | 'claude-3-5-haiku-20241022' | 'claude-3-opus-20240229'
 
 export interface AiSettings {
   account_id: string
+  provider: AiProvider
   openai_key: string
   model: AiModel
+  claude_key: string
+  claude_model: ClaudeModel
   tone: AiTone
   system_prompt: string | null
   updated_at: string
 }
 
 export interface AiSettingsFormValues {
+  provider: AiProvider
   openai_key: string
   model: AiModel
+  claude_key: string
+  claude_model: ClaudeModel
   tone: AiTone
   system_prompt: string
 }
@@ -402,7 +411,7 @@ export interface WbFeedback {
     category?: string
     color?: string
   } | null
-  photoLinks?: string[] | null
+  photoLinks?: { fullSize: string; miniSize: string }[] | null
 }
 
 export interface ReviewTemplate {

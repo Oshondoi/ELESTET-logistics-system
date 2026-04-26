@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS account_ai_settings (
 ALTER TABLE account_ai_settings ENABLE ROW LEVEL SECURITY;
 
 -- Только члены компании могут читать и менять настройки ИИ
+DROP POLICY IF EXISTS "account_ai_settings_member" ON account_ai_settings;
 CREATE POLICY "account_ai_settings_member"
   ON account_ai_settings FOR ALL
   USING (

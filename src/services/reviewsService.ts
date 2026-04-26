@@ -265,6 +265,26 @@ export async function saveAiReply(feedbackId: string, text: string): Promise<voi
   if (error) throw error
 }
 
+export async function cancelAiReply(feedbackId: string): Promise<void> {
+  if (!supabase) return
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any)
+    .from('wb_feedbacks')
+    .update({ ai_reply: null, ai_reply_status: 'none' })
+    .eq('id', feedbackId)
+  // Ошибки игнорируем — это фоновая операция, UI уже закрыт
+}
+
+export async function saveStorePrompt(storeId: string, prompt: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase not configured')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
+    .from('stores')
+    .update({ ai_prompt: prompt.trim() || null })
+    .eq('id', storeId)
+  if (error) throw error
+}
+
 export async function markReplySent(feedbackId: string): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -306,8 +326,11 @@ export async function saveAiSettings(
     .from('account_ai_settings')
     .upsert({
       account_id: accountId,
+      provider: values.provider,
       openai_key: values.openai_key,
       model: values.model,
+      claude_key: values.claude_key,
+      claude_model: values.claude_model,
       tone: values.tone,
       system_prompt: values.system_prompt.trim() || null,
       updated_at: new Date().toISOString(),
@@ -322,27 +345,48 @@ interface AiFeedbackInput {
   productValuation: number
   userName?: string | null
   productName?: string | null
+  photoLinks?: { fullSize: string; miniSize: string }[] | null
+  storePrompt?: string | null
 }
 
-export async function callOpenAi(
-  settings: AiSettings,
-  feedback: AiFeedbackInput,
-): Promise<string> {
-  if (!settings.openai_key) throw new Error('OpenAI API-ключ не настроен')
+/** Конвертирует URL изображения в base64 data URL */
+async function fetchImageAsBase64(url: string): Promise<string | null> {
+  try {
+    const resp = await fetch(url)
+    if (!resp.ok) return null
+    const blob = await resp.blob()
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => reject(null)
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
 
+function buildAiPromptParts(settings: AiSettings, feedback: AiFeedbackInput): { systemContent: string; textContent: string } {
   const toneMap: Record<string, string> = {
     polite: 'вежливым и профессиональным',
     neutral: 'нейтральным и деловым',
     friendly: 'дружелюбным и тёплым',
+    professional: 'строго профессиональным и формальным',
   }
 
-  const systemContent =
+  const baseSystem =
     settings.system_prompt?.trim() ||
     `Ты — специалист по работе с клиентами интернет-магазина на маркетплейсе Wildberries.
 Пиши ответы на отзывы покупателей на русском языке.
 Будь ${toneMap[settings.tone] ?? 'вежливым и профессиональным'}.
 Ответ должен быть кратким (2–4 предложения), конкретным, без шаблонных фраз.
 Не используй смайлы и восклицательные знаки. Обращайся на «Вы».`
+
+  const systemContent = feedback.storePrompt?.trim()
+    ? `${baseSystem}
+
+${feedback.storePrompt.trim()}`
+    : baseSystem
 
   const parts: string[] = [`Оценка: ${feedback.productValuation}/5`]
   if (feedback.productName) parts.push(`Товар: ${feedback.productName}`)
@@ -352,6 +396,33 @@ export async function callOpenAi(
   parts.push('')
   parts.push('Напиши ответ продавца:')
 
+  return { systemContent, textContent: parts.join('\n') }
+}
+
+async function callOpenAiDirect(settings: AiSettings, feedback: AiFeedbackInput): Promise<string> {
+  const { systemContent, textContent } = buildAiPromptParts(settings, feedback)
+
+  // GPT-4o Vision: передаём фото если модель gpt-4o и есть photoLinks
+  const isVisionModel = settings.model === 'gpt-4o'
+  const photos = feedback.photoLinks ?? []
+  let userMessage: unknown
+
+  if (isVisionModel && photos.length > 0) {
+    const base64Photos = await Promise.all(
+      photos.slice(0, 3).map((p) => fetchImageAsBase64(p.fullSize))
+    )
+    const imageContents = base64Photos
+      .filter((b64): b64 is string => b64 !== null)
+      .map((b64) => ({ type: 'image_url', image_url: { url: b64, detail: 'low' } }))
+
+    userMessage = {
+      role: 'user',
+      content: [{ type: 'text', text: textContent }, ...imageContents],
+    }
+  } else {
+    userMessage = { role: 'user', content: textContent }
+  }
+
   const resp = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -359,11 +430,8 @@ export async function callOpenAi(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: settings.model as AiModel,
-      messages: [
-        { role: 'system', content: systemContent },
-        { role: 'user', content: parts.join('\n') },
-      ],
+      model: settings.model,
+      messages: [{ role: 'system', content: systemContent }, userMessage],
       max_tokens: 400,
       temperature: 0.7,
     }),
@@ -379,4 +447,73 @@ export async function callOpenAi(
   type OAIResponse = { choices: Array<{ message: { content: string } }> }
   const json = (await resp.json()) as OAIResponse
   return json.choices[0]?.message?.content?.trim() ?? ''
+}
+
+async function callClaudeDirect(settings: AiSettings, feedback: AiFeedbackInput): Promise<string> {
+  const { systemContent, textContent } = buildAiPromptParts(settings, feedback)
+
+  // Claude Vision: все модели claude-3 поддерживают изображения
+  const photos = feedback.photoLinks ?? []
+  let userContent: unknown
+
+  if (photos.length > 0) {
+    const base64Photos = await Promise.all(
+      photos.slice(0, 3).map((p) => fetchImageAsBase64(p.fullSize))
+    )
+    const imageBlocks = base64Photos
+      .filter((b64): b64 is string => b64 !== null)
+      .map((b64) => {
+        // data URL format: "data:image/jpeg;base64,<data>"
+        const [header, data] = b64.split(',')
+        const mediaType = (header.match(/data:([^;]+);/) ?? [])[1] ?? 'image/jpeg'
+        return { type: 'image', source: { type: 'base64', media_type: mediaType, data } }
+      })
+
+    userContent = [
+      ...imageBlocks,
+      { type: 'text', text: textContent },
+    ]
+  } else {
+    userContent = textContent
+  }
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': settings.claude_key,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: settings.claude_model,
+      max_tokens: 400,
+      system: systemContent,
+      messages: [{ role: 'user', content: userContent }],
+    }),
+  })
+
+  if (!resp.ok) {
+    const errData = await resp.json().catch(() => ({})) as { error?: { message?: string } }
+    if (resp.status === 401) throw new Error('Неверный Claude API-ключ. Проверьте настройки.')
+    if (resp.status === 429) throw new Error('Превышен лимит Claude. Попробуйте позже.')
+    throw new Error(errData.error?.message || `Claude API error: ${resp.status}`)
+  }
+
+  type ClaudeResponse = { content: Array<{ type: string; text: string }> }
+  const json = (await resp.json()) as ClaudeResponse
+  return json.content.find((b) => b.type === 'text')?.text?.trim() ?? ''
+}
+
+export async function callOpenAi(
+  settings: AiSettings,
+  feedback: AiFeedbackInput,
+): Promise<string> {
+  const provider = settings.provider ?? 'openai'
+  if (provider === 'claude') {
+    if (!settings.claude_key) throw new Error('Claude API-ключ не настроен')
+    return callClaudeDirect(settings, feedback)
+  }
+  if (!settings.openai_key) throw new Error('OpenAI API-ключ не настроен')
+  return callOpenAiDirect(settings, feedback)
 }
