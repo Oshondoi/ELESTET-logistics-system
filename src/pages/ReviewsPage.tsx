@@ -796,8 +796,8 @@ export const ReviewsPage = ({
           [
             { key: 'queue' as Tab, label: 'Без ответа' },
             { key: 'answered' as Tab, label: 'Отвечено' },
-            { key: 'test' as Tab, label: '🧪 Тест ИИ-ответа' },
             { key: 'templates' as Tab, label: `Автоматизация${templates.length > 0 ? ` (${templates.length})` : ''}` },
+            { key: 'test' as Tab, label: '🧪 Тест ИИ-ответа' },
           ] as const
         ).map(({ key, label }) => (
           <button
