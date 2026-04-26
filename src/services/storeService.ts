@@ -59,7 +59,8 @@ export const createStoreInSupabase = async (values: StoreFormValues, accountId: 
     inn: values.inn?.trim() || null,
   }
 
-  const { data, error } = await supabase.from('stores').insert(payload).select().single()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase.from('stores').insert(payload as any).select().single()
 
   if (error) throw error
   return data as Store
@@ -80,9 +81,10 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
     inn: values.inn?.trim() || null,
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await supabase
     .from('stores')
-    .update(payload)
+    .update(payload as any)
     .eq('id', storeId)
     .select()
     .single()
