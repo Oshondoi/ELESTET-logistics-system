@@ -110,15 +110,28 @@ export async function sendWbReply(
   feedbackId: string,
   text: string,
 ): Promise<void> {
-  const resp = await fetch(`${WB_FB_BASE}/api/v1/feedbacks`, {
-    method: 'PATCH',
-    headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: feedbackId, text }),
-  })
-  if (!resp.ok) {
+  // WB changed the endpoint: old PATCH /api/v1/feedbacks now returns 405 (GET/HEAD only)
+  // New endpoint: PATCH /api/v1/feedbacks/answer
+  const endpoints = [
+    { url: `${WB_FB_BASE}/api/v1/feedbacks/answer`, method: 'PATCH', body: JSON.stringify({ id: feedbackId, text }) },
+    { url: `${WB_FB_BASE}/api/v1/feedbacks`,        method: 'PATCH', body: JSON.stringify({ id: feedbackId, text }) },
+  ]
+
+  for (const ep of endpoints) {
+    const resp = await fetch(ep.url, {
+      method: ep.method,
+      headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
+      body: ep.body,
+    })
+    if (resp.ok) return
+    if (resp.status === 405) continue // try next endpoint
     if (resp.status === 401) throw new Error('Неверный API-ключ WB')
-    throw new Error(`Ошибка отправки ответа: ${resp.status}`)
+    let detail = ''
+    try { detail = await resp.text() } catch { /* ignore */ }
+    throw new Error(`Ошибка отправки ответа: ${resp.status}${detail ? ` — ${detail}` : ''}`)
   }
+
+  throw new Error('WB API: не удалось найти рабочий endpoint для отправки ответа (405 на всех попытках). Возможно, WB ограничил вызовы из браузера (CORS).')
 }
 
 // ─── Supabase — шаблоны ───────────────────────────────────────

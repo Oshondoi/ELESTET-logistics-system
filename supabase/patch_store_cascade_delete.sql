@@ -1,18 +1,61 @@
--- Fix cascade delete for stores
--- Previously had ON DELETE RESTRICT which blocks store deletion
+-- Fix full cascade delete chain for stores:
+-- stores → shipments → shipment_status_history
+-- stores → shipments (and all other direct FK refs to stores)
+-- stores → trip_lines
 
--- shipments.store_id: RESTRICT → CASCADE
-ALTER TABLE public.shipments
-  DROP CONSTRAINT IF EXISTS shipments_store_id_fkey;
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  -- 1. All tables directly referencing stores(id)
+  FOR r IN
+    SELECT
+      tc.constraint_name,
+      tc.table_name,
+      kcu.column_name
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu
+      ON tc.constraint_name = kcu.constraint_name
+      AND tc.table_schema = kcu.table_schema
+    JOIN information_schema.referential_constraints rc
+      ON tc.constraint_name = rc.constraint_name
+      AND tc.table_schema = rc.constraint_schema
+    JOIN information_schema.table_constraints tc2
+      ON rc.unique_constraint_name = tc2.constraint_name
+    WHERE tc.constraint_type = 'FOREIGN KEY'
+      AND tc.table_schema = 'public'
+      AND tc2.table_name = 'stores'
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I', r.table_name, r.constraint_name);
+    EXECUTE format(
+      'ALTER TABLE public.%I ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES public.stores(id) ON DELETE CASCADE',
+      r.table_name, r.constraint_name, r.column_name
+    );
+  END LOOP;
 
-ALTER TABLE public.shipments
-  ADD CONSTRAINT shipments_store_id_fkey
-  FOREIGN KEY (store_id) REFERENCES public.stores(id) ON DELETE CASCADE;
-
--- trip_lines.store_id: RESTRICT → CASCADE (trips table has no store_id; store is linked via trip_lines)
-ALTER TABLE public.trip_lines
-  DROP CONSTRAINT IF EXISTS trip_lines_store_id_fkey;
-
-ALTER TABLE public.trip_lines
-  ADD CONSTRAINT trip_lines_store_id_fkey
-  FOREIGN KEY (store_id) REFERENCES public.stores(id) ON DELETE CASCADE;
+  -- 2. All tables directly referencing shipments(id)
+  FOR r IN
+    SELECT
+      tc.constraint_name,
+      tc.table_name,
+      kcu.column_name
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu
+      ON tc.constraint_name = kcu.constraint_name
+      AND tc.table_schema = kcu.table_schema
+    JOIN information_schema.referential_constraints rc
+      ON tc.constraint_name = rc.constraint_name
+      AND tc.table_schema = rc.constraint_schema
+    JOIN information_schema.table_constraints tc2
+      ON rc.unique_constraint_name = tc2.constraint_name
+    WHERE tc.constraint_type = 'FOREIGN KEY'
+      AND tc.table_schema = 'public'
+      AND tc2.table_name = 'shipments'
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I', r.table_name, r.constraint_name);
+    EXECUTE format(
+      'ALTER TABLE public.%I ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES public.shipments(id) ON DELETE CASCADE',
+      r.table_name, r.constraint_name, r.column_name
+    );
+  END LOOP;
+END $$;

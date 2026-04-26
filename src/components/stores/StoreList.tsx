@@ -34,7 +34,14 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
       setDeleteTarget(null)
       setDeletePassword('')
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Ошибка удаления')
+      if (err instanceof Error) {
+        setDeleteError(err.message)
+      } else if (err && typeof err === 'object' && 'message' in err) {
+        const e = err as { message?: string; details?: string; code?: string }
+        setDeleteError(`${e.message ?? 'Ошибка'}${e.details ? ` — ${e.details}` : ''}${e.code ? ` (${e.code})` : ''}`)
+      } else {
+        setDeleteError(JSON.stringify(err))
+      }
     } finally {
       setIsDeleting(false)
     }
