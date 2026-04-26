@@ -685,7 +685,7 @@ export const ReviewsPage = ({
       return
     }
 
-    const remaining = autoSettings.dailyLimit - autoSentToday
+    const remaining = autoSettings.dailyLimit === 0 ? Infinity : autoSettings.dailyLimit - autoSentToday
     if (remaining <= 0) {
       setAutoLog(['Дневной лимит исчерпан.'])
       return
@@ -1467,31 +1467,70 @@ export const ReviewsPage = ({
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-slate-600">Лимит ответов в сутки</label>
-                <div className="flex items-center gap-2">
+                <label className="flex cursor-pointer items-center gap-2">
                   <input
-                    type="number"
-                    min={1}
-                    max={500}
-                    value={autoSettings.dailyLimit}
-                    onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
-                    className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                    type="checkbox"
+                    checked={autoSettings.dailyLimit === 0}
+                    onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: e.target.checked ? 0 : 50 })}
+                    className="h-4 w-4 accent-blue-500"
                   />
-                  <span className="text-xs text-slate-400">ответов / день</span>
-                </div>
-                <p className="text-[11px] text-slate-400">Сегодня отправлено: <strong>{autoSentToday}</strong> из {autoSettings.dailyLimit}</p>
+                  <span className="text-xs text-slate-600">Без лимита</span>
+                </label>
+                {autoSettings.dailyLimit !== 0 && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={autoSettings.dailyLimit}
+                      onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
+                      className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                    />
+                    <span className="text-xs text-slate-400">ответов / день</span>
+                  </div>
+                )}
+                <p className="text-[11px] text-slate-400">
+                  Сегодня отправлено: <strong>{autoSentToday}</strong>{autoSettings.dailyLimit !== 0 && ` из ${autoSettings.dailyLimit}`}
+                </p>
               </div>
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-slate-600">Пауза между ответами</label>
                 <div className="flex items-center gap-2">
                   <input
-                    type="number"
-                    min={10}
-                    max={300}
-                    value={autoSettings.delaySeconds}
-                    onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, parseInt(e.target.value) || 10) })}
-                    className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                    type="number" min={0} max={23}
+                    value={Math.floor(autoSettings.delaySeconds / 3600)}
+                    onChange={(e) => {
+                      const h = Math.max(0, Math.min(23, parseInt(e.target.value) || 0))
+                      const rest = autoSettings.delaySeconds % 3600
+                      saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + rest) })
+                    }}
+                    className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
                   />
-                  <span className="text-xs text-slate-400">секунд</span>
+                  <span className="text-xs text-slate-400">ч</span>
+                  <input
+                    type="number" min={0} max={59}
+                    value={Math.floor((autoSettings.delaySeconds % 3600) / 60)}
+                    onChange={(e) => {
+                      const m = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
+                      const h = Math.floor(autoSettings.delaySeconds / 3600)
+                      const s = autoSettings.delaySeconds % 60
+                      saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + m * 60 + s) })
+                    }}
+                    className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                  />
+                  <span className="text-xs text-slate-400">мин</span>
+                  <input
+                    type="number" min={0} max={59}
+                    value={autoSettings.delaySeconds % 60}
+                    onChange={(e) => {
+                      const s = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
+                      const h = Math.floor(autoSettings.delaySeconds / 3600)
+                      const m = Math.floor((autoSettings.delaySeconds % 3600) / 60)
+                      saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + m * 60 + s) })
+                    }}
+                    className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                  />
+                  <span className="text-xs text-slate-400">сек</span>
                 </div>
                 <p className="text-[11px] text-slate-400">Минимум 10 секунд</p>
               </div>
@@ -1547,7 +1586,7 @@ export const ReviewsPage = ({
               </div>
               <button
                 type="button"
-                disabled={isAutoRunning || !activeStore?.api_key || autoSentToday >= autoSettings.dailyLimit || autoSettings.storeIds.length === 0}
+                disabled={isAutoRunning || !activeStore?.api_key || (autoSettings.dailyLimit !== 0 && autoSentToday >= autoSettings.dailyLimit) || autoSettings.storeIds.length === 0}
                 onClick={() => void handleAutoRun()}
                 className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
               >
@@ -1564,7 +1603,7 @@ export const ReviewsPage = ({
                 )}
               </button>
             </div>
-            {autoSentToday >= autoSettings.dailyLimit && (
+            {autoSettings.dailyLimit !== 0 && autoSentToday >= autoSettings.dailyLimit && (
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
                 Дневной лимит исчерпан ({autoSettings.dailyLimit} ответов). Сбросится завтра.
               </div>
