@@ -43,7 +43,11 @@ export const fetchTrips = async (accountId: string, stores: Store[]): Promise<Tr
     lines: (lines ?? [])
       .filter((line) => line.trip_id === trip.id)
       .map((line) => buildTripLineWithStore(line as TripLine, stores)),
-  }))
+  })).sort((a, b) => {
+    const numA = parseInt(a.trip_number?.replace(/\D/g, '') ?? '0', 10)
+    const numB = parseInt(b.trip_number?.replace(/\D/g, '') ?? '0', 10)
+    return numB - numA
+  })
 }
 
 export const createTrip = async (
