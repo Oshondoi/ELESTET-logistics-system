@@ -858,8 +858,9 @@ export const ReviewsPage = ({
         <div ref={storeDropdownRef} className="relative">
           <button
             type="button"
+            disabled={tab === 'templates'}
             onClick={() => setStoreDropdownOpen((v) => !v)}
-            className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:border-slate-300"
+            className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
               <path d="M4 10.5 6 5h12l2 5.5" />
