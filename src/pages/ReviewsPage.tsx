@@ -1499,15 +1499,17 @@ export const ReviewsPage = ({
                 <div className="flex items-center gap-2">
                   {autoSettings.dailyLimit !== 0 && (
                     <>
-                      <input
-                        type="number"
-                        min={1}
-                        max={500}
-                        value={autoSettings.dailyLimit}
-                        onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
-                        className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-                      />
-                      <span className="text-xs text-slate-400">ответов / день</span>
+                      <div className="flex flex-col items-center gap-0.5">
+                        <input
+                          type="number"
+                          min={1}
+                          max={500}
+                          value={autoSettings.dailyLimit}
+                          onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
+                          className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                        />
+                        <span className="text-[10px] text-slate-800">ответов / день</span>
+                      </div>
                     </>
                   )}
                   <label className="flex cursor-pointer items-center gap-1.5">
@@ -1538,7 +1540,7 @@ export const ReviewsPage = ({
                       }}
                       className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
                     />
-                    <span className="text-[10px] text-slate-400">часы</span>
+                    <span className="text-[10px] text-slate-800">часы</span>
                   </div>
                   <span className="mb-5 text-slate-300">:</span>
                   <div className="flex flex-col items-center gap-0.5">
@@ -1553,7 +1555,7 @@ export const ReviewsPage = ({
                       }}
                       className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
                     />
-                    <span className="text-[10px] text-slate-400">минуты</span>
+                    <span className="text-[10px] text-slate-800">минуты</span>
                   </div>
                   <span className="mb-5 text-slate-300">:</span>
                   <div className="flex flex-col items-center gap-0.5">
@@ -1568,7 +1570,7 @@ export const ReviewsPage = ({
                       }}
                       className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
                     />
-                    <span className="text-[10px] text-slate-400">секунды</span>
+                    <span className="text-[10px] text-slate-800">секунды</span>
                   </div>
                 </div>
                 <p className="text-[11px] text-slate-400">Минимум 10 секунд</p>
