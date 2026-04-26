@@ -1689,7 +1689,7 @@ export const ReviewsPage = ({
               </button>
             </div>
             {/* Body */}
-            <div className="max-h-[60vh] overflow-y-auto px-5 py-3">
+            <div className="h-[60vh] overflow-y-auto px-5 py-3">
               {storesWithKey.length === 0 ? (
                 <p className="py-4 text-center text-xs text-slate-400">Нет магазинов с API-ключом</p>
               ) : (
