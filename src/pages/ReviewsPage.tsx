@@ -397,6 +397,10 @@ export const ReviewsPage = ({
   const [autoProgress, setAutoProgress] = useState<{ done: number; total: number } | null>(null)
   const [autoLog, setAutoLog] = useState<string[]>([])
 
+  // Store modal
+  const [storeModalOpen, setStoreModalOpen] = useState(false)
+  const [pendingStoreIds, setPendingStoreIds] = useState<string[]>([])
+
   // Store dropdown
   const [storeDropdownOpen, setStoreDropdownOpen] = useState(false)
   const storeDropdownRef = useRef<HTMLDivElement | null>(null)
@@ -1407,48 +1411,25 @@ export const ReviewsPage = ({
 
           {/* ── Магазины ──────────────────────────────────────── */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-slate-800">Магазины</h3>
-                <p className="mt-0.5 text-xs text-slate-400">Для каких магазинов запускать автоматизацию</p>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {autoSettings.storeIds.length === 0
+                    ? 'Ни один магазин не выбран'
+                    : autoSettings.storeIds.length === storesWithKey.length
+                    ? `Все магазины (${storesWithKey.length})`
+                    : `Выбрано: ${autoSettings.storeIds.length} из ${storesWithKey.length}`}
+                </p>
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  const allIds = storesWithKey.map((s) => s.id)
-                  const allSelected = allIds.every((id) => autoSettings.storeIds.includes(id))
-                  saveAutoSettingsToStorage({ ...autoSettings, storeIds: allSelected ? [] : allIds })
-                }}
-                className="text-xs text-blue-500 hover:text-blue-700 transition"
+                onClick={() => { setPendingStoreIds(autoSettings.storeIds); setStoreModalOpen(true) }}
+                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
               >
-                {storesWithKey.every((s) => autoSettings.storeIds.includes(s.id)) ? 'Снять все' : 'Выбрать все'}
+                Выбрать
               </button>
             </div>
-            {storesWithKey.length === 0 ? (
-              <p className="text-xs text-slate-400">Нет магазинов с API-ключом.</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {storesWithKey.map((store) => {
-                  const checked = autoSettings.storeIds.includes(store.id)
-                  return (
-                    <button
-                      key={store.id}
-                      type="button"
-                      onClick={() => {
-                        const next = checked
-                          ? autoSettings.storeIds.filter((id) => id !== store.id)
-                          : [...autoSettings.storeIds, store.id]
-                        saveAutoSettingsToStorage({ ...autoSettings, storeIds: next })
-                      }}
-                      className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-sm font-medium transition-colors ${checked ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-slate-300'}`}
-                    >
-                      <span className={`h-2 w-2 rounded-full ${checked ? 'bg-blue-500' : 'bg-slate-300'}`} />
-                      {store.name}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
             {autoSettings.storeIds.length === 0 && storesWithKey.length > 0 && (
               <p className="mt-2 text-[11px] text-amber-600">Выберите хотя бы один магазин для запуска автоматизации</p>
             )}
@@ -1699,6 +1680,87 @@ export const ReviewsPage = ({
         onClose={() => setDeletingTemplate(null)}
         onConfirm={() => void handleDeleteTemplate()}
       />
+
+      {/* ── Модалка выбора магазинов ── */}
+      {storeModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setStoreModalOpen(false)}>
+          <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <h2 className="text-sm font-semibold text-slate-800">Выбор магазинов</h2>
+              <button type="button" onClick={() => setStoreModalOpen(false)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            {/* Body */}
+            <div className="px-5 py-3">
+              {storesWithKey.length === 0 ? (
+                <p className="py-4 text-center text-xs text-slate-400">Нет магазинов с API-ключом</p>
+              ) : (
+                <>
+                  <div className="mb-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allIds = storesWithKey.map((s) => s.id)
+                        const allSelected = allIds.every((id) => pendingStoreIds.includes(id))
+                        setPendingStoreIds(allSelected ? [] : allIds)
+                      }}
+                      className="text-xs text-blue-500 hover:text-blue-700 transition"
+                    >
+                      {storesWithKey.every((s) => pendingStoreIds.includes(s.id)) ? 'Снять все' : 'Выбрать все'}
+                    </button>
+                  </div>
+                  <ul className="flex flex-col gap-1">
+                    {storesWithKey.map((store) => {
+                      const checked = pendingStoreIds.includes(store.id)
+                      return (
+                        <li key={store.id}>
+                          <label className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-2.5 transition-colors ${checked ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setPendingStoreIds(checked
+                                  ? pendingStoreIds.filter((id) => id !== store.id)
+                                  : [...pendingStoreIds, store.id]
+                                )
+                              }}
+                              className="h-4 w-4 accent-blue-500"
+                            />
+                            <span className="text-sm font-medium text-slate-700">{store.name}</span>
+                          </label>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </>
+              )}
+            </div>
+            {/* Footer */}
+            <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
+              <span className="text-xs text-slate-400">
+                {pendingStoreIds.length === 0 ? 'Не выбрано' : `Выбрано: ${pendingStoreIds.length}`}
+              </span>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setStoreModalOpen(false)} className="rounded-lg border border-slate-200 px-4 py-1.5 text-xs text-slate-600 hover:bg-slate-50 transition">
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveAutoSettingsToStorage({ ...autoSettings, storeIds: pendingStoreIds })
+                    setStoreModalOpen(false)
+                  }}
+                  className="rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Превью фото при наведении */}
       {photoPreview && (
