@@ -172,6 +172,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 23. patch_ai_reviews.sql            ← ИИ-ответы: поля в wb_feedbacks + account_ai_settings
 24. patch_ai_providers.sql           ← мульти-провайдер: provider/claude_key/claude_model
 25. patch_store_ai_prompt.sql        ← промпт магазина: ai_prompt в stores
+26. patch_fix_wb_feedbacks_rls_v2.sql ← фикс RLS wb_feedbacks (SECURITY DEFINER)
 ```
 > Для dev без auth: `supabase/disable_rls_dev.sql`
 
