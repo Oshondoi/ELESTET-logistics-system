@@ -1492,7 +1492,7 @@ export const ReviewsPage = ({
                   />
                   <span className="text-xs text-slate-400">секунд</span>
                 </div>
-                <p className="text-[11px] text-slate-400">Имитирует естественный интервал, снижает риск блокировки</p>
+                <p className="text-[11px] text-slate-400">Минимум 10 секунд</p>
               </div>
             </div>
           </div>
