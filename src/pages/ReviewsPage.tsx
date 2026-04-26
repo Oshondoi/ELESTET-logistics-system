@@ -262,8 +262,45 @@ interface ReviewsPageProps {
 }
 
 const REVIEWS_TAB_KEY = 'reviews_active_tab'
+const AUTO_SETTINGS_KEY = 'reviews_auto_settings'
+const AUTO_SENT_TODAY_KEY = 'reviews_auto_sent_today'
 
 type Tab = 'queue' | 'answered' | 'templates' | 'test'
+
+interface AutoSettings {
+  source: 'ai' | 'templates' | 'ai_with_fallback'
+  dailyLimit: number
+  targetRatings: number[]
+  requireText: boolean
+  delaySeconds: number
+}
+
+const DEFAULT_AUTO_SETTINGS: AutoSettings = {
+  source: 'ai',
+  dailyLimit: 50,
+  targetRatings: [1, 2, 3, 4, 5],
+  requireText: false,
+  delaySeconds: 5,
+}
+
+const loadAutoSettings = (): AutoSettings => {
+  try {
+    const raw = localStorage.getItem(AUTO_SETTINGS_KEY)
+    if (raw) return { ...DEFAULT_AUTO_SETTINGS, ...JSON.parse(raw) }
+  } catch {}
+  return DEFAULT_AUTO_SETTINGS
+}
+
+const loadAutoSentToday = (): number => {
+  try {
+    const raw = localStorage.getItem(AUTO_SENT_TODAY_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as { date: string; count: number }
+      if (parsed.date === new Date().toISOString().slice(0, 10)) return parsed.count
+    }
+  } catch {}
+  return 0
+}
 
 const getSavedTab = (): Tab => {
   const saved = localStorage.getItem(REVIEWS_TAB_KEY)
@@ -350,6 +387,13 @@ export const ReviewsPage = ({
   const [testResult, setTestResult] = useState<string | null>(null)
   const [isTestGenerating, setIsTestGenerating] = useState(false)
   const [testError, setTestError] = useState<string | null>(null)
+
+  // Automation tab
+  const [autoSettings, setAutoSettings] = useState<AutoSettings>(loadAutoSettings)
+  const [autoSentToday, setAutoSentToday] = useState(loadAutoSentToday)
+  const [isAutoRunning, setIsAutoRunning] = useState(false)
+  const [autoProgress, setAutoProgress] = useState<{ done: number; total: number } | null>(null)
+  const [autoLog, setAutoLog] = useState<string[]>([])
 
   // Store dropdown
   const [storeDropdownOpen, setStoreDropdownOpen] = useState(false)
@@ -618,6 +662,107 @@ export const ReviewsPage = ({
     await deleteAiPrompt(id)
     setSystemPrompts((prev) => prev.filter((p) => p.id !== id))
     setStorePrompts((prev) => prev.filter((p) => p.id !== id))
+  }
+
+  // ── Automation settings save
+  const saveAutoSettingsToStorage = (next: AutoSettings) => {
+    setAutoSettings(next)
+    localStorage.setItem(AUTO_SETTINGS_KEY, JSON.stringify(next))
+  }
+
+  // ── Auto-run: generate + send for all pending reviews
+  const handleAutoRun = async () => {
+    if (!activeStore?.api_key || !queueRows) return
+    if (isAutoRunning) return
+
+    const remaining = autoSettings.dailyLimit - autoSentToday
+    if (remaining <= 0) {
+      setAutoLog(['Дневной лимит исчерпан.'])
+      return
+    }
+
+    const candidates = queueRows.filter((row) => {
+      if (autoSettings.requireText && !row.data.text?.trim()) return false
+      if (!autoSettings.targetRatings.includes(row.data.productValuation)) return false
+      return true
+    }).slice(0, remaining)
+
+    if (candidates.length === 0) {
+      setAutoLog(['Нет подходящих отзывов в очереди.'])
+      return
+    }
+
+    setIsAutoRunning(true)
+    setAutoProgress({ done: 0, total: candidates.length })
+    setAutoLog([`Начинаем: ${candidates.length} отзывов`])
+    let sent = 0
+
+    for (const row of candidates) {
+      try {
+        let text: string | null = null
+
+        if (autoSettings.source === 'ai' || autoSettings.source === 'ai_with_fallback') {
+          if (aiSettings && isAiConfigured) {
+            try {
+              text = await callOpenAi(aiSettings, {
+                text: row.data.text,
+                productValuation: row.data.productValuation,
+                userName: row.data.userName,
+                productName: row.data.productDetails?.productName ?? null,
+                photoLinks: row.data.photoLinks ?? null,
+                storePrompt: activeStore?.ai_prompt ?? undefined,
+                extraSystemPrompts: systemPrompts.map((p) => p.content),
+                extraStorePrompts: storePrompts.map((p) => p.content),
+              })
+            } catch {
+              if (autoSettings.source !== 'ai_with_fallback') throw new Error('Ошибка ИИ')
+            }
+          }
+        }
+
+        if (!text && (autoSettings.source === 'templates' || autoSettings.source === 'ai_with_fallback')) {
+          const matched = templates.find((tpl) => {
+            if (tpl.trigger_keywords.length > 0) {
+              const lower = (row.data.text ?? '').toLowerCase()
+              return tpl.trigger_keywords.some((kw) => lower.includes(kw.toLowerCase()))
+            }
+            if (tpl.trigger_ratings.length > 0) return tpl.trigger_ratings.includes(row.data.productValuation)
+            return true
+          })
+          if (matched) text = applyTemplate(matched.text, row.data)
+        }
+
+        if (!text) {
+          setAutoLog((prev) => [...prev, `⚠ Пропущен: нет текста для отзыва #${row.data.id?.slice(-6) ?? '?'}`])
+          setAutoProgress((p) => p ? { ...p, done: p.done + 1 } : p)
+          continue
+        }
+
+        await saveAiReply(row.id, text)
+        setLocalTexts((prev) => ({ ...prev, [row.id]: text! }))
+
+        if (autoSettings.delaySeconds > 0) {
+          await new Promise((res) => setTimeout(res, autoSettings.delaySeconds * 1000))
+        }
+
+        await sendWbReply(activeStore.api_key, row.id, text)
+        await markReplySent(row.id)
+        setQueueRows((prev) => prev ? prev.filter((r) => r.id !== row.id) : prev)
+        sent++
+        const todayStr = new Date().toISOString().slice(0, 10)
+        const newCount = autoSentToday + sent
+        setAutoSentToday(newCount)
+        localStorage.setItem(AUTO_SENT_TODAY_KEY, JSON.stringify({ date: todayStr, count: newCount }))
+        setAutoLog((prev) => [...prev, `✓ Отправлено: ${row.data.userName ?? 'Покупатель'}, ${row.data.productValuation}★`])
+      } catch (err) {
+        setAutoLog((prev) => [...prev, `✗ Ошибка: ${err instanceof Error ? err.message : 'неизвестно'}`])
+      }
+      setAutoProgress((p) => p ? { ...p, done: p.done + 1 } : p)
+    }
+
+    setAutoLog((prev) => [...prev, `Готово. Отправлено: ${sent} из ${candidates.length}`])
+    setIsAutoRunning(false)
+    setAutoProgress(null)
   }
 
   // ── Save AI settings
@@ -1251,89 +1396,210 @@ export const ReviewsPage = ({
 
       {/* ── Templates tab */}
       {tab === 'templates' && (
-        <div className="flex flex-col gap-3">
-          <div className="flex items-start justify-between gap-4">
-            <p className="max-w-lg text-sm text-slate-500">
-              Шаблоны для ручного заполнения ответа.{' '}
-              <strong className="text-slate-600">Приоритет:</strong> ключевые слова → оценка → универсальный.
-            </p>
-            <Button
-              onClick={() => { setEditingTemplate(null); setTemplateModalOpen(true) }}
-              className="shrink-0"
-            >
-              + Шаблон
-            </Button>
+        <div className="flex flex-col gap-5">
+
+          {/* ── Источник ответов ─────────────────────────────── */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="mb-3 text-sm font-semibold text-slate-800">Источник ответов</h3>
+            <div className="flex flex-col gap-2">
+              {([
+                { value: 'ai', label: 'ИИ (Claude / OpenAI)', desc: 'Генерирует уникальный ответ для каждого отзыва' },
+                { value: 'templates', label: 'Шаблоны', desc: 'Использует подходящий шаблон из вкладки «Автоматизация»' },
+                { value: 'ai_with_fallback', label: 'ИИ → Шаблоны (резервный)', desc: 'Пробует ИИ, при ошибке — шаблон' },
+              ] as const).map((opt) => (
+                <label
+                  key={opt.value}
+                  className={`flex cursor-pointer items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${autoSettings.source === opt.value ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}
+                >
+                  <input
+                    type="radio"
+                    name="auto-source"
+                    checked={autoSettings.source === opt.value}
+                    onChange={() => saveAutoSettingsToStorage({ ...autoSettings, source: opt.value })}
+                    className="mt-0.5 accent-blue-500"
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-slate-800">{opt.label}</p>
+                    <p className="text-xs text-slate-400">{opt.desc}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
           </div>
 
-          {isLoadingTemplates && (
-            <div className="py-8 text-center text-sm text-slate-400">Загрузка...</div>
-          )}
-
-          {!isLoadingTemplates && templates.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-slate-200 py-16 text-center">
-              <p className="mb-1 text-sm font-medium text-slate-600">Шаблонов пока нет</p>
-              <p className="text-xs text-slate-400">Создайте шаблон для быстрого заполнения ответа.</p>
-            </div>
-          )}
-
-          {templates.map((tpl) => (
-            <div
-              key={tpl.id}
-              className="flex items-start gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-slate-800">{tpl.name}</span>
-                  {tpl.is_auto && (
-                    <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold uppercase text-blue-600">
-                      Авто
-                    </span>
-                  )}
-                  {tpl.trigger_ratings.length > 0 && (
-                    <span className="text-[11px] text-amber-600">
-                      {tpl.trigger_ratings.map((r) => `${r}★`).join(' ')}
-                    </span>
-                  )}
-                  {tpl.trigger_keywords.length > 0 && (
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">
-                      {tpl.trigger_keywords.slice(0, 3).join(', ')}
-                      {tpl.trigger_keywords.length > 3 ? ` +${tpl.trigger_keywords.length - 3}` : ''}
-                    </span>
-                  )}
-                  {tpl.trigger_ratings.length === 0 && tpl.trigger_keywords.length === 0 && (
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-600">
-                      Универсальный
-                    </span>
-                  )}
+          {/* ── Лимиты ────────────────────────────────────────── */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="mb-3 text-sm font-semibold text-slate-800">Лимиты и задержки</h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium text-slate-600">Лимит ответов в сутки</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={autoSettings.dailyLimit}
+                    onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, dailyLimit: Math.max(1, parseInt(e.target.value) || 1) })}
+                    className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                  />
+                  <span className="text-xs text-slate-400">ответов / день</span>
                 </div>
-                <p className="line-clamp-2 text-sm text-slate-500">{tpl.text}</p>
+                <p className="text-[11px] text-slate-400">Сегодня отправлено: <strong>{autoSentToday}</strong> из {autoSettings.dailyLimit}</p>
               </div>
-              <div className="flex shrink-0 gap-1">
-                <button
-                  type="button"
-                  onClick={() => { setEditingTemplate(tpl); setTemplateModalOpen(true) }}
-                  className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeletingTemplate(tpl)}
-                  className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-500"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6l-1 14H6L5 6" />
-                    <path d="M10 11v6M14 11v6" />
-                    <path d="M9 6V4h6v2" />
-                  </svg>
-                </button>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium text-slate-600">Пауза между ответами</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={300}
+                    value={autoSettings.delaySeconds}
+                    onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(0, parseInt(e.target.value) || 0) })}
+                    className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
+                  />
+                  <span className="text-xs text-slate-400">секунд</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Имитирует естественный интервал, снижает риск блокировки</p>
               </div>
             </div>
-          ))}
+          </div>
+
+          {/* ── Фильтры ───────────────────────────────────────── */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="mb-3 text-sm font-semibold text-slate-800">Фильтры</h3>
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <p className="text-xs font-medium text-slate-600">Отвечать на оценки</p>
+                <div className="flex gap-2">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => {
+                        const cur = autoSettings.targetRatings
+                        const next = cur.includes(star) ? cur.filter((r) => r !== star) : [...cur, star].sort()
+                        if (next.length > 0) saveAutoSettingsToStorage({ ...autoSettings, targetRatings: next })
+                      }}
+                      className={`flex h-9 w-12 items-center justify-center rounded-xl border text-sm font-medium transition-colors ${autoSettings.targetRatings.includes(star) ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-400 hover:border-slate-300'}`}
+                    >
+                      {star}★
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="flex cursor-pointer items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={autoSettings.requireText}
+                  onChange={(e) => saveAutoSettingsToStorage({ ...autoSettings, requireText: e.target.checked })}
+                  className="h-4 w-4 rounded accent-blue-500"
+                />
+                <div>
+                  <p className="text-sm font-medium text-slate-700">Только отзывы с текстом</p>
+                  <p className="text-xs text-slate-400">Пропускать отзывы только с оценкой, без текста</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {/* ── Запуск ────────────────────────────────────────── */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-800">Запуск автоответа</h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  В очереди: <strong className="text-slate-600">{queueRows?.filter((r) => autoSettings.targetRatings.includes(r.data.productValuation) && (!autoSettings.requireText || r.data.text?.trim())).length ?? 0}</strong> подходящих отзывов
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isAutoRunning || !activeStore?.api_key || autoSentToday >= autoSettings.dailyLimit}
+                onClick={() => void handleAutoRun()}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+              >
+                {isAutoRunning ? (
+                  <>
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+                    {autoProgress ? `${autoProgress.done} / ${autoProgress.total}` : 'Запуск...'}
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor"><path d="M5 3l14 9-14 9V3z" /></svg>
+                    Запустить сейчас
+                  </>
+                )}
+              </button>
+            </div>
+            {autoSentToday >= autoSettings.dailyLimit && (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                Дневной лимит исчерпан ({autoSettings.dailyLimit} ответов). Сбросится завтра.
+              </div>
+            )}
+            {!activeStore?.api_key && (
+              <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                API-ключ магазина не настроен. Добавьте его в разделе «Магазины».
+              </div>
+            )}
+            {autoLog.length > 0 && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Лог запуска</p>
+                  <button type="button" onClick={() => setAutoLog([])} className="text-[11px] text-slate-400 hover:text-slate-600">Очистить</button>
+                </div>
+                <div className="flex flex-col gap-0.5 max-h-40 overflow-y-auto">
+                  {autoLog.map((line, i) => (
+                    <p key={i} className={`text-xs ${line.startsWith('✓') ? 'text-emerald-600' : line.startsWith('✗') ? 'text-rose-500' : line.startsWith('⚠') ? 'text-amber-600' : 'text-slate-500'}`}>{line}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Шаблоны (компактный список для fallback) ─────── */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-800">Шаблоны ответов</h3>
+                <p className="mt-0.5 text-xs text-slate-400">Приоритет: ключевые слова → оценка → универсальный</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setEditingTemplate(null); setTemplateModalOpen(true) }}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+              >
+                + Шаблон
+              </button>
+            </div>
+            {isLoadingTemplates && <p className="py-4 text-center text-xs text-slate-400">Загрузка...</p>}
+            {!isLoadingTemplates && templates.length === 0 && (
+              <p className="py-4 text-center text-xs text-slate-400">Шаблонов нет. Нажмите «+ Шаблон».</p>
+            )}
+            <div className="flex flex-col gap-2">
+              {templates.map((tpl) => (
+                <div key={tpl.id} className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
+                      <span className="text-xs font-semibold text-slate-700">{tpl.name}</span>
+                      {tpl.is_auto && <span className="rounded-full bg-blue-50 px-1.5 py-px text-[10px] font-bold text-blue-600">Авто</span>}
+                      {tpl.trigger_ratings.length > 0 && <span className="text-[11px] text-amber-600">{tpl.trigger_ratings.map((r) => `${r}★`).join(' ')}</span>}
+                      {tpl.trigger_keywords.length > 0 && <span className="rounded-full bg-slate-200 px-1.5 py-px text-[10px] text-slate-500">{tpl.trigger_keywords.slice(0, 2).join(', ')}{tpl.trigger_keywords.length > 2 ? ` +${tpl.trigger_keywords.length - 2}` : ''}</span>}
+                      {tpl.trigger_ratings.length === 0 && tpl.trigger_keywords.length === 0 && <span className="rounded-full bg-emerald-50 px-1.5 py-px text-[10px] text-emerald-600">Универсальный</span>}
+                    </div>
+                    <p className="line-clamp-1 text-xs text-slate-400">{tpl.text}</p>
+                  </div>
+                  <div className="flex shrink-0 gap-0.5">
+                    <button type="button" onClick={() => { setEditingTemplate(tpl); setTemplateModalOpen(true) }} className="rounded-lg p-1.5 text-slate-400 hover:bg-white hover:text-slate-600 transition">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                    </button>
+                    <button type="button" onClick={() => setDeletingTemplate(tpl)} className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4h6v2" /></svg>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
         </div>
       )}
 
