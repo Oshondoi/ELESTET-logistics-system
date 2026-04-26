@@ -432,6 +432,7 @@ export const ReviewsPage = ({
   }, [])
 
   const canRefresh = !isFetching && cooldownLeft === 0
+  const isAiConfigured = aiSettings?.provider === 'claude' ? !!aiSettings.claude_key : !!aiSettings?.openai_key
 
   // ── Load rows from DB
   const loadFromDb = async (isAnswered: boolean) => {
@@ -483,10 +484,10 @@ export const ReviewsPage = ({
 
   // ── Generate AI reply for a feedback
   const handleGenerate = async (row: WbFeedbackRow) => {
-    if (!aiSettings?.openai_key) {
+    if (!aiSettings || !isAiConfigured) {
       setGenErrors((prev) => ({
         ...prev,
-        [row.id]: 'OpenAI API-ключ не настроен. Нажмите кнопку «⚙ Настройки ИИ».',
+        [row.id]: 'API-ключ ИИ не настроен. Нажмите «⚙ Настройки ИИ».',
       }))
       return
     }
@@ -593,8 +594,8 @@ export const ReviewsPage = ({
 
   // ── Test generate (dry-run, nothing saved or sent)
   const handleTestGenerate = async () => {
-    if (!aiSettings?.openai_key) {
-      setTestError('Сначала настройте OpenAI API-ключ (кнопка «⚙ Настройки ИИ»).')
+    if (!aiSettings || !isAiConfigured) {
+      setTestError('API-ключ ИИ не настроен (кнопка «⚙ Настройки ИИ»).')
       return
     }
     if (!testText.trim()) {
@@ -711,7 +712,7 @@ export const ReviewsPage = ({
             title="Настройки ИИ-ответов"
             className={cn(
               'flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm transition-colors',
-              aiSettings?.openai_key
+              isAiConfigured
                 ? 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300'
                 : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300',
             )}
@@ -720,7 +721,7 @@ export const ReviewsPage = ({
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
-            {aiSettings?.openai_key ? 'ИИ настроен' : 'Настройки ИИ'}
+            {isAiConfigured ? 'ИИ настроен' : 'Настройки ИИ'}
           </button>
 
           {/* Sync button — always visible, disabled on templates/test */}
@@ -781,13 +782,13 @@ export const ReviewsPage = ({
             Введите тестовый отзыв, нажмите «Сгенерировать» — ИИ покажет пример ответа.
           </div>
 
-          {!aiSettings?.openai_key && (
+          {!isAiConfigured && (
             <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
               <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
               </svg>
               <span className="text-sm text-slate-600">
-                OpenAI API-ключ не настроен.{' '}
+                API-ключ ИИ не настроен.{' '}
                 <button
                   type="button"
                   onClick={() => setAiSettingsModalOpen(true)}
@@ -906,13 +907,13 @@ export const ReviewsPage = ({
           )}
 
           {/* AI key notice (queue only, when reviews present) */}
-          {tab === 'queue' && !aiSettings?.openai_key && (currentRows ?? []).length > 0 && (
+          {tab === 'queue' && !isAiConfigured && (currentRows ?? []).length > 0 && (
             <div className="flex items-center gap-3 rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
               <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-violet-400" fill="none" stroke="currentColor" strokeWidth="2">
                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
               </svg>
               <span className="text-sm text-violet-700">
-                ИИ-ответы недоступны — OpenAI ключ не настроен.{' '}
+                ИИ-ответы недоступны — API-ключ ИИ не настроен.{' '}
                 <button
                   type="button"
                   onClick={() => setAiSettingsModalOpen(true)}
@@ -1019,10 +1020,10 @@ export const ReviewsPage = ({
                           type="button"
                           onClick={() => void handleGenerate(row)}
                           disabled={isGenerating}
-                          title={!aiSettings?.openai_key ? 'Настройте OpenAI ключ (кнопка «⚙ Настройки ИИ»)' : ''}
+                          title={!isAiConfigured ? 'Настройте API-ключ ИИ (кнопка «⚙ Настройки ИИ»)' : ''}
                           className={cn(
                             'flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition-colors',
-                            aiSettings?.openai_key
+                            isAiConfigured
                               ? 'bg-violet-100 text-violet-700 hover:bg-violet-200 disabled:opacity-60'
                               : 'cursor-not-allowed bg-slate-100 text-slate-400',
                           )}
@@ -1118,7 +1119,7 @@ export const ReviewsPage = ({
 
                         <div className="flex items-center gap-2">
                           {/* Regenerate */}
-                          {aiSettings?.openai_key && (
+                          {isAiConfigured && (
                             <button
                               type="button"
                               onClick={() => void handleGenerate(row)}

@@ -358,7 +358,7 @@ export type AiReplyStatus = 'none' | 'generated' | 'sent'
 export type AiTone = 'polite' | 'neutral' | 'friendly' | 'professional'
 export type AiProvider = 'openai' | 'claude'
 export type AiModel = 'gpt-4o-mini' | 'gpt-4o' | 'gpt-3.5-turbo'
-export type ClaudeModel = 'claude-3-5-sonnet-20241022' | 'claude-3-5-haiku-20241022' | 'claude-3-opus-20240229'
+export type ClaudeModel = 'claude-sonnet-4-6' | 'claude-haiku-4-5-20251001' | 'claude-opus-4-7'
 
 export interface AiSettings {
   account_id: string

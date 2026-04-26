@@ -27,9 +27,9 @@ const OPENAI_MODEL_OPTIONS: { value: AiModel; label: string }[] = [
 ]
 
 const CLAUDE_MODEL_OPTIONS: { value: ClaudeModel; label: string }[] = [
-  { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet — умный, сбалансированный, поддерживает фото (рекомендуется)' },
-  { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku — быстрый, дёшевый, поддерживает фото' },
-  { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus — наиболее мощный, дорогой, поддерживает фото' },
+  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 — умный, сбалансированный (рекомендуется)' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 — быстрый, дёшевый' },
+  { value: 'claude-opus-4-7', label: 'Claude Opus 4.7 — наиболее мощный, дорогой' },
 ]
 
 const TONE_OPTIONS: { value: AiTone; label: string; desc: string }[] = [
@@ -110,7 +110,7 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, onClose, on
   const [model, setModel] = useState<AiModel>('gpt-4o-mini')
   const [claudeKey, setClaudeKey] = useState('')
   const [claudeKeyDeleted, setClaudeKeyDeleted] = useState(false)
-  const [claudeModel, setClaudeModel] = useState<ClaudeModel>('claude-3-5-sonnet-20241022')
+  const [claudeModel, setClaudeModel] = useState<ClaudeModel>('claude-sonnet-4-6')
   const [tone, setTone] = useState<AiTone>('polite')
   const [prompt, setPrompt] = useState('')
   const [storePrompt, setStorePrompt] = useState('')
@@ -128,7 +128,7 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, onClose, on
       setTab(initial?.provider ?? 'openai')
       setActiveProvider(initial?.provider ?? 'openai')
       setModel(initial?.model ?? 'gpt-4o-mini')
-      setClaudeModel(initial?.claude_model ?? 'claude-3-5-sonnet-20241022')
+      setClaudeModel(initial?.claude_model ?? 'claude-sonnet-4-6')
       setTone(initial?.tone ?? 'polite')
       setPrompt(initial?.system_prompt ?? '')
       setStorePrompt(initialStorePrompt)

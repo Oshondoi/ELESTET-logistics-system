@@ -494,10 +494,11 @@ async function callClaudeDirect(settings: AiSettings, feedback: AiFeedbackInput)
   })
 
   if (!resp.ok) {
-    const errData = await resp.json().catch(() => ({})) as { error?: { message?: string } }
+    const errData = await resp.json().catch(() => ({})) as { error?: { type?: string; message?: string } }
     if (resp.status === 401) throw new Error('Неверный Claude API-ключ. Проверьте настройки.')
     if (resp.status === 429) throw new Error('Превышен лимит Claude. Попробуйте позже.')
-    throw new Error(errData.error?.message || `Claude API error: ${resp.status}`)
+    const detail = errData.error?.message ?? errData.error?.type ?? ''
+    throw new Error(`Claude API error ${resp.status}${detail ? ': ' + detail : ''}`)
   }
 
   type ClaudeResponse = { content: Array<{ type: string; text: string }> }

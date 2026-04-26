@@ -1,9 +1,17 @@
 # Active Context
 
 ## Current Focus
-ИИ-ответы на отзывы WB — расширенная настройка ИИ завершена: поддержка Claude + OpenAI, мульти-провайдер, Vision для фото, промпты системный и магазина, 4 тона ответов, активный таб сохраняется в localStorage. SQL-патч `patch_ai_providers.sql` и `patch_store_ai_prompt.sql` нужно применить в Supabase SQL Editor. Следующие шаги: поиск/фильтры на странице Логистика, участники компании (Members), мобильное приложение.
+Фикс Claude API: обновлены ID моделей на актуальные (claude-sonnet-4-6 / claude-haiku-4-5-20251001 / claude-opus-4-7) — старые claude-3-* deprecated и удалены Anthropic. Добавлен `isAiConfigured` хелпер в ReviewsPage — теперь проверяет ключ активного провайдера (не всегда openai_key). Все SQL-патчи для ИИ применены в продакшн. Следующие шаги: поиск/фильтры на странице Логистика, участники компании (Members), мобильное приложение.
 
 ## What Was Recently Done
+
+### Фикс Claude API — обновление моделей (26.04.2026)
+- **Причина:** Anthropic deprecateд claude-3-5-sonnet-20241022, claude-3-5-haiku-20241022, claude-3-opus-20240229 — все возвращали `404 model not found`
+- **`src/types/index.ts`**: `ClaudeModel` = `'claude-sonnet-4-6' | 'claude-haiku-4-5-20251001' | 'claude-opus-4-7'`
+- **`src/components/reviews/AiSettingsModal.tsx`**: обновлены `CLAUDE_MODEL_OPTIONS` и дефолтная модель на `claude-sonnet-4-6`
+- **`supabase/patch_ai_providers.sql`**: добавлен `UPDATE` для сброса старых model ID на `claude-sonnet-4-6`
+- **Баг-фикс `ReviewsPage.tsx`**: везде было `aiSettings?.openai_key` — добавлен хелпер `isAiConfigured` (проверяет ключ активного провайдера), все проверки заменены
+- **`reviewsService.ts`**: улучшено сообщение ошибки Claude — теперь выводит HTTP статус + детальное описание ошибки от API
 
 ### ИИ-настройки — мульти-провайдер Claude + OpenAI (26.04.2026)
 - **`src/types/index.ts`**: добавлены `AiProvider` (`openai`|`claude`), `ClaudeModel`, `AiTone` расширен (`professional`), обновлены `AiSettings` и `AiSettingsFormValues`
@@ -81,8 +89,8 @@
 22. patch_wb_feedbacks.sql
 23. patch_fix_wb_feedbacks_rls.sql
 24. patch_ai_reviews.sql             ← ИИ-ответы: поля в wb_feedbacks + account_ai_settings
-25. patch_ai_providers.sql           ← ⚠️ мульти-провайдер: provider/claude_key/claude_model
-26. patch_store_ai_prompt.sql        ← ⚠️ промпт магазина: ai_prompt в stores
+25. patch_ai_providers.sql           ← мульти-провайдер: provider/claude_key/claude_model (применён)
+26. patch_store_ai_prompt.sql        ← промпт магазина: ai_prompt в stores (применён)
 ```
 
 ## What Was Recently Done

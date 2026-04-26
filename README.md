@@ -57,7 +57,7 @@ MVP веб-приложения для логистики поставок на 
 
 ### ИИ-ответы на отзывы WB
 - Ключ хранится в `account_ai_settings` с RLS — каждый клиент использует свой ключ
-- **Мульти-провайдер**: Claude (Sonnet/Haiku/Opus) и OpenAI (gpt-4o-mini/gpt-4o/gpt-3.5-turbo) — оба поддерживают Vision (фото из отзыва)
+- **Мульти-провайдер**: Claude (Sonnet 4.6 / Haiku 4.5 / Opus 4.7) и OpenAI (gpt-4o-mini/gpt-4o/gpt-3.5-turbo) — оба поддерживают Vision (фото из отзыва)
 - **Активный провайдер**: выбирается кнопкой «Активировать» внутри таба, бейдж «активный» в заголовке
 - **`AiSettingsModal`**: табы Claude/OpenAI, оба блока в grid-ячейке (высота не прыгает), удаление ключа
 - **4 тона**: Вежливый / Нейтральный / Дружелюбный / Профессиональный
@@ -170,6 +170,8 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 21. patch_wb_feedbacks.sql
 22. patch_fix_wb_feedbacks_rls.sql
 23. patch_ai_reviews.sql            ← ИИ-ответы: поля в wb_feedbacks + account_ai_settings
+24. patch_ai_providers.sql           ← мульти-провайдер: provider/claude_key/claude_model
+25. patch_store_ai_prompt.sql        ← промпт магазина: ai_prompt в stores
 ```
 > Для dev без auth: `supabase/disable_rls_dev.sql`
 
@@ -195,7 +197,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | Магазины — синк WB | ✅ Готово | Колонки API ключ/Поставщик/Адрес, синк seller-info |
 | Профиль пользователя | ✅ Готово | Topbar дропдаун + ProfileModal (имя, пароль) |
 | **Отзывы WB** | ✅ Готово | WB API, DB-first, шаблоны, cooldown, dry-run вкладка «Тест» |
-| **ИИ-ответы на отзывы** | ✅ Готово | OpenAI интеграция, генерация/правка/отправка, 1–3★ подтверждение, Тест-вкладка |
+| **ИИ-ответы на отзывы** | ✅ Готово | OpenAI + Claude 4 интеграция, Vision, мульти-провайдер, генерация/правка/отправка |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
