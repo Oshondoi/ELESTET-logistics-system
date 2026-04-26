@@ -148,10 +148,11 @@ function App() {
   const { permissions, isLoading: isPermissionsLoading } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
 
   useEffect(() => {
-    if (!isAccountsLoading && accounts.length > 0 && !activeAccountId) {
-      setActiveAccountId(accounts[0].id)
+    if (!isAccountsLoading && accounts.length > 0) {
+      const found = accounts.find((a) => a.id === activeAccountId)
+      if (!found) setActiveAccountId(accounts[0].id)
     }
-  }, [accounts, isAccountsLoading, activeAccountId])
+  }, [accounts, isAccountsLoading])
 
   const {
     shipments,
