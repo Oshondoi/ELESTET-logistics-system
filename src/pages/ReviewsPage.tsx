@@ -1680,7 +1680,7 @@ export const ReviewsPage = ({
       {/* ── Модалка выбора магазинов ── */}
       {storeModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setStoreModalOpen(false)}>
-          <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <h2 className="text-sm font-semibold text-slate-800">Выбор магазинов</h2>
@@ -1689,7 +1689,7 @@ export const ReviewsPage = ({
               </button>
             </div>
             {/* Body */}
-            <div className="px-5 py-3">
+            <div className="max-h-[60vh] overflow-y-auto px-5 py-3">
               {storesWithKey.length === 0 ? (
                 <p className="py-4 text-center text-xs text-slate-400">Нет магазинов с API-ключом</p>
               ) : (
