@@ -27,6 +27,12 @@ import {
   syncFeedbacksFromWb,
   updateReviewTemplate,
 } from '../services/reviewsService'
+import {
+  loadAutomationSettings,
+  loadAutomationLogs,
+  saveAutomationSettings,
+} from '../services/automationService'
+import type { AutomationLog } from '../services/automationService'
 import type {
   AiPrompt,
   AiPromptFormValues,
@@ -281,7 +287,7 @@ const DEFAULT_AUTO_SETTINGS: AutoSettings = {
   dailyLimit: 50,
   targetRatings: [1, 2, 3, 4, 5],
   requireText: false,
-  delaySeconds: 10,
+  delaySeconds: 32,
   storeIds: [],
 }
 
@@ -398,6 +404,10 @@ export const ReviewsPage = ({
   const [autoLog, setAutoLog] = useState<string[]>([])
   const [autoQueueRows, setAutoQueueRows] = useState<WbFeedbackRow[]>([])
   const [isLoadingAutoQueue, setIsLoadingAutoQueue] = useState(false)
+  const [autoEnabled, setAutoEnabled] = useState(false)
+  const [autoDbLogs, setAutoDbLogs] = useState<AutomationLog[]>([])
+  const [isLoadingAutoDb, setIsLoadingAutoDb] = useState(false)
+  const [autoDbSynced, setAutoDbSynced] = useState(false)
 
   // Store modal
   const [storeModalOpen, setStoreModalOpen] = useState(false)
@@ -428,6 +438,36 @@ export const ReviewsPage = ({
     if (!activeAccountId) return
     getAiSettings(activeAccountId).then(setAiSettings).catch(() => {})
     fetchAiPrompts(activeAccountId, 'system').then(setSystemPrompts).catch(() => {})
+  }, [activeAccountId])
+
+  // ── Load automation settings from DB on account change
+  useEffect(() => {
+    if (!activeAccountId) return
+    setIsLoadingAutoDb(true)
+    loadAutomationSettings(activeAccountId)
+      .then((s) => {
+        if (s) {
+          setAutoEnabled(s.is_enabled)
+          setAutoDbSynced(true)
+          // Перезаписываем localStorage данными из DB
+          const fromDb: AutoSettings = {
+            source: s.source as AutoSettings['source'],
+            dailyLimit: s.daily_limit,
+            targetRatings: s.target_ratings,
+            requireText: s.require_text,
+            delaySeconds: s.delay_seconds,
+            storeIds: s.store_ids,
+          }
+          setAutoSettings(fromDb)
+          localStorage.setItem(AUTO_SETTINGS_KEY, JSON.stringify(fromDb))
+        } else {
+          setAutoDbSynced(false)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsLoadingAutoDb(false))
+    loadAutomationLogs(activeAccountId).then(setAutoDbLogs).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeAccountId])
 
   // ── Load store prompts when active store changes
@@ -717,10 +757,27 @@ export const ReviewsPage = ({
     setStorePrompts((prev) => prev.filter((p) => p.id !== id))
   }
 
-  // ── Automation settings save
+  // ── Automation settings save (localStorage + DB)
   const saveAutoSettingsToStorage = (next: AutoSettings) => {
     setAutoSettings(next)
     localStorage.setItem(AUTO_SETTINGS_KEY, JSON.stringify(next))
+    if (activeAccountId) {
+      saveAutomationSettings(activeAccountId, {
+        source: next.source,
+        daily_limit: next.dailyLimit,
+        target_ratings: next.targetRatings,
+        require_text: next.requireText,
+        delay_seconds: next.delaySeconds,
+        store_ids: next.storeIds,
+      }).catch(() => {})
+    }
+  }
+
+  const toggleAutoEnabled = (enabled: boolean) => {
+    setAutoEnabled(enabled)
+    if (activeAccountId) {
+      saveAutomationSettings(activeAccountId, { is_enabled: enabled }).catch(() => {})
+    }
   }
 
   // ── Auto-run: generate + send for all pending reviews
@@ -798,9 +855,9 @@ export const ReviewsPage = ({
         await saveAiReply(row.id, text)
         setLocalTexts((prev) => ({ ...prev, [row.id]: text! }))
 
-        if (autoSettings.delaySeconds > 0) {
-          await new Promise((res) => setTimeout(res, autoSettings.delaySeconds * 1000))
-        }
+        // Пауза перед отправкой (минимум 15 сек, половина от delaySeconds)
+        const halfDelayMs = Math.max(15000, (autoSettings.delaySeconds / 2) * 1000)
+        await new Promise((res) => setTimeout(res, halfDelayMs))
 
         await sendWbReply(activeStore.api_key, row.id, text)
         await markReplySent(row.id)
@@ -811,6 +868,9 @@ export const ReviewsPage = ({
         setAutoSentToday(newCount)
         localStorage.setItem(AUTO_SENT_TODAY_KEY, JSON.stringify({ date: todayStr, count: newCount }))
         setAutoLog((prev) => [...prev, `✓ Отправлено: ${row.data.userName ?? 'Покупатель'}, ${row.data.productValuation}★`])
+
+        // Пауза после отправки (минимум 15 сек, половина от delaySeconds)
+        await new Promise((res) => setTimeout(res, halfDelayMs))
       } catch (err) {
         setAutoLog((prev) => [...prev, `✗ Ошибка: ${err instanceof Error ? err.message : 'неизвестно'}`])
       }
@@ -1550,7 +1610,7 @@ export const ReviewsPage = ({
                       onChange={(e) => {
                         const h = Math.max(0, Math.min(23, parseInt(e.target.value) || 0))
                         const rest = autoSettings.delaySeconds % 3600
-                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + rest) })
+                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(32, h * 3600 + rest) })
                       }}
                       className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
                     />
@@ -1565,7 +1625,7 @@ export const ReviewsPage = ({
                         const m = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
                         const h = Math.floor(autoSettings.delaySeconds / 3600)
                         const s = autoSettings.delaySeconds % 60
-                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + m * 60 + s) })
+                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(32, h * 3600 + m * 60 + s) })
                       }}
                       className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
                     />
@@ -1580,14 +1640,14 @@ export const ReviewsPage = ({
                         const s = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
                         const h = Math.floor(autoSettings.delaySeconds / 3600)
                         const m = Math.floor((autoSettings.delaySeconds % 3600) / 60)
-                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(10, h * 3600 + m * 60 + s) })
+                        saveAutoSettingsToStorage({ ...autoSettings, delaySeconds: Math.max(32, h * 3600 + m * 60 + s) })
                       }}
                       className="w-16 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
                     />
                     <span className="text-[10px] text-slate-800">секунды</span>
                   </div>
                 </div>
-                <p className="text-[11px] text-slate-400">Минимум 10 секунд</p>
+                <p className="text-[11px] text-slate-400">Минимум 32 секунды</p>
               </div>
             </div>
           </div>
@@ -1628,6 +1688,41 @@ export const ReviewsPage = ({
                 </div>
               </label>
             </div>
+          </div>
+
+          {/* ── Серверная автоматизация ───────────────────────── */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-800">Серверная автоматизация</h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {isLoadingAutoDb
+                    ? 'Загрузка...'
+                    : autoEnabled
+                      ? autoDbLogs.length > 0
+                        ? `Запускается каждые 30 мин • Последний запуск: ${new Date(autoDbLogs[0].run_at).toLocaleString('ru')}`
+                        : 'Включена • Ещё не запускалась'
+                      : 'Отключена — ответы отправляются только вручную'}
+                </p>
+              </div>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={autoEnabled}
+                  disabled={isLoadingAutoDb}
+                  onChange={(e) => toggleAutoEnabled(e.target.checked)}
+                  className="h-4 w-4 accent-blue-500"
+                />
+                <span className="text-sm text-slate-700">{autoEnabled ? 'Включена' : 'Включить'}</span>
+              </label>
+            </div>
+            {autoEnabled && autoDbLogs.length > 0 && (
+              <div className="mt-3 max-h-32 overflow-y-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-600 space-y-1">
+                {autoDbLogs[0].log.slice(-6).map((l, i) => (
+                  <div key={i}>{l}</div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* ── Запуск ────────────────────────────────────────── */}
