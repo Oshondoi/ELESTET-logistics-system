@@ -811,6 +811,11 @@ export const ReviewsPage = ({
     setAutoLog([`Начинаем: ${candidates.length} отзывов`])
     let sent = 0
 
+    try {
+    // Пауза перед стартом — 15 секунд
+    setAutoLog((prev) => [...prev, 'Пауза перед стартом (15 сек)...'])
+    await new Promise((res) => setTimeout(res, 15000))
+
     for (const row of candidates) {
       try {
         let text: string | null = null
@@ -878,8 +883,10 @@ export const ReviewsPage = ({
     }
 
     setAutoLog((prev) => [...prev, `Готово. Отправлено: ${sent} из ${candidates.length}`])
-    setIsAutoRunning(false)
-    setAutoProgress(null)
+    } finally {
+      setIsAutoRunning(false)
+      setAutoProgress(null)
+    }
   }
 
   // ── Save AI settings
@@ -1031,7 +1038,7 @@ export const ReviewsPage = ({
           <Button
             variant="secondary"
             onClick={() => void syncAll()}
-            disabled={!canRefresh || !activeStore?.api_key || tab === 'templates' || tab === 'test'}
+            disabled={!canRefresh || !activeStore?.api_key || tab === 'test'}
             title={
               !activeStore?.api_key
                 ? 'Нет API-ключа'
@@ -1692,6 +1699,7 @@ export const ReviewsPage = ({
 
           {/* ── Серверная автоматизация ───────────────────────── */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            {/* Заголовок + переключатель */}
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-slate-800">Серверная автоматизация</h3>
@@ -1699,83 +1707,84 @@ export const ReviewsPage = ({
                   {isLoadingAutoDb
                     ? 'Загрузка...'
                     : autoEnabled
-                      ? autoDbLogs.length > 0
-                        ? `Запускается каждые 30 мин • Последний запуск: ${new Date(autoDbLogs[0].run_at).toLocaleString('ru')}`
-                        : 'Включена • Ещё не запускалась'
-                      : 'Отключена — ответы отправляются только вручную'}
+                      ? 'Сервер отвечает на отзывы каждые 30 мин по вашим настройкам'
+                      : 'Отключена — включите чекбокс чтобы сервер начал отвечать автоматически'}
                 </p>
               </div>
-              <label className="flex cursor-pointer items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={autoEnabled}
-                  disabled={isLoadingAutoDb}
-                  onChange={(e) => toggleAutoEnabled(e.target.checked)}
-                  className="h-4 w-4 accent-blue-500"
-                />
-                <span className="text-sm text-slate-700">{autoEnabled ? 'Включена' : 'Включить'}</span>
-              </label>
+              <div className="flex items-center gap-3">
+                {/* Обновить логи */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!activeAccountId) return
+                    setIsLoadingAutoDb(true)
+                    Promise.all([
+                      loadAutomationSettings(activeAccountId),
+                      loadAutomationLogs(activeAccountId),
+                    ]).then(([s, logs]) => {
+                      if (s) setAutoEnabled(s.is_enabled)
+                      setAutoDbLogs(logs)
+                    }).catch(() => {}).finally(() => setIsLoadingAutoDb(false))
+                  }}
+                  className="text-slate-400 hover:text-slate-600 transition"
+                  title="Обновить"
+                >
+                  <svg viewBox="0 0 24 24" className={cn('h-4 w-4', isLoadingAutoDb && 'animate-spin')} fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="23 4 23 10 17 10" />
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                  </svg>
+                </button>
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={autoEnabled}
+                    disabled={isLoadingAutoDb}
+                    onChange={(e) => toggleAutoEnabled(e.target.checked)}
+                    className="h-4 w-4 accent-blue-500"
+                  />
+                  <span className="text-sm text-slate-700">{autoEnabled ? 'Включена' : 'Включить'}</span>
+                </label>
+              </div>
             </div>
-            {autoEnabled && autoDbLogs.length > 0 && (
-              <div className="mt-3 max-h-32 overflow-y-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-600 space-y-1">
-                {autoDbLogs[0].log.slice(-6).map((l, i) => (
-                  <div key={i}>{l}</div>
+
+            {/* Последние запуски */}
+            {autoDbLogs.length > 0 ? (
+              <div className="mt-4 space-y-3">
+                {autoDbLogs.slice(0, 3).map((runLog) => (
+                  <div key={runLog.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                    {/* Шапка запуска */}
+                    <div className="mb-2 flex items-center justify-between text-[11px]">
+                      <span className="font-medium text-slate-700">
+                        {new Date(runLog.run_at).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span className={cn(
+                        'rounded-full px-2 py-0.5 font-semibold',
+                        runLog.error ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700',
+                      )}>
+                        {runLog.error ? 'Ошибка' : `Отправлено: ${runLog.sent_count}`}
+                      </span>
+                    </div>
+                    {/* Строки лога */}
+                    <div className="space-y-0.5 text-xs text-slate-600">
+                      {runLog.error && (
+                        <div className="text-red-500">{runLog.error}</div>
+                      )}
+                      {runLog.log.map((line, i) => (
+                        <div key={i} className={cn(
+                          line.startsWith('✓') ? 'text-green-600' :
+                          line.startsWith('✗') || line.startsWith('⚠') ? 'text-red-500' :
+                          'text-slate-500',
+                        )}>{line}</div>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
-            )}
-          </div>
-
-          {/* ── Запуск ────────────────────────────────────────── */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-800">Запуск автоответа</h3>
-                <p className="mt-0.5 text-xs text-slate-400">
-                  В очереди: <strong className="text-slate-600">{isLoadingAutoQueue ? '...' : autoQueueRows.filter((r) => autoSettings.storeIds.includes(r.store_id) && autoSettings.targetRatings.includes(r.data.productValuation) && (!autoSettings.requireText || r.data.text?.trim())).length}</strong> подходящих отзывов
-                </p>
+            ) : autoEnabled && !isLoadingAutoDb ? (
+              <div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-400 text-center">
+                Ещё не запускалась — первый запуск произойдёт автоматически
               </div>
-              <button
-                type="button"
-                disabled={isAutoRunning || !activeStore?.api_key || (autoSettings.dailyLimit !== 0 && autoSentToday >= autoSettings.dailyLimit) || autoSettings.storeIds.length === 0}
-                onClick={() => void handleAutoRun()}
-                className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-              >
-                {isAutoRunning ? (
-                  <>
-                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-                    {autoProgress ? `${autoProgress.done} / ${autoProgress.total}` : 'Запуск...'}
-                  </>
-                ) : (
-                  <>
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor"><path d="M5 3l14 9-14 9V3z" /></svg>
-                    Запустить сейчас
-                  </>
-                )}
-              </button>
-            </div>
-            {autoSettings.dailyLimit !== 0 && autoSentToday >= autoSettings.dailyLimit && (
-              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                Дневной лимит исчерпан ({autoSettings.dailyLimit} ответов). Сбросится завтра.
-              </div>
-            )}
-            {!activeStore?.api_key && (
-              <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                API-ключ магазина не настроен. Добавьте его в разделе «Магазины».
-              </div>
-            )}
-            {autoLog.length > 0 && (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Лог запуска</p>
-                  <button type="button" onClick={() => setAutoLog([])} className="text-[11px] text-slate-400 hover:text-slate-600">Очистить</button>
-                </div>
-                <div className="flex flex-col gap-0.5 max-h-40 overflow-y-auto">
-                  {autoLog.map((line, i) => (
-                    <p key={i} className={`text-xs ${line.startsWith('✓') ? 'text-emerald-600' : line.startsWith('✗') ? 'text-rose-500' : line.startsWith('⚠') ? 'text-amber-600' : 'text-slate-500'}`}>{line}</p>
-                  ))}
-                </div>
-              </div>
-            )}
+            ) : null}
           </div>
 
           {/* ── Шаблоны (компактный список для fallback) ─────── */}

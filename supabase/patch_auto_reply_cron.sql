@@ -14,17 +14,18 @@ WHERE EXISTS (
 );
 
 -- ── Создать задание: каждые 30 минут ─────────────────────────────
--- Замените <PROJECT_REF> на реальный ref вашего Supabase проекта
--- (найти в: Supabase Dashboard → Settings → General → Reference ID)
+-- ПЕРЕД ЗАПУСКОМ замените:
+--   YOUR_PROJECT_REF  → Dashboard → Settings → General → Reference ID
+--   YOUR_SERVICE_ROLE_KEY → Dashboard → Settings → API → service_role (secret)
 SELECT cron.schedule(
   'auto-reply-every-30min',
   '*/30 * * * *',  -- каждые 30 минут
   $$
   SELECT net.http_post(
-    url := 'https://<PROJECT_REF>.supabase.co/functions/v1/auto-reply',
+    url := 'https://YOUR_PROJECT_REF.supabase.co/functions/v1/auto-reply',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || current_setting('app.service_role_key', true)
+      'Authorization', 'Bearer YOUR_SERVICE_ROLE_KEY'
     ),
     body := '{}'::jsonb
   )

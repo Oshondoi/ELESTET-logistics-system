@@ -15,7 +15,6 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const WB_FB_BASE = 'https://feedbacks-api.wildberries.ru'
-const PRE_POST_DELAY_MS = 15_000  // 15 сек до и после каждой отправки
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -189,28 +188,11 @@ interface AutoSettings {
   require_text: boolean
   delay_seconds: number
   store_ids: string[]
-  daily_sent_count: number
-  daily_reset_date: string | null
 }
 
 async function runForAccount(settings: AutoSettings, log: string[]): Promise<number> {
   const db = getDb()
   let sent = 0
-  const today = new Date().toISOString().slice(0, 10)
-
-  // Сброс дневного счётчика если новый день
-  let dailySent = settings.daily_sent_count
-  if (!settings.daily_reset_date || settings.daily_reset_date < today) {
-    dailySent = 0
-    await db.from('automation_settings').update({ daily_sent_count: 0, daily_reset_date: today }).eq('account_id', settings.account_id)
-  }
-
-  // Проверяем лимит
-  const remaining = settings.daily_limit === 0 ? Infinity : settings.daily_limit - dailySent
-  if (remaining <= 0) {
-    log.push('Дневной лимит исчерпан.')
-    return 0
-  }
 
   // Загружаем AI настройки
   const { data: aiData } = await db.from('account_ai_settings').select('*').eq('account_id', settings.account_id).single()
@@ -226,9 +208,10 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
 
   // Загружаем магазины
   const { data: storesData } = await db.from('stores').select('id, api_key, ai_prompt').in('id', settings.store_ids)
-  const stores = (storesData ?? []) as { id: string; api_key: string | null; api_prompt?: string | null }[]
+  const stores = (storesData ?? []) as { id: string; api_key: string | null; ai_prompt?: string | null }[]
 
-  log.push(`Магазинов: ${stores.length}. Оставшийся лимит: ${remaining === Infinity ? '∞' : remaining}`)
+  const limit = settings.daily_limit === 0 ? Infinity : settings.daily_limit
+  log.push(`Магазинов: ${stores.length}. Лимит: ${limit === Infinity ? '∞' : limit}. Задержка: ${settings.delay_seconds}с`)
 
   // Для каждого магазина
   for (const store of stores) {
@@ -291,19 +274,19 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
         if (settings.require_text && !((d['text'] as string | undefined)?.trim())) return false
         return true
       })
-      .slice(0, remaining === Infinity ? undefined : Math.max(0, (remaining as number) - sent))
+      .slice(0, limit === Infinity ? undefined : Math.max(0, (limit as number) - sent))
 
     log.push(`[${store.id}] кандидатов: ${candidates.length}`)
 
     for (const row of candidates) {
-      if (sent >= (remaining === Infinity ? Infinity : (remaining as number))) break
+      if (limit !== Infinity && sent >= (limit as number)) break
 
       const feedback = row.data as unknown as Feedback
       feedback.id = row.id
 
       try {
-        // Пауза ДО (минимум PRE_POST_DELAY_MS)
-        await sleep(Math.max(PRE_POST_DELAY_MS, settings.delay_seconds * 1000 / 2))
+        // Пауза ДО (половина delay_seconds)
+        await sleep(settings.delay_seconds * 500)
 
         // Генерация ответа
         let replyText = ''
@@ -342,8 +325,8 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
           continue
         }
 
-        // Пауза ПОСЛЕ (оставшаяся часть delay)
-        await sleep(Math.max(PRE_POST_DELAY_MS, settings.delay_seconds * 1000 / 2))
+        // Пауза ПОСЛЕ (половина delay_seconds)
+        await sleep(settings.delay_seconds * 500)
 
         // Отправляем на WB
         await sendWbReply(store.api_key, row.id, replyText)
@@ -357,12 +340,7 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
         }).eq('id', row.id)
 
         sent++
-        log.push(`[${row.id}] ✓ отправлено (${sent}/${remaining === Infinity ? '∞' : remaining})`)
-
-        // Обновляем счётчик в DB
-        await db.from('automation_settings').update({
-          daily_sent_count: dailySent + sent,
-        }).eq('account_id', settings.account_id)
+        log.push(`[${row.id}] ✓ отправлено (всего: ${sent})`)
 
       } catch (e) {
         log.push(`[${row.id}] ошибка: ${(e as Error).message}`)
@@ -419,13 +397,14 @@ Deno.serve(async (req) => {
       }
 
       // Пишем лог
-      await db.from('automation_logs').insert({
+      const { error: insertErr } = await db.from('automation_logs').insert({
         account_id: settings.account_id,
         run_at: startedAt,
         sent_count: sent,
         log: accountLog,
         error: accountError ?? null,
       })
+      if (insertErr) log.push(`[WARN] не удалось записать лог: ${insertErr.message}`)
 
       // Обновляем last_run_at и last_log
       await db.from('automation_settings').update({

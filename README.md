@@ -78,6 +78,15 @@ MVP веб-приложения для логистики поставок на 
 - **Активный таб** (Без ответа / Отвечено / Шаблоны / Тест) сохраняется в localStorage
 - Требует применения `supabase/patch_ai_reviews.sql`, `patch_ai_providers.sql`, `patch_store_ai_prompt.sql`, `patch_ai_prompts_list.sql`
 
+### Серверная автоматизация ответов WB
+- **Edge Function** `auto-reply` (Deno) — запускается через pg_cron каждые 30 минут без браузера
+- **Управление**: чекбокс «Включена» на вкладке Автоматизация → `automation_settings.is_enabled` в БД
+- **Все настройки с фронта**: задержка, лимит, магазины, фильтры по оценкам — сохраняются в `automation_settings` при каждом изменении
+- **Логи** видны прямо на вкладке: последние 3 запуска с цветными строками (✓/✗/⚠), время, кол-во отправленных
+- **Паузы**: `delay_seconds / 2` до и после каждой отправки (минимум 32с на фронте)
+- **SQL**: `patch_automation_settings.sql` (таблицы + RLS), `patch_auto_reply_cron.sql` (заменить PROJECT_REF и SERVICE_ROLE_KEY)
+- **Деплой функции**: Dashboard → Edge Functions → `auto-reply` → вставить код из `supabase/functions/auto-reply/index.ts`
+
 ### Магазины
 - Список магазинов + создание / редактирование / удаление
 - API-ключ: маска `••••` в edit-режиме, кнопка «Изменить»
