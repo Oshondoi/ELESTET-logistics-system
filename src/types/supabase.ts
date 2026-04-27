@@ -447,6 +447,42 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['wb_feedbacks']['Insert']>
         Relationships: []
       }
+      carrier_tariffs: {
+        Row: {
+          id: string
+          account_id: string
+          carrier_id: string
+          warehouse_id: string
+          price_per_box: number | null
+          price_per_kg: number | null
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          carrier_id: string
+          warehouse_id: string
+          price_per_box?: number | null
+          price_per_kg?: number | null
+        }
+        Update: Partial<Database['public']['Tables']['carrier_tariffs']['Insert']>
+        Relationships: []
+      }
+      wb_unload_tariffs: {
+        Row: {
+          id: string
+          account_id: string
+          warehouse_id: string
+          price_per_box: number
+        }
+        Insert: {
+          id?: string
+          account_id: string
+          warehouse_id: string
+          price_per_box?: number
+        }
+        Update: Partial<Database['public']['Tables']['wb_unload_tariffs']['Insert']>
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

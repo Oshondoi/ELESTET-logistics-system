@@ -417,7 +417,7 @@ export const ReviewsPage = ({
     if (!activeAccountId || isRunningNow) return
     setIsRunningNow(true)
     // Fire-and-forget: не ждём завершения функции
-    supabase.functions.invoke('auto-reply', { body: { account_id: activeAccountId } }).catch(() => {})
+    supabase?.functions.invoke('auto-reply', { body: { account_id: activeAccountId } }).catch(() => {})
     // Через 3 секунды отпускаем кнопку, через 5 — обновляем логи
     setTimeout(() => setIsRunningNow(false), 3000)
     setTimeout(() => {
