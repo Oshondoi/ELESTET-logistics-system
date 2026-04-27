@@ -418,6 +418,7 @@ function App() {
                 <DirectoriesPage
                   carriers={carriers}
                   warehouses={warehouses}
+                  accountId={activeAccount?.id ?? ''}
                   onAddCarrier={addCarrier}
                   onDeleteCarrier={removeCarrier}
                   onRenameCarrier={renameCarrier}

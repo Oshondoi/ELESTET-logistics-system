@@ -6,6 +6,7 @@ import { Input } from '../components/ui/Input'
 import { Modal } from '../components/ui/Modal'
 import { Textarea } from '../components/ui/Textarea'
 import { cn } from '../lib/utils'
+import { supabase } from '../lib/supabase'
 import {
   WbRateLimitError,
   callOpenAi,
@@ -408,6 +409,28 @@ export const ReviewsPage = ({
   const [autoDbLogs, setAutoDbLogs] = useState<AutomationLog[]>([])
   const [isLoadingAutoDb, setIsLoadingAutoDb] = useState(false)
   const [autoDbSynced, setAutoDbSynced] = useState(false)
+  const [logsModalOpen, setLogsModalOpen] = useState(false)
+  const [logsShowAll, setLogsShowAll] = useState(false)
+  const [isRunningNow, setIsRunningNow] = useState(false)
+
+  const handleRunNow = () => {
+    if (!activeAccountId || isRunningNow) return
+    setIsRunningNow(true)
+    // Fire-and-forget: не ждём завершения функции
+    supabase.functions.invoke('auto-reply', { body: { account_id: activeAccountId } }).catch(() => {})
+    // Через 3 секунды отпускаем кнопку, через 5 — обновляем логи
+    setTimeout(() => setIsRunningNow(false), 3000)
+    setTimeout(() => {
+      if (!activeAccountId) return
+      Promise.all([
+        loadAutomationSettings(activeAccountId),
+        loadAutomationLogs(activeAccountId),
+      ]).then(([s, logs]) => {
+        if (s) setAutoEnabled(s.is_enabled)
+        setAutoDbLogs(logs)
+      }).catch(() => {})
+    }, 35000)
+  }
 
   // Store modal
   const [storeModalOpen, setStoreModalOpen] = useState(false)
@@ -1707,7 +1730,7 @@ export const ReviewsPage = ({
                   {isLoadingAutoDb
                     ? 'Загрузка...'
                     : autoEnabled
-                      ? 'Сервер отвечает на отзывы каждые 30 мин по вашим настройкам'
+                      ? 'Сервер проверяет новые отзывы каждые 30 мин и отвечает по вашим настройкам'
                       : 'Отключена — включите чекбокс чтобы сервер начал отвечать автоматически'}
                 </p>
               </div>
@@ -1734,6 +1757,33 @@ export const ReviewsPage = ({
                     <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
                   </svg>
                 </button>
+                {/* Запустить вручную */}
+                <button
+                  type="button"
+                  onClick={handleRunNow}
+                  disabled={isRunningNow || isLoadingAutoDb || !autoEnabled}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                    isRunningNow
+                      ? 'border-blue-200 bg-blue-50 text-blue-400 cursor-not-allowed'
+                      : !autoEnabled
+                        ? 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed'
+                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-800',
+                  )}
+                  title="Срочный запуск — запустить сервер прямо сейчас"
+                >
+                  {isRunningNow ? (
+                    <svg viewBox="0 0 24 24" className="h-3 w-3 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="23 4 23 10 17 10" />
+                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                  )}
+                  {isRunningNow ? 'Запуск...' : '⚡ Срочный запуск'}
+                </button>
                 <label className="flex cursor-pointer items-center gap-2">
                   <input
                     type="checkbox"
@@ -1747,44 +1797,94 @@ export const ReviewsPage = ({
               </div>
             </div>
 
-            {/* Последние запуски */}
-            {autoDbLogs.length > 0 ? (
-              <div className="mt-4 space-y-3">
-                {autoDbLogs.slice(0, 3).map((runLog) => (
-                  <div key={runLog.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                    {/* Шапка запуска */}
-                    <div className="mb-2 flex items-center justify-between text-[11px]">
-                      <span className="font-medium text-slate-700">
-                        {new Date(runLog.run_at).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                      </span>
+            {/* Кнопка / статус последнего запуска */}
+            <div className="mt-3">
+              {autoDbLogs.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setLogsModalOpen(true)}
+                  className="w-full rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-left hover:bg-slate-100 transition"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-500">
+                      Последний запуск: {new Date(autoDbLogs[0].run_at).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <div className="flex items-center gap-2">
                       <span className={cn(
-                        'rounded-full px-2 py-0.5 font-semibold',
-                        runLog.error ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700',
+                        'rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                        autoDbLogs[0].error ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700',
                       )}>
-                        {runLog.error ? 'Ошибка' : `Отправлено: ${runLog.sent_count}`}
+                        {autoDbLogs[0].error ? 'Ошибка' : `Отправлено: ${autoDbLogs[0].sent_count}`}
                       </span>
-                    </div>
-                    {/* Строки лога */}
-                    <div className="space-y-0.5 text-xs text-slate-600">
-                      {runLog.error && (
-                        <div className="text-red-500">{runLog.error}</div>
-                      )}
-                      {runLog.log.map((line, i) => (
-                        <div key={i} className={cn(
-                          line.startsWith('✓') ? 'text-green-600' :
-                          line.startsWith('✗') || line.startsWith('⚠') ? 'text-red-500' :
-                          'text-slate-500',
-                        )}>{line}</div>
-                      ))}
+                      <span className="text-xs text-slate-400">Все логи →</span>
                     </div>
                   </div>
-                ))}
+                </button>
+              ) : autoEnabled && !isLoadingAutoDb ? (
+                <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-400 text-center">
+                  Ещё не запускалась — первый запуск произойдёт автоматически
+                </div>
+              ) : null}
+            </div>
+
+            {/* Модалка логов */}
+            {logsModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setLogsModalOpen(false)}>
+                <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl flex flex-col max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+                  {/* Шапка модалки */}
+                  <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-800">Логи автоматизации</h3>
+                      <p className="text-xs text-slate-400 mt-0.5">Последние {autoDbLogs.length} запусков</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {autoDbLogs.length > 3 && (
+                        <button
+                          type="button"
+                          onClick={() => setLogsShowAll(v => !v)}
+                          className="text-xs text-slate-400 hover:text-slate-600 transition"
+                        >
+                          {logsShowAll ? 'Показать меньше' : `Показать все (${autoDbLogs.length})`}
+                        </button>
+                      )}
+                      <button type="button" onClick={() => setLogsModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition">
+                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  {/* Список запусков */}
+                  <div className="overflow-y-auto p-5 space-y-3">
+                    {(logsShowAll ? autoDbLogs : autoDbLogs.slice(0, 3)).map((runLog) => (
+                      <div key={runLog.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                        <div className="mb-2 flex items-center justify-between text-[11px]">
+                          <span className="font-medium text-slate-700">
+                            {new Date(runLog.run_at).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <span className={cn(
+                            'rounded-full px-2 py-0.5 font-semibold',
+                            runLog.error ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700',
+                          )}>
+                            {runLog.error ? 'Ошибка' : `Отправлено: ${runLog.sent_count}`}
+                          </span>
+                        </div>
+                        <div className="space-y-0.5 text-xs">
+                          {runLog.error && <div className="text-red-500">{runLog.error}</div>}
+                          {runLog.log.map((line, i) => (
+                            <div key={i} className={cn(
+                              line.startsWith('✓') ? 'text-green-600' :
+                              line.startsWith('✗') || line.startsWith('⚠') ? 'text-red-500' :
+                              'text-slate-500',
+                            )}>{line}</div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
-            ) : autoEnabled && !isLoadingAutoDb ? (
-              <div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-400 text-center">
-                Ещё не запускалась — первый запуск произойдёт автоматически
-              </div>
-            ) : null}
+            )}
           </div>
 
           {/* ── Шаблоны (компактный список для fallback) ─────── */}

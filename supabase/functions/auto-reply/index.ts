@@ -1,13 +1,7 @@
 /**
- * auto-reply — серверная автоматизация ответов на отзывы WB
- *
- * Запускается через pg_cron каждые 30 минут (или вручную через HTTP).
- * Для каждого account с is_enabled=true:
- *   1. Синхронизирует отзывы с WB (для каждого выбранного магазина)
- *   2. Фильтрует подходящие по критериям
- *   3. Генерирует ответы через ИИ
- *   4. Отправляет ответы на WB (с паузой delay_seconds между каждым)
- *   5. Пишет лог в automation_logs
+ * auto-reply — обрабатывает ОДИН аккаунт.
+ * Принимает { account_id } в теле запроса.
+ * Вызывается диспетчером auto-reply-dispatch (или напрямую кнопкой с фронта).
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -357,16 +351,22 @@ Deno.serve(async (req) => {
 
   const log: string[] = []
   const startedAt = new Date().toISOString()
-  log.push(`Запуск: ${startedAt}`)
 
   try {
     const db = getDb()
 
-    // Загружаем все активные настройки автоматизации
-    const { data: allSettings, error } = await db
-      .from('automation_settings')
-      .select('*')
-      .eq('is_enabled', true)
+    // Читаем account_id из тела запроса
+    let accountId: string | undefined
+    try {
+      const body = await req.json()
+      accountId = body?.account_id
+    } catch { /* тело пустое */ }
+
+    // Загружаем настройки для конкретного аккаунта или всех активных
+    const query = db.from('automation_settings').select('*').eq('is_enabled', true)
+    if (accountId) query.eq('account_id', accountId)
+
+    const { data: allSettings, error } = await query
 
     if (error) throw new Error(`DB read error: ${error.message}`)
     if (!allSettings || allSettings.length === 0) {
@@ -376,45 +376,44 @@ Deno.serve(async (req) => {
       })
     }
 
-    log.push(`Активных аккаунтов: ${allSettings.length}`)
+    // Обрабатываем аккаунт(ы) — при вызове от диспетчера всегда один
+    const results = await Promise.all(
+      (allSettings as AutoSettings[]).map(async (settings) => {
+        const accountLog: string[] = []
+        let sent = 0
+        let accountError: string | undefined
 
-    const results: { account_id: string; sent: number; error?: string }[] = []
-
-    for (const settings of allSettings as AutoSettings[]) {
-      const accountLog: string[] = []
-      let sent = 0
-      let accountError: string | undefined
-
-      try {
-        if (!settings.store_ids || settings.store_ids.length === 0) {
-          accountLog.push('Нет выбранных магазинов.')
-        } else {
-          sent = await runForAccount(settings, accountLog)
+        try {
+          if (!settings.store_ids || settings.store_ids.length === 0) {
+            accountLog.push('Нет выбранных магазинов.')
+          } else {
+            sent = await runForAccount(settings, accountLog)
+          }
+        } catch (e) {
+          accountError = (e as Error).message
+          accountLog.push(`ОШИБКА: ${accountError}`)
         }
-      } catch (e) {
-        accountError = (e as Error).message
-        accountLog.push(`ОШИБКА: ${accountError}`)
-      }
 
-      // Пишем лог
-      const { error: insertErr } = await db.from('automation_logs').insert({
-        account_id: settings.account_id,
-        run_at: startedAt,
-        sent_count: sent,
-        log: accountLog,
-        error: accountError ?? null,
+        // Пишем лог
+        const { error: insertErr } = await db.from('automation_logs').insert({
+          account_id: settings.account_id,
+          run_at: startedAt,
+          sent_count: sent,
+          log: accountLog,
+          error: accountError ?? null,
+        })
+        if (insertErr) log.push(`[WARN] не удалось записать лог: ${insertErr.message}`)
+
+        // Обновляем last_run_at и last_log
+        await db.from('automation_settings').update({
+          last_run_at: startedAt,
+          last_log: accountLog.slice(-20),
+        }).eq('account_id', settings.account_id)
+
+        log.push(...accountLog.map((l) => `[${settings.account_id.slice(0, 8)}] ${l}`))
+        return { account_id: settings.account_id, sent, error: accountError }
       })
-      if (insertErr) log.push(`[WARN] не удалось записать лог: ${insertErr.message}`)
-
-      // Обновляем last_run_at и last_log
-      await db.from('automation_settings').update({
-        last_run_at: startedAt,
-        last_log: accountLog.slice(-20), // последние 20 строк
-      }).eq('account_id', settings.account_id)
-
-      results.push({ account_id: settings.account_id, sent, error: accountError })
-      log.push(...accountLog.map((l) => `[${settings.account_id.slice(0, 8)}] ${l}`))
-    }
+    )
 
     return new Response(JSON.stringify({ ok: true, results, log }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

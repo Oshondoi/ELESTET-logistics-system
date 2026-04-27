@@ -79,13 +79,21 @@ MVP веб-приложения для логистики поставок на 
 - Требует применения `supabase/patch_ai_reviews.sql`, `patch_ai_providers.sql`, `patch_store_ai_prompt.sql`, `patch_ai_prompts_list.sql`
 
 ### Серверная автоматизация ответов WB
-- **Edge Function** `auto-reply` (Deno) — запускается через pg_cron каждые 30 минут без браузера
-- **Управление**: чекбокс «Включена» на вкладке Автоматизация → `automation_settings.is_enabled` в БД
-- **Все настройки с фронта**: задержка, лимит, магазины, фильтры по оценкам — сохраняются в `automation_settings` при каждом изменении
-- **Логи** видны прямо на вкладке: последние 3 запуска с цветными строками (✓/✗/⚠), время, кол-во отправленных
-- **Паузы**: `delay_seconds / 2` до и после каждой отправки (минимум 32с на фронте)
-- **SQL**: `patch_automation_settings.sql` (таблицы + RLS), `patch_auto_reply_cron.sql` (заменить PROJECT_REF и SERVICE_ROLE_KEY)
-- **Деплой функции**: Dashboard → Edge Functions → `auto-reply` → вставить код из `supabase/functions/auto-reply/index.ts`
+- **Edge Function** `auto-reply` (Deno) — обрабатывает один аккаунт (принимает `account_id` в теле)
+- **Dispatcher** `auto-reply-dispatch` — параллельный запуск `auto-reply` для всех аккаунтов, pg_cron вызывает его каждые 30 минут
+- **Управление**: чекбокс «Включена» на вкладке Автоматизация → `automation_settings.is_enabled`
+- **Все настройки с фронта**: задержка, лимит, магазины, фильтры сохраняются в `automation_settings`
+- **⚡ Срочный запуск**: кнопка для ручного запуска для текущего аккаунта, дизейблед при `autoEnabled=false`
+- **Логи**: блок фикс-высоты — последний запуск + статус; модальный список по клику
+- **Паузы**: `delay_seconds / 2` до/после отправки (мин 32с)
+- Требует применения `patch_automation_settings.sql`, `patch_auto_reply_cron.sql` + деплоя Edge Functions `auto-reply` и `auto-reply-dispatch`
+
+### Тарифы логистики
+- **carrier_tariffs**: тариф перевозчика до склада назначения: `price_per_box` и `price_per_kg`
+- **wb_unload_tariffs**: цена за отгрузку на склад ВБ: `price_per_box` по каждому складу
+- Кнопка `₽` у перевозчика открывает `CarrierTariffModal` со всеми складами, чекбоксами и инпутами (автосохранение при blur)
+- Панель «Тарифы отгрузки на склады ВБ» ниже сетки справочников
+- Требует применения `patch_carrier_tariffs.sql`
 
 ### Магазины
 - Список магазинов + создание / редактирование / удаление
@@ -96,6 +104,8 @@ MVP веб-приложения для логистики поставок на 
 - Страница Справочники: Перевозчики и Склады
 - Добавление/переименование/удаление с подтверждением
 - Динамические дропдауны перевозчика/склада в модалках (из Supabase)
+- **Тарифы перевозчика**: кнопка `₽` у каждого → модалка со всеми складами, инпуты «за короб» и «за кг», чекбоксы, автосохранение
+- **Тарифы отгрузки ВБ**: панель ниже сетки — цена за короб по каждому системному складу WB
 
 ### Стикеры WB (58×40мм)
 - Таблица `sticker_templates` в Supabase — полный CRUD
@@ -185,7 +195,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 21. patch_wb_feedbacks.sql
 22. patch_fix_wb_feedbacks_rls.sql
 23. patch_ai_reviews.sql            ← ИИ-ответы: поля в wb_feedbacks + account_ai_settings
-```
+24. patch_automation_settings.sql   ← Таблицы automation_settings + automation_logs + RLS
+25. patch_auto_reply_cron.sql       ← pg_cron задание (заменить PROJECT_REF и SERVICE_ROLE_KEY)
+26. patch_carrier_tariffs.sql       ← Тарифы перевозчиков и отгрузки ВБ
 > Для dev без auth: `supabase/disable_rls_dev.sql`
 
 4. `npm run dev`
@@ -211,6 +223,8 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | Профиль пользователя | ✅ Готово | Topbar дропдаун + ProfileModal (имя, пароль) |
 | **Отзывы WB** | ✅ Готово | WB API, DB-first, шаблоны, cooldown, dry-run вкладка «Тест» |
 | **ИИ-ответы на отзывы** | ✅ Готово | OpenAI интеграция, генерация/правка/отправка, 1–3★ подтверждение, Тест-вкладка |
+| **Серверная автоматизация WB** | ✅ Готово | Dispatcher + auto-reply Edge Functions, cron, № запуск |
+| **Тарифы логистики** | ✅ Готово | Тарифы перевозчиков + отгрузка на склады ВБ |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |

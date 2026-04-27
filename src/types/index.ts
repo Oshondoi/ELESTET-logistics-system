@@ -221,6 +221,22 @@ export interface Warehouse {
   created_at: string
 }
 
+export interface CarrierTariff {
+  id: string
+  account_id: string
+  carrier_id: string
+  warehouse_id: string
+  price_per_box: number | null
+  price_per_kg: number | null
+}
+
+export interface WbUnloadTariff {
+  id: string
+  account_id: string
+  warehouse_id: string
+  price_per_box: number
+}
+
 // ─── Рейсы ───────────────────────────────────────────────────
 
 export type TripStatus = 'Формируется' | 'Отправлен' | 'Прибыл' | 'Завершён'
