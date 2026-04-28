@@ -3,8 +3,8 @@ import { cn } from '../../lib/utils'
 import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -13,6 +13,7 @@ interface SidebarProps {
   onDeleteActiveCompany: (id: string) => void
   onEditCompany: (account: Account) => void
   permissions: RolePermissions
+  isAdmin?: boolean
 }
 
 const items = [
@@ -144,6 +145,7 @@ export const Sidebar = ({
   onDeleteActiveCompany,
   onEditCompany,
   permissions,
+  isAdmin = false,
 }: SidebarProps) => {
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
   const companyRef = useRef<HTMLDivElement | null>(null)
@@ -334,6 +336,7 @@ export const Sidebar = ({
               <span className="font-medium tracking-normal">{item.label}</span>
             </button>
           ))}
+
         </nav>
       </div>
 

@@ -20,6 +20,7 @@ const DEFAULT_VALUES: StoreFormValues = {
   store_code: '',
   api_key: '',
   supplier: '',
+  supplier_full: '',
   address: '',
   inn: '',
 }
@@ -54,8 +55,16 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
       onClose={onClose}
       title={isEditing ? 'Редактировать магазин' : 'Новый магазин'}
       description={isEditing ? undefined : 'Если store_code не указан, система сгенерирует уникальный код автоматически.'}
+      footer={
+        <div className="flex justify-end gap-3">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Отмена
+          </Button>
+          <Button type="submit" form="store-form">{isEditing ? 'Сохранить' : 'Создать магазин'}</Button>
+        </div>
+      }
     >
-      <form className="grid gap-4" onSubmit={handleSubmit}>
+      <form id="store-form" className="grid gap-4" onSubmit={handleSubmit}>
         <Input
           label="Название"
           placeholder="Например, WB Москва"
@@ -139,10 +148,16 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
         {/* Поставщик, ИНН и адрес */}
         <div className="grid gap-3">
           <Input
-            label="Поставщик"
-            placeholder="Название юрлица или ИП"
+            label="Поставщик (краткое)"
+            placeholder="Торговое наименование, ИП и т.п."
             value={values.supplier ?? ''}
             onChange={(e) => setValues((c) => ({ ...c, supplier: e.target.value }))}
+          />
+          <Input
+            label="Наименование для стикера"
+            placeholder="Отобразится на стикере как Поставщик"
+            value={values.supplier_full ?? ''}
+            onChange={(e) => setValues((c) => ({ ...c, supplier_full: e.target.value }))}
           />
           <Input
             label="ИНН"
@@ -158,12 +173,6 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
           />
         </div>
 
-        <div className="flex justify-end gap-3 pt-2">
-          <Button type="button" variant="secondary" onClick={onClose}>
-            Отмена
-          </Button>
-          <Button type="submit">{isEditing ? 'Сохранить' : 'Создать магазин'}</Button>
-        </div>
       </form>
     </Modal>
   )

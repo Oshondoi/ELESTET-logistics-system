@@ -155,8 +155,8 @@ const PromptListModal = ({ open, title, hint, prompts, onAdd, onEdit, onDelete, 
   }
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-950/50 p-4">
-      <div className="relative flex w-full max-w-3xl flex-col rounded-2xl bg-white shadow-xl" style={{ maxHeight: '90vh', minHeight: '520px' }}>
+    <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-950/50 p-4" onClick={onClose}>
+      <div className="relative flex w-full max-w-3xl flex-col rounded-2xl bg-white shadow-xl" style={{ maxHeight: '90vh', minHeight: '520px' }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-200 px-7 py-5">
           <div>
             <h3 className="text-lg font-semibold text-slate-900">{title}</h3>

@@ -202,7 +202,11 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
 
   if (tpl.supplier)         y = boldLabel(ctx, 'Поставщик: ',         tpl.supplier,         PAD, y, 21, maxX)
   if (tpl.supplier_address) y = boldLabel(ctx, 'Адрес поставщика: ',  tpl.supplier_address, PAD, y, 21, maxX)
-  if (tpl.production_date)  y = boldLabel(ctx, 'Дата производства: ', tpl.production_date,  PAD, y, 21, maxX)
+  if (tpl.production_date) {
+    const [yyyy, mm, dd] = tpl.production_date.split('-')
+    const dateFormatted = (dd && mm && yyyy) ? `${dd}.${mm}.${yyyy}` : tpl.production_date
+    y = boldLabel(ctx, 'Дата производства: ', dateFormatted, PAD, y, 21, maxX)
+  }
 
   /* Страна + иконки по уходу на одной строке */
   ctx.fillStyle = '#111'
@@ -213,7 +217,7 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   const countryVal = (tpl.country || '').replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
   ctx.fillText(countryVal, PAD + ctx.measureText(countryLabel).width, y)
 
-  /* иконки по уходу справа на строке Страна — только включённые */
+  /* иконки по уходу — всегда фиксированы у нижнего края, не зависят от y */
   const iconFlags: Record<string, boolean> = {
     'wash-30':       tpl.icon_wash,
     'iron':          tpl.icon_iron,
@@ -226,7 +230,7 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   if (activeIcons.length > 0) {
     const iconsTotal = activeIcons.length * iconSize + (activeIcons.length - 1) * iconGap
     const iconsX = W_PX - PAD - iconsTotal
-    const iconsY = y - iconSize + 12
+    const iconsY = H_PX - PAD - iconSize   // фиксированная позиция от нижнего края
     for (let i = 0; i < activeIcons.length; i++) {
       const img = _icons[activeIcons[i]]
       const ix = iconsX + i * (iconSize + iconGap)
@@ -241,7 +245,7 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   /* ЕАС в правом верхнем углу тела */
   if (tpl.icon_eac) {
     const eacSize = 64
-    drawEAC(ctx, W_PX - PAD - eacSize, BODY_Y + 10, eacSize)
+    drawEAC(ctx, W_PX - PAD - eacSize, BODY_Y + 50, eacSize)
   }
 
   return canvas.toDataURL('image/png')

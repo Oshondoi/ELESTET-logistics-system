@@ -10,6 +10,7 @@ import { StoreFormModal } from './components/stores/StoreFormModal'
 import { Button } from './components/ui/Button'
 import { Input } from './components/ui/Input'
 import { Modal } from './components/ui/Modal'
+import { ToastContainer } from './components/ui/Toast'
 import { useAccounts } from './hooks/useAccounts'
 import { useAppData } from './hooks/useAppData'
 import { useAuth } from './hooks/useAuth'
@@ -26,9 +27,10 @@ import { StoresPage } from './pages/StoresPage'
 import { DirectoriesPage } from './pages/DirectoriesPage'
 import { StickersPage } from './pages/StickersPage'
 import { ReviewsPage } from './pages/ReviewsPage'
+import { AdminPage } from './pages/AdminPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin'
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
 const ACTIVE_STORE_ID_STORAGE_KEY = 'elestet-active-store-id'
@@ -96,6 +98,7 @@ const pageTitles: Record<PageKey, string> = {
   stickers: 'Стикеры',
   reviews: 'Отзывы',
   roles: 'Роли',
+  admin: 'Администратор',
 }
 
 function App() {
@@ -112,7 +115,8 @@ function App() {
       storedPage === 'products' ||
       storedPage === 'reviews' ||
       storedPage === 'roles' ||
-      storedPage === 'stickers'
+      storedPage === 'stickers' ||
+      storedPage === 'admin'
     ) {
       return storedPage
     }
@@ -176,6 +180,9 @@ function App() {
     addInvoicePhoto,
     replaceInvoicePhoto,
     removeInvoicePhoto,
+    addStickerFile,
+    removeStickerFile,
+    fetchWbBarcodes,
     removeTrip,
     removeTripLine,
     changeTripStatus,
@@ -217,13 +224,17 @@ function App() {
     stickers: 'stickers_view',
     reviews: null,
     roles: 'roles_manage',
+    admin: null,
   }
+
+  const isAdmin = session?.user?.email === 'sydykovsam@gmail.com'
 
   // Если текущая страница недоступна по правам — показываем home.
   // Используем вычисляемое значение (не useEffect), чтобы избежать race condition:
   // useEffect читает stale state из той же фазы рендера и не видит обновлений permissions.
   const effectivePage: PageKey = (() => {
     if (isAccountsLoading || isPermissionsLoading) return activePage
+    if (activePage === 'admin' && !isAdmin) return 'home'
     const key = pagePermKey[activePage]
     if (key !== null && !permissions[key]) return 'home'
     return activePage
@@ -347,12 +358,15 @@ function App() {
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const data = await resp.json() as any
-    // API возвращает только: name, sid, tin, tradeMark — адреса нет
+    // data.tradeMark = название магазина, data.name = краткое наименование поставщика (ИП / ООО и т.п.)
+    const tradeName = (data.tradeMark ?? '').trim()
+    const shortLegalName = (data.name ?? '').trim()
     await updateStore(store.id, {
-      name: store.name,
+      name: tradeName || store.name,
       marketplace: store.marketplace,
       store_code: store.store_code,
-      supplier: (data.name ?? store.supplier ?? '').trim(),
+      supplier: shortLegalName || store.supplier || '',
+      supplier_full: store.supplier_full ?? '',
       address: store.address ?? '',
       inn: (data.tin ?? store.inn ?? '').trim(),
     })
@@ -360,25 +374,32 @@ function App() {
 
   return (
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-900">
+      <ToastContainer />
       <div className="flex h-full">
-        <Sidebar
-          activePage={effectivePage}
-          onSelectPage={setActivePage}
-          onOpenAddCompany={() => setAccountModalOpen(true)}
-          onSignOut={() => void signOut()}
-          accounts={accounts}
-          activeAccount={activeAccount}
-          onSelectAccount={setActiveAccountId}
-          onDeleteActiveCompany={handleDeleteCompany}
-          onEditCompany={(account) => { setEditingAccount(account); setEditAccountModalOpen(true) }}
-          permissions={permissions}
-        />
+        {effectivePage !== 'admin' && (
+          <Sidebar
+            activePage={effectivePage}
+            onSelectPage={setActivePage}
+            onOpenAddCompany={() => setAccountModalOpen(true)}
+            onSignOut={() => void signOut()}
+            accounts={accounts}
+            activeAccount={activeAccount}
+            onSelectAccount={setActiveAccountId}
+            onDeleteActiveCompany={handleDeleteCompany}
+            onEditCompany={(account) => { setEditingAccount(account); setEditAccountModalOpen(true) }}
+            permissions={permissions}
+            isAdmin={isAdmin}
+          />
+        )}
 
         <main className="flex flex-1 flex-col overflow-hidden">
           <Topbar
             title={pageTitles[effectivePage]}
             userName={profileUserName}
             userEmail={session?.user?.email ?? ''}
+            isAdmin={isAdmin}
+            onAdminClick={() => setActivePage('admin')}
+            onBack={effectivePage === 'admin' ? () => setActivePage('home') : undefined}
             onProfileClick={() => setProfileModalOpen(true)}
             onSignOut={() => void signOut()}
           />
@@ -407,6 +428,9 @@ function App() {
                   onAddInvoicePhoto={addInvoicePhoto}
                   onReplaceInvoicePhoto={replaceInvoicePhoto}
                   onRemoveInvoicePhoto={removeInvoicePhoto}
+                  onAddStickerFile={addStickerFile}
+                  onRemoveStickerFile={removeStickerFile}
+                  onFetchWbBarcodes={fetchWbBarcodes}
                   canManage={permissions.shipments_manage}
                   accountId={activeAccount?.id ?? ''}
                   onUpdateTripCustomFields={updateTripCustomFields}
@@ -463,6 +487,8 @@ function App() {
                   selectedStoreId={activeStoreId}
                   onStoreChange={setActiveStoreId}
                 />
+              ) : effectivePage === 'admin' ? (
+                <AdminPage />
               ) : (
                 <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} />
               )

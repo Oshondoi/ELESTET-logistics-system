@@ -378,6 +378,10 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
                   <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Артикул продавца</th>
                   <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Название</th>
                   <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Бренд</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Цвет</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Состав</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Страна</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Предмет</th>
                   <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Категория</th>
                 </tr>
               </thead>
@@ -437,15 +441,29 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
                           )
                         })()}
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{product.nm_id}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-400">
+                        <a
+                          href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-blue-500 hover:underline"
+                        >
+                          {product.nm_id}
+                        </a>
+                      </td>
                       <td className="px-4 py-3 text-xs text-slate-600">{product.vendor_code ?? '—'}</td>
                       <td className="px-4 py-3 font-medium text-slate-800">{product.name ?? '—'}</td>
                       <td className="px-4 py-3 text-xs text-slate-500">{product.brand ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs text-slate-500">{product.color ?? '—'}</td>
+                      <td className="max-w-[200px] truncate px-4 py-3 text-xs text-slate-500" title={product.composition ?? ''}>{product.composition ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs text-slate-500">{product.country ?? '—'}</td>
                       <td className="px-4 py-3 text-xs text-slate-400">{product.category ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs text-slate-400">{(product as any).category_parent ?? '—'}</td>
                     </tr>
                     {/* Строки размеров с анимацией (grid-trick как в логистике) */}
                     <tr>
-                      <td className="p-0" colSpan={7}>
+                      <td className="p-0" colSpan={9}>
                         <div
                           style={{
                             display: 'grid',

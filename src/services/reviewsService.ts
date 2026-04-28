@@ -416,6 +416,8 @@ export async function saveAiSettings(
 
 interface AiFeedbackInput {
   text?: string | null
+  pros?: string | null
+  cons?: string | null
   productValuation: number
   userName?: string | null
   productName?: string | null
@@ -474,6 +476,8 @@ function buildAiPromptParts(settings: AiSettings, feedback: AiFeedbackInput): { 
   if (feedback.productName) parts.push(`Товар: ${feedback.productName}`)
   if (feedback.userName) parts.push(`Покупатель: ${feedback.userName}`)
   parts.push('')
+  if (feedback.pros?.trim()) parts.push(`Плюсы: ${feedback.pros.trim()}`)
+  if (feedback.cons?.trim()) parts.push(`Минусы: ${feedback.cons.trim()}`)
   parts.push(`Текст отзыва: ${feedback.text?.trim() || 'Без текста (только оценка)'}`)
   parts.push('')
   parts.push('Напиши ответ продавца:')

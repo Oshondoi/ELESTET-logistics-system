@@ -300,3 +300,57 @@ export const updateTripLineInvoicePhotos = async (
 
   if (error) throw error
 }
+
+export const uploadStickerFile = async (
+  accountId: string,
+  lineId: string,
+  file: File,
+): Promise<string> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const ext = file.name.split('.').pop() ?? 'pdf'
+  const path = `${accountId}/${lineId}/${Date.now()}.${ext}`
+
+  const { error: uploadError } = await supabase.storage
+    .from('trip-stickers')
+    .upload(path, file, { upsert: false })
+
+  if (uploadError) throw uploadError
+
+  const { data } = supabase.storage.from('trip-stickers').getPublicUrl(path)
+  return data.publicUrl
+}
+
+export const updateTripLineStickerFiles = async (
+  accountId: string,
+  lineId: string,
+  sticker_file_urls: string[],
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    .update({ sticker_file_urls })
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+
+  if (error) throw error
+}
+
+/** Получить штрихкоды поставки FBW через WB API (Edge Function) */
+export const getWbSupplyBarcodes = async (
+  accountId: string,
+  lineId: string,
+  wbSupplyId?: string,
+): Promise<{ wb_supply_id: string; barcodes: { barcode: string; quantity: number }[] }> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const body: Record<string, string> = { account_id: accountId, line_id: lineId }
+  if (wbSupplyId) body.wb_supply_id = wbSupplyId
+  const { data, error } = await supabase.functions.invoke<{
+    wb_supply_id?: string
+    barcodes?: { barcode: string; quantity: number }[]
+    error?: string
+  }>('wb-supply', { body })
+  if (error) throw error
+  if (!data) throw new Error('Пустой ответ от wb-supply')
+  if (data.error) throw new Error(data.error)
+  return data as { wb_supply_id: string; barcodes: { barcode: string; quantity: number }[] }
+}

@@ -8,6 +8,9 @@ import { Modal } from '../components/ui/Modal'
 import { downloadStickerPdf, previewStickerPdf } from '../lib/stickerPdf'
 import { generateEAN13 } from '../lib/ean13'
 import { fetchProducts } from '../services/productService'
+import { showToast } from '../components/ui/Toast'
+
+const BULK_PDF_WARN_THRESHOLD = 100
 
 // ── Хелперы для размеров (Import WB) ─────────────────────
 interface SizeRowImp { techSize: string; barcode: string; rowKey: string }
@@ -90,9 +93,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   }
 
   const handlePrint = () => {
-    const toPrint = selected.size > 0
+    const toPrint = (selected.size > 0
       ? stickers.filter((s) => selected.has(s.id))
-      : stickers
+      : stickers).map((s) => ({ ...s, production_date: globalProductionDate || s.production_date }))
     if (toPrint.length === 0) return
     setIsPrinting(true)
     try {
@@ -103,9 +106,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   }
 
   const handlePreview = () => {
-    const toPrint = selected.size > 0
+    const toPrint = (selected.size > 0
       ? stickers.filter((s) => selected.has(s.id))
-      : stickers
+      : stickers).map((s) => ({ ...s, production_date: globalProductionDate || s.production_date }))
     if (toPrint.length === 0) return
     setIsPreviewing(true)
     try {
@@ -192,7 +195,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
     const toPrint: StickerTemplate[] = []
     for (const item of bundle.items) {
       const s = stickers.find((st) => st.id === item.sticker_id)
-      if (s) toPrint.push({ ...s, copies: item.copies })
+      if (s) toPrint.push({ ...s, copies: item.copies, production_date: globalProductionDate || s.production_date })
     }
     if (toPrint.length > 0) downloadStickerPdf(toPrint)
   }
@@ -201,7 +204,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
     const toPrint: StickerTemplate[] = []
     for (const item of bundle.items) {
       const s = stickers.find((st) => st.id === item.sticker_id)
-      if (s) toPrint.push({ ...s, copies: item.copies })
+      if (s) toPrint.push({ ...s, copies: item.copies, production_date: globalProductionDate || s.production_date })
     }
     if (toPrint.length > 0) previewStickerPdf(toPrint)
   }
@@ -220,6 +223,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   // ── Импорт WB ─────────────────────────────────────────────
   const storesWithKey = stores.filter((s) => s.api_key)
   const [importProducts, setImportProducts] = useState<Product[]>([])
+  const [importCustomNames, setImportCustomNames] = useState<Map<string, string>>(new Map())
   const [isLoadingImport, setIsLoadingImport] = useState(false)
   const [importSelected, setImportSelected] = useState<Set<string>>(new Set())
   const [isImporting, setIsImporting] = useState(false)
@@ -229,6 +233,49 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const importStoreDropdownRef = useRef<HTMLDivElement | null>(null)
   const [importExpandedIds, setImportExpandedIds] = useState<Set<string>>(new Set())
   const [importExpandAll, setImportExpandAll] = useState(() => localStorage.getItem('elestet-stickers-expand-all') === 'true')
+  const [globalProductionDate, setGlobalProductionDate] = useState('')
+  const [globalIcons, setGlobalIcons] = useState(() => {
+    try {
+      const stored = localStorage.getItem('elestet-sticker-icons')
+      if (stored) return { wash: false, iron: false, no_bleach: false, no_tumble_dry: false, eac: true, ...JSON.parse(stored) }
+    } catch {}
+    return { wash: false, iron: false, no_bleach: false, no_tumble_dry: false, eac: true }
+  })
+  const toggleGlobalIcon = (key: keyof typeof globalIcons) => setGlobalIcons((p) => {
+    const next = { ...p, [key]: !p[key] }
+    localStorage.setItem('elestet-sticker-icons', JSON.stringify(next))
+    return next
+  })
+  const [iconsDropdownOpen, setIconsDropdownOpen] = useState(false)
+  const iconsDropdownRef = useRef<HTMLDivElement | null>(null)
+  const dateInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Pre-print проверка пустых полей
+  type PrePrintState = { stickers: StickerTemplate[]; onPrint: (s: StickerTemplate[]) => void } | null
+  const [prePrintModal, setPrePrintModal] = useState<PrePrintState>(null)
+  const [prePrintEdits, setPrePrintEdits] = useState<Partial<StickerTemplate>>({})
+
+  const CHECKED_FIELDS: { key: keyof StickerTemplate; label: string }[] = [
+    { key: 'production_date',  label: 'Дата производства' },
+    { key: 'composition',      label: 'Состав' },
+    { key: 'color',            label: 'Цвет' },
+    { key: 'supplier',         label: 'Поставщик' },
+    { key: 'supplier_address', label: 'Адрес поставщика' },
+    { key: 'country',          label: 'Страна' },
+  ]
+
+  const getMissingFields = (stickers: StickerTemplate[]) =>
+    CHECKED_FIELDS.filter(({ key }) => stickers.some((s) => !s[key]))
+
+  const previewWithCheck = (stickers: StickerTemplate[], onPrint: (s: StickerTemplate[]) => void) => {
+    const missing = getMissingFields(stickers)
+    if (missing.length > 0) {
+      setPrePrintEdits({})
+      setPrePrintModal({ stickers, onPrint })
+    } else {
+      onPrint(stickers)
+    }
+  }
   const [importAnyExpanded, setImportAnyExpanded] = useState(false)
 
   const handleImportToggleAll = () => {
@@ -249,6 +296,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   useEffect(() => {
     const handler = (e: PointerEvent) => {
       if (!importStoreDropdownRef.current?.contains(e.target as Node)) setImportStoreDropdownOpen(false)
+      if (!iconsDropdownRef.current?.contains(e.target as Node)) setIconsDropdownOpen(false)
     }
     window.addEventListener('pointerdown', handler)
     return () => window.removeEventListener('pointerdown', handler)
@@ -269,10 +317,45 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
     if (activeTab === 'import') void loadImportProducts(selectedStoreId)
   }, [activeTab, selectedStoreId, loadImportProducts])
 
+  const importStore = stores.find((s) => s.id === selectedStoreId)
+
   const allImportSizeRows = useMemo(
     () => importProducts.flatMap((p) => getSizeRowsImp(p)),
     [importProducts]
   )
+
+  const buildSelectedStickers = (): StickerTemplate[] => {
+    const stickers: StickerTemplate[] = []
+    for (const product of importProducts) {
+      const rows = getSizeRowsImp(product)
+      for (const row of rows) {
+        if (!importSelected.has(row.rowKey) || row.barcode === '—') continue
+        stickers.push({
+          id: row.rowKey,
+          account_id: '',
+          barcode: row.barcode,
+          name: importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? row.barcode,
+          composition: product.composition ?? null,
+          article: String(product.nm_id),
+          brand: product.brand ?? null,
+          size: row.techSize !== '—' ? row.techSize : null,
+          color: product.color ?? null,
+          supplier: importStore?.supplier_full ?? importStore?.supplier ?? null,
+          supplier_address: importStore?.address ?? null,
+          production_date: globalProductionDate || null,
+          country: product.country ?? '',
+          copies: 1,
+          icon_wash: globalIcons.wash,
+          icon_iron: globalIcons.iron,
+          icon_no_bleach: globalIcons.no_bleach,
+          icon_no_tumble_dry: globalIcons.no_tumble_dry,
+          icon_eac: globalIcons.eac,
+          created_at: '',
+        })
+      }
+    }
+    return stickers
+  }
 
   const handleImportCreate = async () => {
     const toCreate = allImportSizeRows
@@ -292,22 +375,21 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
         try {
           const result = await onAdd({
             barcode,
-            name: p.name ?? p.vendor_code ?? barcode,
-            article: p.vendor_code ?? '',
+            name: importCustomNames.get(p.id) ?? p.name ?? p.vendor_code ?? barcode,
+            article: String(p.nm_id),
             brand: p.brand ?? '',
             size: row.techSize !== '—' ? row.techSize : '',
-            color: '',
-            composition: '',
-            supplier: '',
-            supplier_address: '',
-            production_date: '',
-            country: '',
+            color: p.color ?? '',
+            composition: p.composition ?? '',
+            supplier: importStore?.supplier_full ?? importStore?.supplier ?? '',
+            supplier_address: importStore?.address ?? '',
+            production_date: globalProductionDate || '',
             copies: 1,
-            icon_wash: false,
-            icon_iron: false,
-            icon_no_bleach: false,
-            icon_no_tumble_dry: false,
-            icon_eac: true,
+            icon_wash: globalIcons.wash,
+            icon_iron: globalIcons.iron,
+            icon_no_bleach: globalIcons.no_bleach,
+            icon_no_tumble_dry: globalIcons.no_tumble_dry,
+            icon_eac: globalIcons.eac,
           }) as { id: string } | undefined
           if (result?.id) createdIds.push(result.id)
         } catch {
@@ -350,6 +432,95 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
 
   return (
     <div className="space-y-4">
+      {/* ── Pre-print модал: проверка незаполненных полей ── */}
+      {prePrintModal && (() => {
+        const missing = getMissingFields(prePrintModal.stickers)
+        const isMultiple = prePrintModal.stickers.length > 1
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPrePrintModal(null)}>
+            <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="flex items-start gap-3 px-6 pt-6 pb-4">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-amber-100">
+                  <svg viewBox="0 0 24 24" className="h-4.5 w-4.5 text-amber-600" fill="none" stroke="currentColor" strokeWidth="2.2">
+                    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-800">Не все поля заполнены</p>
+                  <p className="mt-0.5 text-sm text-slate-500">
+                    {isMultiple
+                      ? `У части стикеров (${prePrintModal.stickers.length} шт.) отсутствуют данные:`
+                      : 'У стикера отсутствуют данные:'}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {missing.map(({ label }) => (
+                      <span key={label} className="rounded-lg bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">{label}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Разовый редактор */}
+              <div className="border-t border-slate-100 px-6 py-4">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-slate-400">{isMultiple ? 'Редактирование (применится ко всем)' : 'Разовое редактирование'}</p>
+                  <div className="space-y-2">
+                    {missing.map(({ key, label }) => (
+                      <div key={key} className="flex items-center gap-3">
+                        <span className="w-32 shrink-0 text-xs text-slate-500">{label}</span>
+                        <input
+                          type={key === 'production_date' ? 'date' : 'text'}
+                          value={(prePrintEdits[key] as string) ?? (prePrintModal.stickers[0][key] as string) ?? ''}
+                          onChange={(e) => setPrePrintEdits((p) => ({ ...p, [key]: e.target.value }))}
+                          placeholder={key === 'production_date' ? '' : `Введите ${label.toLowerCase()}...`}
+                          className="flex-1 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-slate-700 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100 [color-scheme:light]"
+                        />
+                      </div>
+                    ))}
+                  </div>
+              </div>
+
+              {/* Кнопки */}
+              <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+                <button
+                  type="button"
+                  onClick={() => setPrePrintModal(null)}
+                  className="rounded-2xl border border-slate-200 px-4 py-2 text-sm text-slate-500 transition hover:bg-slate-50"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const stickers = prePrintModal.stickers.map((s) => ({ ...s, ...prePrintEdits }))
+                    setPrePrintModal(null)
+                    prePrintModal.onPrint(stickers)
+                  }}
+                  className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
+                >
+                  {!isMultiple && Object.keys(prePrintEdits).length > 0 ? 'Сохранить и открыть' : 'Открыть'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── Плавающее предупреждение о большом количестве стикеров ── */}
+      {activeTab === 'import' && importSelected.size > BULK_PDF_WARN_THRESHOLD && (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+          <div className="flex items-center gap-3 rounded-2xl bg-amber-500 px-5 py-3 shadow-xl shadow-amber-200/60 ring-1 ring-amber-400/40">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-white" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <span className="text-sm font-medium text-white">
+              Выбрано <span className="font-bold">{importSelected.size}</span> стикеров — генерация PDF может замедлить браузер
+            </span>
+          </div>
+        </div>
+      )}
       {/* ── Верхняя панель ─────────────────────────────────── */}
       <Card className="rounded-3xl p-2.5">
         <div className="flex items-center gap-2.5">
@@ -457,26 +628,91 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                 </svg>
                 Создать набор
               </Button>
-              <Button variant="secondary" disabled={isPreviewing || stickers.length === 0} onClick={handlePreview} className="flex shrink-0 items-center gap-1.5 rounded-2xl px-4 py-2.5">
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
-                </svg>
-                {isPreviewing ? 'Загрузка…' : 'Предпросмотр'}
-              </Button>
               <Button variant="secondary" disabled={isPrinting || stickers.length === 0} onClick={handlePrint} className="flex shrink-0 items-center gap-1.5 rounded-2xl px-4 py-2.5">
                 <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v8H6z" />
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
                 </svg>
                 {isPrinting ? 'Генерация…' : `Скачать PDF${selected.size > 0 ? ` (${printCount})` : ''}`}
               </Button>
-              {canManage && (
-              <Button onClick={() => { setEditingSticker(null); setModalOpen(true) }} className="shrink-0 rounded-2xl px-5 py-2.5">
-                + Создать стикер
-              </Button>
-              )}
             </>
-          ) : activeTab === 'bundles' ? (
-            canManage ? (
+          ) : null}
+
+          {/* Дата производства — глобальная для всех вкладок */}
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => dateInputRef.current?.showPicker()}
+              className="inline-flex items-center gap-2 rounded-[18px] border border-transparent bg-[#F3F6FD] px-4 py-2.5 text-sm font-medium leading-none text-slate-900 transition-colors hover:bg-[#E9EEF8]"
+            >
+              <span className="text-slate-500">Дата производства:</span>
+              <span className={`inline-block w-[5.5rem] tabular-nums ${globalProductionDate ? 'text-slate-900' : 'text-slate-400'}`}>
+                {globalProductionDate
+                  ? (() => { const [y, m, d] = globalProductionDate.split('-'); return `${d}.${m}.${y}` })()
+                  : 'дд.мм.гггг'}
+              </span>
+            </button>
+            <input
+              ref={dateInputRef}
+              type="date"
+              value={globalProductionDate}
+              onChange={(e) => setGlobalProductionDate(e.target.value)}
+              className="pointer-events-none absolute bottom-0 left-0 h-0 w-0 opacity-0"
+              tabIndex={-1}
+            />
+          </div>
+
+          {/* Иконки — дропдаун */}
+          <div ref={iconsDropdownRef} className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setIconsDropdownOpen((o) => !o)}
+              title="Иконки на стикере"
+              className={[
+                'flex h-10 items-center gap-2 rounded-2xl border px-4 text-sm font-medium transition',
+                Object.values(globalIcons).some(Boolean)
+                  ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                  : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
+              ].join(' ')}
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
+              </svg>
+              Иконки
+              <svg viewBox="0 0 24 24" className={`h-3 w-3 shrink-0 transition-transform ${iconsDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6" /></svg>
+            </button>
+            {iconsDropdownOpen && (
+              <div className="absolute right-0 top-full z-30 mt-1.5 w-52 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
+                <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">Иконки на стикере</div>
+                {([
+                  { key: 'eac',           icon: '/eac.svg',                 label: 'Знак ЕАС' },
+                  { key: 'wash',          icon: '/icons/wash-30.svg',      label: 'Стирка 30°' },
+                  { key: 'iron',          icon: '/icons/iron.svg',          label: 'Утюг' },
+                  { key: 'no_bleach',     icon: '/icons/no-bleach.svg',     label: 'Не отбеливать' },
+                  { key: 'no_tumble_dry', icon: '/icons/no-tumble-dry.svg', label: 'Не сушить в барабане' },
+                ] as { key: keyof typeof globalIcons; icon: string; label: string }[]).map(({ key, icon, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => toggleGlobalIcon(key)}
+                    className={`flex w-full items-center gap-3 px-4 py-2.5 transition hover:bg-slate-50 ${globalIcons[key] ? 'bg-blue-50/60' : ''}`}
+                  >
+                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition ${
+                      globalIcons[key] ? 'border-blue-500 bg-blue-500' : 'border-slate-300 bg-white'
+                    }`}>
+                      {globalIcons[key] && (
+                        <svg viewBox="0 0 24 24" className="h-3 w-3 text-white" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>
+                      )}
+                    </span>
+                    <img src={icon} alt={label} className="h-7 w-7 object-contain" />
+                    <span className={`text-sm ${globalIcons[key] ? 'font-medium text-slate-800' : 'text-slate-500'}`}>{label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Создать набор — для наборов и импорта крайняя правая */}
+          {activeTab === 'bundles' && canManage && (
             <Button
               onClick={() => {
                 const init: Record<string, { checked: boolean; copies: number }> = {}
@@ -490,14 +726,19 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
               </svg>
               Создать набор
             </Button>
-            ) : null
-          ) : activeTab === 'import' ? (
-            <>
-              <Button className="shrink-0 rounded-2xl px-5 py-2.5" disabled={isImporting || importSelected.size === 0} onClick={() => void handleImportCreate()}>
-                {isImporting ? 'Создание…' : `Создать набор${importSelected.size > 0 ? ` (${importSelected.size})` : ''}`}
-              </Button>
-            </>
-          ) : null}
+          )}
+          {activeTab === 'import' && (
+            <Button className="shrink-0 rounded-2xl px-5 py-2.5" disabled={isImporting || importSelected.size === 0} onClick={() => void handleImportCreate()}>
+              {isImporting ? 'Создание…' : `Создать набор${importSelected.size > 0 ? ` (${importSelected.size})` : ''}`}
+            </Button>
+          )}
+
+          {/* + Создать стикер — крайняя правая */}
+          {activeTab === 'stickers' && canManage && (
+            <Button onClick={() => { setEditingSticker(null); setModalOpen(true) }} className="shrink-0 rounded-2xl px-5 py-2.5">
+              + Создать стикер
+            </Button>
+          )}
         </div>
       </Card>
 
@@ -532,6 +773,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                 <p className="text-xs text-slate-400">Перейдите на страницу Товары и нажмите «Синхронизировать»</p>
               </div>
             ) : (
+              <>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -551,8 +793,55 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Артикул WB</th>
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Артикул продавца</th>
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Название</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Для стикера</th>
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Бренд</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Цвет</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Состав</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Страна</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Предмет</th>
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Категория</th>
+                      <th className="w-20 px-3 py-2.5">
+                        {importSelected.size > 0 && (
+                          <div className="flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              title={`Предпросмотр выбранных (${importSelected.size})`}
+                              onClick={() => {
+                              const s = buildSelectedStickers()
+                              if (s.length === 0) return
+                              if (s.length > BULK_PDF_WARN_THRESHOLD) {
+                                showToast(`Выбрано ${s.length} стикеров — генерация может занять некоторое время`, 'info')
+                              }
+                              previewWithCheck(s, previewStickerPdf)
+                            }}
+                              className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              title={`Скачать PDF выбранных (${importSelected.size})`}
+                              onClick={() => {
+                              const s = buildSelectedStickers()
+                              if (s.length === 0) return
+                              if (s.length > BULK_PDF_WARN_THRESHOLD) {
+                                showToast(`Выбрано ${s.length} стикеров — генерация может занять некоторое время`, 'info')
+                              }
+                              downloadStickerPdf(s)
+                            }}
+                              className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
+                              </svg>
+                            </button>
+                          </div>
+                        )}
+                      </th>
                     </tr>
                   </thead>
                   {importProducts.map((product) => {
@@ -610,14 +899,97 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                               </div>
                             )}
                           </td>
-                          <td className="px-4 py-3 font-mono text-xs text-slate-400">{product.nm_id}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-400">
+                            <a
+                              href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-blue-500 hover:underline"
+                            >
+                              {product.nm_id}
+                            </a>
+                          </td>
                           <td className="px-4 py-3 text-xs text-slate-600">{product.vendor_code ?? '—'}</td>
                           <td className="px-4 py-3 font-medium text-slate-800">{product.name ?? '—'}</td>
+                          <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="text"
+                              value={importCustomNames.get(product.id) ?? ''}
+                              onChange={(e) => setImportCustomNames((prev) => {
+                                const n = new Map(prev)
+                                if (e.target.value) n.set(product.id, e.target.value)
+                                else n.delete(product.id)
+                                return n
+                              })}
+                              placeholder={product.name ?? ''}
+                              className="w-full min-w-[140px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-800 placeholder-slate-300 focus:border-blue-400 focus:outline-none focus:ring-0"
+                            />
+                          </td>
                           <td className="px-4 py-3 text-xs text-slate-500">{product.brand ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{product.color ?? '—'}</td>
+                          <td className="max-w-[160px] truncate px-4 py-3 text-xs text-slate-500" title={product.composition ?? ''}>{product.composition ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{product.country ?? '—'}</td>
                           <td className="px-4 py-3 text-xs text-slate-400">{product.category ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-400">{(product as any).category_parent ?? '—'}</td>
+                          <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                            {(() => {
+                              const productStickers: StickerTemplate[] = sizeRows
+                                .filter((r) => r.barcode !== '—')
+                                .map((r) => ({
+                                  id: r.rowKey,
+                                  account_id: '',
+                                  barcode: r.barcode,
+                                  name: importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? r.barcode,
+                                  composition: product.composition ?? null,
+                                  article: String(product.nm_id),
+                                  brand: product.brand ?? null,
+                                  size: r.techSize !== '—' ? r.techSize : null,
+                                  color: product.color ?? null,
+                                  supplier: importStore?.supplier_full ?? importStore?.supplier ?? null,
+                                  supplier_address: importStore?.address ?? null,
+                                  production_date: globalProductionDate || null,
+                                  country: product.country ?? '',
+                                  copies: 1,
+                                  icon_wash: globalIcons.wash,
+                                  icon_iron: globalIcons.iron,
+                                  icon_no_bleach: globalIcons.no_bleach,
+                                  icon_no_tumble_dry: globalIcons.no_tumble_dry,
+                                  icon_eac: globalIcons.eac,
+                                  created_at: '',
+                                }))
+                              if (productStickers.length === 0) return null
+                              return (
+                                <div className="flex items-center gap-0.5">
+                                  <button
+                                    type="button"
+                                    title={`Предпросмотр (${productStickers.length} стикеров)`}
+                                    onClick={() => previewWithCheck(productStickers, previewStickerPdf)}
+                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                                  >
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                                    </svg>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title={`Скачать PDF (${productStickers.length} стикеров)`}
+                                    onClick={() => downloadStickerPdf(productStickers)}
+                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                                  >
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                      <polyline points="7 10 12 15 17 10" />
+                                      <line x1="12" y1="15" x2="12" y2="3" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              )
+                            })()}
+                          </td>
                         </tr>
                         <tr>
-                          <td className="p-0" colSpan={8}>
+                          <td className="p-0" colSpan={14}>
                             <div style={{ display: 'grid', gridTemplateRows: isExpanded ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
                               <div className="overflow-hidden">
                                 <div className="border-t border-slate-100 bg-slate-50/70">
@@ -626,7 +998,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                       <tr>
                                         <th className="w-9 px-3 py-2" />
                                         <th className="px-4 py-2 font-semibold" colSpan={2}>Размер</th>
-                                        <th className="px-4 py-2 font-semibold" colSpan={3}>Баркод</th>
+                                        <th className="px-4 py-2 font-semibold" colSpan={2}>Баркод</th>
+                                        <th className="w-20 px-3 py-2" />
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100/80">
@@ -647,7 +1020,59 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                               <span className="text-xs text-slate-300">—</span>
                                             )}
                                           </td>
-                                          <td colSpan={3} className="px-4 py-2 font-mono text-xs text-slate-500">{row.barcode}</td>
+                                          <td colSpan={2} className="px-4 py-2 font-mono text-xs text-slate-500">{row.barcode}</td>
+                                          <td className="px-3 py-2">
+                                            {row.barcode !== '—' && (() => {
+                                              const tempSticker: StickerTemplate = {
+                                                id: row.rowKey,
+                                                account_id: '',
+                                                barcode: row.barcode,
+                                                name: importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? row.barcode,
+                                                composition: product.composition ?? null,
+                                                article: String(product.nm_id),
+                                                brand: product.brand ?? null,
+                                                size: row.techSize !== '—' ? row.techSize : null,
+                                                color: product.color ?? null,
+                                                supplier: importStore?.supplier_full ?? importStore?.supplier ?? null,
+                                                supplier_address: importStore?.address ?? null,
+                                                production_date: globalProductionDate || null,
+                                                country: product.country ?? '',
+                                                copies: 1,
+                                                icon_wash: globalIcons.wash,
+                                                icon_iron: globalIcons.iron,
+                                                icon_no_bleach: globalIcons.no_bleach,
+                                                icon_no_tumble_dry: globalIcons.no_tumble_dry,
+                                                icon_eac: globalIcons.eac,
+                                                created_at: '',
+                                              }
+                                              return (
+                                                <div className="flex items-center gap-0.5">
+                                                  <button
+                                                    type="button"
+                                                    title="Предпросмотр стикера"
+                                                    onClick={(e) => { e.stopPropagation(); previewWithCheck([tempSticker], previewStickerPdf) }}
+                                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                                                  >
+                                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                                                    </svg>
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    title="Скачать PDF"
+                                                    onClick={(e) => { e.stopPropagation(); downloadStickerPdf([tempSticker]) }}
+                                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                                                  >
+                                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                                      <polyline points="7 10 12 15 17 10" />
+                                                      <line x1="12" y1="15" x2="12" y2="3" />
+                                                    </svg>
+                                                  </button>
+                                                </div>
+                                              )
+                                            })()}
+                                          </td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -662,6 +1087,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                   })}
                 </table>
               </div>
+              </>
             )}
           </div>
         ) : activeTab === 'stickers' ? (
@@ -733,7 +1159,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                         <button
                           type="button"
                           title="Предпросмотр"
-                          onClick={() => previewStickerPdf([s])}
+                          onClick={() => previewStickerPdf([{ ...s, production_date: globalProductionDate || s.production_date }])}
                           className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
                         >
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
@@ -744,13 +1170,13 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                         <button
                           type="button"
                           title="Скачать PDF"
-                          onClick={() => downloadStickerPdf([s])}
+                          onClick={() => downloadStickerPdf([{ ...s, production_date: globalProductionDate || s.production_date }])}
                           className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
                         >
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                            <path d="M6 9V2h12v7" />
-                            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-                            <path d="M6 14h12v8H6z" />
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
                           </svg>
                         </button>
                         {canManage && (
@@ -835,9 +1261,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                               className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
                             >
                               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                                <path d="M6 9V2h12v7" />
-                                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-                                <path d="M6 14h12v8H6z" />
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
                               </svg>
                             </button>
                             {canManage && (

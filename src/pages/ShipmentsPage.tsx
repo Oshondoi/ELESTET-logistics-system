@@ -45,6 +45,9 @@ interface ShipmentsPageProps {
   onAddInvoicePhoto: (tripId: string, lineId: string, file: File) => Promise<void>
   onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
   onRemoveInvoicePhoto: (tripId: string, lineId: string, index: number) => Promise<void>
+  onAddStickerFile: (tripId: string, lineId: string, file: File) => Promise<void>
+  onRemoveStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
+  onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onUpdateTripCustomFields?: (tripId: string, fields: Record<string, unknown>) => Promise<void>
   onUpdateLineCustomFields?: (tripId: string, lineId: string, fields: Record<string, unknown>) => Promise<void>
   canManage?: boolean
@@ -68,6 +71,9 @@ export const ShipmentsPage = ({
   onAddInvoicePhoto,
   onReplaceInvoicePhoto,
   onRemoveInvoicePhoto,
+  onAddStickerFile,
+  onRemoveStickerFile,
+  onFetchWbBarcodes,
   onUpdateTripCustomFields,
   onUpdateLineCustomFields,
   canManage = true,
@@ -438,6 +444,9 @@ export const ShipmentsPage = ({
           onAddInvoicePhoto={onAddInvoicePhoto}
           onReplaceInvoicePhoto={onReplaceInvoicePhoto}
           onRemoveInvoicePhoto={onRemoveInvoicePhoto}
+          onAddStickerFile={onAddStickerFile}
+          onRemoveStickerFile={onRemoveStickerFile}
+          onFetchWbBarcodes={onFetchWbBarcodes}
           canManage={canManage}
           tripConfig={tripConfig}
           lineConfig={lineConfig}

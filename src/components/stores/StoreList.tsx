@@ -71,6 +71,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
                 <th className="px-3 py-2.5">Store Code</th>
                 <th className="px-3 py-2.5">API ключ</th>
                 <th className="px-3 py-2.5">Поставщик</th>
+                <th className="px-3 py-2.5">Наим. для стикера</th>
                 <th className="px-3 py-2.5">Адрес</th>
                 <th className="px-3 py-2.5">Создан</th>
                 <th className="w-28 px-3 py-2.5"></th>
@@ -98,6 +99,9 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
                     </td>
                     <td className="px-3 py-3.5 text-slate-600">
                       {store.supplier || <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="max-w-[220px] truncate px-3 py-3.5 text-slate-500">
+                      {store.supplier_full || <span className="text-slate-300">—</span>}
                     </td>
                     <td className="max-w-[200px] truncate px-3 py-3.5 text-slate-500">
                       {store.address || <span className="text-slate-300">—</span>}

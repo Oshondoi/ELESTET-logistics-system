@@ -25,6 +25,9 @@ import {
   updateTripLine as updateTripLineInSupabase,
   uploadInvoicePhoto as uploadInvoicePhotoInSupabase,
   updateTripLineInvoicePhotos as updateTripLineInvoicePhotosInSupabase,
+  uploadStickerFile as uploadStickerFileInSupabase,
+  updateTripLineStickerFiles as updateTripLineStickerFilesInSupabase,
+  getWbSupplyBarcodes as getWbSupplyBarcodesInSupabase,
   bulkArriveTripLines as bulkArriveTripLinesInSupabase,
 } from '../services/tripService'
 import {
@@ -51,6 +54,7 @@ import {
   updateBundle as updateBundleInSupabase,
   deleteBundle as deleteBundleInSupabase,
 } from '../services/stickerService'
+import { openBarcodePrintPage } from '../lib/barcodeUtils'
 import type {
   Shipment,
   ShipmentFormValues,
@@ -464,6 +468,56 @@ export const useAppData = (accountId: string | null) => {
     applyUrls(tripId, lineId, newUrls)
   }
 
+  const getStickerUrls = (tripId: string, lineId: string): string[] => {
+    const trip = trips.find((t) => t.id === tripId)
+    return trip?.lines.find((l) => l.id === lineId)?.sticker_file_urls ?? []
+  }
+
+  const applyStickerUrls = (tripId: string, lineId: string, urls: string[]) => {
+    setTrips((current) =>
+      current.map((t) =>
+        t.id === tripId
+          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, sticker_file_urls: urls } : l) }
+          : t,
+      ),
+    )
+  }
+
+  const addStickerFile = async (tripId: string, lineId: string, file: File) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const url = await uploadStickerFileInSupabase(accountId, lineId, file)
+    const newUrls = [...getStickerUrls(tripId, lineId), url]
+    await updateTripLineStickerFilesInSupabase(accountId, lineId, newUrls)
+    applyStickerUrls(tripId, lineId, newUrls)
+  }
+
+  const removeStickerFile = async (tripId: string, lineId: string, index: number) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const newUrls = getStickerUrls(tripId, lineId).filter((_, i) => i !== index)
+    await updateTripLineStickerFilesInSupabase(accountId, lineId, newUrls)
+    applyStickerUrls(tripId, lineId, newUrls)
+  }
+
+  const fetchWbBarcodes = async (tripId: string, lineId: string, wbSupplyId: string) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const result = await getWbSupplyBarcodesInSupabase(accountId, lineId, wbSupplyId)
+    // Обновляем wb_supply_id в локальном state если изменился
+    setTrips((current) =>
+      current.map((t) =>
+        t.id === tripId
+          ? {
+              ...t,
+              lines: t.lines.map((l) =>
+                l.id === lineId ? { ...l, wb_supply_id: result.wb_supply_id } : l,
+              ),
+            }
+          : t,
+      ),
+    )
+    // Открываем страницу печати штрихкодов
+    openBarcodePrintPage(result.barcodes)
+  }
+
   return {
     stores: accountStores,
     shipments: shipmentViews,
@@ -506,6 +560,9 @@ export const useAppData = (accountId: string | null) => {
     addInvoicePhoto,
     replaceInvoicePhoto,
     removeInvoicePhoto,
+    addStickerFile,
+    removeStickerFile,
+    fetchWbBarcodes,
     reload: hydrateFromSupabase,
   }
 }

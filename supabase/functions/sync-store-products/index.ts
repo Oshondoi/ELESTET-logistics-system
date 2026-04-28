@@ -17,6 +17,46 @@ function jsonResponse(body: unknown, status = 200) {
   })
 }
 
+// Тип предмета (subject)
+interface SubjectInfo {
+  subjectId: number
+  subjectName: string
+  parentName: string
+}
+
+// WB API: получить маппинг subjectName → { subjectId, parentName } через /content/v2/object/all
+async function fetchSubjectMap(apiKey: string): Promise<Map<string, SubjectInfo>> {
+  const map = new Map<string, SubjectInfo>()
+  let offset = 0
+  const limit = 1000
+
+  for (let page = 0; page < 50; page++) {
+    const resp = await fetch(
+      `https://content-api.wildberries.ru/content/v2/object/all?limit=${limit}&offset=${offset}`,
+      { headers: { 'Authorization': apiKey } }
+    )
+    if (!resp.ok) break
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await resp.json()) as any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items: any[] = data.data ?? []
+    for (const item of items) {
+      if (item.subjectName) {
+        map.set(item.subjectName as string, {
+          subjectId: item.subjectId as number,
+          subjectName: item.subjectName as string,
+          parentName: item.parentName as string ?? null,
+        })
+      }
+    }
+    if (items.length < limit) break
+    offset += limit
+  }
+
+  return map
+}
+
 // WB API: получить все карточки товаров (с пагинацией)
 async function fetchAllWbCards(apiKey: string): Promise<unknown[]> {
   const cards: unknown[] = []
@@ -69,7 +109,7 @@ async function fetchAllWbCards(apiKey: string): Promise<unknown[]> {
 
 // Преобразует карточку WB в строку таблицы products
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function transformCard(card: any, storeId: string, accountId: string) {
+function transformCard(card: any, storeId: string, accountId: string, subjectMap: Map<string, SubjectInfo>) {
   const barcodes: string[] = (card.sizes ?? []).flatMap(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (s: any) => (s.skus ?? []) as string[]
@@ -90,6 +130,9 @@ function transformCard(card: any, storeId: string, accountId: string) {
     return null
   }
 
+  const subjectName = (card.subjectName as string | undefined) ?? null
+  const subjectInfo = subjectName ? subjectMap.get(subjectName) ?? null : null
+
   return {
     account_id: accountId,
     store_id: storeId,
@@ -97,7 +140,9 @@ function transformCard(card: any, storeId: string, accountId: string) {
     vendor_code: (card.vendorCode as string | undefined) ?? null,
     name: (card.title as string | undefined) ?? null,
     brand: (card.brand as string | undefined) ?? null,
-    category: (card.subjectName as string | undefined) ?? null,
+    category: subjectName,
+    category_parent: subjectInfo?.parentName ?? null,
+    subject_id: subjectInfo?.subjectId ?? null,
     color: getChar(['Цвет', 'Цвета', 'Основной цвет']),
     composition: getChar(['Состав', 'Состав материала']),
     country: getChar(['Страна производства', 'Страна изготовления', 'Страна']),
@@ -155,8 +200,12 @@ Deno.serve(async (req: Request) => {
 
     // ── Загружаем товары из WB ────────────────────────────────────
     let cards: unknown[]
+    let subjectMap: Map<string, SubjectInfo>
     try {
-      cards = await fetchAllWbCards(store.api_key as string)
+      ;[cards, subjectMap] = await Promise.all([
+        fetchAllWbCards(store.api_key as string),
+        fetchSubjectMap(store.api_key as string),
+      ])
     } catch (wbErr: unknown) {
       const msg = errMsg(wbErr)
 
@@ -173,7 +222,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Upsert в products (батчами по 500) ───────────────────────
-    const rows = cards.map((card) => transformCard(card, store.id as string, store.account_id as string))
+    const rows = cards.map((card) => transformCard(card, store.id as string, store.account_id as string, subjectMap))
     const BATCH_SIZE = 500
 
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {

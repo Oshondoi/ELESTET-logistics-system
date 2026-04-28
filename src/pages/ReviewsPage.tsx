@@ -671,6 +671,8 @@ export const ReviewsPage = ({
     try {
       const text = await callOpenAi(aiSettings, {
         text: row.data.text,
+        pros: row.data.pros,
+        cons: row.data.cons,
         productValuation: row.data.productValuation,
         userName: row.data.userName,
         productName: row.data.productDetails?.productName ?? null,
@@ -848,6 +850,8 @@ export const ReviewsPage = ({
             try {
               text = await callOpenAi(aiSettings, {
                 text: row.data.text,
+                pros: row.data.pros,
+                cons: row.data.cons,
                 productValuation: row.data.productValuation,
                 userName: row.data.userName,
                 productName: row.data.productDetails?.productName ?? null,
@@ -1146,14 +1150,13 @@ export const ReviewsPage = ({
                       type="button"
                       onClick={() => setTestRating(r)}
                       className={cn(
-                        'flex h-9 w-9 flex-col items-center justify-center rounded-xl border text-sm font-semibold transition-colors',
+                        'flex h-9 w-12 items-center justify-center rounded-xl border text-sm font-medium transition-colors',
                         testRating === r
-                          ? 'border-amber-400 bg-amber-50 text-amber-700'
-                          : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300',
+                          ? 'border-amber-300 bg-amber-50 text-amber-700'
+                          : 'border-slate-200 text-slate-400 hover:border-slate-300',
                       )}
                     >
-                      {r}
-                      <span className="text-[8px] leading-none">★</span>
+                      {r}★
                     </button>
                   ))}
                 </div>
@@ -1295,7 +1298,14 @@ export const ReviewsPage = ({
                       )}
                     </div>
                     <p className="text-sm leading-relaxed text-slate-700">
-                      {fb.text || <span className="italic text-slate-400">Отзыв без текста</span>}
+                      {fb.text || fb.pros || fb.cons
+                        ? <>
+                            {fb.pros && <span><span className="font-semibold">Плюсы: </span>{fb.pros}</span>}
+                            {fb.cons && <span className={fb.pros ? 'mt-0.5 block' : ''}><span className="font-semibold">Минусы: </span>{fb.cons}</span>}
+                            {fb.text && <span className={(fb.pros || fb.cons) ? 'mt-0.5 block' : ''}>{fb.text}</span>}
+                          </>
+                        : <span className="italic text-slate-400">Отзыв без текста</span>
+                      }
                     </p>
                     {fb.answer?.text && (
                       <div className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
@@ -1720,117 +1730,95 @@ export const ReviewsPage = ({
             </div>
           </div>
 
-          {/* ── Серверная автоматизация ───────────────────────── */}
+          {/* ── Автоматизация ответов ─────────────────────────── */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             {/* Заголовок + переключатель */}
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-800">Серверная автоматизация</h3>
-                <p className="mt-0.5 text-xs text-slate-400">
-                  {isLoadingAutoDb
-                    ? 'Загрузка...'
-                    : autoEnabled
-                      ? 'Сервер проверяет новые отзывы каждые 30 мин и отвечает по вашим настройкам'
-                      : 'Отключена — включите чекбокс чтобы сервер начал отвечать автоматически'}
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                {/* Обновить логи */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!activeAccountId) return
-                    setIsLoadingAutoDb(true)
-                    Promise.all([
-                      loadAutomationSettings(activeAccountId),
-                      loadAutomationLogs(activeAccountId),
-                    ]).then(([s, logs]) => {
-                      if (s) setAutoEnabled(s.is_enabled)
-                      setAutoDbLogs(logs)
-                    }).catch(() => {}).finally(() => setIsLoadingAutoDb(false))
-                  }}
-                  className="text-slate-400 hover:text-slate-600 transition"
-                  title="Обновить"
-                >
-                  <svg viewBox="0 0 24 24" className={cn('h-4 w-4', isLoadingAutoDb && 'animate-spin')} fill="none" stroke="currentColor" strokeWidth="2">
+            <h3 className="text-sm font-semibold text-slate-800">Автоматизация ответов</h3>
+            <div className="mt-2 flex items-center gap-3">
+              {/* Обновить логи */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!activeAccountId) return
+                  setIsLoadingAutoDb(true)
+                  Promise.all([
+                    loadAutomationSettings(activeAccountId),
+                    loadAutomationLogs(activeAccountId),
+                  ]).then(([s, logs]) => {
+                    if (s) setAutoEnabled(s.is_enabled)
+                    setAutoDbLogs(logs)
+                  }).catch(() => {}).finally(() => setIsLoadingAutoDb(false))
+                }}
+                className="text-slate-400 hover:text-slate-600 transition"
+                title="Обновить"
+              >
+                <svg viewBox="0 0 24 24" className={cn('h-4 w-4', isLoadingAutoDb && 'animate-spin')} fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="23 4 23 10 17 10" />
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                </svg>
+              </button>
+              {/* Запустить вручную */}
+              <button
+                type="button"
+                onClick={handleRunNow}
+                disabled={isRunningNow || isLoadingAutoDb || !autoEnabled}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                  isRunningNow
+                    ? 'border-blue-200 bg-blue-50 text-blue-400 cursor-not-allowed'
+                    : !autoEnabled
+                      ? 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed'
+                      : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-800',
+                )}
+                title="Срочный запуск — запустить сервер прямо сейчас"
+              >
+                {isRunningNow ? (
+                  <svg viewBox="0 0 24 24" className="h-3 w-3 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
                     <polyline points="23 4 23 10 17 10" />
                     <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
                   </svg>
-                </button>
-                {/* Запустить вручную */}
-                <button
-                  type="button"
-                  onClick={handleRunNow}
-                  disabled={isRunningNow || isLoadingAutoDb || !autoEnabled}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
-                    isRunningNow
-                      ? 'border-blue-200 bg-blue-50 text-blue-400 cursor-not-allowed'
-                      : !autoEnabled
-                        ? 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed'
-                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-800',
-                  )}
-                  title="Срочный запуск — запустить сервер прямо сейчас"
-                >
-                  {isRunningNow ? (
-                    <svg viewBox="0 0 24 24" className="h-3 w-3 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="23 4 23 10 17 10" />
-                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                    </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
-                      <polygon points="5 3 19 12 5 21 5 3" />
-                    </svg>
-                  )}
-                  {isRunningNow ? 'Запуск...' : '⚡ Срочный запуск'}
-                </button>
-                <label className="flex cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={autoEnabled}
-                    disabled={isLoadingAutoDb}
-                    onChange={(e) => toggleAutoEnabled(e.target.checked)}
-                    className="h-4 w-4 accent-blue-500"
-                  />
-                  <span className="text-sm text-slate-700">{autoEnabled ? 'Включена' : 'Включить'}</span>
-                </label>
-              </div>
-            </div>
-
-            {/* Кнопка / статус последнего запуска */}
-            <div className="mt-3">
-              {autoDbLogs.length > 0 ? (
+                ) : (
+                  <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
+                    <polygon points="5 3 19 12 5 21 5 3" />
+                  </svg>
+                )}
+                {isRunningNow ? 'Запуск...' : '⚡ Срочный запуск'}
+              </button>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={autoEnabled}
+                  disabled={isLoadingAutoDb}
+                  onChange={(e) => toggleAutoEnabled(e.target.checked)}
+                  className="h-4 w-4 accent-blue-500"
+                />
+                <span className="inline-block w-16 text-sm text-slate-700">{autoEnabled ? 'Включена' : 'Включить'}</span>
+              </label>
+              {/* Кнопка логов — растягивается на оставшуюся ширину */}
+              {autoDbLogs.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setLogsModalOpen(true)}
-                  className="w-full rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-left hover:bg-slate-100 transition"
+                  className="ml-auto flex shrink-0 items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-left hover:bg-slate-100 transition"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-500">
-                      Последний запуск: {new Date(autoDbLogs[0].run_at).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className={cn(
-                        'rounded-full px-2 py-0.5 text-[11px] font-semibold',
-                        autoDbLogs[0].error ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700',
-                      )}>
-                        {autoDbLogs[0].error ? 'Ошибка' : `Отправлено: ${autoDbLogs[0].sent_count}`}
-                      </span>
-                      <span className="text-xs text-slate-400">Все логи →</span>
-                    </div>
-                  </div>
+                  <span className="text-xs text-slate-500">
+                    Последний запуск: {new Date(autoDbLogs[0].run_at).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <span className={cn(
+                    'rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                    autoDbLogs[0].error ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700',
+                  )}>
+                    {autoDbLogs[0].error ? 'Ошибка' : `Отправлено: ${autoDbLogs[0].sent_count}`}
+                  </span>
+                  <span className="text-xs text-slate-400">Все логи →</span>
                 </button>
-              ) : autoEnabled && !isLoadingAutoDb ? (
-                <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-400 text-center">
-                  Ещё не запускалась — первый запуск произойдёт автоматически
-                </div>
-              ) : null}
+              )}
             </div>
 
             {/* Модалка логов */}
             {logsModalOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setLogsModalOpen(false)}>
-                <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl flex flex-col max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+                <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl flex flex-col h-[88vh]" onClick={(e) => e.stopPropagation()}>
                   {/* Шапка модалки */}
                   <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
                     <div>
@@ -1855,7 +1843,7 @@ export const ReviewsPage = ({
                     </div>
                   </div>
                   {/* Список запусков */}
-                  <div className="overflow-y-auto p-5 space-y-3">
+                  <div className="flex-1 overflow-y-auto p-5 space-y-3">
                     {(logsShowAll ? autoDbLogs : autoDbLogs.slice(0, 3)).map((runLog) => (
                       <div key={runLog.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
                         <div className="mb-2 flex items-center justify-between text-[11px]">

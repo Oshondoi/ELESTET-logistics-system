@@ -10,6 +10,7 @@ import { Card } from '../ui/Card'
 import { DeleteConfirmModal } from '../ui/DeleteConfirmModal'
 import { StatusDropdown } from '../ui/StatusDropdown'
 import { InvoicePhotoCell } from '../ui/InvoicePhotoCell'
+import { TripLineStickerCell } from '../ui/TripLineStickerCell'
 import { TripLineFormModal } from './TripLineFormModal'
 import { TripFormModal } from './TripFormModal'
 
@@ -53,6 +54,9 @@ interface TripTableProps {
   onAddInvoicePhoto: (tripId: string, lineId: string, file: File) => Promise<void>
   onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
   onRemoveInvoicePhoto: (tripId: string, lineId: string, index: number) => Promise<void>
+  onAddStickerFile: (tripId: string, lineId: string, file: File) => Promise<void>
+  onRemoveStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
+  onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   canManage?: boolean
   focusMode?: boolean
   hoverAddMode?: boolean
@@ -109,6 +113,9 @@ export const TripTable = ({
   onAddInvoicePhoto,
   onReplaceInvoicePhoto,
   onRemoveInvoicePhoto,
+  onAddStickerFile,
+  onRemoveStickerFile,
+  onFetchWbBarcodes,
   canManage = true,
   focusMode = false,
   hoverAddMode = true,
@@ -628,6 +635,7 @@ export const TripTable = ({
                                 {!lineHidden.has('arrival_date') && <th className="px-3 py-2 font-semibold">Прибыл</th>}
                                 {!lineHidden.has('shipped_date') && <th className="px-3 py-2 font-semibold">Отгружено</th>}
                                 {!lineHidden.has('marketplace_delivery_date') && <th className="px-3 py-2 font-semibold">Дата МП</th>}
+                                <th className="px-3 py-2 font-semibold">Стикеры</th>
                                 {!lineHidden.has('payment') && <th className="px-3 py-2 font-semibold">Оплата</th>}
                                 {!lineHidden.has('comment') && <th className="px-3 py-2 font-semibold">Комментарий</th>}
                                 {lineConfig.customCols.map((col) => (
@@ -708,6 +716,15 @@ export const TripTable = ({
                                   {!lineHidden.has('marketplace_delivery_date') && (
                                     <td className="px-3 py-2.5 text-slate-500">{line.planned_marketplace_delivery_date ? formatDate(line.planned_marketplace_delivery_date) : '—'}</td>
                                   )}
+                                  <td className="px-3 py-2.5">
+                                    <TripLineStickerCell
+                                      fileUrls={line.sticker_file_urls ?? []}
+                                      wbSupplyId={line.wb_supply_id}
+                                      onAdd={canManage ? (file) => onAddStickerFile(trip.id, line.id, file) : undefined}
+                                      onRemove={canManage ? (idx) => onRemoveStickerFile(trip.id, line.id, idx) : undefined}
+                                      onFetchWbBarcodes={(wbId) => onFetchWbBarcodes(trip.id, line.id, wbId)}
+                                    />
+                                  </td>
                                   {!lineHidden.has('payment') && (
                                     <td className="px-3 py-2.5">
                                       <div className="flex items-center gap-2">

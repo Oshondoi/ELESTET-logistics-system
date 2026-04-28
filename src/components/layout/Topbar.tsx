@@ -4,11 +4,14 @@ interface TopbarProps {
   title: string
   userName: string
   userEmail: string
+  isAdmin?: boolean
+  onAdminClick?: () => void
+  onBack?: () => void
   onProfileClick: () => void
   onSignOut: () => void
 }
 
-export const Topbar = ({ title, userName, userEmail, onProfileClick, onSignOut }: TopbarProps) => {
+export const Topbar = ({ title, userName, userEmail, isAdmin, onAdminClick, onBack, onProfileClick, onSignOut }: TopbarProps) => {
   const initial = userName ? userName.charAt(0).toUpperCase() : (userEmail ? userEmail.charAt(0).toUpperCase() : '?')
   const displayName = userName || userEmail || 'Профиль'
   const [open, setOpen] = useState(false)
@@ -32,6 +35,32 @@ export const Topbar = ({ title, userName, userEmail, onProfileClick, onSignOut }
       </div>
 
       <div className="flex items-center gap-2">
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex h-7 items-center gap-1.5 rounded-xl border border-slate-200 px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M3 10.5 12 4l9 6.5" />
+              <path d="M5.5 9.5V20h13V9.5" />
+              <path d="M9.5 20v-5h5V20" />
+            </svg>
+            Домой
+          </button>
+        ) : isAdmin ? (
+          <button
+            type="button"
+            onClick={onAdminClick}
+            className="flex h-7 items-center gap-1.5 rounded-xl border border-slate-200 px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M12 2a5 5 0 0 1 5 5c0 1.7-.8 3.2-2.1 4.2L17 22H7l2.1-10.8A5 5 0 0 1 7 7a5 5 0 0 1 5-5Z" />
+              <circle cx="12" cy="7" r="2" />
+            </svg>
+            Админ
+          </button>
+        ) : null}
         <button
           type="button"
           aria-label="Уведомления"

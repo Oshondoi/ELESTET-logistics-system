@@ -141,6 +141,7 @@ export interface Store {
   marketplace: string
   api_key?: string | null
   supplier?: string | null
+  supplier_full?: string | null
   address?: string | null
   inn?: string | null
   ai_prompt?: string | null
@@ -202,6 +203,7 @@ export interface StoreFormValues {
   store_code?: string
   api_key?: string
   supplier?: string
+  supplier_full?: string
   address?: string
   inn?: string
 }
@@ -275,6 +277,8 @@ export interface TripLine {
   status: ShipmentStatus
   payment_status: PaymentStatus
   invoice_photo_urls: string[]
+  sticker_file_urls: string[]
+  wb_supply_id: string | null
   comment: string
   custom_fields: Record<string, unknown>
   created_at: string
@@ -415,6 +419,8 @@ export interface WbFeedbackRow {
 export interface WbFeedback {
   id: string
   text: string
+  pros?: string | null
+  cons?: string | null
   productValuation: number // 1–5
   createdDate: string
   userName: string | null
