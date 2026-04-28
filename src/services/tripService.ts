@@ -328,7 +328,8 @@ export const updateTripLineStickerFiles = async (
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await supabase
     .from('trip_lines')
-    .update({ sticker_file_urls })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ sticker_file_urls } as any)
     .eq('id', lineId)
     .eq('account_id', accountId)
 

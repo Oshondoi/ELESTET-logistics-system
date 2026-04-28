@@ -234,7 +234,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const [importExpandedIds, setImportExpandedIds] = useState<Set<string>>(new Set())
   const [importExpandAll, setImportExpandAll] = useState(() => localStorage.getItem('elestet-stickers-expand-all') === 'true')
   const [globalProductionDate, setGlobalProductionDate] = useState('')
-  const [globalIcons, setGlobalIcons] = useState(() => {
+  const [globalIcons, setGlobalIcons] = useState<{ wash: boolean; iron: boolean; no_bleach: boolean; no_tumble_dry: boolean; eac: boolean }>(() => {
     try {
       const stored = localStorage.getItem('elestet-sticker-icons')
       if (stored) return { wash: false, iron: false, no_bleach: false, no_tumble_dry: false, eac: true, ...JSON.parse(stored) }
@@ -384,6 +384,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
             supplier: importStore?.supplier_full ?? importStore?.supplier ?? '',
             supplier_address: importStore?.address ?? '',
             production_date: globalProductionDate || '',
+            country: '',
             copies: 1,
             icon_wash: globalIcons.wash,
             icon_iron: globalIcons.iron,
