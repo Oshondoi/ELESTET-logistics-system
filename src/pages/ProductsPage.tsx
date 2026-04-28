@@ -326,7 +326,7 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <span className="text-sm font-semibold text-slate-900">
-            Товары
+            Артикулы
             {!isLoadingProducts && (
               <span className="ml-2 rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
                 {filtered.length}
@@ -334,9 +334,9 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
             )}
             {!isLoadingProducts && (
               <span className="ml-3 text-sm font-semibold text-slate-900">
-                Артикул
+                Баркоды
                 <span className="ml-2 rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
-                  {new Set(filtered.map((p) => p.vendor_code).filter(Boolean)).size}
+                  {filtered.flatMap((p) => p.barcodes).length}
                 </span>
               </span>
             )}

@@ -1,9 +1,14 @@
 # Active Context
 
 ## Current Focus
-UI-полировка: StickersPage тулбар переработан, PDF стикеры — иконки фиксированы внизу, ReviewsPage — плюсы/минусы из WB, блок автоматизации переименован и перестроен, PromptListModal закрывается по клику вне тела. Следующие шаги: поиск/фильтры на Логистике, участники компании (Members), мобильное приложение.
+UI-полировка: ProductsPage — счётчики переименованы (Артикулы / Баркоды), TS-ошибки Vercel устранены. Следующие шаги: поиск/фильтры на Логистике, участники компании (Members), мобильное приложение.
 
 ## What Was Recently Done
+
+### Фикс TS-ошибок сборки Vercel + мелкие UI (29.04.2026)
+- **`StickersPage.tsx`**: `globalIcons` state — добавлен явный тип `useState<{...}>` (фикс TS7006 + symbol key), добавлено `country: ''` в объект при импорте из WB (фикс TS2345)
+- **`tripService.ts`**: `.update({ sticker_file_urls } as any)` — cast для Supabase-типов, не знающих о новой колонке (фикс TS2353)
+- **`ProductsPage.tsx`**: счётчик «Товары» → «Артикулы»; счётчик «Артикул (кол-во уникальных vendor_code)» → «Баркоды (сумма всех barcodes)`
 
 ### UI-полировка StickersPage + ReviewsPage (29.04.2026)
 - **`StickersPage.tsx`** — тулбар:
