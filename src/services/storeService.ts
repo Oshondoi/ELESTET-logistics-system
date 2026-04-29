@@ -114,7 +114,8 @@ export const fetchArchivedStoresFromSupabase = async (accountId: string) => {
   const { data, error } = await supabase.rpc('get_archived_stores', { p_account_id: accountId })
 
   if (error) throw error
-  return (data ?? []) as Store[]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (data ?? []) as unknown as Store[]
 }
 
 export const restoreStoreInSupabase = async (storeId: string) => {
