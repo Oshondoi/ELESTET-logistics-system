@@ -58,13 +58,14 @@ export const updateCarrierFull = async (accountId: string, carrierId: string, da
   if (!supabase) throw new Error('Supabase is not configured')
   const { data: row, error } = await supabase
     .from('carriers')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .update({
       name: data.name,
       phone: data.phone ?? null,
       contact_person: data.contact_person ?? null,
       notes: data.notes ?? null,
       owner_user_id: data.owner_user_id ?? null,
-    })
+    } as any)
     .eq('id', carrierId)
     .eq('account_id', accountId)
     .select()

@@ -578,6 +578,40 @@ export interface Database {
           my_role: string
         }>
       }
+      get_my_archived_accounts: {
+        Args: Record<string, never>
+        Returns: Array<{
+          id: string
+          name: string
+          created_at: string
+          deleted_at: string
+          my_role: string
+        }>
+      }
+      restore_account: {
+        Args: { p_account_id: string }
+        Returns: void
+      }
+      archive_store: {
+        Args: { p_store_id: string }
+        Returns: void
+      }
+      get_archived_stores: {
+        Args: { p_account_id: string }
+        Returns: Array<{
+          id: string
+          account_id: string
+          store_code: string
+          name: string
+          api_key: string | null
+          supplier_name: string | null
+          deleted_at: string
+        }>
+      }
+      restore_store: {
+        Args: { p_store_id: string }
+        Returns: void
+      }
     }
     Enums: {
       [_ in never]: never
