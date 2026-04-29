@@ -4,18 +4,22 @@ import {
   createAccountWithOwnerInSupabase,
   deleteAccountWithOwnerInSupabase,
   fetchAccountsFromSupabase,
+  fetchArchivedAccountsFromSupabase,
+  restoreAccountInSupabase,
   updateAccountInSupabase,
 } from '../services/accountService'
 import type { Account } from '../types'
 
 export const useAccounts = (enabled: boolean) => {
   const [accounts, setAccounts] = useState<Account[]>([])
+  const [archivedAccounts, setArchivedAccounts] = useState<Account[]>([])
   const [isLoading, setIsLoading] = useState(enabled && isSupabaseConfigured)
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     if (!enabled || !isSupabaseConfigured) {
       setAccounts([])
+      setArchivedAccounts([])
       setError(null)
       setIsLoading(false)
       return
@@ -31,6 +35,13 @@ export const useAccounts = (enabled: boolean) => {
       setError(loadError instanceof Error ? loadError.message : 'Ошибка загрузки компаний')
     } finally {
       setIsLoading(false)
+    }
+    // Архив загружаем отдельно — ошибка (RPC не применена) не блокирует активные компании
+    try {
+      const nextArchived = await fetchArchivedAccountsFromSupabase()
+      setArchivedAccounts(nextArchived)
+    } catch {
+      // RPC ещё не применена — игнорируем
     }
   }, [enabled])
 
@@ -48,6 +59,20 @@ export const useAccounts = (enabled: boolean) => {
   const deleteAccount = async (accountId: string) => {
     await deleteAccountWithOwnerInSupabase(accountId)
     setAccounts((current) => current.filter((account) => account.id !== accountId))
+    try {
+      const nextArchived = await fetchArchivedAccountsFromSupabase()
+      setArchivedAccounts(nextArchived)
+    } catch {
+      // ignore
+    }
+  }
+
+  const restoreAccount = async (accountId: string) => {
+    await restoreAccountInSupabase(accountId)
+    const archived = await fetchArchivedAccountsFromSupabase()
+    const active = await fetchAccountsFromSupabase()
+    setAccounts(active)
+    setArchivedAccounts(archived)
   }
 
   const updateAccount = async (accountId: string, name: string) => {
@@ -58,10 +83,12 @@ export const useAccounts = (enabled: boolean) => {
 
   return {
     accounts,
+    archivedAccounts,
     isLoading,
     error,
     createAccount,
     deleteAccount,
+    restoreAccount,
     updateAccount,
     reload,
   }

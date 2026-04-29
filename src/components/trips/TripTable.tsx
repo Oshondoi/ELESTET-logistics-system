@@ -57,6 +57,7 @@ interface TripTableProps {
   onAddStickerFile: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
   canManage?: boolean
   focusMode?: boolean
   hoverAddMode?: boolean
@@ -76,6 +77,7 @@ const tripStatusTone = {
 } as const
 
 const lineTone = {
+  'Формируется': 'neutral',
   'Ожидает отправки': 'warning',
   'В пути': 'info',
   'Прибыл': 'success',
@@ -116,6 +118,7 @@ export const TripTable = ({
   onAddStickerFile,
   onRemoveStickerFile,
   onFetchWbBarcodes,
+  onUploadWbPass,
   canManage = true,
   focusMode = false,
   hoverAddMode = true,
@@ -512,6 +515,19 @@ export const TripTable = ({
                             onChange={(status) => onChangeTripStatus(trip.id, status)}
                           />
                         </div>
+                        {(() => {
+                          const dateMap: Partial<Record<TripStatus, string | null>> = {
+                            'Формируется': trip.created_at,
+                            'Отправлен': trip.departure_date,
+                            'Прибыл': trip.arrived_at,
+                            'Завершён': trip.finished_at,
+                          }
+                          const prefix = trip.status === 'Формируется' ? 'с ' : ''
+                          const date = dateMap[trip.status]
+                          return date ? (
+                            <div className="mt-0.5 pl-2.5 text-[10px] text-slate-400">{prefix}{formatDate(date)}</div>
+                          ) : null
+                        })()}
                       </td>
                     )}
                     {!tripHidden.has('payment') && (
@@ -645,7 +661,7 @@ export const TripTable = ({
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-200">
-                              {trip.lines.length > 0 ? trip.lines.map((line) => (
+                              {trip.lines.length > 0 ? [...trip.lines].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).map((line) => (
                                 <tr
                                   key={line.id}
                                   className="align-middle text-slate-600"
@@ -705,6 +721,20 @@ export const TripTable = ({
                                         toneMap={lineTone}
                                         onChange={(status) => onChangeTripLineStatus(trip.id, line.id, status)}
                                       />
+                                      {(() => {
+                                        const dateMap: Partial<Record<ShipmentStatus, string | null>> = {
+                                          'Формируется': line.created_at,
+                                          'Ожидает отправки': line.waiting_at,
+                                          'В пути': line.reception_date,
+                                          'Прибыл': line.arrival_date,
+                                          'Отгружен': line.shipped_date,
+                                        }
+                                        const date = dateMap[line.status]
+                                        const prefix = line.status === 'Формируется' ? 'с ' : ''
+                                        return date ? (
+                                          <div className="mt-0.5 pl-2.5 text-[10px] text-slate-400">{prefix}{formatDate(date)}</div>
+                                        ) : null
+                                      })()}
                                     </td>
                                   )}
                                   {!lineHidden.has('arrival_date') && (
@@ -720,9 +750,11 @@ export const TripTable = ({
                                     <TripLineStickerCell
                                       fileUrls={line.sticker_file_urls ?? []}
                                       wbSupplyId={line.wb_supply_id}
+                                      passUrl={line.wb_pass_url}
                                       onAdd={canManage ? (file) => onAddStickerFile(trip.id, line.id, file) : undefined}
                                       onRemove={canManage ? (idx) => onRemoveStickerFile(trip.id, line.id, idx) : undefined}
                                       onFetchWbBarcodes={(wbId) => onFetchWbBarcodes(trip.id, line.id, wbId)}
+                                      onUploadPass={canManage ? (file) => onUploadWbPass(trip.id, line.id, file) : undefined}
                                     />
                                   </td>
                                   {!lineHidden.has('payment') && (

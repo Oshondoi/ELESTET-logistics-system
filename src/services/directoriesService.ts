@@ -46,6 +46,33 @@ export const updateCarrier = async (accountId: string, carrierId: string, name: 
   return data as Carrier
 }
 
+export interface CarrierUpdateData {
+  name: string
+  phone?: string | null
+  contact_person?: string | null
+  notes?: string | null
+  owner_user_id?: string | null
+}
+
+export const updateCarrierFull = async (accountId: string, carrierId: string, data: CarrierUpdateData): Promise<Carrier> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: row, error } = await supabase
+    .from('carriers')
+    .update({
+      name: data.name,
+      phone: data.phone ?? null,
+      contact_person: data.contact_person ?? null,
+      notes: data.notes ?? null,
+      owner_user_id: data.owner_user_id ?? null,
+    })
+    .eq('id', carrierId)
+    .eq('account_id', accountId)
+    .select()
+    .single()
+  if (error) throw error
+  return row as Carrier
+}
+
 export const fetchWarehouses = async (accountId: string): Promise<Warehouse[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase

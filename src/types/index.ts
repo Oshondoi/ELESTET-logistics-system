@@ -103,6 +103,7 @@ export interface ResolvedUser {
 }
 
 export type ShipmentStatus =
+  | 'Формируется'
   | 'Ожидает отправки'
   | 'В пути'
   | 'Прибыл'
@@ -122,6 +123,7 @@ export interface Account {
   id: string
   name: string
   created_at: string
+  deleted_at?: string | null
   my_role?: MemberRole
 }
 
@@ -143,6 +145,7 @@ export interface Store {
   supplier?: string | null
   supplier_full?: string | null
   address?: string | null
+  deleted_at?: string | null
   inn?: string | null
   ai_prompt?: string | null
   created_at: string
@@ -212,6 +215,10 @@ export interface Carrier {
   id: string
   account_id: string
   name: string
+  phone?: string | null
+  contact_person?: string | null
+  notes?: string | null
+  owner_user_id?: string | null
   created_at: string
 }
 
@@ -250,6 +257,8 @@ export interface Trip {
   trip_number: string | null
   carrier: string
   departure_date: string | null
+  arrived_at: string | null
+  finished_at: string | null
   status: TripStatus
   payment_status: PaymentStatus
   comment: string
@@ -274,11 +283,13 @@ export interface TripLine {
   arrival_date: string | null
   reception_date: string | null
   shipped_date: string | null
+  waiting_at: string | null
   status: ShipmentStatus
   payment_status: PaymentStatus
   invoice_photo_urls: string[]
   sticker_file_urls: string[]
   wb_supply_id: string | null
+  wb_pass_url: string | null
   comment: string
   custom_fields: Record<string, unknown>
   created_at: string

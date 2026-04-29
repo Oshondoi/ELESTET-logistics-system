@@ -37,6 +37,7 @@ export const fetchStoresFromSupabase = async (accountId: string) => {
     .from('stores')
     .select('*')
     .eq('account_id', accountId)
+    .is('deleted_at', null)
     .order('created_at', { ascending: false })
 
   if (error) throw error
@@ -100,7 +101,28 @@ export const deleteStoreInSupabase = async (storeId: string) => {
     throw new Error('Supabase client is not configured')
   }
 
-  const { error } = await supabase.from('stores').delete().eq('id', storeId)
+  const { error } = await supabase.rpc('archive_store', { p_store_id: storeId })
+
+  if (error) throw error
+}
+
+export const fetchArchivedStoresFromSupabase = async (accountId: string) => {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured')
+  }
+
+  const { data, error } = await supabase.rpc('get_archived_stores', { p_account_id: accountId })
+
+  if (error) throw error
+  return (data ?? []) as Store[]
+}
+
+export const restoreStoreInSupabase = async (storeId: string) => {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured')
+  }
+
+  const { error } = await supabase.rpc('restore_store', { p_store_id: storeId })
 
   if (error) throw error
 }

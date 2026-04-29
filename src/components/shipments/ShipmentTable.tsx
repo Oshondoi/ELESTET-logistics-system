@@ -9,6 +9,7 @@ interface ShipmentTableProps {
 }
 
 const statusToneMap = {
+  'Формируется': 'neutral',
   'Ожидает отправки': 'warning',
   'В пути': 'info',
   'Прибыл': 'success',

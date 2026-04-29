@@ -1,9 +1,44 @@
 # Active Context
 
 ## Current Focus
-UI-полировка: ProductsPage — счётчики переименованы (Артикулы / Баркоды), TS-ошибки Vercel устранены. Следующие шаги: поиск/фильтры на Логистике, участники компании (Members), мобильное приложение.
+WB Supplies API интеграция (QR-стикеры поставки) + пропуск WB. Следующие шаги: поиск/фильтры на Логистике, участники компании (Members), мобильное приложение.
 
 ## What Was Recently Done
+
+### Стикеры QR-кодов поставки WB + кнопка пропуска (30.04.2026)
+- **Edge Function `wb-supply`**: генерирует PDF с QR-кодами коробов поставки WB
+  - Эндпоинт: `GET /api/v1/supplies/{ID}/package` (единственный рабочий; `/passes` → 404)
+  - 1 страница на коробку (packageCode), 58×40мм (164.4×113.4pt)
+  - QR-код генерируется через `qrcode-generator@1.4.4`, PDF — через `pdf-lib@1.17.1`
+  - Коробки сортируются по числовой части `packageCode` по возрастанию
+  - Ошибки: 401 / 403 / 404 → читаемые сообщения на русском
+  - Файл загружается в бакет `trip-stickers`, URL добавляется к `sticker_file_urls`
+  - Деплой: `supabase functions deploy wb-supply --project-ref jzucxqakvgzpgtvagsnq`
+- **Кнопка «WB»** в `TripLineStickerCell`: открывает попап с полем ID поставки → вызывает Edge Function
+  - Фиолетовая если `wb_supply_id` задан, серая — нет
+  - Toast «Штрихкоды WB загружены в стикеры поставки» (success, зелёный)
+- **Кнопка «Пропуск»** в `TripLineStickerCell` (новое, 30.04.2026):
+  - Серая — пропуск не загружен, кликнуть → file picker (только PDF)
+  - Зелёная — загружен, кликнуть → открывается в новой вкладке; рядом кнопка замены
+  - Хранится в `trip-stickers` бакете с суффиксом `_pass` в имени
+  - `wb_pass_url` — отдельная колонка в `trip_lines` (не входит в `sticker_file_urls`)
+  - SQL: `supabase/patch_wb_pass_url.sql` — применён в Supabase ✅
+- **`supabase/functions/wb-supply/index.ts`**: полностью переписан (убрана логика `/passes`, `_debug_passes`)
+- **`src/hooks/useAppData.ts`**: удалён debug console.log; добавлена функция `uploadWbPass`
+- **`src/services/tripService.ts`**: добавлены `uploadWbPassFile`, `updateTripLineWbPassUrl`
+- **`src/types/index.ts`**: добавлено поле `wb_pass_url: string | null` в `TripLine`
+- **Меню стикеров**: дата/время загрузки в формате `DD.MM.YYYY HH:MM GMT+N`
+- **Badge**: показывается от 1 файла, кнопка скачивания всегда открывает меню
+
+### Архив компаний + архив магазинов (29.04.2026)
+- **`supabase/patch_archive_accounts.sql`**: добавлен `deleted_at` к `accounts`; `get_my_accounts` фильтрует `deleted_at IS NULL`; RLS политика обновлена; `delete_account_with_owner` теперь soft delete; `hard_delete_expired_accounts()` + pg_cron задание (03:00 UTC ежедневно)
+- **`supabase/patch_archive_stores.sql`**: добавлен `deleted_at` к `stores`; RLS политики обновлены; создана RPC `archive_store(p_store_id uuid)`; FK `trip_lines.store_id` изменён с RESTRICT → SET NULL; `hard_delete_expired_stores()` + pg_cron задание (03:10 UTC)
+- **`src/components/accounts/DeleteAccountModal.tsx`**: переписан через `DeleteConfirmModal` — поле пароля + отображение ошибки + описание «15 дней в архиве»
+- **`src/App.tsx`**: импортирован `supabase` клиент; добавлены `deleteAccountPassword` + `deleteAccountError` state; `handleConfirmDeleteActiveCompany` теперь верифицирует пароль через `signInWithPassword` перед архивацией
+- **`src/services/storeService.ts`**: `fetchStoresFromSupabase` → добавлен `.is('deleted_at', null)`; `deleteStoreInSupabase` → вызывает RPC `archive_store` вместо прямого удаления
+- **Правила (системные, не изменяются пользователем)**:
+  - Удаление компании: только владелец + обязательный ввод пароля + 15 дней в архиве
+  - Удаление магазина: управляется ролью (`canManage`) + пароль (уже требовался) + 15 дней в архиве
 
 ### Фикс TS-ошибок сборки Vercel + мелкие UI (29.04.2026)
 - **`StickersPage.tsx`**: `globalIcons` state — добавлен явный тип `useState<{...}>` (фикс TS7006 + symbol key), добавлено `country: ''` в объект при импорте из WB (фикс TS2345)

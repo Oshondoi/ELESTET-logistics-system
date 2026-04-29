@@ -8,9 +8,11 @@ import {
 import {
   listStores,
   fetchStoresFromSupabase,
+  fetchArchivedStoresFromSupabase,
   createStoreInSupabase,
   updateStoreInSupabase,
   deleteStoreInSupabase,
+  restoreStoreInSupabase,
 } from '../services/storeService'
 import {
   fetchTrips,
@@ -27,7 +29,9 @@ import {
   updateTripLineInvoicePhotos as updateTripLineInvoicePhotosInSupabase,
   uploadStickerFile as uploadStickerFileInSupabase,
   updateTripLineStickerFiles as updateTripLineStickerFilesInSupabase,
-  getWbSupplyBarcodes as getWbSupplyBarcodesInSupabase,
+  getWbSupplyStickers as getWbSupplyStickersInSupabase,
+  uploadWbPassFile as uploadWbPassFileInSupabase,
+  updateTripLineWbPassUrl as updateTripLineWbPassUrlInSupabase,
   bulkArriveTripLines as bulkArriveTripLinesInSupabase,
 } from '../services/tripService'
 import {
@@ -39,11 +43,13 @@ import {
   createCarrier as createCarrierInSupabase,
   deleteCarrier as deleteCarrierInSupabase,
   updateCarrier as updateCarrierInSupabase,
+  updateCarrierFull as updateCarrierFullInSupabase,
   fetchWarehouses,
   createWarehouse as createWarehouseInSupabase,
   deleteWarehouse as deleteWarehouseInSupabase,
   updateWarehouse as updateWarehouseInSupabase,
 } from '../services/directoriesService'
+import type { CarrierUpdateData } from '../services/directoriesService'
 import {
   fetchStickers,
   createSticker as createStickerInSupabase,
@@ -55,6 +61,7 @@ import {
   deleteBundle as deleteBundleInSupabase,
 } from '../services/stickerService'
 import { openBarcodePrintPage } from '../lib/barcodeUtils'
+import { buildWbBarcodesPdf } from '../lib/wbBarcodesPdf'
 import type {
   Shipment,
   ShipmentFormValues,
@@ -80,6 +87,7 @@ import type {
 
 export const useAppData = (accountId: string | null) => {
   const [stores, setStores] = useState<Store[]>([])
+  const [archivedStores, setArchivedStores] = useState<Store[]>([])
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [trips, setTrips] = useState<TripWithLines[]>([])
   const [carriers, setCarriers] = useState<Carrier[]>([])
@@ -117,6 +125,11 @@ export const useAppData = (accountId: string | null) => {
 
       setStores(supabaseStores)
       setShipments(supabaseShipments)
+
+      // Архив загружаем отдельно — ошибка (RPC не применена) не блокирует основные данные
+      fetchArchivedStoresFromSupabase(accountId)
+        .then((archived) => setArchivedStores(archived))
+        .catch(() => { /* RPC ещё не применена — игнорируем */ })
 
       const [supabaseTrips, supabaseCarriers, supabaseWarehouses] = await Promise.all([
         fetchTrips(accountId, supabaseStores),
@@ -174,6 +187,25 @@ export const useAppData = (accountId: string | null) => {
 
     await deleteStoreInSupabase(storeId)
     setStores((current) => current.filter((s) => s.id !== storeId))
+    // Обновить archived список
+    if (accountId) {
+      const archived = await fetchArchivedStoresFromSupabase(accountId)
+      setArchivedStores(archived)
+    }
+  }
+
+  const restoreStore = async (storeId: string) => {
+    if (!isSupabaseConfigured || !accountId) {
+      throw new Error('Supabase не настроен')
+    }
+
+    await restoreStoreInSupabase(storeId)
+    const [active, archived] = await Promise.all([
+      fetchStoresFromSupabase(accountId),
+      fetchArchivedStoresFromSupabase(accountId),
+    ])
+    setStores(active)
+    setArchivedStores(archived)
   }
 
   const addShipment = async (values: ShipmentFormValues): Promise<ShipmentWithStore> => {
@@ -249,7 +281,7 @@ export const useAppData = (accountId: string | null) => {
                 status: updatedTrip.status,
                 trip_number: updatedTrip.trip_number,
                 lines: trip.lines.map((line) =>
-                  line.status === 'Ожидает отправки' || line.status === 'В пути'
+                  line.status === 'Формируется' || line.status === 'Ожидает отправки' || line.status === 'В пути'
                     ? { ...line, status: 'Прибыл', arrival_date: line.arrival_date ?? today }
                     : line,
                 ),
@@ -271,15 +303,16 @@ export const useAppData = (accountId: string | null) => {
   const changeTripLineStatus = async (tripId: string, lineId: string, status: ShipmentStatus) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const currentLine = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
-    const { arrival_date, shipped_date } = await updateTripLineStatusInSupabase(
+    const { waiting_at, arrival_date, shipped_date } = await updateTripLineStatusInSupabase(
       accountId, lineId, status,
+      currentLine?.waiting_at ?? null,
       currentLine?.arrival_date ?? null,
       currentLine?.shipped_date ?? null,
     )
     setTrips((current) =>
       current.map((trip) =>
         trip.id === tripId
-          ? { ...trip, lines: trip.lines.map((line) => line.id === lineId ? { ...line, status, arrival_date, shipped_date } : line) }
+          ? { ...trip, lines: trip.lines.map((line) => line.id === lineId ? { ...line, status, waiting_at, arrival_date, shipped_date } : line) }
           : trip,
       ),
     )
@@ -368,6 +401,12 @@ export const useAppData = (accountId: string | null) => {
   const renameCarrier = async (carrierId: string, name: string): Promise<void> => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const updated = await updateCarrierInSupabase(accountId, carrierId, name)
+    setCarriers((current) => current.map((c) => c.id === carrierId ? updated : c).sort((a, b) => a.name.localeCompare(b.name)))
+  }
+
+  const updateCarrier = async (carrierId: string, data: CarrierUpdateData): Promise<void> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const updated = await updateCarrierFullInSupabase(accountId, carrierId, data)
     setCarriers((current) => current.map((c) => c.id === carrierId ? updated : c).sort((a, b) => a.name.localeCompare(b.name)))
   }
 
@@ -498,9 +537,22 @@ export const useAppData = (accountId: string | null) => {
     applyStickerUrls(tripId, lineId, newUrls)
   }
 
+  const uploadWbPass = async (tripId: string, lineId: string, file: File) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const url = await uploadWbPassFileInSupabase(accountId, lineId, file)
+    await updateTripLineWbPassUrlInSupabase(accountId, lineId, url)
+    setTrips((current) =>
+      current.map((t) =>
+        t.id === tripId
+          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, wb_pass_url: url } : l) }
+          : t,
+      ),
+    )
+  }
+
   const fetchWbBarcodes = async (tripId: string, lineId: string, wbSupplyId: string) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
-    const result = await getWbSupplyBarcodesInSupabase(accountId, lineId, wbSupplyId)
+    const result = await getWbSupplyStickersInSupabase(accountId, lineId, wbSupplyId)
     // Обновляем wb_supply_id в локальном state если изменился
     setTrips((current) =>
       current.map((t) =>
@@ -514,12 +566,19 @@ export const useAppData = (accountId: string | null) => {
           : t,
       ),
     )
-    // Открываем страницу печати штрихкодов
-    openBarcodePrintPage(result.barcodes)
+    if (!result.sticker_urls || result.sticker_urls.length === 0) {
+      throw new Error('WB не вернул стикеры для этой поставки. Возможно, упаковка ещё не сформирована.')
+    }
+    // Добавляем полученные URL к существующим стикерам
+    const existing = getStickerUrls(tripId, lineId)
+    const newUrls = [...existing, ...result.sticker_urls]
+    await updateTripLineStickerFilesInSupabase(accountId, lineId, newUrls)
+    applyStickerUrls(tripId, lineId, newUrls)
   }
 
   return {
     stores: accountStores,
+    archivedStores,
     shipments: shipmentViews,
     trips,
     carriers,
@@ -533,6 +592,7 @@ export const useAppData = (accountId: string | null) => {
     addStore,
     updateStore,
     removeStore,
+    restoreStore,
     addShipment,
     addTrip,
     addTripLine,
@@ -548,6 +608,7 @@ export const useAppData = (accountId: string | null) => {
     addCarrier,
     removeCarrier,
     renameCarrier,
+    updateCarrier,
     addWarehouse,
     removeWarehouse,
     renameWarehouse,
@@ -562,6 +623,7 @@ export const useAppData = (accountId: string | null) => {
     removeInvoicePhoto,
     addStickerFile,
     removeStickerFile,
+    uploadWbPass,
     fetchWbBarcodes,
     reload: hydrateFromSupabase,
   }

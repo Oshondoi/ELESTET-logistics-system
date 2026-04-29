@@ -5,12 +5,14 @@ import { showToast } from './Toast'
 interface TripLineStickerCellProps {
   fileUrls: string[]
   wbSupplyId?: string | null
+  passUrl?: string | null
   onAdd?: (file: File) => Promise<void>
   onRemove?: (index: number) => Promise<void>
   onFetchWbBarcodes?: (wbSupplyId: string) => Promise<void>
+  onUploadPass?: (file: File) => Promise<void>
 }
 
-export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onFetchWbBarcodes }: TripLineStickerCellProps) => {
+export const TripLineStickerCell = ({ fileUrls, wbSupplyId, passUrl, onAdd, onRemove, onFetchWbBarcodes, onUploadPass }: TripLineStickerCellProps) => {
   const [isLoading, setIsLoading] = useState(false)
   const [isWbLoading, setIsWbLoading] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -18,9 +20,11 @@ export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onF
   const [showWbInput, setShowWbInput] = useState(false)
   const [wbInputValue, setWbInputValue] = useState('')
   const [wbInputPos, setWbInputPos] = useState({ top: 0, left: 0 })
+  const [isPassLoading, setIsPassLoading] = useState(false)
   const menuBtnRef = useRef<HTMLButtonElement>(null)
   const wbBtnRef = useRef<HTMLButtonElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const passInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!menuOpen) return
@@ -63,6 +67,21 @@ export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onF
     e.target.value = ''
   }
 
+  const handlePassFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !onUploadPass) return
+    setIsPassLoading(true)
+    try {
+      await onUploadPass(file)
+      showToast('Пропуск загружен', 'success')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Ошибка загрузки пропуска')
+    } finally {
+      setIsPassLoading(false)
+    }
+    e.target.value = ''
+  }
+
   const hasFiles = fileUrls.length > 0
 
   const menu = menuOpen
@@ -72,31 +91,48 @@ export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onF
           onMouseDown={(e) => e.stopPropagation()}
           className="min-w-[160px] overflow-hidden rounded-xl border border-slate-100 bg-white shadow-xl"
         >
-          {fileUrls.map((url, i) => (
-            <div key={i} className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-slate-50">
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="truncate max-w-[110px] text-xs text-blue-600 hover:underline"
-                onClick={() => setMenuOpen(false)}
-              >
-                Стикер {i + 1}
-              </a>
-              {onRemove && (
-                <button
-                  type="button"
-                  title="Удалить"
-                  onClick={() => { setMenuOpen(false); void withLoading(() => onRemove(i)) }}
-                  className="flex-shrink-0 text-slate-300 transition hover:text-rose-500"
-                >
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              )}
-            </div>
-          ))}
+          {fileUrls.map((url, i) => {
+            const ts = url.match(/\/([0-9]{10,13})_/)?.[1]
+            const dateStr = ts ? (() => {
+              const ms = ts.length === 10 ? Number(ts) * 1000 : Number(ts)
+              const d = new Date(ms)
+              const pad = (n: number) => String(n).padStart(2, '0')
+              const offset = -d.getTimezoneOffset()
+              const sign = offset >= 0 ? '+' : '-'
+              const h = Math.floor(Math.abs(offset) / 60)
+              return `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())} GMT${sign}${h}`
+            })() : null
+            return (
+              <div key={i} className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-slate-50">
+                <div className="flex min-w-0 flex-col">
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="truncate text-xs font-medium text-blue-600 hover:underline"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Стикер {i + 1}
+                  </a>
+                  {dateStr && (
+                    <span className="text-[10px] text-slate-400">{dateStr}</span>
+                  )}
+                </div>
+                {onRemove && (
+                  <button
+                    type="button"
+                    title="Удалить"
+                    onClick={() => { setMenuOpen(false); void withLoading(() => onRemove(i)) }}
+                    className="flex-shrink-0 text-slate-300 transition hover:text-rose-500"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            )
+          })}
         </div>,
         document.body,
       )
@@ -115,7 +151,10 @@ export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onF
     if (!id || !onFetchWbBarcodes) return
     setShowWbInput(false)
     setIsWbLoading(true)
-    try { await onFetchWbBarcodes(id) }
+    try {
+      await onFetchWbBarcodes(id)
+      showToast('Штрихкоды WB загружены в стикеры поставки', 'success')
+    }
     catch (e) { showToast(e instanceof Error ? e.message : 'Ошибка WB') }
     finally { setIsWbLoading(false) }
   }
@@ -130,6 +169,17 @@ export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onF
         className="hidden"
         onChange={handleFile}
       />
+
+      {/* Hidden pass file input */}
+      {onUploadPass && (
+        <input
+          ref={passInputRef}
+          type="file"
+          accept=".pdf"
+          className="hidden"
+          onChange={handlePassFile}
+        />
+      )}
 
       {/* Upload button */}
       {onAdd && (
@@ -159,15 +209,11 @@ export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onF
         ref={menuBtnRef}
         type="button"
         disabled={!hasFiles}
-        title={!hasFiles ? 'Стикеры не загружены' : fileUrls.length === 1 ? 'Открыть стикер' : `Стикеры (${fileUrls.length})`}
+        title={!hasFiles ? 'Стикеры не загружены' : `Стикеры (${fileUrls.length})`}
         onClick={(e) => {
           if (!hasFiles) return
           e.stopPropagation()
-          if (fileUrls.length === 1) {
-            window.open(fileUrls[0], '_blank')
-          } else {
-            setMenuOpen((v) => !v)
-          }
+          setMenuOpen((v) => !v)
         }}
         className={`relative flex h-7 w-7 items-center justify-center rounded-lg transition ${
           hasFiles
@@ -180,7 +226,7 @@ export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onF
           <polyline points="7 10 12 15 17 10" />
           <line x1="12" y1="15" x2="12" y2="3" />
         </svg>
-        {fileUrls.length > 1 && (
+        {hasFiles && (
           <span className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[9px] font-bold text-white leading-none">
             {fileUrls.length}
           </span>
@@ -215,6 +261,67 @@ export const TripLineStickerCell = ({ fileUrls, wbSupplyId, onAdd, onRemove, onF
         </button>
       )}
       {menu}
+      {/* Pass button */}
+      {onUploadPass && (
+        <div className="flex items-center">
+          {passUrl ? (
+            <>
+              <a
+                href={passUrl}
+                target="_blank"
+                rel="noreferrer"
+                title="Открыть пропуск"
+                className="flex h-7 items-center gap-1 rounded-l-lg bg-emerald-50 px-1.5 text-xs font-semibold text-emerald-600 hover:bg-emerald-100"
+              >
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                Пропуск
+              </a>
+              <button
+                type="button"
+                title="Заменить пропуск"
+                disabled={isPassLoading}
+                onClick={() => passInputRef.current?.click()}
+                className="flex h-7 items-center justify-center border-l border-emerald-100 bg-emerald-50 px-1 text-emerald-400 transition hover:bg-emerald-100 hover:text-emerald-600 rounded-r-lg disabled:opacity-40"
+              >
+                {isPassLoading ? (
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                )}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              title="Загрузить пропуск WB"
+              disabled={isPassLoading}
+              onClick={() => passInputRef.current?.click()}
+              className="flex h-7 items-center gap-1 rounded-lg bg-slate-50 px-1.5 text-xs font-semibold text-slate-400 transition hover:bg-emerald-50 hover:text-emerald-500 disabled:opacity-40"
+            >
+              {isPassLoading ? (
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+              )}
+              Пропуск
+            </button>
+          )}
+        </div>
+      )}
       {showWbInput && createPortal(
         <div
           style={{ position: 'fixed', top: wbInputPos.top, left: wbInputPos.left, zIndex: 9999 }}

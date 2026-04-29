@@ -8,10 +8,12 @@ interface SidebarProps {
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
+  archivedAccounts?: Account[]
   activeAccount: Account | null
   onSelectAccount: (accountId: string) => void
   onDeleteActiveCompany: (id: string) => void
   onEditCompany: (account: Account) => void
+  onRestoreAccount?: (accountId: string) => Promise<void>
   permissions: RolePermissions
   isAdmin?: boolean
 }
@@ -140,14 +142,17 @@ export const Sidebar = ({
   onOpenAddCompany,
   onSignOut,
   accounts,
+  archivedAccounts = [],
   activeAccount,
   onSelectAccount,
   onDeleteActiveCompany,
   onEditCompany,
+  onRestoreAccount,
   permissions,
   isAdmin = false,
 }: SidebarProps) => {
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
+  const [restoringAccountId, setRestoringAccountId] = useState<string | null>(null)
   const companyRef = useRef<HTMLDivElement | null>(null)
   const hasActiveAccount = Boolean(activeAccount)
   const companyName = activeAccount ? activeAccount.name : 'Нет компании'
@@ -218,7 +223,7 @@ export const Sidebar = ({
             </button>
 
             {hasActiveAccount && isCompanyOpen ? (
-              <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-20 rounded-[12px] border border-[#BCD2FF] bg-white shadow-[0_8px_20px_rgba(36,72,146,0.14)]">
+              <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-20 max-h-[70vh] overflow-y-auto rounded-[12px] border border-[#BCD2FF] bg-white shadow-[0_8px_20px_rgba(36,72,146,0.14)]">
                 {accounts.map((account) => {
                   const isSelected = activeAccount?.id === account.id
                   const listCompanyIdLabel = `ID: ${account.id.slice(0, 8)}`
@@ -299,6 +304,67 @@ export const Sidebar = ({
                     </button>
                   )
                 })}
+
+                {archivedAccounts.length > 0 && onRestoreAccount && (
+                  <>
+                    <div className="mx-3 my-1 border-t border-slate-100" />
+                    <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Архив
+                    </div>
+                    {archivedAccounts.map((account) => {
+                      const msLeft = account.deleted_at
+                        ? new Date(account.deleted_at).getTime() + 15 * 24 * 60 * 60 * 1000 - Date.now()
+                        : 0
+                      const days = Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)))
+                      const isRestoring = restoringAccountId === account.id
+                      return (
+                        <div
+                          key={account.id}
+                          className="flex flex-col gap-1.5 px-[16px] py-[10px]"
+                        >
+                          <span>
+                            <span className="block text-[13px] font-medium text-slate-400">{account.name}</span>
+                            <span className={`mt-0.5 block text-[11px] ${days <= 3 ? 'text-rose-400' : 'text-slate-300'}`}>
+                              {days} дн. до удаления
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            disabled={isRestoring}
+                            onClick={async (e) => {
+                              e.stopPropagation()
+                              setRestoringAccountId(account.id)
+                              try {
+                                await onRestoreAccount(account.id)
+                              } finally {
+                                setRestoringAccountId(null)
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <svg
+                              viewBox="0 0 24 24"
+                              className={`h-3 w-3 ${isRestoring ? 'animate-spin' : ''}`}
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                            >
+                              {isRestoring ? (
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                              ) : (
+                                <>
+                                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                                  <path d="M21 3v5h-5" />
+                                </>
+                              )}
+                            </svg>
+                            {isRestoring ? '...' : 'Восстановить'}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </>
+                )}
               </div>
             ) : null}
           </div>

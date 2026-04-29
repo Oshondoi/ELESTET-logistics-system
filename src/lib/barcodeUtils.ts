@@ -2,10 +2,11 @@
  * Открывает новую вкладку с EAN-13 штрихкодами для печати.
  * Использует JsBarcode через CDN — без npm-зависимостей.
  */
-export function openBarcodePrintPage(barcodes: { barcode: string; quantity: number }[]) {
+export function openBarcodePrintPage(barcodes: { barcode: string; quantity: number }[], win?: Window | null) {
   const items = barcodes.flatMap((b) => Array(b.quantity).fill(b.barcode) as string[])
 
   if (items.length === 0) {
+    win?.close()
     return
   }
 
@@ -49,5 +50,9 @@ export function openBarcodePrintPage(barcodes: { barcode: string; quantity: numb
 
   const blob = new Blob([html], { type: 'text/html' })
   const url = URL.createObjectURL(blob)
-  window.open(url, '_blank')
+  if (win) {
+    win.location.href = url
+  } else {
+    window.open(url, '_blank')
+  }
 }

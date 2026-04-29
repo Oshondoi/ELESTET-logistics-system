@@ -3,12 +3,14 @@ import type { Carrier, Warehouse } from '../types'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
+import { Modal } from '../components/ui/Modal'
 import {
   fetchCarrierTariffs,
   upsertCarrierTariff,
   fetchWbUnloadTariffs,
   upsertWbUnloadTariff,
 } from '../services/directoriesService'
+import type { CarrierUpdateData } from '../services/directoriesService'
 
 interface DirectoryPanelProps {
   title: string
@@ -18,9 +20,10 @@ interface DirectoryPanelProps {
   onUpdate: (id: string, name: string) => Promise<void>
   canManage?: boolean
   onTariff?: (id: string, name: string) => void
+  onEditModal?: (item: { id: string; name: string }) => void
 }
 
-const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = true, onTariff }: DirectoryPanelProps) => {
+const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = true, onTariff, onEditModal }: DirectoryPanelProps) => {
   const [inputValue, setInputValue] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
@@ -150,7 +153,7 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = t
                       {!item.is_system && (
                         <button
                           type="button"
-                          onClick={() => startEdit(item)}
+                          onClick={() => onEditModal ? onEditModal(item) : startEdit(item)}
                           aria-label={`Редактировать ${item.name}`}
                           className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500"
                         >
@@ -213,6 +216,127 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = t
         onConfirm={() => void handleConfirmDelete()}
       />
     </>
+  )
+}
+
+// ── Модалка редактирования перевозчика ────────────────────────────
+
+const CarrierEditModal = ({
+  carrier,
+  currentUserId,
+  onClose,
+  onSave,
+}: {
+  carrier: Carrier
+  currentUserId: string
+  onClose: () => void
+  onSave: (id: string, data: CarrierUpdateData) => Promise<void>
+}) => {
+  const [name, setName] = useState(carrier.name)
+  const [phone, setPhone] = useState(carrier.phone ?? '')
+  const [contactPerson, setContactPerson] = useState(carrier.contact_person ?? '')
+  const [notes, setNotes] = useState(carrier.notes ?? '')
+  const [isOwner, setIsOwner] = useState(carrier.owner_user_id === currentUserId)
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) { setError('Введите название'); return }
+    setIsSaving(true)
+    setError(null)
+    try {
+      await onSave(carrier.id, {
+        name: name.trim(),
+        phone: phone.trim() || null,
+        contact_person: contactPerson.trim() || null,
+        notes: notes.trim() || null,
+        owner_user_id: isOwner ? currentUserId : null,
+      })
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка сохранения')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Редактировать перевозчика">
+      <form className="grid gap-4" onSubmit={(e) => void handleSubmit(e)}>
+        <div className="grid gap-1.5">
+          <label className="text-xs font-medium text-slate-500">Название *</label>
+          <input
+            autoFocus
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-400"
+          />
+        </div>
+
+        <div className="grid gap-1.5">
+          <label className="text-xs font-medium text-slate-500">Телефон</label>
+          <input
+            type="text"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+7 999 000-00-00"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-blue-400"
+          />
+        </div>
+
+        <div className="grid gap-1.5">
+          <label className="text-xs font-medium text-slate-500">Контактное лицо</label>
+          <input
+            type="text"
+            value={contactPerson}
+            onChange={(e) => setContactPerson(e.target.value)}
+            placeholder="Иван Иванов"
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-blue-400"
+          />
+        </div>
+
+        <div className="grid gap-1.5">
+          <label className="text-xs font-medium text-slate-500">Примечания</label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            placeholder="Любая дополнительная информация..."
+            className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-blue-400"
+          />
+        </div>
+
+        {/* Я владелец (логистик) */}
+        <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 transition hover:bg-blue-50/40">
+          <div className="mt-0.5 flex-shrink-0">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isOwner}
+              onClick={() => setIsOwner((v) => !v)}
+              className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none ${isOwner ? 'bg-blue-500' : 'bg-slate-200'}`}
+            >
+              <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${isOwner ? 'translate-x-4' : 'translate-x-0'}`} />
+            </button>
+          </div>
+          <div>
+            <p className="text-sm font-medium text-slate-800">Я являюсь владельцем этого перевозчика</p>
+            <p className="mt-0.5 text-xs text-slate-400">Включите, если вы сами управляете этой логистической компанией</p>
+          </div>
+        </label>
+
+        {error && <p className="text-sm text-rose-500">{error}</p>}
+
+        <div className="flex justify-end gap-3 pt-1">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={isSaving}>Отмена</Button>
+          <Button type="submit" disabled={isSaving || !name.trim()}>
+            {isSaving ? 'Сохранение...' : 'Сохранить'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
@@ -352,11 +476,10 @@ const CarrierTariffModal = ({
                         type="number"
                         min="0"
                         step="any"
-                        placeholder="—"
                         value={values[wh.id]?.box ?? ''}
                         onChange={(e) => setValue(wh.id, 'box', e.target.value)}
                         onBlur={() => void handleBlur(wh.id)}
-                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-900 outline-none focus:border-blue-400"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-900 outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                       />
                     </td>
                     <td className="px-3 py-1.5">
@@ -364,11 +487,10 @@ const CarrierTariffModal = ({
                         type="number"
                         min="0"
                         step="any"
-                        placeholder="—"
                         value={values[wh.id]?.kg ?? ''}
                         onChange={(e) => setValue(wh.id, 'kg', e.target.value)}
                         onBlur={() => void handleBlur(wh.id)}
-                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-900 outline-none focus:border-blue-400"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-900 outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                       />
                     </td>
                   </tr>
@@ -470,9 +592,11 @@ interface DirectoriesPageProps {
   carriers: Carrier[]
   warehouses: Warehouse[]
   accountId: string
+  currentUserId: string
   onAddCarrier: (name: string) => Promise<unknown>
   onDeleteCarrier: (id: string) => Promise<void>
   onRenameCarrier: (id: string, name: string) => Promise<void>
+  onUpdateCarrier: (id: string, data: CarrierUpdateData) => Promise<void>
   onAddWarehouse: (name: string) => Promise<unknown>
   onDeleteWarehouse: (id: string) => Promise<void>
   onRenameWarehouse: (id: string, name: string) => Promise<void>
@@ -483,15 +607,18 @@ export const DirectoriesPage = ({
   carriers,
   warehouses,
   accountId,
+  currentUserId,
   onAddCarrier,
   onDeleteCarrier,
   onRenameCarrier,
+  onUpdateCarrier,
   onAddWarehouse,
   onDeleteWarehouse,
   onRenameWarehouse,
   canManage = true,
 }: DirectoriesPageProps) => {
   const [tariffCarrier, setTariffCarrier] = useState<Carrier | null>(null)
+  const [editCarrier, setEditCarrier] = useState<Carrier | null>(null)
 
   return (
     <div className="space-y-4">
@@ -503,6 +630,7 @@ export const DirectoriesPage = ({
           onDelete={onDeleteCarrier}
           onUpdate={onRenameCarrier}
           canManage={canManage}
+          onEditModal={(item) => setEditCarrier(carriers.find((c) => c.id === item.id) ?? null)}
           onTariff={(id, name) =>
             setTariffCarrier(carriers.find((c) => c.id === id) ?? { id, account_id: accountId, name, created_at: '' })
           }
@@ -525,6 +653,15 @@ export const DirectoriesPage = ({
           warehouses={warehouses}
           accountId={accountId}
           onClose={() => setTariffCarrier(null)}
+        />
+      )}
+
+      {editCarrier && (
+        <CarrierEditModal
+          carrier={editCarrier}
+          currentUserId={currentUserId}
+          onClose={() => setEditCarrier(null)}
+          onSave={onUpdateCarrier}
         />
       )}
     </div>

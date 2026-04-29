@@ -1,18 +1,21 @@
 import { StoreList } from '../components/stores/StoreList'
+import { ArchivedStoresList } from '../components/stores/ArchivedStoresList'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import type { Store } from '../types'
 
 interface StoresPageProps {
   stores: Store[]
+  archivedStores?: Store[]
   onOpenCreate: () => void
   onEdit: (store: Store) => void
   onDelete: (storeId: string) => Promise<void>
   onSync: (store: Store) => Promise<void>
+  onRestore?: (storeId: string) => Promise<void>
   canManage?: boolean
 }
 
-export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete, onSync, canManage = true }: StoresPageProps) => (
+export const StoresPage = ({ stores, archivedStores = [], onOpenCreate, onEdit, onDelete, onSync, onRestore, canManage = true }: StoresPageProps) => (
   <div className="space-y-4">
     <Card className="rounded-3xl p-2.5">
       <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
@@ -33,5 +36,9 @@ export const StoresPage = ({ stores, onOpenCreate, onEdit, onDelete, onSync, can
     </Card>
 
     <StoreList stores={stores} onEdit={onEdit} onDelete={onDelete} onSync={onSync} canManage={canManage} />
+
+    {onRestore && (
+      <ArchivedStoresList stores={archivedStores} canManage={canManage} onRestore={onRestore} />
+    )}
   </div>
 )

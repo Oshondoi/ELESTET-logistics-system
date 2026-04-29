@@ -76,3 +76,24 @@ export const deleteAccountInSupabase = async (accountId: string) => {
 
   if (deleteAccountError) throw deleteAccountError
 }
+
+export const fetchArchivedAccountsFromSupabase = async () => {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured')
+  }
+
+  const { data, error } = await supabase.rpc('get_my_archived_accounts')
+
+  if (error) throw error
+  return (data ?? []) as import('../types').Account[]
+}
+
+export const restoreAccountInSupabase = async (accountId: string) => {
+  if (!supabase) {
+    throw new Error('Supabase client is not configured')
+  }
+
+  const { error } = await supabase.rpc('restore_account', { p_account_id: accountId })
+
+  if (error) throw error
+}

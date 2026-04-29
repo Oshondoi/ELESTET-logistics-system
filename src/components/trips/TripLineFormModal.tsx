@@ -31,7 +31,7 @@ const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues
   reception_date: '',
   arrival_date: '',
   shipped_date: '',
-  status: 'Ожидает отправки',
+  status: 'Формируется',
   payment_status: 'Не оплачено',
   comment: '',
 })

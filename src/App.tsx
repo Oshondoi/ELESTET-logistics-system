@@ -16,7 +16,7 @@ import { useAppData } from './hooks/useAppData'
 import { useAuth } from './hooks/useAuth'
 import { useMyPermissions } from './hooks/useMyPermissions'
 import { useRoles } from './hooks/useRoles'
-import { isSupabaseConfigured } from './lib/supabase'
+import { isSupabaseConfigured, supabase } from './lib/supabase'
 import { AuthPage } from './pages/AuthPage'
 import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
@@ -133,6 +133,8 @@ function App() {
   const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState(false)
   const [isDeletingAccount, setIsDeletingAccount] = useState(false)
   const [pendingDeleteAccountId, setPendingDeleteAccountId] = useState<string | null>(null)
+  const [deleteAccountPassword, setDeleteAccountPassword] = useState('')
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null)
   const [shipmentModalOpen, setShipmentModalOpen] = useState(false)
   const [tripModalOpen, setTripModalOpen] = useState(false)
   const [storeModalOpen, setStoreModalOpen] = useState(false)
@@ -146,7 +148,7 @@ function App() {
   useEffect(() => {
     setProfileUserName((session?.user?.user_metadata?.full_name as string) ?? '')
   }, [session?.user?.id])
-  const { accounts, isLoading: isAccountsLoading, createAccount, deleteAccount, updateAccount } = useAccounts(Boolean(session))
+  const { accounts, archivedAccounts, isLoading: isAccountsLoading, createAccount, deleteAccount, restoreAccount, updateAccount } = useAccounts(Boolean(session))
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
   const { roles, isLoading: isRolesLoading, addRole, updateRole, removeRole, cloneRoleToAccount } = useRoles(activeAccount?.id ?? null)
   const { permissions, isLoading: isPermissionsLoading } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
@@ -167,6 +169,7 @@ function App() {
   const {
     shipments,
     stores,
+    archivedStores,
     trips,
     carriers,
     warehouses,
@@ -175,6 +178,7 @@ function App() {
     addStore,
     updateStore,
     removeStore,
+    restoreStore,
     addTrip,
     addTripLine,
     addInvoicePhoto,
@@ -182,6 +186,7 @@ function App() {
     removeInvoicePhoto,
     addStickerFile,
     removeStickerFile,
+    uploadWbPass,
     fetchWbBarcodes,
     removeTrip,
     removeTripLine,
@@ -195,6 +200,7 @@ function App() {
     addCarrier,
     removeCarrier,
     renameCarrier,
+    updateCarrier,
     addWarehouse,
     removeWarehouse,
     renameWarehouse,
@@ -304,13 +310,23 @@ function App() {
   }
 
   const handleConfirmDeleteActiveCompany = async () => {
-    if (!pendingDeleteAccountId) return
+    if (!pendingDeleteAccountId || !supabase) return
     setIsDeletingAccount(true)
+    setDeleteAccountError(null)
     try {
+      const { data: userData } = await supabase.auth.getUser()
+      const email = userData.user?.email
+      if (!email) throw new Error('Не удалось определить пользователя')
+      const { error: authError } = await supabase.auth.signInWithPassword({ email, password: deleteAccountPassword })
+      if (authError) throw new Error('Неверный пароль')
       await deleteAccount(pendingDeleteAccountId)
       if (activeAccountId === pendingDeleteAccountId) setActiveAccountId(null)
       setPendingDeleteAccountId(null)
+      setDeleteAccountPassword('')
+      setDeleteAccountError(null)
       setDeleteAccountModalOpen(false)
+    } catch (err) {
+      setDeleteAccountError(err instanceof Error ? err.message : 'Ошибка')
     } finally {
       setIsDeletingAccount(false)
     }
@@ -387,6 +403,8 @@ function App() {
             onSelectAccount={setActiveAccountId}
             onDeleteActiveCompany={handleDeleteCompany}
             onEditCompany={(account) => { setEditingAccount(account); setEditAccountModalOpen(true) }}
+            onRestoreAccount={restoreAccount}
+            archivedAccounts={archivedAccounts}
             permissions={permissions}
             isAdmin={isAdmin}
           />
@@ -431,21 +449,24 @@ function App() {
                   onAddStickerFile={addStickerFile}
                   onRemoveStickerFile={removeStickerFile}
                   onFetchWbBarcodes={fetchWbBarcodes}
+                  onUploadWbPass={uploadWbPass}
                   canManage={permissions.shipments_manage}
                   accountId={activeAccount?.id ?? ''}
                   onUpdateTripCustomFields={updateTripCustomFields}
                   onUpdateLineCustomFields={updateLineCustomFields}
                 />
               ) : effectivePage === 'stores' ? (
-                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} canManage={permissions.stores_manage} />
+                <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} canManage={permissions.stores_manage} />
               ) : effectivePage === 'directories' ? (
                 <DirectoriesPage
                   carriers={carriers}
                   warehouses={warehouses}
                   accountId={activeAccount?.id ?? ''}
+                  currentUserId={session?.user.id ?? ''}
                   onAddCarrier={addCarrier}
                   onDeleteCarrier={removeCarrier}
                   onRenameCarrier={renameCarrier}
+                  onUpdateCarrier={updateCarrier}
                   onAddWarehouse={addWarehouse}
                   onDeleteWarehouse={removeWarehouse}
                   onRenameWarehouse={renameWarehouse}
@@ -490,7 +511,7 @@ function App() {
               ) : effectivePage === 'admin' ? (
                 <AdminPage />
               ) : (
-                <StoresPage stores={stores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} />
+                <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} />
               )
             ) : null}
           </div>
@@ -521,9 +542,14 @@ function App() {
         open={deleteAccountModalOpen}
         accountName={pendingDeleteAccount?.name ?? ''}
         isSubmitting={isDeletingAccount}
+        error={deleteAccountError}
+        password={deleteAccountPassword}
+        onPasswordChange={setDeleteAccountPassword}
         onClose={() => {
           if (!isDeletingAccount) {
             setDeleteAccountModalOpen(false)
+            setDeleteAccountPassword('')
+            setDeleteAccountError(null)
           }
         }}
         onConfirm={() => void handleConfirmDeleteActiveCompany()}

@@ -207,6 +207,7 @@ export const RoleFormModal = ({
   const [resolveError, setResolveError] = useState<string | null>(null)
   const [isResolving, setIsResolving] = useState(false)
   const lastResolved = useRef<string | null>(null)
+  const userIdDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (open) {
@@ -267,16 +268,28 @@ export const RoleFormModal = ({
     }
   }
 
-  const handleUserIdBlur = () => {
-    const val = userIdInput.trim()
+  const triggerUserIdResolve = (val: string) => {
     if (!val || val === (resolvedUser ? `U${resolvedUser.short_id ?? ''}` : '') || val === resolvedUser?.user_id) return
-    // Парсим U{n} формат
     const shortMatch = /^[Uu](\d+)$/.exec(val)
     if (shortMatch) {
       void doResolve({ shortId: parseInt(shortMatch[1]) }, emailInput.trim() || undefined)
-    } else {
+    } else if (val.length === 36) {
       void doResolve({ userId: val }, emailInput.trim() || undefined)
     }
+  }
+
+  const handleUserIdChange = (value: string) => {
+    setUserIdInput(value)
+    setResolveError(null)
+    if (userIdDebounceRef.current) clearTimeout(userIdDebounceRef.current)
+    const trimmed = value.trim()
+    if (!trimmed) return
+    userIdDebounceRef.current = setTimeout(() => triggerUserIdResolve(trimmed), 600)
+  }
+
+  const handleUserIdBlur = () => {
+    if (userIdDebounceRef.current) clearTimeout(userIdDebounceRef.current)
+    triggerUserIdResolve(userIdInput.trim())
   }
 
   const clearUser = () => {
@@ -421,13 +434,13 @@ export const RoleFormModal = ({
                     <div className="h-px flex-1 bg-slate-200" />
                   </div>
                   <div className="grid gap-1">
-                    <label className="text-xs font-medium text-slate-500">ID пользователя (U1, U2, ... или UUID)</label>
+                    <label className="text-xs font-medium text-slate-500">ID пользователя (U1, U2, ...)</label>
                     <input
                       type="text"
                       value={userIdInput}
-                      onChange={(e) => { setUserIdInput(e.target.value); setResolveError(null) }}
+                      onChange={(e) => handleUserIdChange(e.target.value)}
                       onBlur={handleUserIdBlur}
-                      placeholder="U5  или  xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                      placeholder="U2"
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-blue-400"
                     />
                   </div>

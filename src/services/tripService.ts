@@ -144,16 +144,20 @@ export const updateTripLineStatus = async (
   accountId: string,
   lineId: string,
   status: ShipmentStatus,
+  currentWaitingAt: string | null,
   currentArrivalDate: string | null,
   currentShippedDate: string | null,
-): Promise<{ arrival_date: string | null; shipped_date: string | null }> => {
+): Promise<{ waiting_at: string | null; arrival_date: string | null; shipped_date: string | null }> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const today = new Date().toISOString().slice(0, 10)
+  const waiting_at =
+    status === 'Ожидает отправки' && !currentWaitingAt ? today : currentWaitingAt
   const arrival_date =
     status === 'Прибыл' && !currentArrivalDate ? today : currentArrivalDate
   const shipped_date =
     status === 'Отгружен' && !currentShippedDate ? today : currentShippedDate
   const patch: Record<string, unknown> = { status }
+  if (status === 'Ожидает отправки' && !currentWaitingAt) patch.waiting_at = waiting_at
   if (status === 'Прибыл' && !currentArrivalDate) patch.arrival_date = arrival_date
   if (status === 'Отгружен' && !currentShippedDate) patch.shipped_date = shipped_date
   const { error } = await supabase
@@ -164,7 +168,7 @@ export const updateTripLineStatus = async (
     .eq('account_id', accountId)
 
   if (error) throw error
-  return { arrival_date, shipped_date }
+  return { waiting_at, arrival_date, shipped_date }
 }
 
 // Массово переводит поставки рейса в «Прибыл», кроме «Отгружен» (статус впереди по логике)
@@ -174,7 +178,7 @@ export const bulkArriveTripLines = async (
   today: string,
 ): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const toArrive: ShipmentStatus[] = ['Ожидает отправки', 'В пути']
+  const toArrive: ShipmentStatus[] = ['Формируется', 'Ожидает отправки', 'В пути']
 
   // Обновляем статус
   const { error: e1 } = await supabase
@@ -336,22 +340,61 @@ export const updateTripLineStickerFiles = async (
   if (error) throw error
 }
 
+export const uploadWbPassFile = async (
+  accountId: string,
+  lineId: string,
+  file: File,
+): Promise<string> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const ext = file.name.split('.').pop() ?? 'pdf'
+  const path = `${accountId}/${lineId}/${Date.now()}_pass.${ext}`
+
+  const { error: uploadError } = await supabase.storage
+    .from('trip-stickers')
+    .upload(path, file, { upsert: false })
+
+  if (uploadError) throw uploadError
+
+  const { data } = supabase.storage.from('trip-stickers').getPublicUrl(path)
+  return data.publicUrl
+}
+
+export const updateTripLineWbPassUrl = async (
+  accountId: string,
+  lineId: string,
+  wb_pass_url: string | null,
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ wb_pass_url } as any)
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+
+  if (error) throw error
+}
+
 /** Получить штрихкоды поставки FBW через WB API (Edge Function) */
-export const getWbSupplyBarcodes = async (
+export const getWbSupplyStickers = async (
   accountId: string,
   lineId: string,
   wbSupplyId?: string,
-): Promise<{ wb_supply_id: string; barcodes: { barcode: string; quantity: number }[] }> => {
+): Promise<{ wb_supply_id: string; sticker_urls: string[] }> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const body: Record<string, string> = { account_id: accountId, line_id: lineId }
   if (wbSupplyId) body.wb_supply_id = wbSupplyId
   const { data, error } = await supabase.functions.invoke<{
     wb_supply_id?: string
-    barcodes?: { barcode: string; quantity: number }[]
+    sticker_urls?: string[]
     error?: string
   }>('wb-supply', { body })
-  if (error) throw error
-  if (!data) throw new Error('Пустой ответ от wb-supply')
+  if (error) {
+    const msg = (error as { message?: string }).message ?? String(error)
+    if (msg.includes('non-2xx') || msg.includes('Failed to send')) throw new Error('Не удалось связаться с сервером. Проверьте интернет-соединение.')
+    throw new Error(msg)
+  }
+  if (!data) throw new Error('Пустой ответ от сервера. Попробуйте ещё раз.')
   if (data.error) throw new Error(data.error)
-  return data as { wb_supply_id: string; barcodes: { barcode: string; quantity: number }[] }
+  return data as { wb_supply_id: string; sticker_urls: string[] }
 }

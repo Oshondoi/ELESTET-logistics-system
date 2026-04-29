@@ -1,6 +1,7 @@
 import type { PaymentStatus, ShipmentStatus, TripStatus } from '../types'
 
 export const shipmentStatuses: ShipmentStatus[] = [
+  'Формируется',
   'Ожидает отправки',
   'В пути',
   'Прибыл',

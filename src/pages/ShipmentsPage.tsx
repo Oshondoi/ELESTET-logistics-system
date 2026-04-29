@@ -48,6 +48,7 @@ interface ShipmentsPageProps {
   onAddStickerFile: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
   onUpdateTripCustomFields?: (tripId: string, fields: Record<string, unknown>) => Promise<void>
   onUpdateLineCustomFields?: (tripId: string, lineId: string, fields: Record<string, unknown>) => Promise<void>
   canManage?: boolean
@@ -74,6 +75,7 @@ export const ShipmentsPage = ({
   onAddStickerFile,
   onRemoveStickerFile,
   onFetchWbBarcodes,
+  onUploadWbPass,
   onUpdateTripCustomFields,
   onUpdateLineCustomFields,
   canManage = true,
@@ -391,8 +393,12 @@ export const ShipmentsPage = ({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 >
-                  <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" />
-                  <circle cx="12" cy="12" r="3" />
+                  <line x1="8" y1="6" x2="21" y2="6" />
+                  <line x1="8" y1="12" x2="21" y2="12" />
+                  <line x1="8" y1="18" x2="21" y2="18" />
+                  <circle cx="3" cy="6" r="1.5" />
+                  <circle cx="3" cy="12" r="1.5" />
+                  <circle cx="3" cy="18" r="1.5" />
                 </svg>
               </Button>
               <div className="flex h-10 min-w-[170px] items-center justify-between rounded-2xl bg-slate-100 px-4 text-sm text-slate-600">
@@ -447,6 +453,7 @@ export const ShipmentsPage = ({
           onAddStickerFile={onAddStickerFile}
           onRemoveStickerFile={onRemoveStickerFile}
           onFetchWbBarcodes={onFetchWbBarcodes}
+          onUploadWbPass={onUploadWbPass}
           canManage={canManage}
           tripConfig={tripConfig}
           lineConfig={lineConfig}
