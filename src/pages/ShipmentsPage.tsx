@@ -47,8 +47,13 @@ interface ShipmentsPageProps {
   onRemoveInvoicePhoto: (tripId: string, lineId: string, index: number) => Promise<void>
   onAddStickerFile: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
+  onAddCombinedStickerFile: (tripId: string, lineId: string, file: File) => Promise<void>
+  onRemoveCombinedStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
+  onRemoveWbPass: (tripId: string, lineId: string, index: number) => Promise<void>
   onUpdateTripCustomFields?: (tripId: string, fields: Record<string, unknown>) => Promise<void>
   onUpdateLineCustomFields?: (tripId: string, lineId: string, fields: Record<string, unknown>) => Promise<void>
   canManage?: boolean
@@ -74,8 +79,13 @@ export const ShipmentsPage = ({
   onRemoveInvoicePhoto,
   onAddStickerFile,
   onRemoveStickerFile,
+  onAddCombinedStickerFile,
+  onRemoveCombinedStickerFile,
   onFetchWbBarcodes,
+  onSaveWbSupplyId,
+  onRefreshCargoType,
   onUploadWbPass,
+  onRemoveWbPass,
   onUpdateTripCustomFields,
   onUpdateLineCustomFields,
   canManage = true,
@@ -452,8 +462,13 @@ export const ShipmentsPage = ({
           onRemoveInvoicePhoto={onRemoveInvoicePhoto}
           onAddStickerFile={onAddStickerFile}
           onRemoveStickerFile={onRemoveStickerFile}
+          onAddCombinedStickerFile={onAddCombinedStickerFile}
+          onRemoveCombinedStickerFile={onRemoveCombinedStickerFile}
           onFetchWbBarcodes={onFetchWbBarcodes}
+          onSaveWbSupplyId={onSaveWbSupplyId}
+          onRefreshCargoType={onRefreshCargoType}
           onUploadWbPass={onUploadWbPass}
+          onRemoveWbPass={onRemoveWbPass}
           canManage={canManage}
           tripConfig={tripConfig}
           lineConfig={lineConfig}

@@ -186,8 +186,13 @@ function App() {
     removeInvoicePhoto,
     addStickerFile,
     removeStickerFile,
+    addCombinedStickerFile,
+    removeCombinedStickerFile,
     uploadWbPass,
+    removeWbPass,
+    saveWbSupplyId,
     fetchWbBarcodes,
+    refreshCargoType,
     removeTrip,
     removeTripLine,
     changeTripStatus,
@@ -425,7 +430,7 @@ function App() {
           <div className="flex-1 overflow-y-scroll p-3 lg:p-4">
             {!isLoading && !error ? (
               effectivePage === 'home' ? (
-                <HomePage shipments={shipments} rawShipments={rawShipments} stores={stores} />
+                <HomePage shipments={shipments} rawShipments={rawShipments} stores={stores} hasAccount={accounts.length > 0} onCreateCompany={() => setAccountModalOpen(true)} />
               ) : effectivePage === 'fulfillment' ? (
                 <FulfillmentPage />
               ) : effectivePage === 'shipments' ? (
@@ -448,8 +453,13 @@ function App() {
                   onRemoveInvoicePhoto={removeInvoicePhoto}
                   onAddStickerFile={addStickerFile}
                   onRemoveStickerFile={removeStickerFile}
+                  onAddCombinedStickerFile={addCombinedStickerFile}
+                  onRemoveCombinedStickerFile={removeCombinedStickerFile}
                   onFetchWbBarcodes={fetchWbBarcodes}
+                  onSaveWbSupplyId={saveWbSupplyId}
+                  onRefreshCargoType={refreshCargoType}
                   onUploadWbPass={uploadWbPass}
+                  onRemoveWbPass={removeWbPass}
                   canManage={permissions.shipments_manage}
                   accountId={activeAccount?.id ?? ''}
                   onUpdateTripCustomFields={updateTripCustomFields}

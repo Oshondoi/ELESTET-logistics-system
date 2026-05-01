@@ -401,10 +401,22 @@ const CarrierTariffModal = ({
   const toggleAll = () => {
     const next = !allChecked
     setChecked(Object.fromEntries(destWarehouses.map((w) => [w.id, next])))
+    if (!next) {
+      destWarehouses.forEach((w) => {
+        upsertCarrierTariff(accountId, carrier.id, w.id, null, null).catch(console.error)
+      })
+    }
   }
 
-  const toggleOne = (id: string) =>
-    setChecked((prev) => ({ ...prev, [id]: !prev[id] }))
+  const toggleOne = (id: string) => {
+    setChecked((prev) => {
+      const next = !prev[id]
+      if (!next) {
+        upsertCarrierTariff(accountId, carrier.id, id, null, null).catch(console.error)
+      }
+      return { ...prev, [id]: next }
+    })
+  }
 
   return (
     <div

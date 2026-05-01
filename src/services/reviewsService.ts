@@ -233,7 +233,7 @@ export async function syncFeedbacksFromWb(
           created_date: fb.createdDate ?? null,
           synced_at: new Date().toISOString(),
         })),
-        { onConflict: 'id' },
+        { onConflict: 'store_id,id' },
       )
     if (upsertError) throw new Error(`Ошибка сохранения в БД: ${upsertError.message}`)
   }

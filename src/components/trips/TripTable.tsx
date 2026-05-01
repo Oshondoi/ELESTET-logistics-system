@@ -14,6 +14,185 @@ import { TripLineStickerCell } from '../ui/TripLineStickerCell'
 import { TripLineFormModal } from './TripLineFormModal'
 import { TripFormModal } from './TripFormModal'
 
+const TOOLTIP_MAX_W = 480
+const TOOLTIP_OFFSET = 14
+
+const WB_CARGO_LABELS: Record<number, { label: string; className: string }> = {
+  1: { label: 'Короба', className: 'bg-blue-50 text-blue-600' },
+  2: { label: 'Паллеты', className: 'bg-violet-50 text-violet-600' },
+}
+
+const CommentCell = ({ text, className }: { text: string | null | undefined; className?: string }) => {
+  const [visible, setVisible] = useState(false)
+  const iconRef = useRef<HTMLDivElement>(null)
+  if (!text) return <span className={cn('text-slate-300', className)}>—</span>
+
+  const getStyle = (): React.CSSProperties => {
+    if (!iconRef.current) return { left: 0, top: 0, maxWidth: TOOLTIP_MAX_W }
+    const rect = iconRef.current.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const estimatedH = Math.ceil(text.length / 60) * 18 + 20
+    // Предпочтительно: ниже иконки, выровнено по левому краю
+    let left = rect.left
+    let top = rect.bottom + 6
+    // Уходит за правый край — сдвигаем влево
+    if (left + TOOLTIP_MAX_W > vw - 8) left = Math.max(8, vw - TOOLTIP_MAX_W - 8)
+    // Уходит за нижний край — показываем выше иконки
+    if (top + estimatedH > vh - 8) top = Math.max(8, rect.top - estimatedH - 6)
+    return { left, top, maxWidth: TOOLTIP_MAX_W }
+  }
+
+  return (
+    <div
+      ref={iconRef}
+      className={cn('inline-flex cursor-default text-slate-400 hover:text-slate-600', className)}
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+      {visible && createPortal(
+        <div
+          className="pointer-events-none fixed z-[9999] rounded-xl bg-slate-900/95 px-3 py-2 text-xs leading-relaxed text-white shadow-xl"
+          style={getStyle()}
+        >
+          {text}
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+const WbSupplyIdButton = ({
+  wbSupplyId,
+  onSave,
+  onClear,
+}: {
+  wbSupplyId?: string | null
+  onSave: (id: string) => Promise<void>
+  onClear: () => Promise<void>
+}) => {
+  const [showInput, setShowInput] = useState(false)
+  const [inputValue, setInputValue] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [isClearing, setIsClearing] = useState(false)
+  const [popPos, setPopPos] = useState({ top: 0, left: 0 })
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!showInput) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (btnRef.current?.contains(target)) return
+      if ((target as Element)?.closest?.('[data-wb-popup]')) return
+      setShowInput(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showInput])
+
+  const open = () => {
+    if (showInput) { setShowInput(false); return }
+    if (!btnRef.current) return
+    const rect = btnRef.current.getBoundingClientRect()
+    const left = Math.min(rect.left, window.innerWidth - 248)
+    setPopPos({ top: rect.bottom + 4, left: Math.max(8, left) })
+    setInputValue(wbSupplyId ?? '')
+    setShowInput(true)
+  }
+
+  const handleSave = async () => {
+    const id = inputValue.trim()
+    if (!id) return
+    setIsSaving(true)
+    try {
+      await onSave(id)
+      setShowInput(false)
+    } catch {}
+    finally { setIsSaving(false) }
+  }
+
+  const handleClear = async () => {
+    setIsClearing(true)
+    try {
+      await onClear()
+      setShowInput(false)
+    } catch {}
+    finally { setIsClearing(false) }
+  }
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        title={wbSupplyId ? `ID поставки WB: ${wbSupplyId}` : 'Указать ID поставки WB'}
+        onClick={open}
+        className={`inline-flex h-5 items-center gap-0.5 rounded px-1 text-[10px] font-semibold transition ${
+          wbSupplyId
+            ? 'bg-purple-50 text-purple-500 hover:bg-purple-100'
+            : 'bg-slate-100 text-slate-400 hover:bg-purple-50 hover:text-purple-400'
+        }`}
+      >
+        <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" />
+          <path d="M14 17h3m0 0h3m-3 0v-3m0 3v3" />
+        </svg>
+        WB
+      </button>
+      {showInput && createPortal(
+        <div
+          data-wb-popup
+          style={{ position: 'fixed', top: popPos.top, left: popPos.left, zIndex: 9999 }}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="flex w-60 flex-col gap-2 rounded-xl border border-slate-100 bg-white p-3 shadow-xl"
+        >
+          <div className="text-xs font-medium text-slate-600">ID поставки WB</div>
+          <input
+            autoFocus
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleSave(); if (e.key === 'Escape') setShowInput(false) }}
+            placeholder="Например: 26598368"
+            className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none focus:border-purple-400"
+          />
+          <button
+            type="button"
+            disabled={!inputValue.trim() || isSaving}
+            onClick={() => void handleSave()}
+            className="w-full rounded-lg bg-purple-500 px-2 py-1.5 text-xs font-semibold text-white transition hover:bg-purple-600 disabled:opacity-40"
+          >
+            {isSaving ? 'Сохранение...' : 'Сохранить'}
+          </button>
+          <div className="flex gap-1.5">
+            {wbSupplyId && (
+              <button
+                type="button"
+                disabled={isClearing}
+                onClick={() => void handleClear()}
+                className="flex-1 rounded-lg border border-rose-200 px-2 py-1.5 text-xs text-rose-500 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+              >
+                {isClearing ? '...' : 'Удалить'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowInput(false)}
+              className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-500 transition hover:bg-slate-50"
+            >
+              Отмена
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 type DeleteTarget =
   | {
       type: 'trip'
@@ -56,8 +235,13 @@ interface TripTableProps {
   onRemoveInvoicePhoto: (tripId: string, lineId: string, index: number) => Promise<void>
   onAddStickerFile: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
+  onAddCombinedStickerFile: (tripId: string, lineId: string, file: File) => Promise<void>
+  onRemoveCombinedStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
+  onRemoveWbPass: (tripId: string, lineId: string, index: number) => Promise<void>
   canManage?: boolean
   focusMode?: boolean
   hoverAddMode?: boolean
@@ -90,6 +274,27 @@ const paymentTone = {
   'Оплачено': 'success',
 } as const
 
+const paymentIconMap = {
+  'Не оплачено': (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M15 9l-6 6M9 9l6 6" strokeLinecap="round" />
+    </svg>
+  ),
+  'Частично оплачено': (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  'Оплачено': (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12l3 3 5-5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+}
+
 export const TripTable = ({
   trips,
   stores,
@@ -117,8 +322,13 @@ export const TripTable = ({
   onRemoveInvoicePhoto,
   onAddStickerFile,
   onRemoveStickerFile,
+  onAddCombinedStickerFile,
+  onRemoveCombinedStickerFile,
   onFetchWbBarcodes,
+  onSaveWbSupplyId,
+  onRefreshCargoType,
   onUploadWbPass,
+  onRemoveWbPass,
   canManage = true,
   focusMode = false,
   hoverAddMode = true,
@@ -130,6 +340,7 @@ export const TripTable = ({
   onUpdateLineCustomFields,
 }: TripTableProps) => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [refreshingCargoIds, setRefreshingCargoIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     onExpandedCountChange?.(expandedIds.size)
@@ -539,8 +750,8 @@ export const TripTable = ({
                       </td>
                     )}
                     {!tripHidden.has('comment') && (
-                      <td className="max-w-[220px] px-3 py-3.5 text-slate-500">
-                        {trip.comment || '—'}
+                      <td className="px-3 py-3.5">
+                        <CommentCell text={trip.comment} />
                       </td>
                     )}
                     {tripConfig.customCols.map((col) => (
@@ -693,7 +904,50 @@ export const TripTable = ({
                                     <td className="px-3 py-2.5">
                                       <div className="flex flex-col leading-tight">
                                         <span className="font-medium text-slate-800">{line.destination_warehouse}</span>
-                                        <span className="text-[11px] text-slate-400">Поставка {line.shipment_number}</span>
+                                        <div className="mt-0.5 flex items-center gap-1">
+                                          <span className="text-[11px] text-slate-400">Поставка {line.shipment_number}</span>
+                                          {canManage && (
+                                            <WbSupplyIdButton
+                                              wbSupplyId={line.wb_supply_id}
+                                              onSave={(id) => onSaveWbSupplyId(trip.id, line.id, id)}
+                                              onClear={() => onSaveWbSupplyId(trip.id, line.id, '')}
+                                            />
+                                          )}
+                                          {line.wb_cargo_type != null && WB_CARGO_LABELS[line.wb_cargo_type] && (
+                                            <span className={cn(
+                                              'rounded px-1 py-0.5 text-[10px] font-medium leading-none',
+                                              WB_CARGO_LABELS[line.wb_cargo_type].className,
+                                            )}>
+                                              {WB_CARGO_LABELS[line.wb_cargo_type].label}
+                                            </span>
+                                          )}
+                                          {onRefreshCargoType && line.wb_supply_id && (
+                                            <button
+                                              type="button"
+                                              title="Обновить тип отгрузки"
+                                              disabled={refreshingCargoIds.has(line.id)}
+                                              className="text-slate-300 hover:text-slate-500 disabled:opacity-40"
+                                              onClick={async () => {
+                                                setRefreshingCargoIds((s) => new Set(s).add(line.id))
+                                                try {
+                                                  await onRefreshCargoType(trip.id, line.id, line.wb_supply_id!)
+                                                } finally {
+                                                  setRefreshingCargoIds((s) => { const n = new Set(s); n.delete(line.id); return n })
+                                                }
+                                              }}
+                                            >
+                                              <svg
+                                                viewBox="0 0 24 24"
+                                                className={cn('h-3 w-3', refreshingCargoIds.has(line.id) && 'animate-spin')}
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth="2"
+                                              >
+                                                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round" />
+                                              </svg>
+                                            </button>
+                                          )}
+                                        </div>
                                       </div>
                                     </td>
                                   )}
@@ -730,7 +984,7 @@ export const TripTable = ({
                                           'Отгружен': line.shipped_date,
                                         }
                                         const date = dateMap[line.status]
-                                        const prefix = line.status === 'Формируется' ? 'с ' : ''
+                                        const prefix = (line.status === 'Формируется' || line.status === 'Ожидает отправки') ? 'с ' : ''
                                         return date ? (
                                           <div className="mt-0.5 pl-2.5 text-[10px] text-slate-400">{prefix}{formatDate(date)}</div>
                                         ) : null
@@ -750,11 +1004,15 @@ export const TripTable = ({
                                     <TripLineStickerCell
                                       fileUrls={line.sticker_file_urls ?? []}
                                       wbSupplyId={line.wb_supply_id}
-                                      passUrl={line.wb_pass_url}
+                                      passUrls={line.wb_pass_urls ?? []}
+                                      combinedUrls={line.combined_sticker_urls ?? []}
                                       onAdd={canManage ? (file) => onAddStickerFile(trip.id, line.id, file) : undefined}
                                       onRemove={canManage ? (idx) => onRemoveStickerFile(trip.id, line.id, idx) : undefined}
+                                      onAddCombined={canManage ? (file) => onAddCombinedStickerFile(trip.id, line.id, file) : undefined}
+                                      onRemoveCombined={canManage ? (idx) => onRemoveCombinedStickerFile(trip.id, line.id, idx) : undefined}
                                       onFetchWbBarcodes={(wbId) => onFetchWbBarcodes(trip.id, line.id, wbId)}
                                       onUploadPass={canManage ? (file) => onUploadWbPass(trip.id, line.id, file) : undefined}
+                                      onRemovePass={canManage ? (idx) => onRemoveWbPass(trip.id, line.id, idx) : undefined}
                                     />
                                   </td>
                                   {!lineHidden.has('payment') && (
@@ -765,6 +1023,7 @@ export const TripTable = ({
                                             value={line.payment_status}
                                             options={paymentStatuses}
                                             toneMap={paymentTone}
+                                            iconMap={paymentIconMap}
                                             onChange={(ps) => onChangeTripLinePaymentStatus(trip.id, line.id, ps)}
                                           />
                                         </div>
@@ -778,8 +1037,8 @@ export const TripTable = ({
                                     </td>
                                   )}
                                   {!lineHidden.has('comment') && (
-                                    <td className="max-w-[220px] px-3 py-2.5 text-slate-400">
-                                      {line.comment || '—'}
+                                    <td className="px-3 py-2.5">
+                                      <CommentCell text={line.comment} />
                                     </td>
                                   )}
                                   {lineConfig.customCols.map((col) => (

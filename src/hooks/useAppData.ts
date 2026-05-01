@@ -29,9 +29,14 @@ import {
   updateTripLineInvoicePhotos as updateTripLineInvoicePhotosInSupabase,
   uploadStickerFile as uploadStickerFileInSupabase,
   updateTripLineStickerFiles as updateTripLineStickerFilesInSupabase,
+  uploadCombinedStickerFile as uploadCombinedStickerFileInSupabase,
+  updateTripLineCombinedStickerFiles as updateTripLineCombinedStickerFilesInSupabase,
   getWbSupplyStickers as getWbSupplyStickersInSupabase,
+  getWbSupplyCargoType as getWbSupplyCargoTypeInSupabase,
   uploadWbPassFile as uploadWbPassFileInSupabase,
   updateTripLineWbPassUrl as updateTripLineWbPassUrlInSupabase,
+  updateTripLineWbPassUrls as updateTripLineWbPassUrlsInSupabase,
+  updateTripLineWbSupplyId as updateTripLineWbSupplyIdInSupabase,
   bulkArriveTripLines as bulkArriveTripLinesInSupabase,
 } from '../services/tripService'
 import {
@@ -139,6 +144,33 @@ export const useAppData = (accountId: string | null) => {
       setTrips(supabaseTrips)
       setCarriers(supabaseCarriers)
       setWarehouses(supabaseWarehouses)
+
+      // Фоновая загрузка типа отгрузки: фетчим все уникальные supply ID при каждой загрузке,
+      // чтобы данные всегда были актуальны (если пользователь поменял тип на ВБ)
+      const allLinesWithSupply = supabaseTrips.flatMap((t) =>
+        t.lines.filter((l) => l.wb_supply_id),
+      )
+      const uniqueSupplyIds = [...new Set(allLinesWithSupply.map((l) => l.wb_supply_id as string))]
+      if (uniqueSupplyIds.length > 0 && accountId) {
+        // Берём по одной строке на каждый уникальный supply ID для фетча
+        const representativeLines = uniqueSupplyIds.map(
+          (sid) => allLinesWithSupply.find((l) => l.wb_supply_id === sid)!,
+        )
+        Promise.all(
+          representativeLines.map(async (l) => {
+            const cargoType = await getWbSupplyCargoTypeInSupabase(accountId, l.id)
+            if (cargoType !== null) {
+              // Обновляем все строки с тем же wb_supply_id
+              setTrips((prev) => prev.map((t) => ({
+                ...t,
+                lines: t.lines.map((ln) =>
+                  ln.wb_supply_id === l.wb_supply_id ? { ...ln, wb_cargo_type: cargoType } : ln,
+                ),
+              })))
+            }
+          }),
+        ).catch(() => {})
+      }
 
       const supabaseStickers = await fetchStickers(accountId)
       setStickers(supabaseStickers)
@@ -537,14 +569,92 @@ export const useAppData = (accountId: string | null) => {
     applyStickerUrls(tripId, lineId, newUrls)
   }
 
-  const uploadWbPass = async (tripId: string, lineId: string, file: File) => {
-    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
-    const url = await uploadWbPassFileInSupabase(accountId, lineId, file)
-    await updateTripLineWbPassUrlInSupabase(accountId, lineId, url)
+  const getCombinedStickerUrls = (tripId: string, lineId: string): string[] => {
+    const trip = trips.find((t) => t.id === tripId)
+    return trip?.lines.find((l) => l.id === lineId)?.combined_sticker_urls ?? []
+  }
+
+  const applyCombinedStickerUrls = (tripId: string, lineId: string, urls: string[]) => {
     setTrips((current) =>
       current.map((t) =>
         t.id === tripId
-          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, wb_pass_url: url } : l) }
+          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, combined_sticker_urls: urls } : l) }
+          : t,
+      ),
+    )
+  }
+
+  const addCombinedStickerFile = async (tripId: string, lineId: string, file: File) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const url = await uploadCombinedStickerFileInSupabase(accountId, lineId, file)
+    const newUrls = [...getCombinedStickerUrls(tripId, lineId), url]
+    await updateTripLineCombinedStickerFilesInSupabase(accountId, lineId, newUrls)
+    applyCombinedStickerUrls(tripId, lineId, newUrls)
+  }
+
+  const removeCombinedStickerFile = async (tripId: string, lineId: string, index: number) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const newUrls = getCombinedStickerUrls(tripId, lineId).filter((_, i) => i !== index)
+    await updateTripLineCombinedStickerFilesInSupabase(accountId, lineId, newUrls)
+    applyCombinedStickerUrls(tripId, lineId, newUrls)
+  }
+
+  const getPassUrls = (tripId: string, lineId: string): string[] => {
+    const trip = trips.find((t) => t.id === tripId)
+    return trip?.lines.find((l) => l.id === lineId)?.wb_pass_urls ?? []
+  }
+
+  const applyPassUrls = (tripId: string, lineId: string, urls: string[]) => {
+    setTrips((current) =>
+      current.map((t) =>
+        t.id === tripId
+          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, wb_pass_urls: urls } : l) }
+          : t,
+      ),
+    )
+  }
+
+  const uploadWbPass = async (tripId: string, lineId: string, file: File) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const url = await uploadWbPassFileInSupabase(accountId, lineId, file)
+    const newUrls = [...getPassUrls(tripId, lineId), url]
+    await updateTripLineWbPassUrlsInSupabase(accountId, lineId, newUrls)
+    applyPassUrls(tripId, lineId, newUrls)
+  }
+
+  const removeWbPass = async (tripId: string, lineId: string, index: number) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const newUrls = getPassUrls(tripId, lineId).filter((_, i) => i !== index)
+    await updateTripLineWbPassUrlsInSupabase(accountId, lineId, newUrls)
+    applyPassUrls(tripId, lineId, newUrls)
+  }
+
+  const refreshCargoType = async (tripId: string, lineId: string, wbSupplyId: string) => {
+    if (!isSupabaseConfigured || !accountId) return
+    const cargoType = await getWbSupplyCargoTypeInSupabase(accountId, lineId)
+    if (cargoType !== null) {
+      setTrips((current) =>
+        current.map((t) =>
+          t.id === tripId
+            ? {
+                ...t,
+                lines: t.lines.map((l) =>
+                  l.wb_supply_id === wbSupplyId ? { ...l, wb_cargo_type: cargoType } : l,
+                ),
+              }
+            : t,
+        ),
+      )
+    }
+  }
+
+  const saveWbSupplyId = async (tripId: string, lineId: string, wbSupplyId: string) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    await updateTripLineWbSupplyIdInSupabase(accountId, lineId, wbSupplyId || null)
+    setTrips((current) =>
+      current.map((t) =>
+        t.id === tripId
+          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, wb_supply_id: wbSupplyId || null } : l) }
           : t,
       ),
     )
@@ -553,14 +663,18 @@ export const useAppData = (accountId: string | null) => {
   const fetchWbBarcodes = async (tripId: string, lineId: string, wbSupplyId: string) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const result = await getWbSupplyStickersInSupabase(accountId, lineId, wbSupplyId)
-    // Обновляем wb_supply_id в локальном state если изменился
+    // Обновляем wb_supply_id и wb_cargo_type в локальном state
     setTrips((current) =>
       current.map((t) =>
         t.id === tripId
           ? {
               ...t,
               lines: t.lines.map((l) =>
-                l.id === lineId ? { ...l, wb_supply_id: result.wb_supply_id } : l,
+                l.id === lineId ? {
+                  ...l,
+                  wb_supply_id: result.wb_supply_id,
+                  ...(result.cargo_type !== null ? { wb_cargo_type: result.cargo_type } : {}),
+                } : l,
               ),
             }
           : t,
@@ -623,8 +737,13 @@ export const useAppData = (accountId: string | null) => {
     removeInvoicePhoto,
     addStickerFile,
     removeStickerFile,
+    addCombinedStickerFile,
+    removeCombinedStickerFile,
     uploadWbPass,
+    removeWbPass,
+    saveWbSupplyId,
     fetchWbBarcodes,
+    refreshCargoType,
     reload: hydrateFromSupabase,
   }
 }

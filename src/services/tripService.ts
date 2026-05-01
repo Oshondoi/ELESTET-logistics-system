@@ -340,6 +340,41 @@ export const updateTripLineStickerFiles = async (
   if (error) throw error
 }
 
+export const uploadCombinedStickerFile = async (
+  accountId: string,
+  lineId: string,
+  file: File,
+): Promise<string> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const ext = file.name.split('.').pop() ?? 'pdf'
+  const path = `${accountId}/${lineId}/${Date.now()}_combined.${ext}`
+
+  const { error: uploadError } = await supabase.storage
+    .from('trip-stickers')
+    .upload(path, file, { upsert: false })
+
+  if (uploadError) throw uploadError
+
+  const { data } = supabase.storage.from('trip-stickers').getPublicUrl(path)
+  return data.publicUrl
+}
+
+export const updateTripLineCombinedStickerFiles = async (
+  accountId: string,
+  lineId: string,
+  combined_sticker_urls: string[],
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ combined_sticker_urls } as any)
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+
+  if (error) throw error
+}
+
 export const uploadWbPassFile = async (
   accountId: string,
   lineId: string,
@@ -359,6 +394,21 @@ export const uploadWbPassFile = async (
   return data.publicUrl
 }
 
+export const updateTripLineWbSupplyId = async (
+  accountId: string,
+  lineId: string,
+  wb_supply_id: string | null,
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ wb_supply_id } as any)
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+  if (error) throw error
+}
+
 export const updateTripLineWbPassUrl = async (
   accountId: string,
   lineId: string,
@@ -375,18 +425,49 @@ export const updateTripLineWbPassUrl = async (
   if (error) throw error
 }
 
+export const updateTripLineWbPassUrls = async (
+  accountId: string,
+  lineId: string,
+  wb_pass_urls: string[],
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ wb_pass_urls } as any)
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+
+  if (error) throw error
+}
+
+/** Получить только тип отгрузки поставки (без генерации стикеров) */
+export const getWbSupplyCargoType = async (
+  accountId: string,
+  lineId: string,
+): Promise<number | null> => {
+  if (!supabase) return null
+  const { data, error } = await supabase.functions.invoke<{ cargo_type?: number | null; error?: string }>(
+    'wb-supply',
+    { body: { account_id: accountId, line_id: lineId, action: 'cargo_type' } },
+  )
+  if (error || !data || data.error) return null
+  return data.cargo_type ?? null
+}
+
 /** Получить штрихкоды поставки FBW через WB API (Edge Function) */
 export const getWbSupplyStickers = async (
   accountId: string,
   lineId: string,
   wbSupplyId?: string,
-): Promise<{ wb_supply_id: string; sticker_urls: string[] }> => {
+): Promise<{ wb_supply_id: string; sticker_urls: string[]; cargo_type: number | null }> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const body: Record<string, string> = { account_id: accountId, line_id: lineId }
   if (wbSupplyId) body.wb_supply_id = wbSupplyId
   const { data, error } = await supabase.functions.invoke<{
     wb_supply_id?: string
     sticker_urls?: string[]
+    cargo_type?: number | null
     error?: string
   }>('wb-supply', { body })
   if (error) {
@@ -396,5 +477,5 @@ export const getWbSupplyStickers = async (
   }
   if (!data) throw new Error('Пустой ответ от сервера. Попробуйте ещё раз.')
   if (data.error) throw new Error(data.error)
-  return data as { wb_supply_id: string; sticker_urls: string[] }
+  return { wb_supply_id: data.wb_supply_id!, sticker_urls: data.sticker_urls ?? [], cargo_type: data.cargo_type ?? null }
 }

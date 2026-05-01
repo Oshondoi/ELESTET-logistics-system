@@ -18,6 +18,7 @@ interface StatusDropdownProps<T extends string> {
   toneMap: Record<T, BadgeTone>
   onChange: (newValue: T) => Promise<void>
   disabled?: boolean
+  iconMap?: Record<T, React.ReactNode>
 }
 
 export function StatusDropdown<T extends string>({
@@ -26,6 +27,7 @@ export function StatusDropdown<T extends string>({
   toneMap,
   onChange,
   disabled = false,
+  iconMap,
 }: StatusDropdownProps<T>) {
   const [isOpen, setIsOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -36,7 +38,6 @@ export function StatusDropdown<T extends string>({
   // Самая длинная опция — используется как невидимый спейсер внутри кнопки
   // чтобы ширина не прыгала при смене значения (без DOM-измерений)
   const longestOption = options.reduce((a, b) => (a.length >= b.length ? a : b), '')
-
   // Recalculate position on open
   useLayoutEffect(() => {
     if (!isOpen || !triggerRef.current) return
@@ -143,7 +144,8 @@ export function StatusDropdown<T extends string>({
         disabled={disabled || isLoading}
         onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          'relative inline-flex items-center gap-1 rounded-full px-2.5 py-1 whitespace-nowrap',
+          'relative inline-flex items-center gap-1 rounded-full whitespace-nowrap',
+          iconMap ? 'px-1.5 py-1' : 'px-2.5 py-1',
           toneClasses[toneMap[value]],
           isLoading ? 'cursor-wait opacity-60' : 'cursor-pointer',
           !isLoading && !disabled && 'transition-opacity duration-100 hover:opacity-75',
@@ -151,31 +153,48 @@ export function StatusDropdown<T extends string>({
         )}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
+        title={iconMap ? value : undefined}
       >
-        {/* Невидимый спейсер по самой длинной опции + иконка — фиксирует ширину кнопки */}
-        <span aria-hidden className="invisible flex select-none items-center gap-1 text-xs font-medium">
-          {longestOption}
-          <svg className="h-3 w-3" viewBox="0 0 24 24" />
-        </span>
-        {/* Поверх — реальный контент */}
-        <span className="absolute inset-0 flex items-center gap-1 px-2.5">
-          <span className="text-xs font-medium">{value}</span>
-          {isLoading ? (
-            <svg className="h-3 w-3 animate-spin opacity-60" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeDasharray="28 56" />
-            </svg>
-          ) : (
-            <svg
-              className={cn('h-3 w-3 opacity-60 transition-transform duration-150', isOpen && 'rotate-180')}
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-            >
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          )}
-        </span>
+        {iconMap ? (
+          <>
+            <span className="flex h-4 w-4 items-center justify-center">
+              {isLoading ? (
+                <svg className="h-3.5 w-3.5 animate-spin opacity-60" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeDasharray="28 56" />
+                </svg>
+              ) : (
+                iconMap[value]
+              )}
+            </span>
+          </>
+        ) : (
+          <>
+            {/* Невидимый спейсер по самой длинной опции + иконка — фиксирует ширину кнопки */}
+            <span aria-hidden className="invisible flex select-none items-center gap-1 text-xs font-medium">
+              {longestOption}
+              <svg className="h-3 w-3" viewBox="0 0 24 24" />
+            </span>
+            {/* Поверх — реальный контент */}
+            <span className="absolute inset-0 flex items-center gap-1 px-2.5">
+              <span className="text-xs font-medium">{value}</span>
+              {isLoading ? (
+                <svg className="h-3 w-3 animate-spin opacity-60" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeDasharray="28 56" />
+                </svg>
+              ) : (
+                <svg
+                  className={cn('h-3 w-3 opacity-60 transition-transform duration-150', isOpen && 'rotate-180')}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              )}
+            </span>
+          </>
+        )}
       </button>
 
       {createPortal(menu, document.body)}

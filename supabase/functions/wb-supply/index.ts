@@ -53,6 +53,24 @@ async function fetchPackages(apiKey: string, supplyId: string): Promise<WbPackag
   return Array.isArray(data) ? (data as WbPackage[]) : []
 }
 
+/** Получить тип отгрузки поставки: 1=короба, 2=паллеты */
+async function fetchSupplyCargoType(apiKey: string, supplyId: string): Promise<number | null> {
+  try {
+    const resp = await fetch(`${WB_BASE}/api/v1/supplies/${supplyId}`, {
+      headers: { Authorization: apiKey },
+    })
+    if (!resp.ok) return null
+    const data = await resp.json() as { boxTypeID?: number; isBoxOnPallet?: boolean }
+    // boxTypeID=1 → QR-паллеты ("На паллете")
+    if (data.boxTypeID === 1) return 2
+    // boxTypeID=2 → зависит от isBoxOnPallet
+    if (data.boxTypeID === 2) return data.isBoxOnPallet ? 2 : 1
+    return null
+  } catch {
+    return null
+  }
+}
+
 // deno-lint-ignore no-explicit-any
 function drawQrCode(page: any, text: string, x: number, y: number, size: number): void {
   const qr = qrcodegen(0, 'M')
@@ -112,12 +130,13 @@ async function uploadPdf(
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
-  let account_id: string, line_id: string, wb_supply_id: string | undefined
+  let account_id: string, line_id: string, wb_supply_id: string | undefined, action: string
   try {
-    const body = await req.json() as { account_id?: string; line_id?: string; wb_supply_id?: string }
+    const body = await req.json() as { account_id?: string; line_id?: string; wb_supply_id?: string; action?: string }
     account_id = body.account_id ?? ''
     line_id = body.line_id ?? ''
     wb_supply_id = body.wb_supply_id?.trim() || undefined
+    action = body.action ?? 'stickers'
     if (!account_id || !line_id) throw new Error('account_id и line_id обязательны')
   } catch (e) { return jsonError(String(e)) }
 
@@ -141,8 +160,24 @@ Deno.serve(async (req) => {
     await db.from('trip_lines').update({ wb_supply_id }).eq('id', line_id).eq('account_id', account_id)
   }
 
+  // action=cargo_type — только тип отгрузки, без PDF
+  if (action === 'cargo_type') {
+    const cargoType = await fetchSupplyCargoType(apiKey, supplyId)
+    if (cargoType !== null) {
+      await db.from('trip_lines').update({ wb_cargo_type: cargoType }).eq('wb_supply_id', supplyId).eq('account_id', account_id)
+    }
+    return jsonOk({ cargo_type: cargoType })
+  }
+
   try {
-    const packages = await fetchPackages(apiKey, supplyId)
+    const [packages, cargoType] = await Promise.all([
+      fetchPackages(apiKey, supplyId),
+      fetchSupplyCargoType(apiKey, supplyId),
+    ])
+    // Сохраняем тип отгрузки в БД
+    if (cargoType !== null) {
+      await db.from('trip_lines').update({ wb_cargo_type: cargoType }).eq('wb_supply_id', supplyId).eq('account_id', account_id)
+    }
     packages.sort((a, b) => {
       const numA = parseInt(a.packageCode.replace(/\D/g, ''), 10) || 0
       const numB = parseInt(b.packageCode.replace(/\D/g, ''), 10) || 0
@@ -153,7 +188,7 @@ Deno.serve(async (req) => {
     }
     const pdfBytes = await buildPdf(packages)
     const stickerUrl = await uploadPdf(db, account_id, line_id, pdfBytes, 'qr-stickers')
-    return jsonOk({ wb_supply_id: supplyId, sticker_urls: [stickerUrl] })
+    return jsonOk({ wb_supply_id: supplyId, sticker_urls: [stickerUrl], cargo_type: cargoType })
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : String(e))
   }

@@ -5,6 +5,8 @@ interface HomePageProps {
   shipments: ShipmentWithStore[]
   rawShipments: Shipment[]
   stores: Store[]
+  hasAccount?: boolean
+  onCreateCompany?: () => void
 }
 
 const StatCard = ({ label, value, hint }: { label: string; value: string; hint: string }) => (
@@ -15,7 +17,7 @@ const StatCard = ({ label, value, hint }: { label: string; value: string; hint: 
   </Card>
 )
 
-export const HomePage = ({ shipments, rawShipments, stores }: HomePageProps) => {
+export const HomePage = ({ shipments, rawShipments, stores, hasAccount = true, onCreateCompany }: HomePageProps) => {
   const totalBoxes = shipments.reduce((sum, shipment) => sum + shipment.box_qty, 0)
   const inTransit = shipments.filter((shipment) => shipment.status === 'В пути').length
   const arrived = shipments.filter((shipment) => shipment.status === 'Прибыл').length
@@ -27,6 +29,26 @@ export const HomePage = ({ shipments, rawShipments, stores }: HomePageProps) => 
           .reduce((max, shipment) => Math.max(max, shipment.tracking_number), 0) + 1
       }`
     : 'Сначала создайте магазин'
+
+  if (!hasAccount) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 text-3xl">🏢</div>
+        <div className="text-lg font-semibold text-slate-800">Создайте компанию, чтобы начать работу</div>
+        <div className="mt-2 max-w-sm text-sm text-slate-500">
+          Без компании разделы системы недоступны. Создайте первую компанию — это займёт несколько секунд.
+        </div>
+        {onCreateCompany && (
+          <button
+            onClick={onCreateCompany}
+            className="mt-6 rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-blue-700 active:scale-95 transition-all"
+          >
+            Создать компанию
+          </button>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">

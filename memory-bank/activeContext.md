@@ -1,9 +1,26 @@
 # Active Context
 
 ## Current Focus
-WB Supplies API интеграция (QR-стикеры поставки) + пропуск WB. Следующие шаги: поиск/фильтры на Логистике, участники компании (Members), мобильное приложение.
+Стикеры 2в1 (combined_sticker_urls) добавлены и мигрированы в БД. Следующие шаги: поиск/фильтры на Логистике, участники компании (Members), мобильное приложение.
 
 ## What Was Recently Done
+
+### Стикеры 2в1 + UI-полировка TripLineStickerCell (01.05.2026)
+- **`supabase/patch_combined_stickers.sql`**: новая колонка `combined_sticker_urls text[] DEFAULT '{}'` в `trip_lines` — **применено ✅**
+- **`src/types/index.ts`**: добавлено поле `combined_sticker_urls: string[]` в интерфейс `TripLine`
+- **`src/services/tripService.ts`**: добавлены `uploadCombinedStickerFile` (бакет `trip-stickers`, суффикс `_combined`) и `updateTripLineCombinedStickerFiles`
+- **`src/hooks/useAppData.ts`**: добавлены `getCombinedStickerUrls`, `applyCombinedStickerUrls`, `addCombinedStickerFile`, `removeCombinedStickerFile`; экспортированы в return
+- **`src/components/trips/TripTable.tsx`**: добавлены props `onAddCombinedStickerFile` / `onRemoveCombinedStickerFile`; переданы в `TripLineStickerCell` как `combinedUrls`, `onAddCombined`, `onRemoveCombined`
+- **`src/pages/ShipmentsPage.tsx`** + **`src/App.tsx`**: props пробрасываются по цепочке
+- **`src/components/ui/TripLineStickerCell.tsx`**: полный UI-оверхол:
+  - **Виолетовая группа (2в1)**: кнопка «просмотр» + кнопка «загрузить файл», badge со счётчиком, dropdown-меню с датой загрузки, удаление файлов
+  - **UI-полировка**: badge горизонтально центрированы (`left-1/2 -translate-x-1/2`); hover-цвета выровнены (синий `hover:bg-blue-100`, изумрудный `hover:bg-emerald-100`); badge на кнопке пропуска (emerald)
+  - **Меню snapshot**: при открытии замораживает список файлов → удаление не схлопывает меню
+  - **Удаление по URL**: `fileUrls.indexOf(url)` вместо индекса из snapshot → правильный файл удаляется
+  - **Стабильная позиция меню**: при открытии сбрасывается в `{-9999,-9999}` → `useLayoutEffect` пересчитывает → убирает артефакт старой позиции
+  - **Viewport clamping**: все три меню не выходят за края экрана (отступ 8px, проверка право/низ/верх)
+  - **Цветовая схема**: violet = 2в1; blue = скачать/QR; emerald = пропуск
+  - **Порядок кнопок** (слева направо): `[2в1 view | 2в1 upload] [sticker download | QR] [pass view | pass upload]`
 
 ### Стикеры QR-кодов поставки WB + кнопка пропуска (30.04.2026)
 - **Edge Function `wb-supply`**: генерирует PDF с QR-кодами коробов поставки WB

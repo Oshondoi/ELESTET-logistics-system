@@ -99,8 +99,13 @@ MVP веб-приложения для логистики поставок на 
   - Пропуск скачивается вручную из ЛК WB и загружается через эту кнопку (PDF)
   - Серая — не загружен; зелёная — загружен (клик → открывает PDF, рядом кнопка замены)
   - Хранится в `trip-stickers` бакете (суффикс `_pass`), отдельное поле `wb_pass_url` в `trip_lines`
+- **Стикеры 2в1** — новая виолетовая группа кнопок в ячейке:
+  - Загрузка любого файла (PDF / JPG) в бакет `trip-stickers` (суффикс `_combined`)
+  - Хранится в отдельном поле `combined_sticker_urls text[]` в `trip_lines`
+  - Badge со счётчиком, dropdown-меню с датой загрузки, удаление файлов
+  - Порядок кнопок (слева направо): `[2в1 view | 2в1 upload] [стикер download | QR] [пропуск view | пропуск upload]`
 - **Меню стикеров**: дата/время загрузки из timestamp в имени файла `DD.MM.YYYY HH:MM GMT+N`; badge от 1 файла; кнопка всегда открывает меню
-- Требует применения `supabase/patch_wb_pass_url.sql`
+- Требует применения `supabase/patch_wb_pass_url.sql` и `supabase/patch_combined_stickers.sql`
 
 ### Тарифы логистики
 - **carrier_tariffs**: тариф перевозчика до склада назначения: `price_per_box` и `price_per_kg`
@@ -217,6 +222,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 27. patch_archive_accounts.sql      ← Архив компаний: soft delete + pg_cron автоочистка 15 дней
 28. patch_archive_stores.sql        ← Архив магазинов: soft delete + pg_cron автоочистка 15 дней
 29. patch_wb_pass_url.sql           ← Поле wb_pass_url в trip_lines для хранения пропуска WB
+30. patch_combined_stickers.sql     ← Поле combined_sticker_urls text[] для стикеров 2в1
 > Для dev без auth: `supabase/disable_rls_dev.sql`
 
 4. `npm run dev`
@@ -245,6 +251,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Серверная автоматизация WB** | ✅ Готово | Dispatcher + auto-reply Edge Functions, cron, № запуск |
 | **Тарифы логистики** | ✅ Готово | Тарифы перевозчиков + отгрузка на склады ВБ |
 | **Стикеры QR поставки WB** | ✅ Готово | Edge Function wb-supply, QR PDF, кнопка пропуска |
+| **Стикеры 2в1** | ✅ Готово | Отдельная колонка combined_sticker_urls, фиолетовая группа кнопок |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |

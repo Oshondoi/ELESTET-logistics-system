@@ -11,7 +11,6 @@ interface AccountFormModalProps {
 
 const initialValues = {
   name: '',
-  inn: '',
 }
 
 export const AccountFormModal = ({ open, onClose, onSubmit }: AccountFormModalProps) => {
@@ -63,13 +62,6 @@ export const AccountFormModal = ({ open, onClose, onSubmit }: AccountFormModalPr
           onChange={(event) => setValues((current) => ({ ...current, name: event.target.value }))}
           required
         />
-        <Input
-          label="ИНН"
-          placeholder="Например, 00602202610081"
-          value={values.inn}
-          onChange={(event) => setValues((current) => ({ ...current, inn: event.target.value }))}
-        />
-
         {error ? (
           <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
         ) : null}

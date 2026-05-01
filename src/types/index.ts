@@ -288,8 +288,11 @@ export interface TripLine {
   payment_status: PaymentStatus
   invoice_photo_urls: string[]
   sticker_file_urls: string[]
+  combined_sticker_urls: string[]
   wb_supply_id: string | null
+  wb_cargo_type: number | null
   wb_pass_url: string | null
+  wb_pass_urls: string[]
   comment: string
   custom_fields: Record<string, unknown>
   created_at: string
