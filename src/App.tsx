@@ -177,6 +177,7 @@ function App() {
     stickers,
     addShipment,
     addStore,
+    appendStore,
     updateStore,
     removeStore,
     restoreStore,
@@ -441,7 +442,7 @@ function App() {
                   stores={stores}
                   trips={trips}
                   onEditTripLine={editTripLine}
-                  onStoreCreated={addStore}
+                  onStoreCreated={appendStore}
                   canManage={isOwnerOrAdmin || permissions.fulfillment_manage}
                 />
               ) : effectivePage === 'shipments' ? (

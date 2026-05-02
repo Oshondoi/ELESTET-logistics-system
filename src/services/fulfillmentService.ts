@@ -12,7 +12,7 @@ import type {
 
 export const fetchFulfillmentSettings = async (accountId: string): Promise<FulfillmentSettings | null> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('fulfillment_settings')
     .select('*')
     .eq('account_id', accountId)
@@ -26,7 +26,7 @@ export const upsertFulfillmentSettings = async (
   settings: Partial<Pick<FulfillmentSettings, 'stage_otk' | 'stage_marking' | 'stage_packing' | 'stage_logistics'>>,
 ): Promise<FulfillmentSettings> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('fulfillment_settings')
     .upsert({ account_id: accountId, ...settings, updated_at: new Date().toISOString() }, { onConflict: 'account_id' })
     .select()
@@ -39,7 +39,7 @@ export const upsertFulfillmentSettings = async (
 
 export const fetchBatches = async (accountId: string): Promise<FulfillmentBatch[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
     .select('*')
     .eq('account_id', accountId)
@@ -51,8 +51,8 @@ export const fetchBatches = async (accountId: string): Promise<FulfillmentBatch[
 export const fetchBatchWithItems = async (batchId: string): Promise<FulfillmentBatchWithItems> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const [{ data: batch, error: batchErr }, { data: items, error: itemsErr }] = await Promise.all([
-    supabase.from('fulfillment_batches').select('*').eq('id', batchId).single(),
-    supabase.from('fulfillment_items').select('*').eq('batch_id', batchId).order('sort_order').order('created_at'),
+    (supabase as any).from('fulfillment_batches').select('*').eq('id', batchId).single(),
+    (supabase as any).from('fulfillment_items').select('*').eq('batch_id', batchId).order('sort_order').order('created_at'),
   ])
   if (batchErr) throw batchErr
   if (itemsErr) throw itemsErr
@@ -72,7 +72,7 @@ export const createBatch = async (
   },
 ): Promise<FulfillmentBatch> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
     .insert({ account_id: accountId, ...values })
     .select()
@@ -99,7 +99,7 @@ export const updateBatch = async (
   >,
 ): Promise<FulfillmentBatch> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', batchId)
@@ -111,7 +111,7 @@ export const updateBatch = async (
 
 export const deleteBatch = async (batchId: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await supabase.from('fulfillment_batches').delete().eq('id', batchId)
+  const { error } = await (supabase as any).from('fulfillment_batches').delete().eq('id', batchId)
   if (error) throw error
 }
 
@@ -121,7 +121,7 @@ export const addItem = async (
   item: Omit<FulfillmentItem, 'id' | 'created_at'>,
 ): Promise<FulfillmentItem> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase.from('fulfillment_items').insert(item).select().single()
+  const { data, error } = await (supabase as any).from('fulfillment_items').insert(item).select().single()
   if (error) throw error
   return data as FulfillmentItem
 }
@@ -144,7 +144,7 @@ export const updateItem = async (
   >,
 ): Promise<FulfillmentItem> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('fulfillment_items')
     .update(updates)
     .eq('id', itemId)
@@ -156,7 +156,7 @@ export const updateItem = async (
 
 export const deleteItem = async (itemId: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await supabase.from('fulfillment_items').delete().eq('id', itemId)
+  const { error } = await (supabase as any).from('fulfillment_items').delete().eq('id', itemId)
   if (error) throw error
 }
 
@@ -180,7 +180,7 @@ export const advanceStage = async (batch: FulfillmentBatch): Promise<Fulfillment
 
   // Log stage completion
   if (supabase) {
-    await supabase.from('fulfillment_stage_logs').insert({ batch_id: batch.id, stage: batch.current_stage })
+    await (supabase as any).from('fulfillment_stage_logs').insert({ batch_id: batch.id, stage: batch.current_stage })
   }
 
   return updateBatch(batch.id, { current_stage: nextStage, status: newStatus as FulfillmentBatch['status'] })

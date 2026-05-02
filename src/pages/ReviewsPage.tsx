@@ -919,7 +919,7 @@ export const ReviewsPage = ({
         await new Promise((res) => setTimeout(res, halfDelayMs))
 
         await sendWbReply(activeStore.api_key, row.id, text)
-        await markReplySent(row.id)
+        await markReplySent(row.id, text)
         setQueueRows((prev) => prev ? prev.filter((r) => r.id !== row.id) : prev)
         sent++
         const todayStr = new Date().toISOString().slice(0, 10)

@@ -214,6 +214,10 @@ export const useAppData = (accountId: string | null) => {
     return store
   }
 
+  const appendStore = (store: Store) => {
+    setStores((current) => [store, ...current])
+  }
+
   const updateStore = async (storeId: string, values: StoreFormValues) => {
     if (!isSupabaseConfigured) {
       throw new Error('Supabase не настроен')
@@ -784,6 +788,7 @@ export const useAppData = (accountId: string | null) => {
     isLoading,
     error,
     addStore,
+    appendStore,
     updateStore,
     removeStore,
     restoreStore,
