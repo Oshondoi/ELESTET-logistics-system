@@ -83,6 +83,12 @@ export const useAuth = () => {
       throw error
     }
 
+    // Supabase возвращает пустой identities[] если почта уже зарегистрирована
+    // (при включённом email-подтверждении ошибка не бросается — защита от enumeration)
+    if (data.user && data.user.identities?.length === 0) {
+      throw new Error('Аккаунт с этой почтой уже существует')
+    }
+
     return data
   }
 
