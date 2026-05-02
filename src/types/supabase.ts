@@ -612,8 +612,46 @@ export interface Database {
         Args: { p_store_id: string }
         Returns: void
       }
-    }
-    Enums: {
+      archive_trip_line: {
+        Args: { p_line_id: string; p_account_id: string }
+        Returns: void
+      }
+      restore_trip_line: {
+        Args: { p_line_id: string; p_account_id: string }
+        Returns: void
+      }
+      get_archived_trip_lines: {
+        Args: { p_account_id: string }
+        Returns: Array<{
+          id: string
+          trip_id: string
+          account_id: string
+          store_id: string
+          shipment_number: number
+          boxes_qty: number
+          units_qty: number | null
+          units_total: number | null
+          weight: number | null
+          status: string
+          payment_status: string
+          comment: string | null
+          created_at: string
+          reception_date: string | null
+          shipped_date: string | null
+          arrival_date: string | null
+          transit_at: string | null
+          planned_marketplace_delivery_date: string | null
+          wb_acceptance_date: string | null
+          wb_supply_id: string | null
+          wb_cargo_type: number | null
+          sticker_file_urls: string[]
+          invoice_photo_urls: string[]
+          wb_pass_urls: string[]
+          combined_sticker_urls: string[]
+          custom_fields: Record<string, unknown>
+          deleted_at: string
+        }>
+      }
       [_ in never]: never
     }
     CompositeTypes: {

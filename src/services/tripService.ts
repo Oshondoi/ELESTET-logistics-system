@@ -127,7 +127,7 @@ export const fetchArchivedTripLines = async (accountId: string, stores: Store[])
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase.rpc('get_archived_trip_lines', { p_account_id: accountId })
   if (error) throw error
-  return ((data ?? []) as TripLine[]).map((line) => buildTripLineWithStore(line, stores))
+  return ((data ?? []) as unknown as TripLine[]).map((line) => buildTripLineWithStore(line, stores))
 }
 
 export const deleteTrip = async (accountId: string, tripId: string): Promise<void> => {

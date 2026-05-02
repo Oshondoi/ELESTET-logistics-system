@@ -1177,7 +1177,7 @@ export const TripTable = ({
                                           {line.wb_supply_id && line.wb_cargo_type != null && WB_CARGO_LABELS[line.wb_cargo_type]
                                             ? line.wb_cargo_type === 1 ? (
                                               // Короба
-                                              <svg title="Короба" viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                                                 <title>Короба</title>
                                                 <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
                                                 <path d="m3.3 7 8.7 5 8.7-5" />
@@ -1185,7 +1185,7 @@ export const TripTable = ({
                                               </svg>
                                             ) : (
                                               // Паллеты
-                                              <svg title="Паллеты" viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-blue-400" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-blue-400" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                                                 <title>Паллеты</title>
                                                 <rect x="2" y="14" width="20" height="2" rx="1" />
                                                 <rect x="4" y="17" width="4" height="3" rx="0.5" />
