@@ -652,6 +652,8 @@ export interface Database {
           deleted_at: string
         }>
       }
+    }
+    Enums: {
       [_ in never]: never
     }
     CompositeTypes: {
