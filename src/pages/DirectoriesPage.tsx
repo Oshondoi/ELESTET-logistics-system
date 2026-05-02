@@ -21,9 +21,10 @@ interface DirectoryPanelProps {
   canManage?: boolean
   onTariff?: (id: string, name: string) => void
   onEditModal?: (item: { id: string; name: string }) => void
+  canDelete?: boolean
 }
 
-const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = true, onTariff, onEditModal }: DirectoryPanelProps) => {
+const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = true, onTariff, onEditModal, canDelete = true }: DirectoryPanelProps) => {
   const [inputValue, setInputValue] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
@@ -169,7 +170,10 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = t
                           type="button"
                           onClick={() => setDeleteTarget(item)}
                           aria-label={`Удалить ${item.name}`}
-                          className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
+                          className={`flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition ${
+                            canDelete ? 'hover:bg-rose-50 hover:text-rose-500' : 'cursor-not-allowed opacity-30'
+                          }`}
+                          disabled={!canDelete}
                         >
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
                             <path d="M9 4h6" /><path d="M5 7h14" />
@@ -613,6 +617,7 @@ interface DirectoriesPageProps {
   onDeleteWarehouse: (id: string) => Promise<void>
   onRenameWarehouse: (id: string, name: string) => Promise<void>
   canManage?: boolean
+  canDelete?: boolean
 }
 
 export const DirectoriesPage = ({
@@ -628,6 +633,7 @@ export const DirectoriesPage = ({
   onDeleteWarehouse,
   onRenameWarehouse,
   canManage = true,
+  canDelete = true,
 }: DirectoriesPageProps) => {
   const [tariffCarrier, setTariffCarrier] = useState<Carrier | null>(null)
   const [editCarrier, setEditCarrier] = useState<Carrier | null>(null)
@@ -642,6 +648,7 @@ export const DirectoriesPage = ({
           onDelete={onDeleteCarrier}
           onUpdate={onRenameCarrier}
           canManage={canManage}
+          canDelete={canDelete}
           onEditModal={(item) => setEditCarrier(carriers.find((c) => c.id === item.id) ?? null)}
           onTariff={(id, name) =>
             setTariffCarrier(carriers.find((c) => c.id === id) ?? { id, account_id: accountId, name, created_at: '' })
@@ -654,6 +661,7 @@ export const DirectoriesPage = ({
           onDelete={onDeleteWarehouse}
           onUpdate={onRenameWarehouse}
           canManage={canManage}
+          canDelete={canDelete}
         />
       </div>
 

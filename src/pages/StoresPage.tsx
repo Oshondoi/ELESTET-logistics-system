@@ -13,9 +13,11 @@ interface StoresPageProps {
   onSync: (store: Store) => Promise<void>
   onRestore?: (storeId: string) => Promise<void>
   canManage?: boolean
+  canDelete?: boolean
+  canSync?: boolean
 }
 
-export const StoresPage = ({ stores, archivedStores = [], onOpenCreate, onEdit, onDelete, onSync, onRestore, canManage = true }: StoresPageProps) => (
+export const StoresPage = ({ stores, archivedStores = [], onOpenCreate, onEdit, onDelete, onSync, onRestore, canManage = true, canDelete = false, canSync = true }: StoresPageProps) => (
   <div className="space-y-4">
     <Card className="rounded-3xl p-2.5">
       <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
@@ -35,7 +37,7 @@ export const StoresPage = ({ stores, archivedStores = [], onOpenCreate, onEdit, 
       </div>
     </Card>
 
-    <StoreList stores={stores} onEdit={onEdit} onDelete={onDelete} onSync={onSync} canManage={canManage} />
+    <StoreList stores={stores} onEdit={onEdit} onDelete={onDelete} onSync={onSync} canManage={canManage} canDelete={canDelete} canSync={canSync} />
 
     {onRestore && (
       <ArchivedStoresList stores={archivedStores} canManage={canManage} onRestore={onRestore} />

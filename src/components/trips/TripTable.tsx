@@ -137,9 +137,10 @@ const WbSupplyIdButton = ({
             : 'bg-slate-100 text-slate-400 hover:bg-purple-50 hover:text-purple-400'
         }`}
       >
-        <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" />
-          <path d="M14 17h3m0 0h3m-3 0v-3m0 3v3" />
+        <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="7.5" cy="15.5" r="5.5" />
+          <path d="M21 2l-9.6 9.6" />
+          <path d="M15.5 7.5 17 6l2 2-1.5 1.5" />
         </svg>
         WB
       </button>
@@ -208,6 +209,131 @@ type DeleteTarget =
       description: string
     }
 
+const MpDateButton = ({
+  date,
+  hasWbSupplyId,
+  onSave,
+  onRefresh,
+}: {
+  date?: string | null
+  hasWbSupplyId?: boolean
+  onSave: (date: string | null) => Promise<void>
+  onRefresh?: () => Promise<void>
+}) => {
+  const [showInput, setShowInput] = useState(false)
+  const [inputValue, setInputValue] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [popPos, setPopPos] = useState({ top: 0, left: 0 })
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!showInput) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (btnRef.current?.contains(target)) return
+      if ((target as Element)?.closest?.('[data-mpdate-popup]')) return
+      setShowInput(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showInput])
+
+  const open = () => {
+    if (showInput) { setShowInput(false); return }
+    if (!btnRef.current) return
+    const rect = btnRef.current.getBoundingClientRect()
+    const left = Math.min(rect.left, window.innerWidth - 220)
+    setPopPos({ top: rect.bottom + 4, left: Math.max(8, left) })
+    setInputValue(date ?? '')
+    setShowInput(true)
+  }
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      await onSave(inputValue || null)
+      setShowInput(false)
+    } catch {}
+    finally { setIsSaving(false) }
+  }
+
+  const handleRefresh = async () => {
+    if (!onRefresh) return
+    setIsRefreshing(true)
+    try { await onRefresh() } catch {}
+    finally { setIsRefreshing(false) }
+  }
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        title={date ? `Запланирован: ${date}` : 'Указать плановую дату поставки'}
+        onClick={open}
+        className="text-slate-500 hover:text-slate-700"
+      >
+        <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+      </button>
+      {hasWbSupplyId && onRefresh && (
+        <button
+          type="button"
+          title="Получить даты из WB"
+          disabled={isRefreshing}
+          onClick={() => void handleRefresh()}
+          className="text-slate-300 hover:text-slate-500 disabled:opacity-40"
+        >
+          <svg viewBox="0 0 24 24" className={cn('h-3 w-3', isRefreshing && 'animate-spin')} fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
+      {showInput && createPortal(
+        <div
+          data-mpdate-popup
+          style={{ position: 'fixed', top: popPos.top, left: popPos.left, zIndex: 9999 }}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="flex w-52 flex-col gap-2 rounded-xl border border-slate-100 bg-white p-3 shadow-xl"
+        >
+          <div className="text-xs font-medium text-slate-600">Плановая дата поставки</div>
+          <input
+            autoFocus
+            type="date"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleSave(); if (e.key === 'Escape') setShowInput(false) }}
+            className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none focus:border-blue-400"
+          />
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={() => void handleSave()}
+              className="flex-1 rounded-lg bg-blue-500 px-2 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-600 disabled:opacity-40"
+            >
+              {isSaving ? '...' : 'Сохранить'}
+            </button>
+            {date && (
+              <button
+                type="button"
+                onClick={() => { setInputValue(''); void handleSave() }}
+                className="rounded-lg border border-rose-200 px-2 py-1.5 text-xs text-rose-500 transition hover:bg-rose-50"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 interface TripTableProps {
   trips: TripWithLines[]
   stores: Store[]
@@ -216,6 +342,8 @@ interface TripTableProps {
   expandAll?: boolean
   onDeleteTrip: (tripId: string) => Promise<void>
   onDeleteTripLine: (tripId: string, lineId: string) => Promise<void>
+  archivedTripLines?: TripLineWithStore[]
+  onRestoreArchivedTripLine?: (lineId: string) => Promise<void>
   onChangeTripStatus: (tripId: string, status: TripStatus) => Promise<void>
   onChangeTripLineStatus: (tripId: string, lineId: string, status: ShipmentStatus) => Promise<void>
   onChangeTripLinePaymentStatus: (tripId: string, lineId: string, paymentStatus: PaymentStatus) => Promise<void>
@@ -240,9 +368,13 @@ interface TripTableProps {
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onSaveMarketplaceDate?: (tripId: string, lineId: string, date: string | null) => Promise<void>
+  onRefreshMarketplaceDate?: (tripId: string, lineId: string) => Promise<void>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveWbPass: (tripId: string, lineId: string, index: number) => Promise<void>
   canManage?: boolean
+  canDeleteAny?: boolean
+  canDeleteTrip?: boolean
   focusMode?: boolean
   hoverAddMode?: boolean
   onExpandedCountChange?: (count: number) => void
@@ -295,6 +427,117 @@ const paymentIconMap = {
   ),
 }
 
+const ArchivedLinesSection = ({
+  lines,
+  onRestore,
+  colCount,
+}: {
+  lines: TripLineWithStore[]
+  onRestore?: (lineId: string) => Promise<void>
+  colCount: number
+}) => {
+  const [expanded, setExpanded] = useState(false)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+
+  return (
+    <div className="mx-2 mb-1 rounded-lg border border-orange-100 bg-orange-50/60">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-orange-600 hover:text-orange-700"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+        Архив ({lines.length})
+      </button>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateRows: expanded ? '1fr' : '0fr',
+          transition: 'grid-template-rows 220ms ease',
+        }}
+      >
+        <div className="overflow-hidden">
+          <div className="overflow-x-auto border-t border-orange-100 pb-1">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wide text-orange-400">
+                <th className="px-3 py-1.5 text-left font-medium">Магазин</th>
+                <th className="px-3 py-1.5 text-left font-medium">Поставка</th>
+                <th className="px-3 py-1.5 text-left font-medium">Склад</th>
+                <th className="px-3 py-1.5 text-left font-medium">Объём</th>
+                <th className="px-3 py-1.5 text-left font-medium">Статус</th>
+                <th className="px-3 py-1.5 text-left font-medium">Удаление</th>
+                <th className="px-3 py-1.5 text-right font-medium"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((line) => {
+                const daysLeft = line.deleted_at
+                  ? Math.max(0, 15 - Math.floor((Date.now() - new Date(line.deleted_at).getTime()) / 86400000))
+                  : null
+                const boxQty = line.box_qty ?? 0
+                const unitsQty = line.units_qty ?? 0
+                return (
+                  <tr key={line.id} className="border-t border-orange-100/60">
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-slate-700">{line.store?.name ?? '—'}</div>
+                      {line.store?.store_code && (
+                        <div className="text-[10px] text-slate-400">{line.store.store_code}</div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-slate-600">
+                      Поставка {line.shipment_number ?? '—'}
+                    </td>
+                    <td className="px-3 py-2 text-slate-500">
+                      {line.destination_warehouse ?? '—'}
+                    </td>
+                    <td className="px-3 py-2 text-slate-600">
+                      <div>{boxQty} {pluralRu(boxQty, 'короб', 'короба', 'коробов')}</div>
+                      <div className="text-[10px] text-slate-400">{unitsQty} единиц</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">{line.status}</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      {daysLeft !== null && (
+                        <span className={daysLeft <= 3 ? 'font-medium text-rose-500' : 'text-orange-500'}>
+                          через {daysLeft} дн.
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {onRestore && (
+                        <button
+                          type="button"
+                          disabled={restoringId === line.id}
+                          className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-50"
+                          onClick={async () => {
+                            setRestoringId(line.id)
+                            try { await onRestore(line.id) } finally { setRestoringId(null) }
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                            <path d="M3 3v5h5" />
+                          </svg>
+                          Восстановить
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export const TripTable = ({
   trips,
   stores,
@@ -303,6 +546,8 @@ export const TripTable = ({
   expandAll = false,
   onDeleteTrip,
   onDeleteTripLine,
+  archivedTripLines = [],
+  onRestoreArchivedTripLine,
   onChangeTripStatus,
   onChangeTripLineStatus,
   onChangeTripLinePaymentStatus,
@@ -327,9 +572,13 @@ export const TripTable = ({
   onFetchWbBarcodes,
   onSaveWbSupplyId,
   onRefreshCargoType,
+  onSaveMarketplaceDate,
+  onRefreshMarketplaceDate,
   onUploadWbPass,
   onRemoveWbPass,
   canManage = true,
+  canDeleteAny = false,
+  canDeleteTrip = false,
   focusMode = false,
   hoverAddMode = true,
   onExpandedCountChange,
@@ -607,7 +856,7 @@ export const TripTable = ({
                 {!tripHidden.has('lines_count') && <th className="px-3 py-2.5">Поставок</th>}
                 {!tripHidden.has('status') && <th className="min-w-[160px] px-3 py-2.5">Статус</th>}
                 {!tripHidden.has('payment') && <th className="min-w-[192px] px-3 py-2.5">Оплата</th>}
-                {!tripHidden.has('comment') && <th className="px-3 py-2.5">Комментарий</th>}
+                {!tripHidden.has('comment') && <th className="w-10 px-3 py-2.5" title="Комментарий">Коммент.</th>}
                 {tripConfig.customCols.map((col) => (
                   <th key={col.key} className="px-3 py-2.5">{col.name}</th>
                 ))}
@@ -783,8 +1032,13 @@ export const TripTable = ({
                             type="button"
                             aria-label={trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
                             title={trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
-                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
-                            onClick={event => handleDeleteTripClick(trip, event)}
+                            className={`flex h-8 w-8 items-center justify-center rounded-xl transition ${
+                              canDeleteTrip
+                                ? 'text-slate-300 hover:bg-rose-50 hover:text-rose-500'
+                                : 'cursor-not-allowed text-slate-200'
+                            }`}
+                            disabled={!canDeleteTrip}
+                            onClick={event => canDeleteTrip && handleDeleteTripClick(trip, event)}
                           >
                             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
                               <path d="M9 4h6" />
@@ -857,14 +1111,11 @@ export const TripTable = ({
                                 <th className="px-3 py-2 font-semibold">Магазин</th>
                                 {!lineHidden.has('shipment') && <th className="px-3 py-2 font-semibold">Поставка</th>}
                                 {!lineHidden.has('volume') && <th className="px-3 py-2 font-semibold">Объём</th>}
-                                {!lineHidden.has('reception_date') && <th className="px-3 py-2 font-semibold">Дата приёма</th>}
                                 {!lineHidden.has('status') && <th className="px-3 py-2 font-semibold">Статус</th>}
-                                {!lineHidden.has('arrival_date') && <th className="px-3 py-2 font-semibold">Прибыл</th>}
-                                {!lineHidden.has('shipped_date') && <th className="px-3 py-2 font-semibold">Отгружено</th>}
-                                {!lineHidden.has('marketplace_delivery_date') && <th className="px-3 py-2 font-semibold">Дата МП</th>}
+                                {(['reception_date', 'transit_at', 'arrival_date', 'shipped_date', 'marketplace_delivery_date', 'wb_acceptance_date'] as const).some(k => !lineHidden.has(k)) && <th className="px-3 py-2 font-semibold">Даты</th>}
                                 <th className="px-3 py-2 font-semibold">Стикеры</th>
                                 {!lineHidden.has('payment') && <th className="px-3 py-2 font-semibold">Оплата</th>}
-                                {!lineHidden.has('comment') && <th className="px-3 py-2 font-semibold">Комментарий</th>}
+                                {!lineHidden.has('comment') && <th className="w-10 px-3 py-2 font-semibold" title="Комментарий">Коммент.</th>}
                                 {lineConfig.customCols.map((col) => (
                                   <th key={col.key} className="px-3 py-2 font-semibold">{col.name}</th>
                                 ))}
@@ -909,25 +1160,50 @@ export const TripTable = ({
                                           {canManage && (
                                             <WbSupplyIdButton
                                               wbSupplyId={line.wb_supply_id}
-                                              onSave={(id) => onSaveWbSupplyId(trip.id, line.id, id)}
+                                              onSave={async (id) => {
+                                                await onSaveWbSupplyId(trip.id, line.id, id)
+                                                if (onRefreshCargoType) {
+                                                  setRefreshingCargoIds((s) => new Set(s).add(line.id))
+                                                  try {
+                                                    await onRefreshCargoType(trip.id, line.id, id)
+                                                  } finally {
+                                                    setRefreshingCargoIds((s) => { const n = new Set(s); n.delete(line.id); return n })
+                                                  }
+                                                }
+                                              }}
                                               onClear={() => onSaveWbSupplyId(trip.id, line.id, '')}
                                             />
                                           )}
-                                          {line.wb_cargo_type != null && WB_CARGO_LABELS[line.wb_cargo_type] && (
-                                            <span className={cn(
-                                              'rounded px-1 py-0.5 text-[10px] font-medium leading-none',
-                                              WB_CARGO_LABELS[line.wb_cargo_type].className,
-                                            )}>
-                                              {WB_CARGO_LABELS[line.wb_cargo_type].label}
-                                            </span>
-                                          )}
-                                          {onRefreshCargoType && line.wb_supply_id && (
+                                          {line.wb_supply_id && line.wb_cargo_type != null && WB_CARGO_LABELS[line.wb_cargo_type]
+                                            ? line.wb_cargo_type === 1 ? (
+                                              // Короба
+                                              <svg title="Короба" viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                                <title>Короба</title>
+                                                <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+                                                <path d="m3.3 7 8.7 5 8.7-5" />
+                                                <path d="M12 22V12" />
+                                              </svg>
+                                            ) : (
+                                              // Паллеты
+                                              <svg title="Паллеты" viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-blue-400" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                                <title>Паллеты</title>
+                                                <rect x="2" y="14" width="20" height="2" rx="1" />
+                                                <rect x="4" y="17" width="4" height="3" rx="0.5" />
+                                                <rect x="10" y="17" width="4" height="3" rx="0.5" />
+                                                <rect x="16" y="17" width="4" height="3" rx="0.5" />
+                                                <rect x="3" y="8" width="18" height="5" rx="1" />
+                                                <rect x="3" y="4" width="18" height="3" rx="1" />
+                                              </svg>
+                                            )
+                                            : <svg viewBox="0 0 24 24" className="invisible h-3.5 w-3.5 shrink-0" />}
+                                          {onRefreshCargoType && (
                                             <button
                                               type="button"
                                               title="Обновить тип отгрузки"
-                                              disabled={refreshingCargoIds.has(line.id)}
-                                              className="text-slate-300 hover:text-slate-500 disabled:opacity-40"
+                                              disabled={!line.wb_supply_id || refreshingCargoIds.has(line.id)}
+                                              className={cn('text-slate-300 hover:text-slate-500 disabled:opacity-40', !line.wb_supply_id && 'invisible')}
                                               onClick={async () => {
+                                                if (!line.wb_supply_id) return
                                                 setRefreshingCargoIds((s) => new Set(s).add(line.id))
                                                 try {
                                                   await onRefreshCargoType(trip.id, line.id, line.wb_supply_id!)
@@ -964,9 +1240,6 @@ export const TripTable = ({
                                       </div>
                                     </td>
                                   )}
-                                  {!lineHidden.has('reception_date') && (
-                                    <td className="px-3 py-2.5 text-slate-500">{line.reception_date ? formatDate(line.reception_date) : '—'}</td>
-                                  )}
                                   {!lineHidden.has('status') && (
                                     <td className={canManage ? 'px-3 py-2.5' : 'pointer-events-none px-3 py-2.5'}>
                                       <StatusDropdown<ShipmentStatus>
@@ -979,7 +1252,7 @@ export const TripTable = ({
                                         const dateMap: Partial<Record<ShipmentStatus, string | null>> = {
                                           'Формируется': line.created_at,
                                           'Ожидает отправки': line.waiting_at,
-                                          'В пути': line.reception_date,
+                                          'В пути': line.transit_at,
                                           'Прибыл': line.arrival_date,
                                           'Отгружен': line.shipped_date,
                                         }
@@ -991,15 +1264,76 @@ export const TripTable = ({
                                       })()}
                                     </td>
                                   )}
-                                  {!lineHidden.has('arrival_date') && (
-                                    <td className="px-3 py-2.5 text-slate-500">{line.arrival_date ? formatDate(line.arrival_date) : '—'}</td>
-                                  )}
-                                  {!lineHidden.has('shipped_date') && (
-                                    <td className="px-3 py-2.5 text-slate-500">{line.shipped_date ? formatDate(line.shipped_date) : '—'}</td>
-                                  )}
-                                  {!lineHidden.has('marketplace_delivery_date') && (
-                                    <td className="px-3 py-2.5 text-slate-500">{line.planned_marketplace_delivery_date ? formatDate(line.planned_marketplace_delivery_date) : '—'}</td>
-                                  )}
+                                  {(() => {
+                                    // Фиксированный порядок дат — НИКОГДА не менять
+                                    const DATE_ITEMS: { key: string; label: string; content: React.ReactNode }[] = [
+                                      {
+                                        key: 'reception_date',
+                                        label: 'Приём',
+                                        content: <span className="text-slate-500">{line.reception_date ? formatDate(line.reception_date) : '—'}</span>,
+                                      },
+                                      {
+                                        key: 'transit_at',
+                                        label: 'Отправлен',
+                                        content: <span className="text-slate-500">{line.transit_at ? formatDate(line.transit_at) : '—'}</span>,
+                                      },
+                                      {
+                                        key: 'arrival_date',
+                                        label: 'Прибыл',
+                                        content: <span className="text-slate-500">{line.arrival_date ? formatDate(line.arrival_date) : '—'}</span>,
+                                      },
+                                      {
+                                        key: 'shipped_date',
+                                        label: 'Отгружен',
+                                        content: <span className="text-slate-500">{line.shipped_date ? formatDate(line.shipped_date) : '—'}</span>,
+                                      },
+                                      {
+                                        key: 'marketplace_delivery_date',
+                                        label: 'Запланирован',
+                                        content: (
+                                          <>
+                                            <span className="text-slate-500">{line.planned_marketplace_delivery_date ? formatDate(line.planned_marketplace_delivery_date) : '—'}</span>
+                                            {canManage && onSaveMarketplaceDate && (
+                                              <div className="ml-0.5 flex items-center gap-0.5">
+                                                <MpDateButton
+                                                  date={line.planned_marketplace_delivery_date}
+                                                  hasWbSupplyId={!!line.wb_supply_id}
+                                                  onSave={(date) => onSaveMarketplaceDate(trip.id, line.id, date)}
+                                                  onRefresh={onRefreshMarketplaceDate ? () => onRefreshMarketplaceDate(trip.id, line.id) : undefined}
+                                                />
+                                              </div>
+                                            )}
+                                          </>
+                                        ),
+                                      },
+                                      {
+                                        key: 'wb_acceptance_date',
+                                        label: 'Приём ВБ',
+                                        content: <span className="text-slate-500">{line.wb_acceptance_date ? formatDate(line.wb_acceptance_date) : '—'}</span>,
+                                      },
+                                    ];
+                                    const visibleDates = DATE_ITEMS.filter(e => !lineHidden.has(e.key));
+                                    if (visibleDates.length === 0) return null;
+                                    const cols: typeof DATE_ITEMS[] = [];
+                                    for (let i = 0; i < visibleDates.length; i += 3) cols.push(visibleDates.slice(i, i + 3));
+                                    return (
+                                      <td className="px-3 py-2.5">
+                                        <div className="flex gap-4">
+                                          {cols.map((col, ci) => (
+                                            <div key={ci} className="flex w-[148px] shrink-0 flex-col gap-0.5">
+                                              {col.map(entry => (
+                                                <div key={entry.key} className="flex items-center gap-1.5">
+                                                  <span className="w-[68px] shrink-0 text-[10px] text-slate-400">{entry.label}</span>
+                                                  {entry.content}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </td>
+                                    );
+                                  })()}
+
                                   <td className="px-3 py-2.5">
                                     <TripLineStickerCell
                                       fileUrls={line.sticker_file_urls ?? []}
@@ -1066,26 +1400,28 @@ export const TripTable = ({
                                             <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                                           </svg>
                                         </button>
-                                        <button
-                                          type="button"
-                                          aria-label={`Удалить поставку ${line.shipment_number}`}
-                                          title={`Удалить поставку ${line.shipment_number}`}
-                                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
-                                          onClick={event => handleDeleteTripLineClick(
-                                            trip.id,
-                                            line.id,
-                                            line.shipment_number,
-                                            event,
-                                          )}
-                                        >
-                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                                            <path d="M9 4h6" />
-                                            <path d="M5 7h14" />
-                                            <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
-                                            <path d="M10 11v4" />
-                                            <path d="M14 11v4" />
-                                          </svg>
-                                        </button>
+                                        {(canDeleteAny || line.status === 'Формируется') && (
+                                          <button
+                                            type="button"
+                                            aria-label={`Удалить поставку ${line.shipment_number}`}
+                                            title={canDeleteAny || line.status === 'Формируется' ? `Удалить поставку ${line.shipment_number}` : 'Удаление доступно только для поставок в статусе «Формируется»'}
+                                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
+                                            onClick={event => handleDeleteTripLineClick(
+                                              trip.id,
+                                              line.id,
+                                              line.shipment_number,
+                                              event,
+                                            )}
+                                          >
+                                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
+                                              <path d="M9 4h6" />
+                                              <path d="M5 7h14" />
+                                              <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+                                              <path d="M10 11v4" />
+                                              <path d="M14 11v4" />
+                                            </svg>
+                                          </button>
+                                        )}
                                       </div>
                                     ) : null}
                                   </td>
@@ -1104,6 +1440,22 @@ export const TripTable = ({
                       </div>
                     </td>
                   </tr>
+                  {/* ── Архивные поставки рейса ── */}
+                  {(() => {
+                    const tripArchived = archivedTripLines.filter((l) => l.trip_id === trip.id)
+                    if (tripArchived.length === 0) return null
+                    return (
+                      <tr>
+                        <td colSpan={outerColCount} className="px-0 pb-2 pt-0">
+                          <ArchivedLinesSection
+                            lines={tripArchived}
+                            onRestore={onRestoreArchivedTripLine}
+                            colCount={outerColCount}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })()}
                   </tbody>
                 )
               })}

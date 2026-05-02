@@ -5,7 +5,7 @@ import { TripLineFormModal } from '../components/trips/TripLineFormModal'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
-import type { Store, TripFormValues, TripLineFormValues, TripStatus, ShipmentStatus, PaymentStatus, TripWithLines } from '../types'
+import type { Store, TripFormValues, TripLineFormValues, TripStatus, ShipmentStatus, PaymentStatus, TripWithLines, TripLineWithStore } from '../types'
 import {
   ColumnConfig,
   DEFAULT_COLUMN_CONFIG,
@@ -30,12 +30,14 @@ const pluralize = (count: number, one: string, few: string, many: string) => {
 
 interface ShipmentsPageProps {
   trips: TripWithLines[]
+  archivedTripLines?: TripLineWithStore[]
   stores: Store[]
   carrierNames?: string[]
   warehouseNames?: string[]
   onOpenCreate: () => void
   onDeleteTrip: (tripId: string) => Promise<void>
   onDeleteTripLine: (tripId: string, lineId: string) => Promise<void>
+  onRestoreArchivedTripLine?: (lineId: string) => Promise<void>
   onChangeTripStatus: (tripId: string, status: TripStatus) => Promise<void>
   onChangeTripLineStatus: (tripId: string, lineId: string, status: ShipmentStatus) => Promise<void>
   onChangeTripLinePaymentStatus: (tripId: string, lineId: string, paymentStatus: PaymentStatus) => Promise<void>
@@ -52,22 +54,28 @@ interface ShipmentsPageProps {
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onSaveMarketplaceDate?: (tripId: string, lineId: string, date: string | null) => Promise<void>
+  onRefreshMarketplaceDate?: (tripId: string, lineId: string) => Promise<void>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveWbPass: (tripId: string, lineId: string, index: number) => Promise<void>
   onUpdateTripCustomFields?: (tripId: string, fields: Record<string, unknown>) => Promise<void>
   onUpdateLineCustomFields?: (tripId: string, lineId: string, fields: Record<string, unknown>) => Promise<void>
   canManage?: boolean
+  canDeleteAny?: boolean
+  canDeleteTrip?: boolean
   accountId?: string
 }
 
 export const ShipmentsPage = ({
   trips,
+  archivedTripLines = [],
   stores,
   carrierNames,
   warehouseNames,
   onOpenCreate,
   onDeleteTrip,
   onDeleteTripLine,
+  onRestoreArchivedTripLine,
   onChangeTripStatus,
   onChangeTripLineStatus,
   onChangeTripLinePaymentStatus,
@@ -84,11 +92,15 @@ export const ShipmentsPage = ({
   onFetchWbBarcodes,
   onSaveWbSupplyId,
   onRefreshCargoType,
+  onSaveMarketplaceDate,
+  onRefreshMarketplaceDate,
   onUploadWbPass,
   onRemoveWbPass,
   onUpdateTripCustomFields,
   onUpdateLineCustomFields,
   canManage = true,
+  canDeleteAny = false,
+  canDeleteTrip = false,
   accountId,
 }: ShipmentsPageProps) => {
   const [expandAllTrips, setExpandAllTrips] = useState(() => localStorage.getItem('elestet-expand-all') === 'true')
@@ -403,12 +415,8 @@ export const ShipmentsPage = ({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 >
-                  <line x1="8" y1="6" x2="21" y2="6" />
-                  <line x1="8" y1="12" x2="21" y2="12" />
-                  <line x1="8" y1="18" x2="21" y2="18" />
-                  <circle cx="3" cy="6" r="1.5" />
-                  <circle cx="3" cy="12" r="1.5" />
-                  <circle cx="3" cy="18" r="1.5" />
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
                 </svg>
               </Button>
               <div className="flex h-10 min-w-[170px] items-center justify-between rounded-2xl bg-slate-100 px-4 text-sm text-slate-600">
@@ -443,6 +451,8 @@ export const ShipmentsPage = ({
           onExpandedCountChange={(count) => { setAnyTripExpanded(count > 0); if (count === 0) setExpandAllTrips(false) }}
           onDeleteTrip={onDeleteTrip}
           onDeleteTripLine={onDeleteTripLine}
+          archivedTripLines={archivedTripLines}
+          onRestoreArchivedTripLine={onRestoreArchivedTripLine}
           onChangeTripStatus={onChangeTripStatus}
           onChangeTripLineStatus={onChangeTripLineStatus}
           onChangeTripLinePaymentStatus={onChangeTripLinePaymentStatus}
@@ -467,9 +477,13 @@ export const ShipmentsPage = ({
           onFetchWbBarcodes={onFetchWbBarcodes}
           onSaveWbSupplyId={onSaveWbSupplyId}
           onRefreshCargoType={onRefreshCargoType}
+          onSaveMarketplaceDate={onSaveMarketplaceDate}
+          onRefreshMarketplaceDate={onRefreshMarketplaceDate}
           onUploadWbPass={onUploadWbPass}
           onRemoveWbPass={onRemoveWbPass}
           canManage={canManage}
+          canDeleteAny={canDeleteAny}
+          canDeleteTrip={canDeleteTrip}
           tripConfig={tripConfig}
           lineConfig={lineConfig}
           onUpdateTripCustomFields={onUpdateTripCustomFields}

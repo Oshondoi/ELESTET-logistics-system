@@ -52,9 +52,11 @@ interface StickersPageProps {
   onEditBundle: (id: string, name: string, items: StickerBundleItem[]) => Promise<StickerBundle>
   onDeleteBundle: (id: string) => Promise<void>
   canManage?: boolean
+  canDelete?: boolean
+  canImport?: boolean
 }
 
-export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true }: StickersPageProps) => {
+export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true }: StickersPageProps) => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingSticker, setEditingSticker] = useState<StickerTemplate | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<StickerTemplate | null>(null)
@@ -753,7 +755,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
             Кастомная <span className="ml-1 text-xs font-normal text-slate-400">{stickers.length}</span>
           </button>
           <button type="button" onClick={() => handleTabChange('import')}
-            className={`text-sm font-semibold transition-colors ${activeTab === 'import' ? 'text-slate-900' : 'text-slate-300 hover:text-slate-900'}`}
+            disabled={!canImport}
+            className={`text-sm font-semibold transition-colors ${activeTab === 'import' ? 'text-slate-900' : 'text-slate-300 hover:text-slate-900'} ${!canImport ? 'cursor-not-allowed opacity-40' : ''}`}
           >
             Импорт <span className="ml-1 text-xs font-normal text-violet-400">WB</span>
           </button>
@@ -1195,7 +1198,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                       </div>
                     </td>
                     <td className="px-2 py-2.5">
-                      {canManage && (
+                      {canDelete && (
                       <button
                         type="button"
                         title="Удалить"
@@ -1287,7 +1290,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                               </svg>
                             </button>
                             )}
-                            {canManage && (
+                            {canDelete && (
                             <button
                               type="button"
                               title="Удалить набор"

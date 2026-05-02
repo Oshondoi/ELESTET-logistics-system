@@ -266,6 +266,9 @@ interface ReviewsPageProps {
   activeAccountId: string
   selectedStoreId: string
   onStoreChange: (id: string) => void
+  canManage?: boolean
+  canUseAi?: boolean
+  canManageAutomation?: boolean
 }
 
 const REVIEWS_TAB_KEY = 'reviews_active_tab'
@@ -322,6 +325,9 @@ export const ReviewsPage = ({
   activeAccountId,
   selectedStoreId,
   onStoreChange,
+  canManage = true,
+  canUseAi = true,
+  canManageAutomation = true,
 }: ReviewsPageProps) => {
   const storesWithKey = stores.filter((s) => s.api_key)
   const activeStore =
@@ -1359,6 +1365,7 @@ export const ReviewsPage = ({
                       /* Collapsed: action buttons */
                       <div className="flex flex-wrap items-center gap-2">
                         {/* AI generate */}
+                        {canUseAi && (
                         <button
                           type="button"
                           onClick={() => void handleGenerate(row)}
@@ -1382,6 +1389,7 @@ export const ReviewsPage = ({
                           )}
                           {isGenerating ? 'Генерация...' : 'ИИ-ответ'}
                         </button>
+                        )}
 
                         {/* Manual write */}
                         <button
@@ -1731,6 +1739,8 @@ export const ReviewsPage = ({
           </div>
 
           {/* ── Автоматизация ответов ─────────────────────────── */}
+          {canManageAutomation && (
+          <>
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             {/* Заголовок + переключатель */}
             <h3 className="text-sm font-semibold text-slate-800">Автоматизация ответов</h3>
@@ -1919,6 +1929,8 @@ export const ReviewsPage = ({
               ))}
             </div>
           </div>
+          </>
+          )}
 
         </div>
       )}

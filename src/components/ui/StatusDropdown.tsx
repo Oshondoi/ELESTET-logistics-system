@@ -12,6 +12,14 @@ const toneClasses: Record<BadgeTone, string> = {
   warning: 'bg-amber-50 text-amber-700',
 }
 
+// Цвета для иконочного режима: bg-100 text-500 hover:bg-200
+const iconToneClasses: Record<BadgeTone, string> = {
+  neutral: 'bg-slate-200 text-slate-500 hover:bg-slate-300',
+  info: 'bg-blue-100 text-blue-500 hover:bg-blue-200',
+  success: 'bg-emerald-100 text-emerald-500 hover:bg-emerald-200',
+  warning: 'bg-amber-100 text-amber-500 hover:bg-amber-200',
+}
+
 interface StatusDropdownProps<T extends string> {
   value: T
   options: readonly T[]
@@ -119,7 +127,16 @@ export function StatusDropdown<T extends string>({
               : 'hover:bg-slate-50 active:bg-slate-100',
           )}
         >
-          <Badge tone={toneMap[option]}>{option}</Badge>
+          {iconMap ? (
+            <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium', toneClasses[toneMap[option]])}>
+              <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                {iconMap[option]}
+              </span>
+              {option}
+            </span>
+          ) : (
+            <Badge tone={toneMap[option]}>{option}</Badge>
+          )}
           {option === value && (
             <svg
               className="ml-auto h-3.5 w-3.5 shrink-0 text-slate-400"
@@ -146,9 +163,9 @@ export function StatusDropdown<T extends string>({
         className={cn(
           'relative inline-flex items-center gap-1 rounded-full whitespace-nowrap',
           iconMap ? 'px-1.5 py-1' : 'px-2.5 py-1',
-          toneClasses[toneMap[value]],
+          iconMap ? iconToneClasses[toneMap[value]] : toneClasses[toneMap[value]],
           isLoading ? 'cursor-wait opacity-60' : 'cursor-pointer',
-          !isLoading && !disabled && 'transition-opacity duration-100 hover:opacity-75',
+          !isLoading && !disabled && (iconMap ? 'transition-colors duration-100' : 'transition-opacity duration-100 hover:opacity-75'),
           disabled && 'pointer-events-none',
         )}
         aria-haspopup="listbox"

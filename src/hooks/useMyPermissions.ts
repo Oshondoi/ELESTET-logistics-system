@@ -57,5 +57,5 @@ export const useMyPermissions = (
     void load()
   }, [load])
 
-  return { permissions, isLoading }
+  return { permissions, isLoading, isOwnerOrAdmin }
 }

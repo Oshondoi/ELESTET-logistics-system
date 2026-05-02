@@ -39,14 +39,32 @@ export interface SyncResult {
 // ─── Роли / Доступы ───────────────────────────────────────────
 
 export interface RolePermissions {
+  // Логистика
   shipments_view: boolean
   shipments_manage: boolean
+  shipments_delete_any: boolean
+  shipments_delete_trip: boolean
+  shipments_manage_payments: boolean
+  // Магазины
   stores_view: boolean
   stores_manage: boolean
+  stores_delete: boolean
+  stores_sync: boolean
+  // Справочники
   directories_view: boolean
   directories_manage: boolean
+  directories_delete: boolean
+  // Стикеры
   stickers_view: boolean
   stickers_manage: boolean
+  stickers_delete: boolean
+  stickers_import: boolean
+  // Отзывы
+  reviews_view: boolean
+  reviews_manage: boolean
+  reviews_ai: boolean
+  reviews_automation: boolean
+  // Администрирование
   roles_manage: boolean
   members_manage: boolean
 }
@@ -54,12 +72,24 @@ export interface RolePermissions {
 export const DEFAULT_PERMISSIONS: RolePermissions = {
   shipments_view: false,
   shipments_manage: false,
+  shipments_delete_any: false,
+  shipments_delete_trip: false,
+  shipments_manage_payments: false,
   stores_view: false,
   stores_manage: false,
+  stores_delete: false,
+  stores_sync: false,
   directories_view: false,
   directories_manage: false,
+  directories_delete: false,
   stickers_view: false,
   stickers_manage: false,
+  stickers_delete: false,
+  stickers_import: false,
+  reviews_view: false,
+  reviews_manage: false,
+  reviews_ai: false,
+  reviews_automation: false,
   roles_manage: false,
   members_manage: false,
 }
@@ -67,12 +97,24 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
 export const FULL_PERMISSIONS: RolePermissions = {
   shipments_view: true,
   shipments_manage: true,
+  shipments_delete_any: true,
+  shipments_delete_trip: true,
+  shipments_manage_payments: true,
   stores_view: true,
   stores_manage: true,
+  stores_delete: true,
+  stores_sync: true,
   directories_view: true,
   directories_manage: true,
+  directories_delete: true,
   stickers_view: true,
   stickers_manage: true,
+  stickers_delete: true,
+  stickers_import: true,
+  reviews_view: true,
+  reviews_manage: true,
+  reviews_ai: true,
+  reviews_automation: true,
   roles_manage: true,
   members_manage: true,
 }
@@ -284,6 +326,7 @@ export interface TripLine {
   reception_date: string | null
   shipped_date: string | null
   waiting_at: string | null
+  transit_at: string | null
   status: ShipmentStatus
   payment_status: PaymentStatus
   invoice_photo_urls: string[]
@@ -291,12 +334,14 @@ export interface TripLine {
   combined_sticker_urls: string[]
   wb_supply_id: string | null
   wb_cargo_type: number | null
+  wb_acceptance_date: string | null
   wb_pass_url: string | null
   wb_pass_urls: string[]
   comment: string
   custom_fields: Record<string, unknown>
   created_at: string
   updated_at: string
+  deleted_at?: string | null
 }
 
 export interface TripLineWithStore extends TripLine {

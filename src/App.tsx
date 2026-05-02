@@ -151,7 +151,7 @@ function App() {
   const { accounts, archivedAccounts, isLoading: isAccountsLoading, createAccount, deleteAccount, restoreAccount, updateAccount } = useAccounts(Boolean(session))
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
   const { roles, isLoading: isRolesLoading, addRole, updateRole, removeRole, cloneRoleToAccount } = useRoles(activeAccount?.id ?? null)
-  const { permissions, isLoading: isPermissionsLoading } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
+  const { permissions, isLoading: isPermissionsLoading, isOwnerOrAdmin } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
 
   useEffect(() => {
     if (!isAccountsLoading && accounts.length > 0) {
@@ -171,6 +171,7 @@ function App() {
     stores,
     archivedStores,
     trips,
+    archivedTripLines,
     carriers,
     warehouses,
     stickers,
@@ -193,8 +194,11 @@ function App() {
     saveWbSupplyId,
     fetchWbBarcodes,
     refreshCargoType,
+    saveMarketplaceDate,
+    refreshMarketplaceDate,
     removeTrip,
     removeTripLine,
+    restoreArchivedTripLine,
     changeTripStatus,
     changeTripLineStatus,
     changeTripLinePaymentStatus,
@@ -233,7 +237,7 @@ function App() {
     products: 'stores_view',
     directories: 'directories_view',
     stickers: 'stickers_view',
-    reviews: null,
+    reviews: 'reviews_view',
     roles: 'roles_manage',
     admin: null,
   }
@@ -436,12 +440,14 @@ function App() {
               ) : effectivePage === 'shipments' ? (
                 <ShipmentsPage
                   trips={trips}
+                  archivedTripLines={archivedTripLines}
                   stores={stores}
                   carrierNames={carrierNames}
                   warehouseNames={warehouseNames}
                   onOpenCreate={handleOpenTripCreate}
                   onDeleteTrip={removeTrip}
                   onDeleteTripLine={removeTripLine}
+                  onRestoreArchivedTripLine={restoreArchivedTripLine}
                   onChangeTripStatus={changeTripStatus}
                   onChangeTripLineStatus={changeTripLineStatus}
                   onChangeTripLinePaymentStatus={changeTripLinePaymentStatus}
@@ -458,15 +464,19 @@ function App() {
                   onFetchWbBarcodes={fetchWbBarcodes}
                   onSaveWbSupplyId={saveWbSupplyId}
                   onRefreshCargoType={refreshCargoType}
+                  onSaveMarketplaceDate={saveMarketplaceDate}
+                  onRefreshMarketplaceDate={refreshMarketplaceDate}
                   onUploadWbPass={uploadWbPass}
                   onRemoveWbPass={removeWbPass}
                   canManage={permissions.shipments_manage}
+                  canDeleteAny={isOwnerOrAdmin || permissions.shipments_delete_any}
+                  canDeleteTrip={isOwnerOrAdmin || permissions.shipments_delete_trip}
                   accountId={activeAccount?.id ?? ''}
                   onUpdateTripCustomFields={updateTripCustomFields}
                   onUpdateLineCustomFields={updateLineCustomFields}
                 />
               ) : effectivePage === 'stores' ? (
-                <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} canManage={permissions.stores_manage} />
+                <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} canManage={permissions.stores_manage} canDelete={isOwnerOrAdmin || permissions.stores_delete} canSync={permissions.stores_manage || isOwnerOrAdmin || permissions.stores_sync} />
               ) : effectivePage === 'directories' ? (
                 <DirectoriesPage
                   carriers={carriers}
@@ -481,6 +491,7 @@ function App() {
                   onDeleteWarehouse={removeWarehouse}
                   onRenameWarehouse={renameWarehouse}
                   canManage={permissions.directories_manage}
+                  canDelete={isOwnerOrAdmin || permissions.directories_delete}
                 />
               ) : effectivePage === 'products' ? (
                 <ProductsPage stores={stores} activeAccountId={activeAccount?.id ?? ''} selectedStoreId={activeStoreId} onStoreChange={setActiveStoreId} />
@@ -510,6 +521,8 @@ function App() {
                   onEditBundle={editBundle}
                   onDeleteBundle={removeBundle}
                   canManage={permissions.stickers_manage}
+                  canDelete={isOwnerOrAdmin || permissions.stickers_delete}
+                  canImport={isOwnerOrAdmin || permissions.stickers_manage || permissions.stickers_import}
                 />
               ) : effectivePage === 'reviews' ? (
                 <ReviewsPage
@@ -517,6 +530,9 @@ function App() {
                   activeAccountId={activeAccount?.id ?? ''}
                   selectedStoreId={activeStoreId}
                   onStoreChange={setActiveStoreId}
+                  canManage={isOwnerOrAdmin || permissions.reviews_manage}
+                  canUseAi={isOwnerOrAdmin || permissions.reviews_ai}
+                  canManageAutomation={isOwnerOrAdmin || permissions.reviews_automation}
                 />
               ) : effectivePage === 'admin' ? (
                 <AdminPage />

@@ -8,9 +8,12 @@ import { resolveAccountUser } from '../../services/roleService'
 
 // ─── Группы прав ─────────────────────────────────────────────
 
+interface PermItem { key: keyof RolePermissions; label: string }
+
 interface PermGroup {
   label: string
-  items: Array<{ key: keyof RolePermissions; label: string }>
+  items: PermItem[]
+  subItems?: PermItem[]
 }
 
 const PERMISSION_GROUPS: PermGroup[] = [
@@ -20,12 +23,21 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: 'shipments_view', label: 'Просмотр отправлений' },
       { key: 'shipments_manage', label: 'Управление отправлениями' },
     ],
+    subItems: [
+      { key: 'shipments_delete_any', label: 'Удаление поставок в любом статусе' },
+      { key: 'shipments_delete_trip', label: 'Удаление рейсов целиком' },
+      { key: 'shipments_manage_payments', label: 'Управление статусом оплаты' },
+    ],
   },
   {
     label: 'Магазины',
     items: [
       { key: 'stores_view', label: 'Просмотр магазинов' },
       { key: 'stores_manage', label: 'Управление магазинами' },
+    ],
+    subItems: [
+      { key: 'stores_sync', label: 'Синхронизация с WB API' },
+      { key: 'stores_delete', label: 'Удаление / архивирование магазина' },
     ],
   },
   {
@@ -34,12 +46,30 @@ const PERMISSION_GROUPS: PermGroup[] = [
       { key: 'directories_view', label: 'Просмотр справочников' },
       { key: 'directories_manage', label: 'Управление справочниками' },
     ],
+    subItems: [
+      { key: 'directories_delete', label: 'Удаление перевозчиков и складов' },
+    ],
   },
   {
     label: 'Стикеры',
     items: [
       { key: 'stickers_view', label: 'Просмотр стикеров' },
       { key: 'stickers_manage', label: 'Управление стикерами' },
+    ],
+    subItems: [
+      { key: 'stickers_delete', label: 'Удаление шаблонов и наборов' },
+      { key: 'stickers_import', label: 'Импорт стикеров из WB' },
+    ],
+  },
+  {
+    label: 'Отзывы',
+    items: [
+      { key: 'reviews_view', label: 'Просмотр отзывов' },
+      { key: 'reviews_manage', label: 'Ответы и шаблоны' },
+    ],
+    subItems: [
+      { key: 'reviews_ai', label: 'Генерация ИИ-ответов' },
+      { key: 'reviews_automation', label: 'Управление автоматизацией' },
     ],
   },
   {
@@ -81,6 +111,90 @@ const Toggle = ({
     </button>
   </label>
 )
+
+// ─── Extended Perms Modal ─────────────────────────────────────
+
+const ExtendedPermsModal = ({
+  group,
+  permissions,
+  setPerm,
+  onClose,
+}: {
+  group: PermGroup
+  permissions: RolePermissions
+  setPerm: (key: keyof RolePermissions, value: boolean) => void
+  onClose: () => void
+}) => (
+  <Modal open onClose={onClose} title={`Расширенные права — ${group.label}`}>
+    <div className="grid gap-0.5">
+      {group.subItems!.map((item) => (
+        <Toggle
+          key={item.key}
+          label={item.label}
+          checked={permissions[item.key]}
+          onChange={(v) => setPerm(item.key, v)}
+        />
+      ))}
+    </div>
+    <div className="mt-4 flex justify-end">
+      <Button type="button" onClick={onClose}>Готово</Button>
+    </div>
+  </Modal>
+)
+
+// ─── PermGroupCard ─────────────────────────────────────────────
+
+const PermGroupCard = ({
+  group,
+  permissions,
+  setPerm,
+  onOpenExtended,
+}: {
+  group: PermGroup
+  permissions: RolePermissions
+  setPerm: (key: keyof RolePermissions, value: boolean) => void
+  onOpenExtended: (group: PermGroup) => void
+}) => {
+  const hasSubItems = Boolean(group.subItems?.length)
+  const activeSubCount = group.subItems?.filter((s) => permissions[s.key]).length ?? 0
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-2">
+      {/* Заголовок группы */}
+      <div className="mb-0.5 text-xs font-semibold text-slate-400">{group.label}</div>
+
+      {/* Основные переключатели */}
+      {group.items.map((item) => (
+        <Toggle
+          key={item.key}
+          label={item.label}
+          checked={permissions[item.key]}
+          onChange={(v) => setPerm(item.key, v)}
+        />
+      ))}
+
+      {/* Кнопка «Расширенные права» — третья строка */}
+      {hasSubItems && (
+        <div className="mt-1 border-t border-slate-100 pt-1.5 pb-0.5">
+          <button
+            type="button"
+            onClick={() => onOpenExtended(group)}
+            className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-medium transition text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+          >
+            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14" />
+            </svg>
+            Расширенные права
+            <span className={`ml-0.5 rounded-full px-1.5 py-0 text-[10px] font-bold transition-colors ${
+              activeSubCount > 0 ? 'bg-blue-500 text-white' : 'text-transparent'
+            }`}>{activeSubCount > 0 ? activeSubCount : '0'}</span>
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ─── Модал клонирования ───────────────────────────────────────
 
@@ -199,6 +313,7 @@ export const RoleFormModal = ({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [cloneOpen, setCloneOpen] = useState(false)
+  const [extendedGroup, setExtendedGroup] = useState<PermGroup | null>(null)
 
   // ─── Назначение пользователя ─────────────────────────────────
   const [emailInput, setEmailInput] = useState('')
@@ -354,25 +469,21 @@ export const RoleFormModal = ({
           <div className="grid gap-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Доступы</span>
-              {enabledCount > 0 && (
-                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600">
-                  {enabledCount} включено
-                </span>
-              )}
+              <span className={`rounded-full px-2 py-0.5 text-xs font-medium transition-colors ${
+                enabledCount > 0 ? 'bg-blue-50 text-blue-600' : 'text-transparent'
+              }`}>
+                {enabledCount > 0 ? `${enabledCount} включено` : '0 включено'}
+              </span>
             </div>
 
             {PERMISSION_GROUPS.map((group) => (
-              <div key={group.label} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-2">
-                <div className="mb-1 text-xs font-semibold text-slate-400">{group.label}</div>
-                {group.items.map((item) => (
-                  <Toggle
-                    key={item.key}
-                    label={item.label}
-                    checked={permissions[item.key]}
-                    onChange={(v) => setPerm(item.key, v)}
-                  />
-                ))}
-              </div>
+              <PermGroupCard
+                key={group.label}
+                group={group}
+                permissions={permissions}
+                setPerm={setPerm}
+                onOpenExtended={setExtendedGroup}
+              />
             ))}
           </div>
 
@@ -489,6 +600,15 @@ export const RoleFormModal = ({
           currentAccountId={currentAccountId}
           onClose={() => setCloneOpen(false)}
           onClone={(targetId) => onClone(initialValues, targetId)}
+        />
+      )}
+
+      {extendedGroup && (
+        <ExtendedPermsModal
+          group={extendedGroup}
+          permissions={permissions}
+          setPerm={setPerm}
+          onClose={() => setExtendedGroup(null)}
         />
       )}
     </>

@@ -105,6 +105,31 @@ export const deleteTripLine = async (accountId: string, lineId: string): Promise
   if (error) throw error
 }
 
+export const archiveTripLine = async (accountId: string, lineId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase.rpc('archive_trip_line', {
+    p_line_id: lineId,
+    p_account_id: accountId,
+  })
+  if (error) throw error
+}
+
+export const restoreTripLine = async (accountId: string, lineId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase.rpc('restore_trip_line', {
+    p_line_id: lineId,
+    p_account_id: accountId,
+  })
+  if (error) throw error
+}
+
+export const fetchArchivedTripLines = async (accountId: string, stores: Store[]): Promise<TripLineWithStore[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.rpc('get_archived_trip_lines', { p_account_id: accountId })
+  if (error) throw error
+  return ((data ?? []) as TripLine[]).map((line) => buildTripLineWithStore(line, stores))
+}
+
 export const deleteTrip = async (accountId: string, tripId: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error: linesError } = await supabase
@@ -145,19 +170,23 @@ export const updateTripLineStatus = async (
   lineId: string,
   status: ShipmentStatus,
   currentWaitingAt: string | null,
+  currentTransitAt: string | null,
   currentArrivalDate: string | null,
   currentShippedDate: string | null,
-): Promise<{ waiting_at: string | null; arrival_date: string | null; shipped_date: string | null }> => {
+): Promise<{ waiting_at: string | null; transit_at: string | null; arrival_date: string | null; shipped_date: string | null }> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const today = new Date().toISOString().slice(0, 10)
   const waiting_at =
     status === 'Ожидает отправки' && !currentWaitingAt ? today : currentWaitingAt
+  const transit_at =
+    status === 'В пути' && !currentTransitAt ? today : currentTransitAt
   const arrival_date =
     status === 'Прибыл' && !currentArrivalDate ? today : currentArrivalDate
   const shipped_date =
     status === 'Отгружен' && !currentShippedDate ? today : currentShippedDate
   const patch: Record<string, unknown> = { status }
   if (status === 'Ожидает отправки' && !currentWaitingAt) patch.waiting_at = waiting_at
+  if (status === 'В пути' && !currentTransitAt) patch.transit_at = transit_at
   if (status === 'Прибыл' && !currentArrivalDate) patch.arrival_date = arrival_date
   if (status === 'Отгружен' && !currentShippedDate) patch.shipped_date = shipped_date
   const { error } = await supabase
@@ -168,7 +197,7 @@ export const updateTripLineStatus = async (
     .eq('account_id', accountId)
 
   if (error) throw error
-  return { waiting_at, arrival_date, shipped_date }
+  return { waiting_at, transit_at, arrival_date, shipped_date }
 }
 
 // Массово переводит поставки рейса в «Прибыл», кроме «Отгружен» (статус впереди по логике)
@@ -453,6 +482,36 @@ export const getWbSupplyCargoType = async (
   )
   if (error || !data || data.error) return null
   return data.cargo_type ?? null
+}
+
+/** Сохранить Дату МП вручную */
+export const saveMarketplaceDate = async (
+  accountId: string,
+  lineId: string,
+  date: string | null,
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ planned_marketplace_delivery_date: date } as any)
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+  if (error) throw error
+}
+
+/** Получить даты поставки из WB API (supplyDate → Дата МП, factDate → Прибыл) */
+export const getWbSupplyMarketplaceDate = async (
+  accountId: string,
+  lineId: string,
+): Promise<{ mpDate: string | null; factDate: string | null }> => {
+  if (!supabase) return { mpDate: null, factDate: null }
+  const { data, error } = await supabase.functions.invoke<{ mp_date?: string | null; fact_date?: string | null; error?: string }>(
+    'wb-supply',
+    { body: { account_id: accountId, line_id: lineId, action: 'mp_date' } },
+  )
+  if (error || !data || data.error) return { mpDate: null, factDate: null }
+  return { mpDate: data.mp_date ?? null, factDate: data.fact_date ?? null }
 }
 
 /** Получить штрихкоды поставки FBW через WB API (Edge Function) */

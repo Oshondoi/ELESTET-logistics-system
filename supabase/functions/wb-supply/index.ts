@@ -71,6 +71,23 @@ async function fetchSupplyCargoType(apiKey: string, supplyId: string): Promise<n
   }
 }
 
+/** Получить даты поставки из WB API: supplyDate (плановая) и factDate (фактическая дата принятия) */
+async function fetchSupplyDates(apiKey: string, supplyId: string): Promise<{ supplyDate: string | null; factDate: string | null }> {
+  try {
+    const resp = await fetch(`${WB_BASE}/api/v1/supplies/${supplyId}`, {
+      headers: { Authorization: apiKey },
+    })
+    if (!resp.ok) return { supplyDate: null, factDate: null }
+    const data = await resp.json() as { supplyDate?: string | null; factDate?: string | null }
+    return {
+      supplyDate: data.supplyDate ? data.supplyDate.slice(0, 10) : null,
+      factDate: data.factDate ? data.factDate.slice(0, 10) : null,
+    }
+  } catch {
+    return { supplyDate: null, factDate: null }
+  }
+}
+
 // deno-lint-ignore no-explicit-any
 function drawQrCode(page: any, text: string, x: number, y: number, size: number): void {
   const qr = qrcodegen(0, 'M')
@@ -167,6 +184,18 @@ Deno.serve(async (req) => {
       await db.from('trip_lines').update({ wb_cargo_type: cargoType }).eq('wb_supply_id', supplyId).eq('account_id', account_id)
     }
     return jsonOk({ cargo_type: cargoType })
+  }
+
+  // action=mp_date — плановая дата (supplyDate) + фактическая дата принятия (factDate)
+  if (action === 'mp_date') {
+    const { supplyDate, factDate } = await fetchSupplyDates(apiKey, supplyId)
+    const updates: Record<string, unknown> = {}
+    if (supplyDate !== null) updates.planned_marketplace_delivery_date = supplyDate
+    if (factDate !== null) updates.wb_acceptance_date = factDate
+    if (Object.keys(updates).length > 0) {
+      await db.from('trip_lines').update(updates).eq('id', line_id).eq('account_id', account_id)
+    }
+    return jsonOk({ mp_date: supplyDate, fact_date: factDate })
   }
 
   try {

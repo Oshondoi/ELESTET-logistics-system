@@ -32,11 +32,13 @@ export const BUILTIN_TRIP_COLS = [
 export const BUILTIN_LINE_COLS = [
   { key: 'shipment', label: 'Поставка' },
   { key: 'volume', label: 'Объём' },
-  { key: 'reception_date', label: 'Дата приёма' },
+  { key: 'reception_date', label: 'Приём' },
+  { key: 'transit_at', label: 'Отправлен (В пути)' },
   { key: 'status', label: 'Статус' },
   { key: 'arrival_date', label: 'Прибыл' },
   { key: 'shipped_date', label: 'Отгружено' },
-  { key: 'marketplace_delivery_date', label: 'Дата МП' },
+  { key: 'marketplace_delivery_date', label: 'Запланирован' },
+  { key: 'wb_acceptance_date', label: 'Приём ВБ' },
   { key: 'payment', label: 'Оплата' },
   { key: 'comment', label: 'Комментарий' },
 ] as const

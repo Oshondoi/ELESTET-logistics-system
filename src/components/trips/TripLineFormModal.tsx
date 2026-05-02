@@ -28,7 +28,7 @@ const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues
   arrived_box_qty: 0,
   weight: 0,
   planned_marketplace_delivery_date: '',
-  reception_date: '',
+  reception_date: new Date().toISOString().slice(0, 10),
   arrival_date: '',
   shipped_date: '',
   status: 'Формируется',

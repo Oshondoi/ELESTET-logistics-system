@@ -38,6 +38,11 @@ import {
   updateTripLineWbPassUrls as updateTripLineWbPassUrlsInSupabase,
   updateTripLineWbSupplyId as updateTripLineWbSupplyIdInSupabase,
   bulkArriveTripLines as bulkArriveTripLinesInSupabase,
+  archiveTripLine as archiveTripLineInSupabase,
+  restoreTripLine as restoreTripLineInSupabase,
+  fetchArchivedTripLines as fetchArchivedTripLinesInSupabase,
+  saveMarketplaceDate as saveMarketplaceDateInSupabase,
+  getWbSupplyMarketplaceDate as getWbSupplyMarketplaceDateInSupabase,
 } from '../services/tripService'
 import {
   updateTripCustomFieldsInSupabase,
@@ -82,6 +87,7 @@ import type {
   TripWithLines,
   Trip,
   TripLine,
+  TripLineWithStore,
   Carrier,
   Warehouse,
   StickerTemplate,
@@ -95,6 +101,7 @@ export const useAppData = (accountId: string | null) => {
   const [archivedStores, setArchivedStores] = useState<Store[]>([])
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [trips, setTrips] = useState<TripWithLines[]>([])
+  const [archivedTripLines, setArchivedTripLines] = useState<TripLineWithStore[]>([])
   const [carriers, setCarriers] = useState<Carrier[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [stickers, setStickers] = useState<StickerTemplate[]>([])
@@ -144,6 +151,11 @@ export const useAppData = (accountId: string | null) => {
       setTrips(supabaseTrips)
       setCarriers(supabaseCarriers)
       setWarehouses(supabaseWarehouses)
+
+      // Загружаем архивные поставки
+      fetchArchivedTripLinesInSupabase(accountId, supabaseStores)
+        .then(setArchivedTripLines)
+        .catch(() => { /* RPC ещё не применена */ })
 
       // Фоновая загрузка типа отгрузки: фетчим все уникальные supply ID при каждой загрузке,
       // чтобы данные всегда были актуальны (если пользователь поменял тип на ВБ)
@@ -291,12 +303,34 @@ export const useAppData = (accountId: string | null) => {
       throw new Error('Supabase не настроен')
     }
 
-    await deleteTripLineInSupabase(accountId, lineId)
+    await archiveTripLineInSupabase(accountId, lineId)
+
+    // Убираем из активных trips
     setTrips((current) => current.map((trip) => (
       trip.id === tripId
         ? { ...trip, lines: trip.lines.filter((line) => line.id !== lineId) }
         : trip
     )))
+
+    // Обновляем архив (если RPC ещё не применена — игнорируем ошибку)
+    fetchArchivedTripLinesInSupabase(accountId, stores)
+      .then(setArchivedTripLines)
+      .catch(() => {})
+  }
+
+  const restoreArchivedTripLine = async (lineId: string) => {
+    if (!isSupabaseConfigured || !accountId) {
+      throw new Error('Supabase не настроен')
+    }
+
+    await restoreTripLineInSupabase(accountId, lineId)
+
+    // Убираем из архива
+    setArchivedTripLines((current) => current.filter((l) => l.id !== lineId))
+
+    // Перегружаем trips чтобы поставка появилась в своём рейсе
+    const updated = await fetchTrips(accountId, stores)
+    setTrips(updated)
   }
 
   const changeTripStatus = async (tripId: string, status: TripStatus) => {
@@ -335,16 +369,17 @@ export const useAppData = (accountId: string | null) => {
   const changeTripLineStatus = async (tripId: string, lineId: string, status: ShipmentStatus) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const currentLine = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
-    const { waiting_at, arrival_date, shipped_date } = await updateTripLineStatusInSupabase(
+    const { waiting_at, transit_at, arrival_date, shipped_date } = await updateTripLineStatusInSupabase(
       accountId, lineId, status,
       currentLine?.waiting_at ?? null,
+      currentLine?.transit_at ?? null,
       currentLine?.arrival_date ?? null,
       currentLine?.shipped_date ?? null,
     )
     setTrips((current) =>
       current.map((trip) =>
         trip.id === tripId
-          ? { ...trip, lines: trip.lines.map((line) => line.id === lineId ? { ...line, status, waiting_at, arrival_date, shipped_date } : line) }
+          ? { ...trip, lines: trip.lines.map((line) => line.id === lineId ? { ...line, status, waiting_at, transit_at, arrival_date, shipped_date } : line) }
           : trip,
       ),
     )
@@ -639,7 +674,7 @@ export const useAppData = (accountId: string | null) => {
             ? {
                 ...t,
                 lines: t.lines.map((l) =>
-                  l.wb_supply_id === wbSupplyId ? { ...l, wb_cargo_type: cargoType } : l,
+                  l.id === lineId ? { ...l, wb_cargo_type: cargoType } : l,
                 ),
               }
             : t,
@@ -654,7 +689,14 @@ export const useAppData = (accountId: string | null) => {
     setTrips((current) =>
       current.map((t) =>
         t.id === tripId
-          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, wb_supply_id: wbSupplyId || null } : l) }
+          ? {
+              ...t,
+              lines: t.lines.map((l) =>
+                l.id === lineId
+                  ? { ...l, wb_supply_id: wbSupplyId || null, ...(wbSupplyId ? {} : { wb_cargo_type: null }) }
+                  : l,
+              ),
+            }
           : t,
       ),
     )
@@ -690,11 +732,49 @@ export const useAppData = (accountId: string | null) => {
     applyStickerUrls(tripId, lineId, newUrls)
   }
 
+  const saveMarketplaceDate = async (tripId: string, lineId: string, date: string | null) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    await saveMarketplaceDateInSupabase(accountId, lineId, date)
+    setTrips((current) =>
+      current.map((t) =>
+        t.id === tripId
+          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, planned_marketplace_delivery_date: date } : l) }
+          : t,
+      ),
+    )
+  }
+
+  const refreshMarketplaceDate = async (tripId: string, lineId: string) => {
+    if (!isSupabaseConfigured || !accountId) return
+    const { mpDate, factDate } = await getWbSupplyMarketplaceDateInSupabase(accountId, lineId)
+    if (mpDate !== null || factDate !== null) {
+      setTrips((current) =>
+        current.map((t) =>
+          t.id === tripId
+            ? {
+                ...t,
+                lines: t.lines.map((l) =>
+                  l.id === lineId
+                    ? {
+                        ...l,
+                        ...(mpDate !== null ? { planned_marketplace_delivery_date: mpDate } : {}),
+                        ...(factDate !== null ? { wb_acceptance_date: factDate } : {}),
+                      }
+                    : l,
+                ),
+              }
+            : t,
+        ),
+      )
+    }
+  }
+
   return {
     stores: accountStores,
     archivedStores,
     shipments: shipmentViews,
     trips,
+    archivedTripLines,
     carriers,
     warehouses,
     stickers,
@@ -712,6 +792,7 @@ export const useAppData = (accountId: string | null) => {
     addTripLine,
     removeTrip,
     removeTripLine,
+    restoreArchivedTripLine,
     changeTripStatus,
     changeTripLineStatus,
     changeTripLinePaymentStatus,
@@ -744,6 +825,8 @@ export const useAppData = (accountId: string | null) => {
     saveWbSupplyId,
     fetchWbBarcodes,
     refreshCargoType,
+    saveMarketplaceDate,
+    refreshMarketplaceDate,
     reload: hydrateFromSupabase,
   }
 }

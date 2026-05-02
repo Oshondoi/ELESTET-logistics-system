@@ -10,9 +10,11 @@ interface StoreListProps {
   onDelete: (storeId: string) => Promise<void>
   onSync: (store: Store) => Promise<void>
   canManage?: boolean
+  canDelete?: boolean
+  canSync?: boolean
 }
 
-export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }: StoreListProps) => {
+export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, canDelete = false, canSync = true }: StoreListProps) => {
   const [deleteTarget, setDeleteTarget] = useState<Store | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -114,6 +116,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
                       {canManage ? (
                       <div className="flex items-center">
                         {/* Синхронизация из WB */}
+                        {canSync && (
                         <button
                           type="button"
                           disabled={!hasKey || isSyncing}
@@ -134,6 +137,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
                             <path d="M21 8v-4" /><path d="M3 16v4" />
                           </svg>
                         </button>
+                        )}
                         {/* Редактировать */}
                         <button
                           type="button"
@@ -146,6 +150,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
                           </svg>
                         </button>
                         {/* Удалить */}
+                        {canDelete && (
                         <button
                           type="button"
                           onClick={() => setDeleteTarget(store)}
@@ -158,6 +163,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true }
                             <path d="M10 11v4" /><path d="M14 11v4" />
                           </svg>
                         </button>
+                        )}
                       </div>
                       ) : null}
                     </td>
