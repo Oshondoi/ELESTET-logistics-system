@@ -40,7 +40,13 @@ export const triggerSync = async (storeId: string): Promise<SyncResult> => {
     { body: { store_id: storeId } },
   )
 
-  if (error) throw error
+  if (error) {
+    const msg = error.message ?? ''
+    if (msg.includes('non-2xx') || msg.includes('Failed to send') || msg.includes('NetworkError')) {
+      throw new Error('Сервис временно недоступен. Попробуйте ещё раз через несколько секунд.')
+    }
+    throw error
+  }
   if (!data) throw new Error('Пустой ответ от функции синхронизации')
   // Функция всегда возвращает 200; ошибка кладётся в data.error
   if (data.error) throw new Error(data.error)

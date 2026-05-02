@@ -63,6 +63,7 @@ interface ShipmentsPageProps {
   canManage?: boolean
   canDeleteAny?: boolean
   canDeleteTrip?: boolean
+  isOwnerOrAdmin?: boolean
   accountId?: string
 }
 
@@ -101,6 +102,7 @@ export const ShipmentsPage = ({
   canManage = true,
   canDeleteAny = false,
   canDeleteTrip = false,
+  isOwnerOrAdmin = false,
   accountId,
 }: ShipmentsPageProps) => {
   const [expandAllTrips, setExpandAllTrips] = useState(() => localStorage.getItem('elestet-expand-all') === 'true')
@@ -484,6 +486,7 @@ export const ShipmentsPage = ({
           canManage={canManage}
           canDeleteAny={canDeleteAny}
           canDeleteTrip={canDeleteTrip}
+          isOwnerOrAdmin={isOwnerOrAdmin}
           tripConfig={tripConfig}
           lineConfig={lineConfig}
           onUpdateTripCustomFields={onUpdateTripCustomFields}

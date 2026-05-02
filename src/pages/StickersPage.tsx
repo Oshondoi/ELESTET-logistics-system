@@ -222,8 +222,37 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
     window.localStorage.setItem('elestet-stickers-tab', tab)
   }
 
-  // ── Импорт WB ─────────────────────────────────────────────
-  const storesWithKey = stores.filter((s) => s.api_key)
+  // ── Sweep-select (свип-выбор): удержание мыши + передвижение для массовой отметки/снятия
+  const sweepDragging = useRef(false)
+  const sweepValue = useRef(false) // true = проверяем, false = снимаем
+  const sweepTarget = useRef<'stickers' | 'import' | null>(null)
+
+  const startSweep = (tab: 'stickers' | 'import', id: string, currentChecked: boolean) => {
+    sweepDragging.current = true
+    sweepValue.current = !currentChecked
+    sweepTarget.current = tab
+    if (tab === 'stickers') {
+      setSelected((prev) => { const n = new Set(prev); sweepValue.current ? n.add(id) : n.delete(id); return n })
+    } else {
+      setImportSelected((prev) => { const n = new Set(prev); sweepValue.current ? n.add(id) : n.delete(id); return n })
+    }
+  }
+
+  const continueSweep = (tab: 'stickers' | 'import', id: string) => {
+    if (!sweepDragging.current || sweepTarget.current !== tab) return
+    if (tab === 'stickers') {
+      setSelected((prev) => { const n = new Set(prev); sweepValue.current ? n.add(id) : n.delete(id); return n })
+    } else {
+      setImportSelected((prev) => { const n = new Set(prev); sweepValue.current ? n.add(id) : n.delete(id); return n })
+    }
+  }
+
+  useEffect(() => {
+    const stop = () => { sweepDragging.current = false; sweepTarget.current = null }
+    window.addEventListener('mouseup', stop)
+    return () => window.removeEventListener('mouseup', stop)
+  }, [])
+
   const [importProducts, setImportProducts] = useState<Product[]>([])
   const [importCustomNames, setImportCustomNames] = useState<Map<string, string>>(new Map())
   const [isLoadingImport, setIsLoadingImport] = useState(false)
@@ -231,6 +260,11 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const [isImporting, setIsImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const [importDone, setImportDone] = useState<number | null>(null)
+  // Модалка создания набора из импорта (показывается ДО создания стикеров)
+  const [importBundleModalOpen, setImportBundleModalOpen] = useState(false)
+  const [importBundleName, setImportBundleName] = useState('')
+  const [importBundleQties, setImportBundleQties] = useState<Record<string, number>>({})
+  const [importBundleError, setImportBundleError] = useState<string | null>(null)
   const [importStoreDropdownOpen, setImportStoreDropdownOpen] = useState(false)
   const importStoreDropdownRef = useRef<HTMLDivElement | null>(null)
   const [importExpandedIds, setImportExpandedIds] = useState<Set<string>>(new Set())
@@ -359,64 +393,71 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
     return stickers
   }
 
-  const handleImportCreate = async () => {
-    const toCreate = allImportSizeRows
-      .filter((row) => importSelected.has(row.rowKey))
-      .map((row) => {
-        const product = importProducts.find((p) => row.rowKey.startsWith(p.id))!
-        return { product, row }
-      })
-    if (toCreate.length === 0) return
+  const handleImportCreate = () => {
+    const init: Record<string, number> = {}
+    allImportSizeRows
+      .filter((r) => importSelected.has(r.rowKey) && r.barcode !== '—')
+      .forEach((r) => { init[r.rowKey] = 1 })
+    if (Object.keys(init).length === 0) return
+    setImportBundleQties(init)
+    const today = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    setImportBundleName(`Партия ${today}`)
+    setImportBundleError(null)
+    setImportBundleModalOpen(true)
+  }
+
+  const handleSaveImportBundle = async () => {
+    if (!importBundleName.trim()) return
     setIsImporting(true)
-    setImportError(null)
-    setImportDone(null)
-    const createdIds: string[] = []
+    setImportBundleError(null)
     try {
-      for (const { product: p, row } of toCreate) {
-        const barcode = row.barcode !== '—' ? row.barcode : generateEAN13()
-        try {
-          const result = await onAdd({
-            barcode,
-            name: importCustomNames.get(p.id) ?? p.name ?? p.vendor_code ?? barcode,
-            article: String(p.nm_id),
-            brand: p.brand ?? '',
-            size: row.techSize !== '—' ? row.techSize : '',
-            color: p.color ?? '',
-            composition: p.composition ?? '',
-            supplier: importStore?.supplier_full ?? importStore?.supplier ?? '',
-            supplier_address: importStore?.address ?? '',
-            production_date: globalProductionDate || '',
-            country: '',
-            copies: 1,
-            icon_wash: globalIcons.wash,
-            icon_iron: globalIcons.iron,
-            icon_no_bleach: globalIcons.no_bleach,
-            icon_no_tumble_dry: globalIcons.no_tumble_dry,
-            icon_eac: globalIcons.eac,
-          }) as { id: string } | undefined
-          if (result?.id) createdIds.push(result.id)
-        } catch {
-          // пропускаем дубли (уже существующий баркод)
+      const bundleItems: StickerBundleItem[] = []
+      for (const product of importProducts) {
+        const rows = getSizeRowsImp(product)
+        for (const row of rows) {
+          if (!importSelected.has(row.rowKey) || row.barcode === '—') continue
+          const copies = importBundleQties[row.rowKey] ?? 1
+          try {
+            const result = await onAdd({
+              barcode: row.barcode,
+              name: importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? row.barcode,
+              article: String(product.nm_id),
+              brand: product.brand ?? '',
+              size: row.techSize !== '—' ? row.techSize : '',
+              color: product.color ?? '',
+              composition: product.composition ?? '',
+              supplier: importStore?.supplier_full ?? importStore?.supplier ?? '',
+              supplier_address: importStore?.address ?? '',
+              production_date: globalProductionDate || '',
+              country: '',
+              copies: 1,
+              icon_wash: globalIcons.wash,
+              icon_iron: globalIcons.iron,
+              icon_no_bleach: globalIcons.no_bleach,
+              icon_no_tumble_dry: globalIcons.no_tumble_dry,
+              icon_eac: globalIcons.eac,
+            }) as { id: string } | undefined
+            if (result?.id) bundleItems.push({ sticker_id: result.id, copies })
+          } catch {
+            // пропускаем дубли
+          }
         }
       }
-      setImportSelected(new Set())
-      if (createdIds.length > 0) {
-        const init: Record<string, { checked: boolean; copies: number }> = {}
-        createdIds.forEach((id) => { init[id] = { checked: true, copies: 1 } })
-        setBundleItems(init)
-        setBundleName('')
-        setEditingBundle(null)
-        setBundleSaveError(null)
-        setBundleModalOpen(true)
-      } else {
-        setImportError('Все выбранные стикеры уже существуют')
+      if (bundleItems.length === 0) {
+        setImportBundleError('Все выбранные стикеры уже существуют')
+        return
       }
+      await onAddBundle(importBundleName.trim(), bundleItems)
+      setImportBundleModalOpen(false)
+      setImportSelected(new Set())
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Ошибка создания стикеров')
+      setImportBundleError(err instanceof Error ? err.message : 'Ошибка создания')
     } finally {
       setIsImporting(false)
     }
   }
+
+  const storesWithKey = stores.filter((s) => s.api_key)
 
   const allSelected = stickers.length > 0 && selected.size === stickers.length
   const printCount = selected.size > 0 ? selected.size : stickers.length
@@ -731,7 +772,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
             </Button>
           )}
           {activeTab === 'import' && (
-            <Button className="shrink-0 rounded-2xl px-5 py-2.5" disabled={isImporting || importSelected.size === 0} onClick={() => void handleImportCreate()}>
+            <Button className="shrink-0 rounded-2xl px-5 py-2.5" disabled={isImporting || importSelected.size === 0} onClick={() => handleImportCreate()}>
               {isImporting ? 'Создание…' : `Создать набор${importSelected.size > 0 ? ` (${importSelected.size})` : ''}`}
             </Button>
           )}
@@ -1009,12 +1050,15 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                     <tbody className="divide-y divide-slate-100/80">
                                       {sizeRows.map((row) => (
                                         <tr key={row.rowKey} className={`align-middle transition-colors ${importSelected.has(row.rowKey) ? 'bg-blue-50/50' : ''}`}>
-                                          <td className="px-3 py-2">
+                                          <td className="select-none px-3 py-2"
+                                            onMouseDown={(e) => { if (e.button === 0) { e.preventDefault(); startSweep('import', row.rowKey, importSelected.has(row.rowKey)) } }}
+                                            onMouseEnter={() => continueSweep('import', row.rowKey)}
+                                          >
                                             <input
                                               type="checkbox"
                                               checked={importSelected.has(row.rowKey)}
                                               onChange={() => setImportSelected((prev) => { const n = new Set(prev); n.has(row.rowKey) ? n.delete(row.rowKey) : n.add(row.rowKey); return n })}
-                                              className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                                              className="pointer-events-none h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
                                             />
                                           </td>
                                           <td colSpan={2} className="px-4 py-2">
@@ -1142,12 +1186,15 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                     key={s.id}
                     className={`align-middle text-slate-700 transition-colors hover:bg-slate-50 ${selected.has(s.id) ? 'bg-blue-50/50' : ''}`}
                   >
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-2.5 select-none"
+                      onMouseDown={(e) => { if (e.button === 0) { e.preventDefault(); startSweep('stickers', s.id, selected.has(s.id)) } }}
+                      onMouseEnter={() => continueSweep('stickers', s.id)}
+                    >
                       <input
                         type="checkbox"
                         checked={selected.has(s.id)}
                         onChange={() => toggleSelect(s.id)}
-                        className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                        className="pointer-events-none h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
                       />
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs text-slate-500">{s.barcode}</td>
@@ -1348,6 +1395,75 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
         onClose={() => { if (!isDeleting) { setDeleteError(null); setDeleteTarget(null) } }}
         onConfirm={() => void handleConfirmDelete()}
       />
+
+      {/* Модалка создания набора из Импорт WB (сначала настройка, потом создание) */}
+      <Modal open={importBundleModalOpen} onClose={() => { if (!isImporting) setImportBundleModalOpen(false) }} title="Создать набор">
+        <div className="flex flex-col gap-4">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Название набора</label>
+            <input
+              type="text"
+              autoFocus
+              placeholder="Например: Партия апрель 2026"
+              value={importBundleName}
+              onChange={(e) => setImportBundleName(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-400"
+            />
+          </div>
+
+          {/* Список размеров/баркодов с кол-вом */}
+          <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-100">
+            <table className="min-w-full text-[13px]">
+              <thead className="sticky top-0 border-b border-slate-100 bg-white text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                <tr>
+                  <th className="px-3 py-2 text-left">Наименование</th>
+                  <th className="px-3 py-2 text-left">Размер</th>
+                  <th className="px-3 py-2 text-left">Баркод</th>
+                  <th className="w-24 px-3 py-2 text-center">Кол-во</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {importProducts.flatMap((product) =>
+                  getSizeRowsImp(product)
+                    .filter((row) => importSelected.has(row.rowKey) && row.barcode !== '—')
+                    .map((row) => (
+                      <tr key={row.rowKey} className="hover:bg-slate-50/60">
+                        <td className="max-w-[180px] truncate px-3 py-2.5 font-medium text-slate-800">
+                          {importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? '—'}
+                        </td>
+                        <td className="px-3 py-2.5 text-slate-500">{row.techSize !== '—' ? row.techSize : '—'}</td>
+                        <td className="px-3 py-2.5 font-mono text-xs text-slate-400">{row.barcode}</td>
+                        <td className="px-3 py-2.5">
+                          <input
+                            type="number"
+                            min={1}
+                            max={9999}
+                            value={importBundleQties[row.rowKey] ?? 1}
+                            onChange={(e) => {
+                              const v = Math.max(1, parseInt(e.target.value) || 1)
+                              setImportBundleQties((prev) => ({ ...prev, [row.rowKey]: v }))
+                            }}
+                            className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm text-slate-900 outline-none focus:border-blue-400"
+                          />
+                        </td>
+                      </tr>
+                    ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {importBundleError && <p className="text-xs text-rose-500">{importBundleError}</p>}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setImportBundleModalOpen(false)} disabled={isImporting}>
+              Отмена
+            </Button>
+            <Button type="button" disabled={!importBundleName.trim() || isImporting} onClick={() => void handleSaveImportBundle()}>
+              {isImporting ? 'Создание…' : 'Сохранить'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Модалка сохранения набора */}
       <Modal open={bundleModalOpen} onClose={() => { if (!isSavingBundle) { setBundleModalOpen(false); setEditingBundle(null) } }} title={editingBundle ? 'Редактировать набор' : 'Создать набор'}>

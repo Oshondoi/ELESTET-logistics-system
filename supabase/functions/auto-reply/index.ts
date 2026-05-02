@@ -19,6 +19,10 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+function ts(): string {
+  return new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Europe/Moscow' }) + ' MSK'
+}
+
 // ── Supabase service-role client (bypasses RLS) ───────────────────
 function getDb() {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -191,7 +195,7 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
   // Загружаем AI настройки
   const { data: aiData } = await db.from('account_ai_settings').select('*').eq('account_id', settings.account_id).single()
   if (!aiData) {
-    log.push('ИИ не настроен для этого аккаунта.')
+    log.push(`${ts()} ИИ не настроен для этого аккаунта.`)
     return 0
   }
   const aiSettings = aiData as AiSettings
@@ -201,29 +205,30 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
   const extraSystem = (sysPrompts ?? []).map((p: { content: string }) => p.content).filter(Boolean)
 
   // Загружаем магазины
-  const { data: storesData } = await db.from('stores').select('id, api_key, ai_prompt').in('id', settings.store_ids)
-  const stores = (storesData ?? []) as { id: string; api_key: string | null; ai_prompt?: string | null }[]
+  const { data: storesData } = await db.from('stores').select('id, name, api_key, ai_prompt').in('id', settings.store_ids)
+  const stores = (storesData ?? []) as { id: string; name: string | null; api_key: string | null; ai_prompt?: string | null }[]
 
   const limit = settings.daily_limit === 0 ? Infinity : settings.daily_limit
-  log.push(`Магазинов: ${stores.length}. Лимит: ${limit === Infinity ? '∞' : limit}. Задержка: ${settings.delay_seconds}с`)
+  log.push(`${ts()} Магазинов: ${stores.length}. Лимит: ${limit === Infinity ? '∞' : limit}. Задержка: ${settings.delay_seconds}с`)
 
   // Для каждого магазина
   for (const store of stores) {
+    const storeName = store.name || store.id.slice(0, 8)
     if (!store.api_key) {
-      log.push(`[${store.id}] нет API-ключа — пропуск`)
+      log.push(`${ts()} [${storeName}] нет API-ключа — пропуск`)
       continue
     }
 
     // Загружаем store prompts
     const { data: storePromptsData } = await db.from('ai_prompts').select('content').eq('account_id', settings.account_id).eq('type', 'store').eq('store_id', store.id).order('sort_order')
     const extraStore = [
-      (store as { id: string; api_key: string | null; ai_prompt?: string | null }).ai_prompt,
+      (store as { id: string; name: string | null; api_key: string | null; ai_prompt?: string | null }).ai_prompt,
       ...((storePromptsData ?? []).map((p: { content: string }) => p.content)),
     ].filter(Boolean) as string[]
 
     // Синхронизируем отзывы с WB
     try {
-      log.push(`[${store.id}] синхронизация...`)
+      log.push(`${ts()} [${storeName}] синхронизация...`)
       const { feedbacks: unanswered } = await fetchWbFeedbacks(store.api_key, false)
       const { feedbacks: answered } = await fetchWbFeedbacks(store.api_key, true)
 
@@ -246,9 +251,9 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
           { onConflict: 'id' },
         )
       }
-      log.push(`[${store.id}] синхронизировано ${unanswered.length} без ответа, ${answered.length} отвечено`)
+      log.push(`${ts()} [${storeName}] синхронизировано ${unanswered.length} без ответа, ${answered.length} отвечено`)
     } catch (e) {
-      log.push(`[${store.id}] ошибка синхронизации: ${(e as Error).message}`)
+      log.push(`${ts()} [${storeName}] ошибка синхронизации: ${(e as Error).message}`)
       continue
     }
 
@@ -270,7 +275,7 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
       })
       .slice(0, limit === Infinity ? undefined : Math.max(0, (limit as number) - sent))
 
-    log.push(`[${store.id}] кандидатов: ${candidates.length}`)
+    log.push(`${ts()} [${storeName}] кандидатов: ${candidates.length}`)
 
     for (const row of candidates) {
       if (limit !== Infinity && sent >= (limit as number)) break
@@ -295,11 +300,11 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
               if (tpl) {
                 replyText = (tpl as { content: string }).content
               } else {
-                log.push(`[${row.id}] ИИ ошибка + нет шаблонов: ${(e as Error).message}`)
+                log.push(`${ts()} [${storeName}] ${row.id.slice(0, 8)} ИИ ошибка + нет шаблонов: ${(e as Error).message}`)
                 continue
               }
             } else {
-              log.push(`[${row.id}] ИИ ошибка: ${(e as Error).message}`)
+              log.push(`${ts()} [${storeName}] ${row.id.slice(0, 8)} ИИ ошибка: ${(e as Error).message}`)
               continue
             }
           }
@@ -308,14 +313,14 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
           const { data: templates } = await db.from('review_templates').select('*').eq('account_id', settings.account_id)
           const tpl = (templates ?? []).find(() => true)
           if (!tpl) {
-            log.push(`[${row.id}] нет шаблонов`)
+            log.push(`${ts()} [${storeName}] ${row.id.slice(0, 8)} нет шаблонов — пропуск`)
             continue
           }
           replyText = (tpl as { content: string }).content
         }
 
         if (!replyText.trim()) {
-          log.push(`[${row.id}] пустой ответ — пропуск`)
+          log.push(`${ts()} [${storeName}] ${row.id.slice(0, 8)} пустой ответ — пропуск`)
           continue
         }
 
@@ -331,13 +336,19 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
           ai_reply: replyText,
           ai_reply_status: 'sent',
           reply_sent_at: new Date().toISOString(),
+          data: { ...row.data, isAnswered: true, answer: { text: replyText } },
         }).eq('id', row.id)
 
         sent++
-        log.push(`[${row.id}] ✓ отправлено (всего: ${sent})`)
+        const article = (feedback.productDetails as { supplierArticle?: string } | null | undefined)?.supplierArticle ?? ''
+        const stars = feedback.productValuation ?? ''
+        const buyer = feedback.userName ?? ''
+        const articlePart = article ? ` арт. ${article}` : ''
+        const buyerPart = buyer ? ` · ${buyer}` : ''
+        log.push(`${ts()} [${storeName}]${articlePart} ★${stars}${buyerPart} ✓ отправлено (всего: ${sent})`)
 
       } catch (e) {
-        log.push(`[${row.id}] ошибка: ${(e as Error).message}`)
+        log.push(`${ts()} [${storeName}] ${row.id.slice(0, 8)} ошибка: ${(e as Error).message}`)
       }
     }
   }
@@ -370,7 +381,7 @@ Deno.serve(async (req) => {
 
     if (error) throw new Error(`DB read error: ${error.message}`)
     if (!allSettings || allSettings.length === 0) {
-      log.push('Нет активных автоматизаций.')
+      log.push(`${ts()} Нет активных автоматизаций.`)
       return new Response(JSON.stringify({ ok: true, log }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
@@ -385,13 +396,13 @@ Deno.serve(async (req) => {
 
         try {
           if (!settings.store_ids || settings.store_ids.length === 0) {
-            accountLog.push('Нет выбранных магазинов.')
+            accountLog.push(`${ts()} Нет выбранных магазинов.`)
           } else {
             sent = await runForAccount(settings, accountLog)
           }
         } catch (e) {
           accountError = (e as Error).message
-          accountLog.push(`ОШИБКА: ${accountError}`)
+          accountlog.push(`${ts()} ОШИБКА: ${accountError}`)
         }
 
         // Пишем лог
@@ -402,7 +413,7 @@ Deno.serve(async (req) => {
           log: accountLog,
           error: accountError ?? null,
         })
-        if (insertErr) log.push(`[WARN] не удалось записать лог: ${insertErr.message}`)
+        if (insertErr) log.push(`${ts()} [WARN] не удалось записать лог: ${insertErr.message}`)
 
         // Обновляем last_run_at и last_log
         await db.from('automation_settings').update({
@@ -419,7 +430,7 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (e) {
-    log.push(`FATAL: ${(e as Error).message}`)
+    log.push(`${ts()} FATAL: ${(e as Error).message}`)
     return new Response(JSON.stringify({ ok: false, log, error: (e as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

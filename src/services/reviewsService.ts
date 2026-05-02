@@ -235,7 +235,13 @@ export async function syncFeedbacksFromWb(
         })),
         { onConflict: 'store_id,id' },
       )
-    if (upsertError) throw new Error(`Ошибка сохранения в БД: ${upsertError.message}`)
+    if (upsertError) {
+      const msg = upsertError.message ?? ''
+      if (msg.toLowerCase().includes('jwt') || msg.toLowerCase().includes('expired')) {
+        throw new Error('Сессия истекла — обновите страницу и войдите снова.')
+      }
+      throw new Error(`Ошибка сохранения в БД: ${msg}`)
+    }
   }
 
   return result
@@ -359,16 +365,24 @@ export async function saveStorePrompt(storeId: string, prompt: string): Promise<
   if (error) throw error
 }
 
-export async function markReplySent(feedbackId: string): Promise<void> {
+export async function markReplySent(
+  feedbackId: string,
+  replyText: string,
+  currentData?: Record<string, unknown>,
+): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
+  const updatePayload: Record<string, unknown> = {
+    is_answered: true,
+    ai_reply_status: 'sent',
+    reply_sent_at: new Date().toISOString(),
+  }
+  if (currentData) {
+    updatePayload.data = { ...currentData, isAnswered: true, answer: { text: replyText } }
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (supabase as any)
     .from('wb_feedbacks')
-    .update({
-      is_answered: true,
-      ai_reply_status: 'sent',
-      reply_sent_at: new Date().toISOString(),
-    })
+    .update(updatePayload)
     .eq('id', feedbackId)
   if (error) throw error
 }

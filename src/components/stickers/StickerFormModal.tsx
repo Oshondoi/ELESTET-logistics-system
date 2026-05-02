@@ -7,7 +7,7 @@ import { Textarea } from '../ui/Textarea'
 import { generateEAN13 } from '../../lib/ean13'
 
 const defaultValues = (): StickerFormValues => ({
-  barcode: generateEAN13(),
+  barcode: '',
   name: '',
   composition: '',
   article: '',

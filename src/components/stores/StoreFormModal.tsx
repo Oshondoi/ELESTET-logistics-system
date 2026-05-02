@@ -78,7 +78,7 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
           onChange={(event) =>
             setValues((current) => ({ ...current, marketplace: event.target.value }))
           }
-          options={marketplaceOptions.map((item) => ({ label: item, value: item }))}
+          options={[{ label: '— Без выбора —', value: '' }, ...marketplaceOptions.map((item) => ({ label: item, value: item }))]}
         />
         <Input
           label="Store Code"

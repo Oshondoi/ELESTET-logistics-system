@@ -231,7 +231,7 @@ function App() {
   // Карта: страница → ключ разрешения (null = всегда доступна)
   const pagePermKey: Record<PageKey, keyof typeof permissions | null> = {
     home: null,
-    fulfillment: 'shipments_view',
+    fulfillment: 'fulfillment_view',
     shipments: 'shipments_view',
     stores: 'stores_view',
     products: 'stores_view',
@@ -436,7 +436,14 @@ function App() {
               effectivePage === 'home' ? (
                 <HomePage shipments={shipments} rawShipments={rawShipments} stores={stores} hasAccount={accounts.length > 0} onCreateCompany={() => setAccountModalOpen(true)} />
               ) : effectivePage === 'fulfillment' ? (
-                <FulfillmentPage />
+                <FulfillmentPage
+                  accountId={activeAccount?.id ?? ''}
+                  stores={stores}
+                  trips={trips}
+                  onEditTripLine={editTripLine}
+                  onStoreCreated={addStore}
+                  canManage={isOwnerOrAdmin || permissions.fulfillment_manage}
+                />
               ) : effectivePage === 'shipments' ? (
                 <ShipmentsPage
                   trips={trips}
@@ -471,6 +478,7 @@ function App() {
                   canManage={permissions.shipments_manage}
                   canDeleteAny={isOwnerOrAdmin || permissions.shipments_delete_any}
                   canDeleteTrip={isOwnerOrAdmin || permissions.shipments_delete_trip}
+                  isOwnerOrAdmin={isOwnerOrAdmin}
                   accountId={activeAccount?.id ?? ''}
                   onUpdateTripCustomFields={updateTripCustomFields}
                   onUpdateLineCustomFields={updateLineCustomFields}

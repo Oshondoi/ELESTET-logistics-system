@@ -417,7 +417,23 @@ export const ReviewsPage = ({
   const [autoDbSynced, setAutoDbSynced] = useState(false)
   const [logsModalOpen, setLogsModalOpen] = useState(false)
   const [logsShowAll, setLogsShowAll] = useState(false)
+  const [logPeriod, setLogPeriod] = useState<'today' | '7d' | '30d' | 'all' | 'custom'>('today')
+  const [logDateFrom, setLogDateFrom] = useState<string>('')
+  const [logDateTo, setLogDateTo] = useState<string>('')
+  const [logDatePickerOpen, setLogDatePickerOpen] = useState(false)
+  const logDatePickerRef = useRef<HTMLDivElement>(null)
   const [isRunningNow, setIsRunningNow] = useState(false)
+
+  useEffect(() => {
+    if (!logDatePickerOpen) return
+    const handler = (e: MouseEvent) => {
+      if (logDatePickerRef.current && !logDatePickerRef.current.contains(e.target as Node)) {
+        setLogDatePickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [logDatePickerOpen])
 
   const handleRunNow = () => {
     if (!activeAccountId || isRunningNow) return
@@ -596,7 +612,12 @@ export const ReviewsPage = ({
       if (isAnswered) setAnsweredRows(rows)
       else { setQueueRows(rows); setCountUnanswered(rows.length) }
     } catch (err) {
-      setFetchError(err instanceof Error ? err.message : 'Ошибка загрузки')
+      const msg = err instanceof Error ? err.message : 'Ошибка загрузки'
+      if (msg.toLowerCase().includes('jwt') || msg.toLowerCase().includes('expired')) {
+        setFetchError('Сессия истекла — обновите страницу и войдите снова.')
+      } else {
+        setFetchError(msg)
+      }
     } finally {
       setIsFetching(false)
     }
@@ -723,7 +744,7 @@ export const ReviewsPage = ({
     setSendErrors((prev) => { const n = { ...prev }; delete n[row.id]; return n })
     try {
       await sendWbReply(activeStore.api_key, row.id, text)
-      await markReplySent(row.id)
+      await markReplySent(row.id, text, row.data as unknown as Record<string, unknown>)
       setQueueRows((prev) => (prev ? prev.filter((r) => r.id !== row.id) : prev))
       setOpenReplyIds((prev) => { const n = new Set(prev); n.delete(row.id); return n })
     } catch (err) {
@@ -1828,33 +1849,163 @@ export const ReviewsPage = ({
             {/* Модалка логов */}
             {logsModalOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setLogsModalOpen(false)}>
-                <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl flex flex-col h-[88vh]" onClick={(e) => e.stopPropagation()}>
+                <div className="w-full max-w-4xl rounded-2xl bg-white shadow-xl flex flex-col h-[88vh]" onClick={(e) => e.stopPropagation()}>
                   {/* Шапка модалки */}
-                  <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-800">Логи автоматизации</h3>
-                      <p className="text-xs text-slate-400 mt-0.5">Последние {autoDbLogs.length} запусков</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {autoDbLogs.length > 3 && (
-                        <button
-                          type="button"
-                          onClick={() => setLogsShowAll(v => !v)}
-                          className="text-xs text-slate-400 hover:text-slate-600 transition"
-                        >
-                          {logsShowAll ? 'Показать меньше' : `Показать все (${autoDbLogs.length})`}
-                        </button>
-                      )}
+                  <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-800">Логи автоматизации</h3>
+                        {(() => {
+                          let count = 0
+                          if (logPeriod === 'custom') {
+                            const from = logDateFrom ? (() => { const d = new Date(logDateFrom + 'T00:00:00'); return d })() : null
+                            const to = logDateTo ? (() => { const d = new Date(logDateTo + 'T23:59:59'); return d })() : null
+                            count = autoDbLogs.filter(l => {
+                              const d = new Date(l.run_at)
+                              if (from && d < from) return false
+                              if (to && d > to) return false
+                              return true
+                            }).length
+                          } else {
+                            const periodStart =
+                              logPeriod === 'today' ? (() => { const d = new Date(); d.setHours(0,0,0,0); return d })() :
+                              logPeriod === '7d' ? new Date(Date.now() - 7 * 86400_000) :
+                              logPeriod === '30d' ? new Date(Date.now() - 30 * 86400_000) :
+                              null
+                            count = periodStart ? autoDbLogs.filter(l => new Date(l.run_at) >= periodStart).length : autoDbLogs.length
+                          }
+                          return <p className="text-xs text-slate-400 mt-0.5">{count} запусков за период</p>
+                        })()}
+                      </div>
                       <button type="button" onClick={() => setLogsModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition">
                         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
                           <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                         </svg>
                       </button>
                     </div>
+                    {/* Фильтр по периоду */}
+                    <div className="flex flex-wrap gap-1.5 items-center">
+                      {(['today', '7d', '30d', 'all'] as const).map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => { setLogPeriod(p); setLogDatePickerOpen(false) }}
+                          className={cn(
+                            'rounded-full px-3 py-1 text-xs font-medium transition',
+                            logPeriod === p
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
+                          )}
+                        >
+                          {p === 'today' ? 'Сегодня' : p === '7d' ? '7 дней' : p === '30d' ? '30 дней' : 'Всё'}
+                        </button>
+                      ))}
+                      {/* Кнопка диапазона дат */}
+                      <div ref={logDatePickerRef} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (logDateFrom || logDateTo) setLogPeriod('custom')
+                            setLogDatePickerOpen(v => !v)
+                          }}
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition',
+                            logPeriod === 'custom'
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
+                          )}
+                        >
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                            <line x1="16" y1="2" x2="16" y2="6" />
+                            <line x1="8" y1="2" x2="8" y2="6" />
+                            <line x1="3" y1="10" x2="21" y2="10" />
+                          </svg>
+                          {(logDateFrom || logDateTo)
+                            ? [
+                                logDateFrom ? new Date(logDateFrom + 'T00:00:00').toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) : '…',
+                                '–',
+                                logDateTo ? new Date(logDateTo + 'T00:00:00').toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) : '…',
+                              ].join(' ')
+                            : 'Период'
+                          }
+                          {(logDateFrom || logDateTo) && (
+                            <span
+                              role="button"
+                              onClick={(e) => { e.stopPropagation(); setLogDateFrom(''); setLogDateTo(''); setLogPeriod('today'); setLogDatePickerOpen(false) }}
+                              className="ml-0.5 leading-none"
+                            >×</span>
+                          )}
+                        </button>
+                        {logDatePickerOpen && (
+                          <div
+                            className="absolute left-0 top-full mt-1.5 z-10 rounded-xl border border-slate-200 bg-white shadow-lg p-3 flex flex-col gap-2.5 min-w-[220px]"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center gap-2">
+                              <label className="text-[11px] text-slate-500 w-4 shrink-0">С</label>
+                              <input
+                                type="date"
+                                value={logDateFrom}
+                                max={logDateTo || undefined}
+                                onChange={(e) => { setLogDateFrom(e.target.value); setLogPeriod('custom') }}
+                                className="flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 outline-none focus:border-blue-400"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="text-[11px] text-slate-500 w-4 shrink-0">По</label>
+                              <input
+                                type="date"
+                                value={logDateTo}
+                                min={logDateFrom || undefined}
+                                onChange={(e) => { setLogDateTo(e.target.value); setLogPeriod('custom') }}
+                                className="flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 outline-none focus:border-blue-400"
+                              />
+                            </div>
+                            <div className="flex justify-between items-center pt-0.5">
+                              <button
+                                type="button"
+                                onClick={() => { setLogDateFrom(''); setLogDateTo(''); setLogPeriod('today'); setLogDatePickerOpen(false) }}
+                                className="text-[11px] text-slate-400 hover:text-slate-600 transition"
+                              >Сбросить</button>
+                              <button
+                                type="button"
+                                onClick={() => { if (logDateFrom || logDateTo) setLogPeriod('custom'); setLogDatePickerOpen(false) }}
+                                className="text-[11px] font-medium text-blue-600 hover:text-blue-700 transition"
+                              >Готово</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                   {/* Список запусков */}
                   <div className="flex-1 overflow-y-auto p-5 space-y-3">
-                    {(logsShowAll ? autoDbLogs : autoDbLogs.slice(0, 3)).map((runLog) => (
+                    {(() => {
+                      let filtered: typeof autoDbLogs
+                      if (logPeriod === 'custom') {
+                        const from = logDateFrom ? new Date(logDateFrom + 'T00:00:00') : null
+                        const to = logDateTo ? new Date(logDateTo + 'T23:59:59') : null
+                        filtered = autoDbLogs.filter(l => {
+                          const d = new Date(l.run_at)
+                          if (from && d < from) return false
+                          if (to && d > to) return false
+                          return true
+                        })
+                      } else {
+                        const periodStart =
+                          logPeriod === 'today' ? (() => { const d = new Date(); d.setHours(0,0,0,0); return d })() :
+                          logPeriod === '7d' ? new Date(Date.now() - 7 * 86400_000) :
+                          logPeriod === '30d' ? new Date(Date.now() - 30 * 86400_000) :
+                          null
+                        filtered = periodStart
+                          ? autoDbLogs.filter(l => new Date(l.run_at) >= periodStart)
+                          : autoDbLogs
+                      }
+                      if (filtered.length === 0) return (
+                        <p className="py-8 text-center text-xs text-slate-400">Нет запусков за выбранный период</p>
+                      )
+                      return filtered.map((runLog) => (
                       <div key={runLog.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
                         <div className="mb-2 flex items-center justify-between text-[11px]">
                           <span className="font-medium text-slate-700">
@@ -1878,7 +2029,8 @@ export const ReviewsPage = ({
                           ))}
                         </div>
                       </div>
-                    ))}
+                    ))
+                    })()}
                   </div>
                 </div>
               </div>

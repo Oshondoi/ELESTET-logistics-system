@@ -368,6 +368,7 @@ interface TripTableProps {
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  isOwnerOrAdmin?: boolean
   onSaveMarketplaceDate?: (tripId: string, lineId: string, date: string | null) => Promise<void>
   onRefreshMarketplaceDate?: (tripId: string, lineId: string) => Promise<void>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
@@ -431,10 +432,12 @@ const ArchivedLinesSection = ({
   lines,
   onRestore,
   colCount,
+  isOwnerOrAdmin = false,
 }: {
   lines: TripLineWithStore[]
   onRestore?: (lineId: string) => Promise<void>
   colCount: number
+  isOwnerOrAdmin?: boolean
 }) => {
   const [expanded, setExpanded] = useState(false)
   const [restoringId, setRestoringId] = useState<string | null>(null)
@@ -502,9 +505,17 @@ const ArchivedLinesSection = ({
                     </td>
                     <td className="px-3 py-2">
                       {daysLeft !== null && (
-                        <span className={daysLeft <= 3 ? 'font-medium text-rose-500' : 'text-orange-500'}>
-                          через {daysLeft} дн.
-                        </span>
+                        <div className="flex flex-col gap-0.5">
+                          {isOwnerOrAdmin && line.deleted_at && (
+                            <span className="text-[10px] text-slate-400">
+                              {new Date(line.deleted_at).toLocaleDateString('ru-RU')}{' '}
+                              {new Date(line.deleted_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
+                          <span className={daysLeft <= 3 ? 'font-medium text-rose-500' : 'text-orange-500'}>
+                            через {daysLeft} дн.
+                          </span>
+                        </div>
                       )}
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -579,6 +590,7 @@ export const TripTable = ({
   canManage = true,
   canDeleteAny = false,
   canDeleteTrip = false,
+  isOwnerOrAdmin = false,
   focusMode = false,
   hoverAddMode = true,
   onExpandedCountChange,
@@ -1451,6 +1463,7 @@ export const TripTable = ({
                             lines={tripArchived}
                             onRestore={onRestoreArchivedTripLine}
                             colCount={outerColCount}
+                            isOwnerOrAdmin={isOwnerOrAdmin}
                           />
                         </td>
                       </tr>

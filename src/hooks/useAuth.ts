@@ -34,9 +34,13 @@ export const useAuth = () => {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession)
       setIsLoading(false)
+      // Если refresh token протух — перезагружаем страницу чтобы сбросить на экран входа
+      if (event === 'SIGNED_OUT' && !nextSession) {
+        window.location.reload()
+      }
     })
 
     return () => {

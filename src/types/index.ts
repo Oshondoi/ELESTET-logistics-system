@@ -64,6 +64,9 @@ export interface RolePermissions {
   reviews_manage: boolean
   reviews_ai: boolean
   reviews_automation: boolean
+  // Фулфилмент
+  fulfillment_view: boolean
+  fulfillment_manage: boolean
   // Администрирование
   roles_manage: boolean
   members_manage: boolean
@@ -90,6 +93,8 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   reviews_manage: false,
   reviews_ai: false,
   reviews_automation: false,
+  fulfillment_view: false,
+  fulfillment_manage: false,
   roles_manage: false,
   members_manage: false,
 }
@@ -115,6 +120,8 @@ export const FULL_PERMISSIONS: RolePermissions = {
   reviews_manage: true,
   reviews_ai: true,
   reviews_automation: true,
+  fulfillment_view: true,
+  fulfillment_manage: true,
   roles_manage: true,
   members_manage: true,
 }
@@ -531,4 +538,68 @@ export interface AiPrompt {
 export interface AiPromptFormValues {
   title: string
   content: string
+}
+
+// ─── Фулфилмент ───────────────────────────────────────────────
+
+export type FulfillmentStage = 'reception' | 'otk' | 'marking' | 'packing' | 'logistics' | 'done'
+export type FulfillmentBatchStatus = 'active' | 'done' | 'cancelled'
+
+export interface FulfillmentSettings {
+  id: string
+  account_id: string
+  stage_otk: boolean
+  stage_marking: boolean
+  stage_packing: boolean
+  stage_logistics: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface FulfillmentBatch {
+  id: string
+  account_id: string
+  store_id: string | null
+  name: string
+  status: FulfillmentBatchStatus
+  current_stage: FulfillmentStage
+  stage_otk: boolean
+  stage_marking: boolean
+  stage_packing: boolean
+  stage_logistics: boolean
+  trip_line_id: string | null
+  comment: string | null
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
+
+export interface FulfillmentItem {
+  id: string
+  batch_id: string
+  barcode: string
+  product_name: string | null
+  size: string | null
+  article: string | null
+  qty_received: number
+  qty_otk: number | null
+  qty_marked: number | null
+  qty_packed: number | null
+  boxes: number | null
+  notes: string | null
+  sort_order: number
+  created_at: string
+}
+
+export interface FulfillmentStageLog {
+  id: string
+  batch_id: string
+  stage: FulfillmentStage
+  completed_at: string
+  completed_by: string | null
+  notes: string | null
+}
+
+export interface FulfillmentBatchWithItems extends FulfillmentBatch {
+  items: FulfillmentItem[]
 }

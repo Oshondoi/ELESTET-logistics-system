@@ -21,7 +21,7 @@ export const tripStatuses: TripStatus[] = [
   'Завершён',
 ]
 
-export const marketplaceOptions = ['Wildberries', 'Ozon', 'Kaspi']
+export const marketplaceOptions = ['Wildberries']
 
 export const carrierOptions = [
   'Asia Cargo',
