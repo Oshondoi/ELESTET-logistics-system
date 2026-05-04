@@ -73,6 +73,17 @@ const PERMISSION_GROUPS: PermGroup[] = [
     ],
   },
   {
+    label: 'Фулфилмент',
+    items: [
+      { key: 'fulfillment_view', label: 'Просмотр фулфилмента' },
+      { key: 'fulfillment_manage', label: 'Управление партиями и этапами' },
+    ],
+    subItems: [
+      { key: 'fulfillment_otk_assign', label: 'Выбор исполнителя в ОТК' },
+      { key: 'fulfillment_stage_jump', label: 'Навигация по этапам (просмотр истории)' },
+    ],
+  },
+  {
     label: 'Администрирование',
     items: [
       { key: 'roles_manage', label: 'Управление ролями' },

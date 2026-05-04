@@ -67,6 +67,8 @@ export interface RolePermissions {
   // Фулфилмент
   fulfillment_view: boolean
   fulfillment_manage: boolean
+  fulfillment_otk_assign: boolean
+  fulfillment_stage_jump: boolean
   // Администрирование
   roles_manage: boolean
   members_manage: boolean
@@ -95,6 +97,8 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   reviews_automation: false,
   fulfillment_view: false,
   fulfillment_manage: false,
+  fulfillment_otk_assign: false,
+  fulfillment_stage_jump: false,
   roles_manage: false,
   members_manage: false,
 }
@@ -122,6 +126,8 @@ export const FULL_PERMISSIONS: RolePermissions = {
   reviews_automation: true,
   fulfillment_view: true,
   fulfillment_manage: true,
+  fulfillment_otk_assign: true,
+  fulfillment_stage_jump: true,
   roles_manage: true,
   members_manage: true,
 }
@@ -569,9 +575,11 @@ export interface FulfillmentBatch {
   stage_logistics: boolean
   trip_line_id: string | null
   comment: string | null
+  otk_discrepancy: number | null
   created_at: string
   updated_at: string
   created_by: string | null
+  deleted_at: string | null
 }
 
 export interface FulfillmentItem {
@@ -602,4 +610,48 @@ export interface FulfillmentStageLog {
 
 export interface FulfillmentBatchWithItems extends FulfillmentBatch {
   items: FulfillmentItem[]
+}
+
+export interface FulfillmentOtkLog {
+  id: string
+  batch_id: string
+  user_id: string
+  user_email: string
+  user_name: string | null
+  performer_user_id: string | null
+  performer_name: string
+  tariff: string
+  qty: number
+  qty_defect: number
+  notes: string | null
+  photo_urls: string[]
+  created_at: string
+  updated_at: string | null
+  deleted_at: string | null
+}
+
+export type FulfillmentMarkingLog = FulfillmentOtkLog
+
+export interface FulfillmentOtkLogHistory {
+  id: string
+  log_id: string
+  user_id: string
+  user_email: string
+  user_name?: string | null
+  action: 'created' | 'updated' | 'deleted'
+  old_values: Record<string, unknown> | null
+  new_values: Record<string, unknown>
+  created_at: string
+}
+
+export interface FulfillmentMarkingLogHistory {
+  id: string
+  log_id: string
+  user_id: string
+  user_email: string
+  user_name?: string | null
+  action: 'created' | 'updated' | 'deleted'
+  old_values: Record<string, unknown> | null
+  new_values: Record<string, unknown>
+  created_at: string
 }

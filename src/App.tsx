@@ -28,9 +28,10 @@ import { DirectoriesPage } from './pages/DirectoriesPage'
 import { StickersPage } from './pages/StickersPage'
 import { ReviewsPage } from './pages/ReviewsPage'
 import { AdminPage } from './pages/AdminPage'
+import { GlossaryPage } from './pages/GlossaryPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary'
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
 const ACTIVE_STORE_ID_STORAGE_KEY = 'elestet-active-store-id'
@@ -99,6 +100,7 @@ const pageTitles: Record<PageKey, string> = {
   reviews: 'Отзывы',
   roles: 'Роли',
   admin: 'Администратор',
+  glossary: 'Словарь',
 }
 
 function App() {
@@ -241,6 +243,7 @@ function App() {
     reviews: 'reviews_view',
     roles: 'roles_manage',
     admin: null,
+    glossary: null,
   }
 
   const isAdmin = session?.user?.email === 'sydykovsam@gmail.com'
@@ -250,7 +253,7 @@ function App() {
   // useEffect читает stale state из той же фазы рендера и не видит обновлений permissions.
   const effectivePage: PageKey = (() => {
     if (isAccountsLoading || isPermissionsLoading) return activePage
-    if (activePage === 'admin' && !isAdmin) return 'home'
+    if ((activePage === 'admin' || activePage === 'glossary') && !isAdmin) return 'home'
     const key = pagePermKey[activePage]
     if (key !== null && !permissions[key]) return 'home'
     return activePage
@@ -427,6 +430,7 @@ function App() {
             userEmail={session?.user?.email ?? ''}
             isAdmin={isAdmin}
             onAdminClick={() => setActivePage('admin')}
+            onGlossaryClick={() => setActivePage('glossary')}
             onBack={effectivePage === 'admin' ? () => setActivePage('home') : undefined}
             onProfileClick={() => setProfileModalOpen(true)}
             onSignOut={() => void signOut()}
@@ -444,6 +448,11 @@ function App() {
                   onEditTripLine={editTripLine}
                   onStoreCreated={appendStore}
                   canManage={isOwnerOrAdmin || permissions.fulfillment_manage}
+                  canOtkAssign={isOwnerOrAdmin || permissions.fulfillment_otk_assign}
+                  canStageJump={isOwnerOrAdmin || permissions.fulfillment_stage_jump}
+                  userId={session?.user?.id ?? ''}
+                  userEmail={session?.user?.email ?? ''}
+                  userName={profileUserName || (session?.user?.email ?? '')}
                 />
               ) : effectivePage === 'shipments' ? (
                 <ShipmentsPage
@@ -545,6 +554,8 @@ function App() {
                 />
               ) : effectivePage === 'admin' ? (
                 <AdminPage />
+              ) : effectivePage === 'glossary' ? (
+                <GlossaryPage />
               ) : (
                 <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} />
               )

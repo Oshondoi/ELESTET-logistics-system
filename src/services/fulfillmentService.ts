@@ -3,6 +3,7 @@ import type {
   FulfillmentBatch,
   FulfillmentBatchWithItems,
   FulfillmentItem,
+  FulfillmentOtkLog,
   FulfillmentSettings,
   FulfillmentStage,
   Product,
@@ -43,7 +44,20 @@ export const fetchBatches = async (accountId: string): Promise<FulfillmentBatch[
     .from('fulfillment_batches')
     .select('*')
     .eq('account_id', accountId)
+    .is('deleted_at', null)
     .order('created_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as FulfillmentBatch[]
+}
+
+export const fetchArchivedBatches = async (accountId: string): Promise<FulfillmentBatch[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_batches')
+    .select('*')
+    .eq('account_id', accountId)
+    .not('deleted_at', 'is', null)
+    .order('deleted_at', { ascending: false })
   if (error) throw error
   return (data ?? []) as FulfillmentBatch[]
 }
@@ -95,6 +109,7 @@ export const updateBatch = async (
       | 'stage_marking'
       | 'stage_packing'
       | 'stage_logistics'
+      | 'otk_discrepancy'
     >
   >,
 ): Promise<FulfillmentBatch> => {
@@ -109,7 +124,31 @@ export const updateBatch = async (
   return data as FulfillmentBatch
 }
 
+// Мягкое удаление — переносит партию в архив. Данные сохраняются.
 export const deleteBatch = async (batchId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_batches')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', batchId)
+  if (error) throw error
+}
+
+// Восстановление партии из архива
+export const restoreBatch = async (batchId: string): Promise<FulfillmentBatch> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_batches')
+    .update({ deleted_at: null })
+    .eq('id', batchId)
+    .select()
+    .single()
+  if (error) throw error
+  return data as FulfillmentBatch
+}
+
+// Безвозвратное удаление (только если нужно освободить место)
+export const hardDeleteBatch = async (batchId: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await (supabase as any).from('fulfillment_batches').delete().eq('id', batchId)
   if (error) throw error
@@ -242,4 +281,252 @@ export const searchProducts = async (
     .or(`name.ilike.%${query}%,vendor_code.ilike.%${query}%`)
     .limit(30)
   return (data ?? []) as CatalogProduct[]
+}
+
+// ── OTK Logs ──────────────────────────────────────────────────
+
+export interface OtkPerformer {
+  user_id: string
+  full_name: string
+  email: string
+}
+
+export const fetchOtkPerformers = async (accountId: string): Promise<OtkPerformer[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+
+  const { data, error } = await (supabase as any)
+    .rpc('get_account_members_with_names', { p_account_id: accountId })
+  if (error) throw error
+
+  return ((data ?? []) as Array<{ user_id: string; full_name: string }>).map((row) => ({
+    user_id: row.user_id,
+    full_name: row.full_name || '—',
+    email: '',
+  }))
+}
+
+export const fetchOtkLogs = async (batchId: string): Promise<FulfillmentOtkLog[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_otk_logs')
+    .select('*')
+    .eq('batch_id', batchId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as FulfillmentOtkLog[]
+}
+
+export const fetchDeletedOtkLogs = async (batchId: string): Promise<FulfillmentOtkLog[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_otk_logs')
+    .select('*')
+    .eq('batch_id', batchId)
+    .not('deleted_at', 'is', null)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as FulfillmentOtkLog[]
+}
+
+export const uploadOtkPhoto = async (
+  accountId: string,
+  batchId: string,
+  file: File,
+): Promise<string> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const ext = file.name.split('.').pop() ?? 'jpg'
+  const path = `${accountId}/${batchId}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
+  const { error } = await supabase.storage.from('otk-photos').upload(path, file, { upsert: false })
+  if (error) throw error
+  const { data } = supabase.storage.from('otk-photos').getPublicUrl(path)
+  return data.publicUrl
+}
+
+export const addOtkLog = async (entry: {
+  batch_id: string
+  user_id: string
+  user_email: string
+  user_name?: string | null
+  performer_user_id?: string | null
+  performer_name: string
+  tariff: string
+  qty: number
+  qty_defect?: number
+  notes?: string
+  photo_urls?: string[]
+}): Promise<FulfillmentOtkLog> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_otk_logs')
+    .insert({ ...entry, photo_urls: entry.photo_urls ?? [] })
+    .select()
+    .single()
+  if (error) throw error
+  return data as FulfillmentOtkLog
+}
+
+export const updateOtkLog = async (
+  id: string,
+  patch: { tariff?: string; qty?: number; qty_defect?: number; notes?: string; photo_urls?: string[] }
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_otk_logs')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const deleteOtkLog = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_otk_logs')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const addOtkLogHistory = async (entry: {
+  log_id: string
+  user_id: string
+  user_email: string
+  user_name?: string | null
+  action: 'created' | 'updated' | 'deleted'
+  old_values?: Record<string, unknown> | null
+  new_values: Record<string, unknown>
+}): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  await (supabase as any).from('fulfillment_otk_log_history').insert(entry)
+}
+
+export const patchOtkLogHistoryUserName = async (id: string, user_name: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  await (supabase as any).from('fulfillment_otk_log_history').update({ user_name }).eq('id', id)
+}
+
+export const fetchOtkLogHistory = async (logId: string) => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_otk_log_history')
+    .select('*')
+    .eq('log_id', logId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as import('../types').FulfillmentOtkLogHistory[]
+}
+
+// ══════════════════════════════════════════════════════════════
+// Marking Logs — аналог OTK для этапа Маркировки
+// ══════════════════════════════════════════════════════════════
+
+export const fetchMarkingLogs = async (batchId: string): Promise<import('../types').FulfillmentMarkingLog[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_marking_logs')
+    .select('*')
+    .eq('batch_id', batchId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as import('../types').FulfillmentMarkingLog[]
+}
+
+export const fetchDeletedMarkingLogs = async (batchId: string): Promise<import('../types').FulfillmentMarkingLog[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_marking_logs')
+    .select('*')
+    .eq('batch_id', batchId)
+    .not('deleted_at', 'is', null)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as import('../types').FulfillmentMarkingLog[]
+}
+
+export const addMarkingLog = async (entry: {
+  batch_id: string
+  user_id: string
+  user_email: string
+  user_name?: string | null
+  performer_user_id?: string | null
+  performer_name: string
+  tariff: string
+  qty: number
+  qty_defect?: number
+  notes?: string
+  photo_urls?: string[]
+}): Promise<import('../types').FulfillmentMarkingLog> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_marking_logs')
+    .insert({ ...entry, photo_urls: entry.photo_urls ?? [] })
+    .select()
+    .single()
+  if (error) throw error
+  return data as import('../types').FulfillmentMarkingLog
+}
+
+export const updateMarkingLog = async (
+  id: string,
+  patch: { tariff?: string; qty?: number; qty_defect?: number; notes?: string; photo_urls?: string[] }
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_marking_logs')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const deleteMarkingLog = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_marking_logs')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const uploadMarkingPhoto = async (
+  accountId: string,
+  batchId: string,
+  file: File,
+): Promise<string> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const ext = file.name.split('.').pop() ?? 'jpg'
+  const path = `marking/${accountId}/${batchId}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
+  const { error } = await supabase.storage.from('otk-photos').upload(path, file, { upsert: false })
+  if (error) throw error
+  const { data } = supabase.storage.from('otk-photos').getPublicUrl(path)
+  return data.publicUrl
+}
+
+export const addMarkingLogHistory = async (entry: {
+  log_id: string
+  user_id: string
+  user_email: string
+  user_name?: string | null
+  action: 'created' | 'updated' | 'deleted'
+  old_values?: Record<string, unknown> | null
+  new_values: Record<string, unknown>
+}): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  await (supabase as any).from('fulfillment_marking_log_history').insert(entry)
+}
+
+export const patchMarkingLogHistoryUserName = async (id: string, user_name: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  await (supabase as any).from('fulfillment_marking_log_history').update({ user_name }).eq('id', id)
+}
+
+export const fetchMarkingLogHistory = async (logId: string) => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_marking_log_history')
+    .select('*')
+    .eq('log_id', logId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as import('../types').FulfillmentMarkingLogHistory[]
 }

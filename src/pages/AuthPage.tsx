@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 
@@ -32,6 +32,13 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+
+  // Автоскрытие тоста ошибки через 4 сек
+  useEffect(() => {
+    if (!error) return
+    const t = setTimeout(() => setError(null), 4000)
+    return () => clearTimeout(t)
+  }, [error])
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -87,6 +94,12 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
       {success ? (
         <div className="fixed left-1/2 top-5 z-50 w-[min(640px,calc(100%-32px))] -translate-x-1/2 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-800 shadow-sm">
           Подтвердите почту, чтобы завершить регистрацию и войти в систему.
+        </div>
+      ) : null}
+      {error ? (
+        <div className="fixed right-5 top-5 z-50 max-w-sm rounded-2xl bg-red-600 px-5 py-4 text-sm font-medium text-white shadow-lg">
+          {error}
+          <button type="button" onClick={() => setError(null)} className="ml-3 opacity-70 hover:opacity-100">✕</button>
         </div>
       ) : null}
 
@@ -156,9 +169,6 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
             hint="Только буквы и цифры. Хотя бы 1 цифра. Регистр не учитывается."
             />
 
-            {error ? (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-            ) : null}
 
           </div>
 
