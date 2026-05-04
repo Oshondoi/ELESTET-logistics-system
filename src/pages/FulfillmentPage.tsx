@@ -296,7 +296,7 @@ const BatchDetailModal = ({
   // ОТК — журнал логов
   const [otkLogs, setOtkLogs] = useState<FulfillmentOtkLog[]>([])
   const [isLoadingOtk, setIsLoadingOtk] = useState(false)
-  const [otkTariff, setOtkTariff] = useState(OTK_TARIFFS[0].id)
+  const [otkTariff, setOtkTariff] = useState<string>(OTK_TARIFFS[0].id)
   const [otkQty, setOtkQty] = useState('')
   const [otkDefect, setOtkDefect] = useState('')
   const [otkNotes, setOtkNotes] = useState('')
@@ -320,7 +320,7 @@ const BatchDetailModal = ({
   // Маркировка — журнал логов (аналог ОТК)
   const [markingLogs, setMarkingLogs] = useState<FulfillmentMarkingLog[]>([])
   const [isLoadingMarking, setIsLoadingMarking] = useState(false)
-  const [markingTariff, setMarkingTariff] = useState(MARKING_TARIFFS[0].id)
+  const [markingTariff, setMarkingTariff] = useState<string>(MARKING_TARIFFS[0].id)
   const [markingQty, setMarkingQty] = useState('')
   const [markingDefect, setMarkingDefect] = useState('')
   const [markingNotes, setMarkingNotes] = useState('')
@@ -1922,7 +1922,7 @@ const BatchDetailModal = ({
                               const allEntries = [...activeLogs, ...otkBuffer]
                               const performers = new Set([
                                 ...activeLogs.map((l) => l.performer_user_id ?? l.user_id),
-                                ...otkBuffer.map((e) => e.performer_user_id ?? e.user_id),
+                                ...otkBuffer.map((e) => e.performer_user_id),
                               ]).size
                               const tariffs = new Set([
                                 ...activeLogs.map((l) => otkEdits[l.id]?.tariff ?? l.tariff),
@@ -2390,9 +2390,9 @@ const BatchDetailModal = ({
                               <td className="px-3 py-2.5">
                                 <InvoicePhotoCell
                                   photoUrls={log.photo_urls ?? []}
-                                  onAdd={(isOwn || canManage) ? (file) => void handleAddMarkingPhoto(log.id, file) : undefined}
-                                  onReplace={(isOwn || canManage) ? (idx, file) => void handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
-                                  onRemove={(isOwn || canManage) ? (idx) => void handleRemoveMarkingPhoto(log.id, idx) : undefined}
+                                  onAdd={(isOwn || canManage) ? (file) => handleAddMarkingPhoto(log.id, file) : undefined}
+                                  onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
+                                  onRemove={(isOwn || canManage) ? (idx) => handleRemoveMarkingPhoto(log.id, idx) : undefined}
                                 />
                               </td>
                               <td className="px-3 py-2.5">
@@ -2789,7 +2789,7 @@ const BatchDetailModal = ({
         const initialValues = createdEntry?.new_values ?? null
 
         // Данные для не-ОТК этапов
-        const stageLabels: Record<FulfillmentStage, string> = { reception: 'Приёмка', otk: 'ОТК', marking: 'Маркировка', packing: 'Короба', logistics: 'Логистика' }
+        const stageLabels: Record<FulfillmentStage, string> = { reception: 'Приёмка', otk: 'ОТК', marking: 'Маркировка', packing: 'Короба', logistics: 'Логистика', done: 'Завершено' }
         const stageQtyKey: Partial<Record<FulfillmentStage, keyof FulfillmentItem>> = { reception: 'qty_received', marking: 'qty_marked', packing: 'qty_packed' }
         const stageQtyLabel: Partial<Record<FulfillmentStage, string>> = { reception: 'Принято', marking: 'Промаркировано', packing: 'Упаковано' }
 
@@ -2844,8 +2844,8 @@ const BatchDetailModal = ({
 
               {/* ── ОТК: мини-табы + журнал ── */}
               {otkHistoryStageTab === 'otk' && (() => {
-                const pristineLogs = otkLogs.filter((l) => new Date(l.updated_at).getTime() - new Date(l.created_at).getTime() <= 1000)
-                const modifiedLogs = otkLogs.filter((l) => new Date(l.updated_at).getTime() - new Date(l.created_at).getTime() > 1000)
+                const pristineLogs = otkLogs.filter((l) => new Date(l.updated_at ?? l.created_at).getTime() - new Date(l.created_at).getTime() <= 1000)
+                const modifiedLogs = otkLogs.filter((l) => new Date(l.updated_at ?? l.created_at).getTime() - new Date(l.created_at).getTime() > 1000)
                 const renderTab = (log: (typeof allOtkLogs)[0], scheme: 'blue' | 'orange' | 'red', suffix?: string) => {
                   const t = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
                   const idx = allOtkLogs.indexOf(log) + 1
@@ -3031,8 +3031,8 @@ const BatchDetailModal = ({
 
                 if (activeId && !histories) { void loadHistory(activeId) }
 
-                const pristineLogs = activeMarkingLogs.filter((l) => new Date(l.updated_at).getTime() - new Date(l.created_at).getTime() <= 1000)
-                const modifiedLogs = activeMarkingLogs.filter((l) => new Date(l.updated_at).getTime() - new Date(l.created_at).getTime() > 1000)
+                const pristineLogs = activeMarkingLogs.filter((l) => new Date(l.updated_at ?? l.created_at).getTime() - new Date(l.created_at).getTime() <= 1000)
+                const modifiedLogs = activeMarkingLogs.filter((l) => new Date(l.updated_at ?? l.created_at).getTime() - new Date(l.created_at).getTime() > 1000)
                 const renderTab = (log: (typeof allOtkLogs)[0], scheme: 'blue' | 'orange' | 'red', suffix?: string) => {
                   const t = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
                   const idx = allOtkLogs.indexOf(log) + 1
