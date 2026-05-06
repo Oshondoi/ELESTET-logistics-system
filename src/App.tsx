@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AccountFormModal } from './components/accounts/AccountFormModal'
 import { DeleteAccountModal } from './components/accounts/DeleteAccountModal'
 import { ProfileModal } from './components/accounts/ProfileModal'
@@ -171,9 +171,13 @@ function App() {
     }
   }, [accounts, isAccountsLoading])
 
-  // Auto-create "Основная компания" if user has no companies yet
+  // Auto-create "Основная компания" if user has no companies yet.
+  // useRef flag prevents multiple creations if isAccountsLoading/accounts.length
+  // flickers (race condition between async reload and state updates).
+  const autoCreatingCompanyRef = useRef(false)
   useEffect(() => {
-    if (!isAccountsLoading && session && accounts.length === 0) {
+    if (!isAccountsLoading && session && accounts.length === 0 && !autoCreatingCompanyRef.current) {
+      autoCreatingCompanyRef.current = true
       void createAccount('Основная компания').then((account) => {
         setActiveAccountId(account.id)
       })
