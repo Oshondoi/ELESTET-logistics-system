@@ -17,7 +17,7 @@ const variants = {
 export const Button = ({ children, className, variant = 'primary', ...props }: ButtonProps) => (
   <button
     className={cn(
-      'inline-flex items-center justify-center gap-2 rounded-[18px] px-4 py-2.5 text-sm font-medium leading-none transition-colors duration-150 ease-out outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 active:outline-none active:ring-0 active:translate-y-0 active:scale-100 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50',
+      'inline-flex items-center justify-center gap-2 rounded-[18px] px-4 py-1.5 text-sm font-medium leading-none transition-colors duration-150 ease-out outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 active:outline-none active:ring-0 active:translate-y-0 active:scale-100 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50',
       variants[variant],
       className,
     )}

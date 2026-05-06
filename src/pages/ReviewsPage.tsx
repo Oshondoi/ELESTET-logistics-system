@@ -384,6 +384,8 @@ export const ReviewsPage = ({
   // AI settings
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
   const [aiSettingsModalOpen, setAiSettingsModalOpen] = useState(false)
+  const [tariffsModalOpen, setTariffsModalOpen] = useState(false)
+  const [tariffsTab, setTariffsTab] = useState<'text' | 'photo'>('text')
   const [systemPrompts, setSystemPrompts] = useState<AiPrompt[]>([])
   const [storePrompts, setStorePrompts] = useState<AiPrompt[]>([])
 
@@ -1068,6 +1070,20 @@ export const ReviewsPage = ({
         </span>
 
         <div className="ml-auto flex items-center gap-2">
+
+          {/* Tariffs button */}
+          <button
+            type="button"
+            onClick={() => setTariffsModalOpen(true)}
+            title="Тарифы Claude"
+            className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-700"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <path d="M2 10h20" />
+            </svg>
+            Тарифы
+          </button>
 
           {/* AI Settings button */}
           <button
@@ -2088,6 +2104,206 @@ export const ReviewsPage = ({
       )}
 
       {/* ── Modals */}
+      {/* ── Тарифы Claude ── */}
+      {tariffsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={() => setTariffsModalOpen(false)}>
+          <div className="relative w-full max-w-4xl rounded-2xl bg-white shadow-2xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="shrink-0 border-b border-slate-200">
+              <div className="flex items-center justify-between px-6 pt-5 pb-4">
+                <h2 className="text-xl font-semibold text-slate-900">Тарифы Claude AI</h2>
+                <button type="button" onClick={() => setTariffsModalOpen(false)} className="text-sm text-slate-500 hover:text-slate-800 transition">Закрыть</button>
+              </div>
+              {/* Tabs */}
+              <div className="flex gap-1 px-6 pb-3">
+                {([{ id: 'text', label: 'Цены на текст' }, { id: 'photo', label: 'Цены на фото' }] as const).map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setTariffsTab(t.id)}
+                    className={cn(
+                      'rounded-lg px-3 py-1.5 text-xs font-medium transition',
+                      tariffsTab === t.id ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700',
+                    )}
+                  >{t.label}</button>
+                ))}
+              </div>
+            </div>
+            {/* Body */}
+            <div className="overflow-y-auto px-6 py-5 space-y-6 text-[13px] text-slate-600 leading-relaxed">
+
+              {/* ── Цены на текст ── */}
+              {tariffsTab === 'text' && (
+                <>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                    <div className="mb-3 text-[15px] font-semibold text-slate-800">Что такое токены?</div>
+                    <p className="mb-3">Claude не читает текст как человек — он делит его на <strong className="text-slate-800">токены</strong>. Один токен ≈ <strong className="text-slate-800">¾ слова</strong> (или 3–4 буквы).</p>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[['Одно слово', '1–2', 'токена'], ['Один отзыв', '~100', 'токенов'], ['Ответ ИИ', '~150', 'токенов']].map(([l, v, u]) => (
+                        <div key={l} className="rounded-xl bg-white border border-slate-200 p-3 text-center">
+                          <div className="text-[11px] text-slate-400 mb-1">{l}</div>
+                          <div className="text-[18px] font-bold text-slate-800">{v}</div>
+                          <div className="text-[11px] text-slate-400">{u}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                    <div className="mb-3 text-[15px] font-semibold text-slate-800">Запрос → ИИ vs ИИ → Ответ</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-xl bg-blue-50 border border-blue-100 p-3">
+                        <div className="mb-1 text-[11px] font-semibold text-blue-700 uppercase tracking-wide">Запрос → ИИ</div>
+                        <p className="text-[12px] text-slate-600">Текст отзыва, системный промпт, промпт магазина, инструкция тона.</p>
+                        <div className="mt-2 text-[12px] font-bold text-blue-700">Дешевле</div>
+                      </div>
+                      <div className="rounded-xl bg-violet-50 border border-violet-100 p-3">
+                        <div className="mb-1 text-[11px] font-semibold text-violet-700 uppercase tracking-wide">ИИ → Ответ</div>
+                        <p className="text-[12px] text-slate-600">Сгенерированный текст ответа на отзыв.</p>
+                        <div className="mt-2 text-[12px] font-bold text-violet-700">Дороже (в 5× у Sonnet)</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                    <div className="mb-3 text-[15px] font-semibold text-slate-800">Стоимость всех моделей</div>
+                    <div className="overflow-hidden rounded-xl border border-slate-200">
+                      <table className="w-full text-[12px]">
+                        <thead>
+                          <tr className="bg-white border-b border-slate-100">
+                            <th className="px-3 py-2 text-left font-semibold text-slate-600">Модель</th>
+                            <th className="px-3 py-2 text-right font-semibold text-slate-600">Запрос → ИИ</th>
+                            <th className="px-3 py-2 text-right font-semibold text-slate-600">ИИ → Ответ</th>
+                            <th className="px-3 py-2 text-right font-semibold text-slate-600">1 ответ на отзыв</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {[
+                            ['Claude Opus 4', '$15/млн', '$75/млн', '~$0.015', 'text-violet-600'],
+                            ['Claude Sonnet 4', '$3/млн', '$15/млн', '~$0.003', 'text-emerald-600'],
+                            ['Claude Haiku 4.5', '$0.80/млн', '$4/млн', '~$0.0008', 'text-teal-600'],
+                            ['Claude 3.7 Sonnet', '$3/млн', '$15/млн', '~$0.003', 'text-emerald-600'],
+                            ['Claude 3.5 Sonnet', '$3/млн', '$15/млн', '~$0.003', 'text-emerald-600'],
+                            ['Claude 3.5 Haiku', '$0.80/млн', '$4/млн', '~$0.0008', 'text-teal-600'],
+                          ].map(([name, inp, out, cost, color]) => (
+                            <tr key={name} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 font-medium text-slate-700">{name}</td>
+                              <td className="px-3 py-2 text-right text-slate-500">{inp}</td>
+                              <td className="px-3 py-2 text-right text-slate-500">{out}</td>
+                              <td className={`px-3 py-2 text-right font-semibold ${color}`}>{cost}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="mt-3 text-[11px] text-slate-400">1 ответ на отзыв ≈ 250 токенов входящих + 150 токенов исходящих.</p>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                    <div className="mb-3 text-[15px] font-semibold text-slate-800">Реальные затраты в месяц</div>
+                    <div className="overflow-hidden rounded-xl border border-slate-200">
+                      <table className="w-full text-[12px]">
+                        <thead>
+                          <tr className="bg-white border-b border-slate-100">
+                            <th className="px-3 py-2 text-left font-semibold text-slate-600">Ответов в месяц</th>
+                            <th className="px-3 py-2 text-right font-semibold text-emerald-600">Sonnet / Haiku 3.5</th>
+                            <th className="px-3 py-2 text-right font-semibold text-teal-600">Haiku 4.5</th>
+                            <th className="px-3 py-2 text-right font-semibold text-violet-600">Opus 4</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {[
+                            ['100 отзывов', '~$0.30', '~$0.08', '~$1.50'],
+                            ['500 отзывов', '~$1.50', '~$0.40', '~$7.50'],
+                            ['1 000 отзывов', '~$3.00', '~$0.80', '~$15.00'],
+                            ['5 000 отзывов', '~$15.00', '~$4.00', '~$75.00'],
+                          ].map(([vol, s, h, o]) => (
+                            <tr key={vol} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 text-slate-700">{vol}</td>
+                              <td className="px-3 py-2 text-right font-medium text-emerald-600">{s}</td>
+                              <td className="px-3 py-2 text-right font-medium text-teal-600">{h}</td>
+                              <td className="px-3 py-2 text-right font-medium text-violet-600">{o}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                    <div className="mb-2 text-[15px] font-semibold text-amber-900">Смена модели в середине</div>
+                    <p className="text-[13px] text-amber-800">Каждый запрос оплачивается по тарифу модели, выбранной <strong>в момент этого запроса</strong>. Прошлые ответы не пересчитываются. Нет подписки — платите только за использование.</p>
+                  </div>
+                </>
+              )}
+
+              {/* ── Цены на фото ── */}
+              {tariffsTab === 'photo' && (
+                <>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                    <div className="mb-2 text-[15px] font-semibold text-slate-800">Как фото переводится в токены?</div>
+                    <p className="mb-3">Изображение кодируется в токены по формуле:</p>
+                    <code className="inline-block rounded-xl bg-white border border-slate-200 px-4 py-2.5 font-mono text-[13px] text-slate-700">токены ≈ (ширина × высота) / 750</code>
+                    <p className="mt-3 text-[12px] text-slate-500">Фото считается как <strong className="text-slate-700">Запрос → ИИ</strong> (дешёвая ставка). <span className="text-rose-500">GPT-4o поддерживает фото. Claude — тоже. GPT-4o-mini и GPT-3.5 — нет.</span></p>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-[13px] font-semibold text-slate-700">Стоимость по размерам</div>
+                    <div className="overflow-hidden rounded-2xl border border-slate-200">
+                      <table className="w-full text-[12px]">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200">
+                            <th className="px-3 py-2.5 text-left font-semibold text-slate-600">Размер</th>
+                            <th className="px-3 py-2.5 text-left font-semibold text-slate-600">Пример</th>
+                            <th className="px-3 py-2.5 text-right font-semibold text-slate-600">Токены</th>
+                            <th className="px-3 py-2.5 text-right font-semibold text-violet-600">Opus 4<div className="text-[10px] font-normal text-slate-400">$15/млн</div></th>
+                            <th className="px-3 py-2.5 text-right font-semibold text-emerald-600">Sonnet 4 · 3.7 · 3.5<div className="text-[10px] font-normal text-slate-400">$3/млн (все трое)</div></th>
+                            <th className="px-3 py-2.5 text-right font-semibold text-teal-600">Haiku 4.5 · 3.5<div className="text-[10px] font-normal text-slate-400">$0.8/млн (оба)</div></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {[
+                            ['256×256', 'Иконка', '~87', '$0.0013', '$0.0003', '$0.00007'],
+                            ['480×360', 'Телефон SD', '~230', '$0.0035', '$0.0007', '$0.0002'],
+                            ['800×600', 'Обычное фото', '~640', '$0.0096', '$0.002', '$0.0005'],
+                            ['1024×768', 'Скриншот', '~1049', '$0.016', '$0.003', '$0.0008'],
+                            ['1200×900', 'Хорошее фото', '~1440', '$0.022', '$0.004', '$0.001'],
+                            ['1920×1080', 'Full HD', '~2765', '$0.041', '$0.008', '$0.002'],
+                            ['1568×1568', 'Макс без сжатия', '~3276', '$0.049', '$0.010', '$0.003'],
+                            ['4000×3000', '→ авто-сжатие до 1568px', '~3276', '$0.049', '$0.010', '$0.003'],
+                          ].map(([size, label, tokens, opus, sonnet, haiku]) => (
+                            <tr key={size} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 font-mono text-slate-600">{size}</td>
+                              <td className="px-3 py-2 text-slate-500">{label}</td>
+                              <td className="px-3 py-2 text-right text-slate-600">{tokens}</td>
+                              <td className="px-3 py-2 text-right font-medium text-violet-600">{opus}</td>
+                              <td className="px-3 py-2 text-right font-medium text-emerald-600">{sonnet}</td>
+                              <td className="px-3 py-2 text-right font-medium text-teal-600">{haiku}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 space-y-2.5 text-[12px] text-slate-600">
+                    <div className="text-[13px] font-semibold text-slate-800 mb-3">Важно знать</div>
+                    {[
+                      'Anthropic автоматически сжимает фото до 1568px — платите не больше строки «Макс».',
+                      'Фото считается по дешёвой ставке (Запрос → ИИ).',
+                      '1 фото ≈ стоимость 2–3 текстовых запросов.',
+                      'Поддерживаются: JPEG, PNG, GIF, WebP.',
+                    ].map((t) => <div key={t} className="flex gap-2"><span className="shrink-0 text-slate-400">•</span><span>{t}</span></div>)}
+                    <div className="flex gap-2"><span className="shrink-0 text-rose-400">•</span><span className="text-rose-600"><strong>Видео не поддерживается</strong> ни одной моделью Claude через API.</span></div>
+                  </div>
+                </>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
+
       <AiSettingsModal
         open={aiSettingsModalOpen}
         initial={aiSettings}

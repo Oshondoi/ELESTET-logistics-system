@@ -788,7 +788,7 @@ const BatchDetailModal = ({
       const deletedLogsNow = otkLogs.filter((l) => otkDeletedIds.includes(l.id))
       await Promise.all(deletedLogsNow.map(async (log) => {
         await ensureOtkCreatedHistory(log)
-        await addOtkLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] }, new_values: {} })
+        await addOtkLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] }, new_values: {} })
         await deleteOtkLog(log.id)
       }))
       // Сохранить правки + залогировать изменения
@@ -824,7 +824,7 @@ const BatchDetailModal = ({
           notes: e.notes || undefined,
           photo_urls: photoUrls,
         })
-        await addOtkLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls } })
+        await addOtkLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls } })
         return log
       }))
       setOtkLogs((prev) => {
@@ -864,7 +864,7 @@ const BatchDetailModal = ({
       setOtkLogHistories((prev) => ({ ...prev, [log.id]: history! }))
     }
     if (history.length === 0) {
-      await addOtkLogHistory({ log_id: log.id, user_id: log.user_id, user_email: log.user_email, user_name: log.user_name ?? otkPerformers.find((p) => p.user_id === log.user_id)?.full_name ?? (log.user_id === userId ? userName : null) ?? null, action: 'created', old_values: null, new_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] } })
+      await addOtkLogHistory({ log_id: log.id, user_id: log.user_id, user_email: log.user_email, user_name: log.user_name ?? otkPerformers.find((p) => p.user_id === log.user_id)?.full_name ?? (log.user_id === userId ? userName : null) ?? null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] } })
     }
   }
 
@@ -982,7 +982,7 @@ const BatchDetailModal = ({
       const deletedLogsNow = markingLogs.filter((l) => markingDeletedIds.includes(l.id))
       await Promise.all(deletedLogsNow.map(async (log) => {
         await deleteMarkingLog(log.id)
-        await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] }, new_values: {} })
+        await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] }, new_values: {} })
       }))
       await Promise.all(Object.entries(markingEdits).map(async ([id, v]) => {
         const originalLog = markingLogs.find((l) => l.id === id)
@@ -1018,7 +1018,7 @@ const BatchDetailModal = ({
           notes: e.notes || undefined,
           photo_urls: photoUrls,
         })
-        await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls } })
+        await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls } })
         return log
       }))
       setMarkingLogs((prev) => {
@@ -1057,7 +1057,7 @@ const BatchDetailModal = ({
         await Promise.all(markingDeletedIds.map(async (id) => {
           const log = markingLogs.find((l) => l.id === id)
           await deleteMarkingLog(id)
-          if (log) await addMarkingLogHistory({ log_id: id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] }, new_values: {} })
+          if (log) await addMarkingLogHistory({ log_id: id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] }, new_values: {} })
         }))
         await Promise.all(Object.entries(markingEdits).map(async ([id, v]) => {
           const originalLog = markingLogs.find((l) => l.id === id)
@@ -1093,7 +1093,7 @@ const BatchDetailModal = ({
             notes: e.notes || undefined,
             photo_urls: photoUrls,
           })
-          await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls } })
+          await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls } })
         }))
         setMarkingBuffer([])
         setMarkingEdits({})
@@ -1906,7 +1906,7 @@ const BatchDetailModal = ({
                 {/* Журнал работ */}
                 {isLoadingOtk ? (
                   <div className="py-6 text-center text-sm text-slate-400">Загрузка…</div>
-                ) : otkLogs.length === 0 ? (
+                ) : otkLogs.length === 0 && otkBuffer.length === 0 ? (
                   <div className="rounded-2xl border-2 border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">
                     Записей нет — добавьте первую работу
                   </div>
@@ -2755,7 +2755,7 @@ const BatchDetailModal = ({
         const closeHistory = () => { setOtkHistoryLog(null); setHistoryOpen(false) }
         const fmt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
 
-        const FIELD_LABELS: Record<string, string> = { tariff: 'Тариф', qty: 'Годный', qty_defect: 'Брак', notes: 'Примечание', photo_urls: 'Фото' }
+        const FIELD_LABELS: Record<string, string> = { performer_name: 'Исполнитель', tariff: 'Тариф', qty: 'Годный', qty_defect: 'Брак', notes: 'Примечание', photo_urls: 'Фото' }
         const calcTotal = (vals: Record<string, unknown>) => (Number(vals.qty) || 0) + (Number(vals.qty_defect) || 0)
         const fmtVal = (key: string, val: unknown): string => {
           if (key === 'tariff') return OTK_TARIFFS.find((t) => t.id === val)?.label ?? String(val)
@@ -2770,7 +2770,7 @@ const BatchDetailModal = ({
           if (h.length === 0) {
             const log = allOtkLogs.find((l) => l.id === logId)
             if (log) {
-              await addOtkLogHistory({ log_id: log.id, user_id: log.user_id, user_email: log.user_email, user_name: log.user_name ?? otkPerformers.find((p) => p.user_id === log.user_id)?.full_name ?? (log.user_id === userId ? userName : null) ?? null, action: 'created', old_values: null, new_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] } })
+              await addOtkLogHistory({ log_id: log.id, user_id: log.user_id, user_email: log.user_email, user_name: log.user_name ?? otkPerformers.find((p) => p.user_id === log.user_id)?.full_name ?? (log.user_id === userId ? userName : null) ?? null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] } })
               h = await fetchOtkLogHistory(logId)
             }
           }
@@ -2994,7 +2994,7 @@ const BatchDetailModal = ({
                 const activeLog = allOtkLogs.find((l) => l.id === activeId) ?? activeMarkingLogs[0] ?? null
                 const isDeletedLog = !!activeLog?.deleted_at
                 const histories = activeId ? markingLogHistories[activeId] : undefined
-                const FIELD_LABELS: Record<string, string> = { tariff: 'Тариф', qty: 'Годный', qty_defect: 'Брак', notes: 'Примечание', photo_urls: 'Фото' }
+                const FIELD_LABELS: Record<string, string> = { performer_name: 'Исполнитель', tariff: 'Тариф', qty: 'Годный', qty_defect: 'Брак', notes: 'Примечание', photo_urls: 'Фото' }
                 const calcTotal = (vals: Record<string, unknown>) => (Number(vals.qty) || 0) + (Number(vals.qty_defect) || 0)
                 const fmtVal = (key: string, val: unknown): string => {
                   if (key === 'tariff') return MARKING_TARIFFS.find((t) => t.id === val)?.label ?? String(val)
@@ -3011,7 +3011,7 @@ const BatchDetailModal = ({
                       const log = allOtkLogs.find((l) => l.id === logId)
                       // Синтезируем created только для НЕ удалённых логов
                       if (log && !log.deleted_at) {
-                        await addMarkingLogHistory({ log_id: log.id, user_id: log.user_id, user_email: log.user_email, user_name: log.user_name ?? markingPerformers.find((p) => p.user_id === log.user_id)?.full_name ?? (log.user_id === userId ? userName : null) ?? null, action: 'created', old_values: null, new_values: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] } })
+                        await addMarkingLogHistory({ log_id: log.id, user_id: log.user_id, user_email: log.user_email, user_name: log.user_name ?? markingPerformers.find((p) => p.user_id === log.user_id)?.full_name ?? (log.user_id === userId ? userName : null) ?? null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] } })
                         h = await fetchMarkingLogHistory(logId)
                       }
                     }

@@ -7,12 +7,13 @@ interface TopbarProps {
   isAdmin?: boolean
   onAdminClick?: () => void
   onGlossaryClick?: () => void
-  onBack?: () => void
+  onDiaryClick?: () => void
+  onHomeClick?: () => void
   onProfileClick: () => void
   onSignOut: () => void
 }
 
-export const Topbar = ({ title, userName, userEmail, isAdmin, onAdminClick, onGlossaryClick, onBack, onProfileClick, onSignOut }: TopbarProps) => {
+export const Topbar = ({ title, userName, userEmail, isAdmin, onAdminClick, onGlossaryClick, onDiaryClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
   const initial = userName ? userName.charAt(0).toUpperCase() : (userEmail ? userEmail.charAt(0).toUpperCase() : '?')
   const displayName = userName || userEmail || 'Профиль'
   const [open, setOpen] = useState(false)
@@ -36,10 +37,10 @@ export const Topbar = ({ title, userName, userEmail, isAdmin, onAdminClick, onGl
       </div>
 
       <div className="flex items-center gap-2">
-        {onBack ? (
+        {onHomeClick && (
           <button
             type="button"
-            onClick={onBack}
+            onClick={onHomeClick}
             className="flex h-7 items-center gap-1.5 rounded-xl border border-slate-200 px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
           >
             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -49,7 +50,22 @@ export const Topbar = ({ title, userName, userEmail, isAdmin, onAdminClick, onGl
             </svg>
             Домой
           </button>
-        ) : isAdmin ? (
+        )}
+        {onDiaryClick && (
+          <button
+            type="button"
+            onClick={onDiaryClick}
+            className="flex h-7 items-center gap-1.5 rounded-xl border border-slate-200 px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+              <path d="M8 7h8M8 11h8M8 15h5" />
+            </svg>
+            Дневник
+          </button>
+        )}
+        {isAdmin && (
           <>
             <button
               type="button"
@@ -76,7 +92,7 @@ export const Topbar = ({ title, userName, userEmail, isAdmin, onAdminClick, onGl
               Админ
             </button>
           </>
-        ) : null}
+        )}
         <button
           type="button"
           aria-label="Уведомления"

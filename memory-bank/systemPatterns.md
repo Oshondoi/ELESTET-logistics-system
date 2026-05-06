@@ -78,7 +78,11 @@ Deletion is intentionally conservative; FK use restrict.
 ## UI Patterns
 - Compact business layout
 - Left sidebar: brand → company switcher → nav → logout
-- Flat top bar with current page title
+  - **Sidebar скрывается** на страницах `admin`, `glossary`, `diary`
+- Flat top bar (Topbar) с правым блоком кнопок:
+  - «Домой» (только на admin/glossary/diary) → «Дневник» → «Словарь» → «Админ» — всегда в таком порядке
+  - Три кнопки (Дневник/Словарь/Админ) **всегда видны**, не заменяют друг друга
+- Company switcher dropdown: **React Portal** → `document.body`, `position:fixed`, `z-9999`, `max-h-[50vh]`
 - Dense tables for operations
 - Trip rows expand inline to show trip_lines
 - Modal forms for creation flows

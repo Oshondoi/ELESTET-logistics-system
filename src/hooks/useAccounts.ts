@@ -57,6 +57,10 @@ export const useAccounts = (enabled: boolean) => {
   }
 
   const deleteAccount = async (accountId: string) => {
+    const activeCount = accounts.filter((a) => a.id !== accountId).length
+    if (activeCount === 0) {
+      throw new Error('Нельзя удалить последнюю компанию')
+    }
     await deleteAccountWithOwnerInSupabase(accountId)
     setAccounts((current) => current.filter((account) => account.id !== accountId))
     try {

@@ -29,9 +29,10 @@ import { StickersPage } from './pages/StickersPage'
 import { ReviewsPage } from './pages/ReviewsPage'
 import { AdminPage } from './pages/AdminPage'
 import { GlossaryPage } from './pages/GlossaryPage'
+import { DiaryPage } from './pages/DiaryPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
 const ACTIVE_STORE_ID_STORAGE_KEY = 'elestet-active-store-id'
@@ -101,6 +102,7 @@ const pageTitles: Record<PageKey, string> = {
   roles: 'Роли',
   admin: 'Администратор',
   glossary: 'Словарь',
+  diary: 'Дневник ELESTET',
 }
 
 function App() {
@@ -118,7 +120,8 @@ function App() {
       storedPage === 'reviews' ||
       storedPage === 'roles' ||
       storedPage === 'stickers' ||
-      storedPage === 'admin'
+      storedPage === 'admin' ||
+      storedPage === 'diary'
     ) {
       return storedPage
     }
@@ -167,6 +170,15 @@ function App() {
       }
     }
   }, [accounts, isAccountsLoading])
+
+  // Auto-create "Основная компания" if user has no companies yet
+  useEffect(() => {
+    if (!isAccountsLoading && session && accounts.length === 0) {
+      void createAccount('Основная компания').then((account) => {
+        setActiveAccountId(account.id)
+      })
+    }
+  }, [isAccountsLoading, session, accounts.length])
 
   const {
     shipments,
@@ -244,6 +256,7 @@ function App() {
     roles: 'roles_manage',
     admin: null,
     glossary: null,
+    diary: null,
   }
 
   const isAdmin = session?.user?.email === 'sydykovsam@gmail.com'
@@ -254,6 +267,7 @@ function App() {
   const effectivePage: PageKey = (() => {
     if (isAccountsLoading || isPermissionsLoading) return activePage
     if ((activePage === 'admin' || activePage === 'glossary') && !isAdmin) return 'home'
+    if (activePage === 'diary' && activeAccount?.my_role !== 'owner') return 'home'
     const key = pagePermKey[activePage]
     if (key !== null && !permissions[key]) return 'home'
     return activePage
@@ -405,7 +419,7 @@ function App() {
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-900">
       <ToastContainer />
       <div className="flex h-full">
-        {effectivePage !== 'admin' && (
+        {effectivePage !== 'admin' && effectivePage !== 'glossary' && effectivePage !== 'diary' && (
           <Sidebar
             activePage={effectivePage}
             onSelectPage={setActivePage}
@@ -431,7 +445,8 @@ function App() {
             isAdmin={isAdmin}
             onAdminClick={() => setActivePage('admin')}
             onGlossaryClick={() => setActivePage('glossary')}
-            onBack={effectivePage === 'admin' ? () => setActivePage('home') : undefined}
+            onDiaryClick={activeAccount?.my_role === 'owner' ? () => setActivePage('diary') : undefined}
+            onHomeClick={['admin', 'glossary', 'diary'].includes(effectivePage) ? () => setActivePage('home') : undefined}
             onProfileClick={() => setProfileModalOpen(true)}
             onSignOut={() => void signOut()}
           />
@@ -556,6 +571,12 @@ function App() {
                 <AdminPage />
               ) : effectivePage === 'glossary' ? (
                 <GlossaryPage />
+              ) : effectivePage === 'diary' ? (
+                <DiaryPage
+                  userId={session?.user?.id ?? ''}
+                  userEmail={session?.user?.email ?? ''}
+                  userName={profileUserName || (session?.user?.email ?? '')}
+                />
               ) : (
                 <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} />
               )

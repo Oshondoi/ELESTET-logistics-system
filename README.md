@@ -264,7 +264,14 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 29. patch_wb_pass_url.sql           ← Поле wb_pass_url в trip_lines для хранения пропуска WB
 30. patch_combined_stickers.sql     ← Поле combined_sticker_urls text[] для стикеров 2в1
 31. patch_transit_at.sql            ← Поле transit_at date (авто при статусе «В пути»)
-32. patch_wb_acceptance_date.sql    ← Поле wb_acceptance_date date (фактическая дата принятия WB)34. patch_fulfillment.sql           ← Модуль Фулфилмент: 4 таблицы + RLS + права в roles> Для dev без auth: `supabase/disable_rls_dev.sql`
+33. patch_wb_acceptance_date.sql    ← Поле wb_acceptance_date date (фактическая дата принятия WB)
+34. patch_fulfillment.sql           ← Модуль Фулфилмент: 4 таблицы + RLS + права в roles
+35. patch_otk_logs.sql              ← OTK: журнал работ + история изменений
+36. patch_marking_logs.sql          ← Маркировка: журнал работ + история изменений
+37. patch_diary.sql                 ← Дневник ELESTET: diary_entries, RLS, хранилище diary-media
+38. patch_ai_providers.sql          ← Мульти-провайдер ИИ (Claude + OpenAI) + миграция model ID
+39. patch_ai_prompts_list.sql       ← Таблица ai_prompts (system/store промпты)
+40. cleanup_archived_accounts.sql   ← (однократно) Удаление архивных компаний для конкретного пользователя
 
 4. `npm run dev`
 
@@ -295,6 +302,12 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Стикеры 2в1** | ✅ Готово | Отдельная колонка combined_sticker_urls, фиолетовая группа кнопок |
 | **Колонка "Даты"** | ✅ Готово | 2 подстолбца: Приём/Отправлен/Прибыл + Отгружен/Запланирован/Приём ВБ; MpDateButton; WB API supplyDate+factDate |
 | **Фулфилмент** | ✅ Готово | 5 этапов (Приёмка→ОТК→Маркировка→Коробá→Логистика), авто-лукап баркода, привязка к рейсу, RBAC |
+| **Дневник ELESTET** | ✅ Готово | Личный дневник (только owner): таймлайн, запись дня, ИИ-разбор, AI-настройки с вкладками цен |
+| **Topbar UX** | ✅ Готово | Кнопки Дневник/Словарь/Админ всегда видны; «Домой» слева от них на full-page страницах; сайдбар скрыт на admin/glossary/diary |
+| **Company auto-create** | ✅ Готово | При `accounts.length === 0` после загрузки — авто-создаётся «Основная компания» |
+| **Company delete guard** | ✅ Готово | Нельзя удалить последнюю компанию; кнопка заблокирована при `accounts.length <= 1` |
+| **Company dropdown Portal** | ✅ Готово | createPortal → document.body, position:fixed, z-9999, max-h-50vh |
+| **API keys browser block** | ✅ Готово | autoComplete=new-password + data-lpignore + data-1p-ignore на всех полях ключей |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |

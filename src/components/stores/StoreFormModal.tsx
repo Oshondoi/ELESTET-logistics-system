@@ -103,6 +103,8 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
                   value={values.api_key ?? ''}
                   onChange={(e) => setValues((c) => ({ ...c, api_key: e.target.value }))}
                   autoComplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore
                 />
                 <button
                   type="button"
@@ -141,6 +143,8 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
             value={values.api_key ?? ''}
             onChange={(e) => setValues((c) => ({ ...c, api_key: e.target.value }))}
             autoComplete="new-password"
+            data-lpignore="true"
+            data-1p-ignore
             hint="Необязательно. После сохранения ключ нельзя будет прочитать."
           />
         )}

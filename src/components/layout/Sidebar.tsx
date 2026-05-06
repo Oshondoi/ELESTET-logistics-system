@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { cn } from '../../lib/utils'
 import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -153,27 +154,44 @@ export const Sidebar = ({
 }: SidebarProps) => {
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
   const [restoringAccountId, setRestoringAccountId] = useState<string | null>(null)
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null)
   const companyRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
   const hasActiveAccount = Boolean(activeAccount)
   const companyName = activeAccount ? activeAccount.name : 'Нет компании'
   const companyIdLabel = activeAccount ? `ID: ${activeAccount.id.slice(0, 8)}` : 'Создайте компанию'
 
+  const openDropdown = () => {
+    if (!triggerRef.current) return
+    const rect = triggerRef.current.getBoundingClientRect()
+    setDropdownPos({ top: rect.bottom + 8, left: rect.left, width: rect.width })
+    setIsCompanyOpen(true)
+  }
+
   useEffect(() => {
+    if (!isCompanyOpen) return
     const handlePointerDown = (event: PointerEvent) => {
       if (!companyRef.current?.contains(event.target as Node)) {
         setIsCompanyOpen(false)
       }
     }
-
     window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [isCompanyOpen])
 
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown)
+  useEffect(() => {
+    if (!isCompanyOpen) return
+    const handleScroll = () => {
+      if (!triggerRef.current) return
+      const rect = triggerRef.current.getBoundingClientRect()
+      setDropdownPos({ top: rect.bottom + 8, left: rect.left, width: rect.width })
     }
-  }, [])
+    window.addEventListener('scroll', handleScroll, true)
+    return () => window.removeEventListener('scroll', handleScroll, true)
+  }, [isCompanyOpen])
 
   return (
-    <aside className="flex h-full w-[234px] shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white/95">
+    <aside className="flex h-full w-[234px] shrink-0 flex-col border-r border-slate-200 bg-white/95">
       <div className="border-b border-slate-200 px-5 py-4">
         <button type="button" className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-xs font-bold text-white">
@@ -194,10 +212,12 @@ export const Sidebar = ({
           </div>
           <div ref={companyRef} className="relative">
             <button
+              ref={triggerRef}
               type="button"
               onClick={() => {
                 if (hasActiveAccount) {
-                  setIsCompanyOpen((current) => !current)
+                  if (isCompanyOpen) setIsCompanyOpen(false)
+                  else openDropdown()
                 }
               }}
               className={cn(
@@ -222,8 +242,17 @@ export const Sidebar = ({
               ) : null}
             </button>
 
-            {hasActiveAccount && isCompanyOpen ? (
-              <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-20 max-h-[70vh] overflow-y-auto rounded-[12px] border border-[#BCD2FF] bg-white shadow-[0_8px_20px_rgba(36,72,146,0.14)]">
+            {hasActiveAccount && isCompanyOpen && dropdownPos ? createPortal(
+              <div
+                style={{
+                  position: 'fixed',
+                  top: dropdownPos.top,
+                  left: dropdownPos.left,
+                  minWidth: dropdownPos.width,
+                  zIndex: 9999,
+                }}
+                className="max-h-[50vh] overflow-y-auto rounded-[12px] border border-[#BCD2FF] bg-white shadow-[0_8px_20px_rgba(36,72,146,0.14)]"
+              >
                 {accounts.map((account) => {
                   const isSelected = activeAccount?.id === account.id
                   const listCompanyIdLabel = `ID: ${account.id.slice(0, 8)}`
@@ -282,7 +311,8 @@ export const Sidebar = ({
                               event.stopPropagation()
                               onDeleteActiveCompany(account.id)
                             }}
-                            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[10px] bg-[#FFF1F1] text-[#FF5B5B] transition hover:bg-[#FFE7E7]"
+                            className={`flex h-7 w-7 cursor-pointer items-center justify-center rounded-[10px] bg-[#FFF1F1] text-[#FF5B5B] transition hover:bg-[#FFE7E7] ${accounts.length <= 1 ? 'opacity-40 !cursor-not-allowed' : ''}`}
+                            disabled={accounts.length <= 1}
                           >
                             <svg
                               viewBox="0 0 24 24"
@@ -365,7 +395,8 @@ export const Sidebar = ({
                     })}
                   </>
                 )}
-              </div>
+              </div>,
+              document.body
             ) : null}
           </div>
 
@@ -402,6 +433,8 @@ export const Sidebar = ({
               <span className="font-medium tracking-normal">{item.label}</span>
             </button>
           ))}
+
+
 
         </nav>
       </div>

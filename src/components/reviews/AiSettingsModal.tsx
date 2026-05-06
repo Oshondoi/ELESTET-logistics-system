@@ -35,9 +35,12 @@ const OPENAI_MODEL_OPTIONS: { value: AiModel; label: string }[] = [
 ]
 
 const CLAUDE_MODEL_OPTIONS: { value: ClaudeModel; label: string }[] = [
-  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 — умный, сбалансированный (рекомендуется)' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 — быстрый, дёшевый' },
-  { value: 'claude-opus-4-7', label: 'Claude Opus 4.7 — наиболее мощный, дорогой' },
+  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4 — умный, сбалансированный (рекомендуется)' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 — быстрый, дёшевый ($0.8/млн)' },
+  { value: 'claude-opus-4-7', label: 'Claude Opus 4 — наиболее мощный, дорогой ($15/млн)' },
+  { value: 'claude-3-7-sonnet-20250219', label: 'Claude 3.7 Sonnet — расширенное мышление ($3/млн)' },
+  { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet — стабильный, проверенный ($3/млн)' },
+  { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku — бюджетный ($0.8/млн)' },
 ]
 
 const TONE_OPTIONS: { value: AiTone; label: string; desc: string }[] = [
@@ -474,6 +477,8 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, systemPromp
                     onChange={(e) => setOpenaiKey(e.target.value)}
                     placeholder="sk-proj-..."
                     autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none"
                   />
                 )}
@@ -544,6 +549,8 @@ export const AiSettingsModal = ({ open, initial, initialStorePrompt, systemPromp
                     onChange={(e) => setClaudeKey(e.target.value)}
                     placeholder="sk-ant-..."
                     autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore
                     className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none"
                   />
                 )}
