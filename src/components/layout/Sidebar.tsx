@@ -157,6 +157,7 @@ export const Sidebar = ({
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null)
   const companyRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const dropdownRef = useRef<HTMLDivElement | null>(null)
   const hasActiveAccount = Boolean(activeAccount)
   const companyName = activeAccount ? activeAccount.name : 'Нет компании'
   const companyIdLabel = activeAccount ? `ID: ${activeAccount.id.slice(0, 8)}` : 'Создайте компанию'
@@ -171,7 +172,11 @@ export const Sidebar = ({
   useEffect(() => {
     if (!isCompanyOpen) return
     const handlePointerDown = (event: PointerEvent) => {
-      if (!companyRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node
+      if (
+        !companyRef.current?.contains(target) &&
+        !dropdownRef.current?.contains(target)
+      ) {
         setIsCompanyOpen(false)
       }
     }
@@ -244,6 +249,7 @@ export const Sidebar = ({
 
             {hasActiveAccount && isCompanyOpen && dropdownPos ? createPortal(
               <div
+                ref={dropdownRef}
                 style={{
                   position: 'fixed',
                   top: dropdownPos.top,
