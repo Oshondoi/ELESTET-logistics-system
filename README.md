@@ -304,10 +304,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Фулфилмент** | ✅ Готово | 5 этапов (Приёмка→ОТК→Маркировка→Коробá→Логистика), авто-лукап баркода, привязка к рейсу, RBAC |
 | **Дневник ELESTET** | ✅ Готово | Личный дневник (только owner): таймлайн, запись дня, ИИ-разбор, AI-настройки с вкладками цен |
 | **Topbar UX** | ✅ Готово | Кнопки Дневник/Словарь/Админ всегда видны; «Домой» слева от них на full-page страницах; сайдбар скрыт на admin/glossary/diary |
-| **Company auto-create** | ✅ Готово | При `accounts.length === 0` после загрузки — авто-создаётся «Основная компания» |
-| **Company delete guard** | ✅ Готово | Нельзя удалить последнюю компанию; кнопка заблокирована при `accounts.length <= 1` |
-| **Company dropdown Portal** | ✅ Готово | createPortal → document.body, position:fixed, z-9999, max-h-50vh; dropdownRef фикс click-outside; архив вынесен в отдельную модалку |
+| **Company auto-create** | ✅ Готово | При `accounts.length === 0` — авто-создаётся «Основная компания»; `autoCreatingCompanyRef` предотвращает дубли при race condition |
 | **Company delete guard** | ✅ Готово | Нельзя удалить последнюю компанию; кнопка `disabled`+`opacity-40`; при удалении активной — переключение на другую ДО удаления (нет null-флэша) |
+| **Company dropdown Portal** | ✅ Готово | createPortal → document.body, position:fixed, z-9999; dropdownRef фикс click-outside; архив в отдельной модалке |
 | **API keys browser block** | ✅ Готово | autoComplete=new-password + data-lpignore + data-1p-ignore на всех полях ключей |
 | **TS/Vercel build fix** | ✅ Готово | SpeechRecognition объявлен в vite-env.d.ts (TS2552 на Vercel устранена) |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
