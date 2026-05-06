@@ -346,8 +346,20 @@ function App() {
       if (!email) throw new Error('Не удалось определить пользователя')
       const { error: authError } = await supabase.auth.signInWithPassword({ email, password: deleteAccountPassword })
       if (authError) throw new Error('Неверный пароль')
+
+      // If deleting the active company — switch to another BEFORE deletion
+      // to avoid a frame where activeAccount === null (which clears all data)
+      if (activeAccountId === pendingDeleteAccountId) {
+        const remaining = accounts.filter((a) => a.id !== pendingDeleteAccountId)
+        if (remaining.length > 0) {
+          const oldest = [...remaining].sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+          )[0]
+          setActiveAccountId(oldest.id)
+        }
+      }
+
       await deleteAccount(pendingDeleteAccountId)
-      if (activeAccountId === pendingDeleteAccountId) setActiveAccountId(null)
       setPendingDeleteAccountId(null)
       setDeleteAccountPassword('')
       setDeleteAccountError(null)
