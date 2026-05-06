@@ -14,6 +14,7 @@ export const useAccounts = (enabled: boolean) => {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [archivedAccounts, setArchivedAccounts] = useState<Account[]>([])
   const [isLoading, setIsLoading] = useState(enabled && isSupabaseConfigured)
+  const [hasFetched, setHasFetched] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
@@ -35,6 +36,7 @@ export const useAccounts = (enabled: boolean) => {
       setError(loadError instanceof Error ? loadError.message : 'Ошибка загрузки компаний')
     } finally {
       setIsLoading(false)
+      setHasFetched(true)
     }
     // Архив загружаем отдельно — ошибка (RPC не применена) не блокирует активные компании
     try {
@@ -89,6 +91,7 @@ export const useAccounts = (enabled: boolean) => {
     accounts,
     archivedAccounts,
     isLoading,
+    hasFetched,
     error,
     createAccount,
     deleteAccount,

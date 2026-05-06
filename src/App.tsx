@@ -153,7 +153,7 @@ function App() {
   useEffect(() => {
     setProfileUserName((session?.user?.user_metadata?.full_name as string) ?? '')
   }, [session?.user?.id])
-  const { accounts, archivedAccounts, isLoading: isAccountsLoading, createAccount, deleteAccount, restoreAccount, updateAccount } = useAccounts(Boolean(session))
+  const { accounts, archivedAccounts, isLoading: isAccountsLoading, hasFetched: hasAccountsFetched, createAccount, deleteAccount, restoreAccount, updateAccount } = useAccounts(Boolean(session))
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
   const { roles, isLoading: isRolesLoading, addRole, updateRole, removeRole, cloneRoleToAccount } = useRoles(activeAccount?.id ?? null)
   const { permissions, isLoading: isPermissionsLoading, isOwnerOrAdmin } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
@@ -172,17 +172,18 @@ function App() {
   }, [accounts, isAccountsLoading])
 
   // Auto-create "Основная компания" if user has no companies yet.
-  // useRef flag prevents multiple creations if isAccountsLoading/accounts.length
-  // flickers (race condition between async reload and state updates).
+  // Guard: hasFetched ensures we only fire AFTER a real Supabase response,
+  // not during the transient render where isLoading is stale-false and accounts=[]
+  // that occurs between session loading and useAccounts re-initializing.
   const autoCreatingCompanyRef = useRef(false)
   useEffect(() => {
-    if (!isAccountsLoading && session && accounts.length === 0 && !autoCreatingCompanyRef.current) {
+    if (hasAccountsFetched && session && accounts.length === 0 && !autoCreatingCompanyRef.current) {
       autoCreatingCompanyRef.current = true
       void createAccount('Основная компания').then((account) => {
         setActiveAccountId(account.id)
       })
     }
-  }, [isAccountsLoading, session, accounts.length])
+  }, [hasAccountsFetched, session, accounts.length])
 
   const {
     shipments,
@@ -271,7 +272,7 @@ function App() {
   const effectivePage: PageKey = (() => {
     if (isAccountsLoading || isPermissionsLoading) return activePage
     if ((activePage === 'admin' || activePage === 'glossary') && !isAdmin) return 'home'
-    if (activePage === 'diary' && activeAccount?.my_role !== 'owner') return 'home'
+    if (activePage === 'diary' && !isAdmin) return 'home'
     const key = pagePermKey[activePage]
     if (key !== null && !permissions[key]) return 'home'
     return activePage
@@ -461,7 +462,7 @@ function App() {
             isAdmin={isAdmin}
             onAdminClick={() => setActivePage('admin')}
             onGlossaryClick={() => setActivePage('glossary')}
-            onDiaryClick={activeAccount?.my_role === 'owner' ? () => setActivePage('diary') : undefined}
+            onDiaryClick={isAdmin ? () => setActivePage('diary') : undefined}
             onHomeClick={['admin', 'glossary', 'diary'].includes(effectivePage) ? () => setActivePage('home') : undefined}
             onProfileClick={() => setProfileModalOpen(true)}
             onSignOut={() => void signOut()}
