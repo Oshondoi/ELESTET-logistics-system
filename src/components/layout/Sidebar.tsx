@@ -153,6 +153,7 @@ export const Sidebar = ({
   isAdmin = false,
 }: SidebarProps) => {
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
+  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false)
   const [restoringAccountId, setRestoringAccountId] = useState<string | null>(null)
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null)
   const companyRef = useRef<HTMLDivElement | null>(null)
@@ -344,67 +345,100 @@ export const Sidebar = ({
                 {archivedAccounts.length > 0 && onRestoreAccount && (
                   <>
                     <div className="mx-3 my-1 border-t border-slate-100" />
-                    <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCompanyOpen(false)
+                        setIsArchiveModalOpen(true)
+                      }}
+                      className="flex w-full items-center gap-2 px-[16px] py-[11px] text-left text-[13px] font-medium text-slate-400 transition hover:bg-[#F8FAFF] hover:text-slate-600"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 8v13H3V8" />
+                        <path d="M23 3H1v5h22z" />
+                        <path d="M10 12h4" />
+                      </svg>
                       Архив
-                    </div>
-                    {archivedAccounts.map((account) => {
-                      const msLeft = account.deleted_at
-                        ? new Date(account.deleted_at).getTime() + 15 * 24 * 60 * 60 * 1000 - Date.now()
-                        : 0
-                      const days = Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)))
-                      const isRestoring = restoringAccountId === account.id
-                      return (
-                        <div
-                          key={account.id}
-                          className="flex flex-col gap-1.5 px-[16px] py-[10px]"
-                        >
-                          <span>
-                            <span className="block text-[13px] font-medium text-slate-400">{account.name}</span>
-                            <span className={`mt-0.5 block text-[11px] ${days <= 3 ? 'text-rose-400' : 'text-slate-300'}`}>
-                              {days} дн. до удаления
-                            </span>
-                          </span>
-                          <button
-                            type="button"
-                            disabled={isRestoring}
-                            onClick={async (e) => {
-                              e.stopPropagation()
-                              setRestoringAccountId(account.id)
-                              try {
-                                await onRestoreAccount(account.id)
-                              } finally {
-                                setRestoringAccountId(null)
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              className={`h-3 w-3 ${isRestoring ? 'animate-spin' : ''}`}
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                            >
-                              {isRestoring ? (
-                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                              ) : (
-                                <>
-                                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                                  <path d="M21 3v5h-5" />
-                                </>
-                              )}
-                            </svg>
-                            {isRestoring ? '...' : 'Восстановить'}
-                          </button>
-                        </div>
-                      )
-                    })}
+                    </button>
                   </>
                 )}
               </div>,
               document.body
             ) : null}
           </div>
+
+          {isArchiveModalOpen && onRestoreAccount && archivedAccounts.length > 0 ? createPortal(
+            <div
+              className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 p-4"
+              onPointerDown={(e) => { if (e.target === e.currentTarget) setIsArchiveModalOpen(false) }}
+            >
+              <div className="w-full max-w-sm rounded-[20px] bg-white shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                  <span className="text-[16px] font-bold text-slate-900">Архив компаний</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsArchiveModalOpen(false)}
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+                  {archivedAccounts.map((account) => {
+                    const msLeft = account.deleted_at
+                      ? new Date(account.deleted_at).getTime() + 15 * 24 * 60 * 60 * 1000 - Date.now()
+                      : 0
+                    const days = Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)))
+                    const isRestoring = restoringAccountId === account.id
+                    return (
+                      <div key={account.id} className="flex items-center justify-between rounded-[14px] px-3 py-3 transition hover:bg-[#F8FAFF]">
+                        <span>
+                          <span className="block text-[14px] font-semibold text-slate-700">{account.name}</span>
+                          <span className={`mt-0.5 block text-[11px] ${days <= 3 ? 'text-rose-400' : 'text-slate-400'}`}>
+                            {days} дн. до удаления
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          disabled={isRestoring}
+                          onClick={async () => {
+                            setRestoringAccountId(account.id)
+                            try {
+                              await onRestoreAccount(account.id)
+                            } finally {
+                              setRestoringAccountId(null)
+                            }
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[12px] font-medium text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            className={`h-3.5 w-3.5 ${isRestoring ? 'animate-spin' : ''}`}
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            {isRestoring ? (
+                              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            ) : (
+                              <>
+                                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                                <path d="M21 3v5h-5" />
+                              </>
+                            )}
+                          </svg>
+                          {isRestoring ? '...' : 'Восстановить'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>,
+            document.body
+          ) : null}
 
           <button
             type="button"
