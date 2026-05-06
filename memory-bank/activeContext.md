@@ -1,6 +1,6 @@
 # Active Context
 
-## Current Focus (06.05.2026)
+## Current Focus (06.05.2026) — обновлено
 
 ### Дневник — UI и навигация
 - **Кнопка "Дневник"** перенесена из сайдбара в Topbar (рядом со "Словарь" и "Админ", только для `my_role === 'owner'`)
@@ -15,16 +15,18 @@
 - Сайдбар скрывается на страницах `admin`, `glossary`, `diary`
 - На этих трёх страницах появляется кнопка «Домой» левее трёх кнопок
 
-### Компании — автосоздание и защита
+### Компании — автосоздание, защита, переключение при удалении
 - **Auto-create**: если после загрузки `accounts.length === 0` — автоматически создаётся «Основная компания» (useEffect в App.tsx)
-- **Защита от удаления последней**: в `useAccounts.deleteAccount` — проверка `accounts.length - 1 === 0`, бросает ошибку
-- **Кнопка удаления в сайдбаре**: `disabled` + `opacity-40` если `accounts.length <= 1`
+- **Защита от удаления последней**: в `useAccounts.deleteAccount` — проверка `accounts.length - 1 === 0`, бросает ошибку; кнопка в сайдбаре `disabled` + `opacity-40`
+- **Переключение ДО удаления**: при удалении активной компании `App.tsx` сначала находит следующую компанию по дате создания и переключается на неё, затем вызывает `deleteAccount`. Это предотвращает null-флэш (`activeAccount = null`) который очищал все данные.
 - SQL-патч `supabase/cleanup_archived_accounts.sql` — ручная очистка архива для sydykovsam@gmail.com
 
-### Дропдаун компаний — Portal
+### Дропдаун компаний — Portal + архивная модалка
 - Рендерится через `createPortal(…, document.body)` с `position:fixed` + координатами от `getBoundingClientRect()`
 - Не ограничен шириной сайдбара, `z-index: 9999`, `max-h-[50vh]`
-- `triggerRef` на кнопку-триггер, позиция пересчитывается при скролле
+- `triggerRef` на кнопку-триггер, `dropdownRef` на portal-div (оба учитываются при click-outside)
+- Позиция пересчитывается при скролле
+- **Архивные компании вынесены в отдельную модалку**: в конце дропдауна кнопка «Архив» → открывает modal (Portal, z-10000) со списком архивных и кнопками «Восстановить»
 
 ### API-ключи — защита от браузерного сохранения
 Все поля API-ключей (WB, Claude, OpenAI) имеют:
@@ -33,6 +35,9 @@
 - `data-1p-ignore` (1Password)
 
 **Затронутые файлы:** `DiaryPage.tsx`, `AiSettingsModal.tsx`, `StoreFormModal.tsx`
+
+### TypeScript / Build
+- `SpeechRecognition` объявлен в `src/vite-env.d.ts` — исправлена ошибка `TS2552` на Vercel (TypeScript DOM lib не содержит SpeechRecognition в части конфигураций)
 
 ## Следующие возможные шаги
 - Добавить группу «Фулфилмент» в UI страницы Ролей (`fulfillment_view` / `fulfillment_manage`)

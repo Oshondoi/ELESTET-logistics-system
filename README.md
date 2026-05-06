@@ -306,8 +306,10 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Topbar UX** | ✅ Готово | Кнопки Дневник/Словарь/Админ всегда видны; «Домой» слева от них на full-page страницах; сайдбар скрыт на admin/glossary/diary |
 | **Company auto-create** | ✅ Готово | При `accounts.length === 0` после загрузки — авто-создаётся «Основная компания» |
 | **Company delete guard** | ✅ Готово | Нельзя удалить последнюю компанию; кнопка заблокирована при `accounts.length <= 1` |
-| **Company dropdown Portal** | ✅ Готово | createPortal → document.body, position:fixed, z-9999, max-h-50vh |
+| **Company dropdown Portal** | ✅ Готово | createPortal → document.body, position:fixed, z-9999, max-h-50vh; dropdownRef фикс click-outside; архив вынесен в отдельную модалку |
+| **Company delete guard** | ✅ Готово | Нельзя удалить последнюю компанию; кнопка `disabled`+`opacity-40`; при удалении активной — переключение на другую ДО удаления (нет null-флэша) |
 | **API keys browser block** | ✅ Готово | autoComplete=new-password + data-lpignore + data-1p-ignore на всех полях ключей |
+| **TS/Vercel build fix** | ✅ Готово | SpeechRecognition объявлен в vite-env.d.ts (TS2552 на Vercel устранена) |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
