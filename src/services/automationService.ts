@@ -9,6 +9,7 @@ export interface AutomationSettings {
   require_text: boolean
   delay_seconds: number
   store_ids: string[]
+  excluded_nm_ids: number[]
   daily_sent_count: number
   daily_reset_date: string | null
   last_run_at: string | null

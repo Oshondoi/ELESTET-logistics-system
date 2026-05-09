@@ -553,3 +553,23 @@ export const getWbSupplyStickers = async (
   if (data.error) throw new Error(data.error)
   return { wb_supply_id: data.wb_supply_id!, sticker_urls: data.sticker_urls ?? [], cargo_type: data.cargo_type ?? null }
 }
+
+/** Получить список штрихкодов коробов поставки WB (для Excel-шаблона распределения) */
+export const getWbSupplyPackageCodes = async (
+  accountId: string,
+  lineId: string,
+): Promise<string[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.functions.invoke<{
+    package_codes?: string[]
+    error?: string
+  }>('wb-supply', { body: { account_id: accountId, line_id: lineId, action: 'package_info' } })
+  if (error) {
+    const msg = (error as { message?: string }).message ?? String(error)
+    if (msg.includes('non-2xx') || msg.includes('Failed to send')) throw new Error('Не удалось связаться с сервером. Проверьте интернет-соединение.')
+    throw new Error(msg)
+  }
+  if (!data) throw new Error('Пустой ответ от сервера.')
+  if (data.error) throw new Error(data.error)
+  return data.package_codes ?? []
+}

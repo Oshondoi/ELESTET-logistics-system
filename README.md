@@ -171,6 +171,18 @@ MVP веб-приложения для логистики поставок на 
 - Панель «Тарифы отгрузки на склады ВБ» ниже сетки справочников
 - Требует применения `patch_carrier_tariffs.sql`
 
+### Автоматизация отзывов WB — чёрный список артикулов (10.05.2026)
+
+- **Blacklist модель**: `excludedNmIds` (пустой = отвечать всем, заполнен = пропускать эти nmId)
+- **Модалка «Артикулы WB»**: товары из таблицы `products` (те же данные что на странице Товары)
+- **Поиск** по артикулу продавца, названию, WB nmId, баркодам
+- **Фото товаров** в модалке: миниатюра + hover-превью (полный паритет с ProductsPage)
+- **Фикс размера модалки**: `h-[85vh] max-h-[720px]` — одинакова при любом состоянии
+- **Источник ответов** карточка удалена — всегда ИИ
+- **`excluded_nm_ids`** синхронизируется в `automation_settings` в DB
+- **Edge Function `auto-reply`** дополнена фильтрацией по `excluded_nm_ids`
+- SQL `patch_excluded_nm_ids.sql` применён в продакшн ✅, Edge Function задеплоена ✅
+
 ### Магазины
 - Список магазинов + создание / редактирование / **архивное удаление** (пароль, 15 дней в архиве → жёсткое удаление через pg_cron)
 - API-ключ: маска `••••` в edit-режиме, кнопка «Изменить»
@@ -291,6 +303,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 40. cleanup_archived_accounts.sql   ← (однократно) Удаление архивных компаний для конкретного пользователя
 41. patch_trip_line_fulfillment_batch_id.sql ← Колонка fulfillment_batch_id в trip_lines
 42. patch_trip_line_backfill_fulfillment_batch_id.sql ← Бэкфилл fulfillment_batch_id для старых записей
+43. patch_excluded_nm_ids.sql  ← excluded_nm_ids integer[] в automation_settings (чёрный список артикулов)
 
 4. `npm run dev`
 
@@ -316,6 +329,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Отзывы WB** | ✅ Готово | WB API, DB-first, шаблоны, cooldown, dry-run вкладка «Тест» |
 | **ИИ-ответы на отзывы** | ✅ Готово | OpenAI интеграция, генерация/правка/отправка, 1–3★ подтверждение, Тест-вкладка |
 | **Серверная автоматизация WB** | ✅ Готово | Dispatcher + auto-reply Edge Functions, cron, № запуск |
+| **Артикулы WB — чёрный список** | ✅ Готово | excludedNmIds, модалка с фото/поиском, синк с DB, Edge Function обновлена |
 | **Тарифы логистики** | ✅ Готово | Тарифы перевозчиков + отгрузка на склады ВБ |
 | **Стикеры QR поставки WB** | ✅ Готово | Edge Function wb-supply, QR PDF, кнопка пропуска |
 | **Стикеры 2в1** | ✅ Готово | Отдельная колонка combined_sticker_urls, фиолетовая группа кнопок |

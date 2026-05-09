@@ -11,6 +11,7 @@ import type {
   FulfillmentSupplyWithBoxes,
   FulfillmentSettings,
   FulfillmentStage,
+  FulfillmentWorkTariff,
   Store,
   TripLine,
   TripWithLines,
@@ -69,6 +70,7 @@ import {
   findProductByBarcode,
 } from '../services/fulfillmentService'
 import { createTrip, addTripLine, setTripLineFulfillmentBatch } from '../services/tripService'
+import { fetchWorkTariffs } from '../services/directoriesService'
 import { Card } from '../components/ui/Card'
 import { InvoicePhotoCell } from '../components/ui/InvoicePhotoCell'
 import { createStoreInSupabase } from '../services/storeService'
@@ -335,7 +337,7 @@ const BatchDetailModal = ({
   // ОТК — журнал логов
   const [otkLogs, setOtkLogs] = useState<FulfillmentOtkLog[]>([])
   const [isLoadingOtk, setIsLoadingOtk] = useState(false)
-  const [otkTariff, setOtkTariff] = useState<string>(OTK_TARIFFS[0].id)
+  const [otkTariff, setOtkTariff] = useState<string>('')
   const [otkQty, setOtkQty] = useState('')
   const [otkDefect, setOtkDefect] = useState('')
   const [otkNotes, setOtkNotes] = useState('')
@@ -361,7 +363,7 @@ const BatchDetailModal = ({
   // Маркировка — журнал логов (аналог ОТК)
   const [markingLogs, setMarkingLogs] = useState<FulfillmentMarkingLog[]>([])
   const [isLoadingMarking, setIsLoadingMarking] = useState(false)
-  const [markingTariff, setMarkingTariff] = useState<string>(MARKING_TARIFFS[0].id)
+  const [markingTariff, setMarkingTariff] = useState<string>('')
   const [markingBarcode, setMarkingBarcode] = useState('')
   const [markingCameraOpen, setMarkingCameraOpen] = useState(false)
   const [markingCameraError, setMarkingCameraError] = useState<string | null>(null)
@@ -393,6 +395,11 @@ const BatchDetailModal = ({
   const [otkLogHistories, setOtkLogHistories] = useState<Record<string, FulfillmentOtkLogHistory[]>>({})
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyItemId, setHistoryItemId] = useState<string | null>(null)
+
+  // Тарифы работ из БД
+  const [workTariffs, setWorkTariffs] = useState<FulfillmentWorkTariff[]>([])
+  const otkTariffsList = workTariffs.filter((t) => t.stage === 'otk')
+  const markingTariffsList = workTariffs.filter((t) => t.stage === 'marking')
 
   // Логистика
 
@@ -450,6 +457,20 @@ const BatchDetailModal = ({
   const store = stores.find((s) => s.id === batch.store_id)
   const enabledStages = getEnabledStages(batch)
   const currentIdx = enabledStages.indexOf(batch.current_stage)
+
+  // Загрузить тарифы работ из БД
+  useEffect(() => {
+    fetchWorkTariffs(accountId)
+      .then((list) => {
+        setWorkTariffs(list)
+        const firstOtk = list.find((t) => t.stage === 'otk')
+        if (firstOtk) setOtkTariff(firstOtk.id)
+        const firstMarking = list.find((t) => t.stage === 'marking')
+        if (firstMarking) setMarkingTariff(firstMarking.id)
+      })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId])
 
   // Текущий просматриваемый этап (может отличаться от batch.current_stage при навигации)
   const [viewStage, setViewStage] = useState<FulfillmentStage>(initialBatch.current_stage)
@@ -2218,7 +2239,7 @@ const BatchDetailModal = ({
                           <label className="mb-1 block text-xs font-medium text-slate-500">Тариф</label>
                           <select value={otkTariff} onChange={(e) => setOtkTariff(e.target.value)}
                             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            {OTK_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                            {otkTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                           </select>
                         </div>
                         {/* Годный / Брак */}
@@ -2354,7 +2375,7 @@ const BatchDetailModal = ({
                           otkEdits[log.id].qty_defect !== log.qty_defect ||
                           otkEdits[log.id].notes !== (log.notes ?? '')
                         )
-                        const displayTariff = OTK_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
+                        const displayTariff = otkTariffsList.find((t) => t.id === edit.tariff)?.name ?? OTK_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
                         return (
                           <div key={log.id} className="relative">
                           {/* Плейсхолдер — всегда занимает место в сетке */}
@@ -2432,7 +2453,7 @@ const BatchDetailModal = ({
                               <span className="mt-1 block truncate text-xs font-semibold text-slate-700 leading-tight">{log.performer_name}</span>
                               <select value={edit.tariff} onChange={(e) => setOtkEdits((p) => ({ ...p, [log.id]: { ...edit, tariff: e.target.value } }))}
                                 className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                                {OTK_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                                {otkTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                               </select>
                               <div className="mt-1.5 flex items-center gap-3">
                                 <label className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -2469,7 +2490,7 @@ const BatchDetailModal = ({
                       {/* Буферные (несохранённые) записи */}
                       {otkBuffer.map((entry) => {
                         const isEditing = otkEditingId === entry.tempId
-                        const tariffLabel = OTK_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
+                        const tariffLabel = otkTariffsList.find((t) => t.id === entry.tariff)?.name ?? OTK_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
                         return (
                           <div key={entry.tempId} className="relative">
                             {/* Плейсхолдер */}
@@ -2509,7 +2530,7 @@ const BatchDetailModal = ({
                                 <span className="mt-1 block truncate text-xs font-semibold text-slate-700 leading-tight">{entry.performer_name}</span>
                                 <select value={entry.tariff} onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, tariff: e.target.value } : x))}
                                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                                  {OTK_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                                  {otkTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                                 </select>
                                 <div className="mt-1.5 flex items-center gap-3">
                                   <label className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -2642,7 +2663,7 @@ const BatchDetailModal = ({
                           <label className="mb-1 block text-xs font-medium text-slate-500">Тариф</label>
                           <select value={markingTariff} onChange={(e) => setMarkingTariff(e.target.value)}
                             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            {MARKING_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                            {markingTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                           </select>
                         </div>
                         {/* Годный / Брак */}
@@ -2782,7 +2803,7 @@ const BatchDetailModal = ({
                           markingEdits[log.id].notes !== (log.notes ?? '') ||
                           markingEdits[log.id].barcode !== (log.barcode ?? '')
                         )
-                        const displayTariff = MARKING_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
+                        const displayTariff = markingTariffsList.find((t) => t.id === edit.tariff)?.name ?? MARKING_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
                         return (
                           <div key={log.id} className="relative">
                             {/* Плейсхолдер — всегда занимает место в сетке */}
@@ -2873,7 +2894,7 @@ const BatchDetailModal = ({
                                 )}
                                 <select value={edit.tariff} onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, tariff: e.target.value } }))}
                                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                                  {MARKING_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                                  {markingTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                                 </select>
                                 <div className="mt-1.5 flex items-center gap-3">
                                   <label className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -2910,7 +2931,7 @@ const BatchDetailModal = ({
                       {/* Буферные (несохранённые) записи */}
                       {markingBuffer.map((entry) => {
                         const isEditing = markingEditingId === entry.tempId
-                        const tariffLabel = MARKING_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
+                        const tariffLabel = markingTariffsList.find((t) => t.id === entry.tariff)?.name ?? MARKING_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
                         return (
                           <div key={entry.tempId} className="relative">
                             {/* Плейсхолдер */}
@@ -2964,7 +2985,7 @@ const BatchDetailModal = ({
                                 )}
                                 <select value={entry.tariff} onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, tariff: e.target.value } : x))}
                                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                                  {MARKING_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                                  {markingTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                                 </select>
                                 <div className="mt-1.5 flex items-center gap-3">
                                   <label className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -3923,7 +3944,7 @@ const BatchDetailModal = ({
         const FIELD_LABELS: Record<string, string> = { performer_name: 'Исполнитель', tariff: 'Тариф', qty: 'Годный', qty_defect: 'Брак', notes: 'Примечание', photo_urls: 'Фото' }
         const calcTotal = (vals: Record<string, unknown>) => (Number(vals.qty) || 0) + (Number(vals.qty_defect) || 0)
         const fmtVal = (key: string, val: unknown): string => {
-          if (key === 'tariff') return OTK_TARIFFS.find((t) => t.id === val)?.label ?? String(val)
+          if (key === 'tariff') return otkTariffsList.find((t) => t.id === val)?.name ?? OTK_TARIFFS.find((t) => t.id === val)?.label ?? String(val)
           if (key === 'photo_urls') return Array.isArray(val) ? `${(val as unknown[]).length} фото` : '—'
           if (val === null || val === undefined || val === '') return '—'
           return String(val)
@@ -4162,7 +4183,7 @@ const BatchDetailModal = ({
                 const FIELD_LABELS: Record<string, string> = { performer_name: 'Исполнитель', tariff: 'Тариф', qty: 'Годный', qty_defect: 'Брак', notes: 'Примечание', photo_urls: 'Фото' }
                 const calcTotal = (vals: Record<string, unknown>) => (Number(vals.qty) || 0) + (Number(vals.qty_defect) || 0)
                 const fmtVal = (key: string, val: unknown): string => {
-                  if (key === 'tariff') return MARKING_TARIFFS.find((t) => t.id === val)?.label ?? String(val)
+                  if (key === 'tariff') return markingTariffsList.find((t) => t.id === val)?.name ?? MARKING_TARIFFS.find((t) => t.id === val)?.label ?? String(val)
                   if (key === 'photo_urls') return Array.isArray(val) ? `${(val as unknown[]).length} фото` : '—'
                   if (val === null || val === undefined || val === '') return '—'
                   return String(val)

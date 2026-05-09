@@ -34,8 +34,10 @@ import {
   saveAutomationSettings,
 } from '../services/automationService'
 import type { AutomationLog } from '../services/automationService'
+import { fetchProducts } from '../services/productService'
 import type {
   AiPrompt,
+  Product,
   AiPromptFormValues,
   AiSettings,
   AiSettingsFormValues,
@@ -284,6 +286,7 @@ interface AutoSettings {
   requireText: boolean
   delaySeconds: number
   storeIds: string[]
+  excludedNmIds: number[]  // empty = respond to all; non-empty = skip these articles
 }
 
 const DEFAULT_AUTO_SETTINGS: AutoSettings = {
@@ -293,12 +296,21 @@ const DEFAULT_AUTO_SETTINGS: AutoSettings = {
   requireText: false,
   delaySeconds: 32,
   storeIds: [],
+  excludedNmIds: [],
 }
 
 const loadAutoSettings = (): AutoSettings => {
   try {
     const raw = localStorage.getItem(AUTO_SETTINGS_KEY)
-    if (raw) return { ...DEFAULT_AUTO_SETTINGS, ...JSON.parse(raw) }
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      // migrate old nmIds (whitelist) to excludedNmIds (blacklist)
+      if (parsed.nmIds !== undefined && parsed.excludedNmIds === undefined) {
+        parsed.excludedNmIds = []
+        delete parsed.nmIds
+      }
+      return { ...DEFAULT_AUTO_SETTINGS, ...parsed }
+    }
   } catch {}
   return DEFAULT_AUTO_SETTINGS
 }
@@ -460,6 +472,14 @@ export const ReviewsPage = ({
   const [storeModalOpen, setStoreModalOpen] = useState(false)
   const [pendingStoreIds, setPendingStoreIds] = useState<string[]>([])
 
+  // Article modal
+  const [artModalOpen, setArtModalOpen] = useState(false)
+  const [pendingExcludedIds, setPendingExcludedIds] = useState<number[]>([])
+  const [artModalStoreFilter, setArtModalStoreFilter] = useState<string>('')
+  const [artModalProducts, setArtModalProducts] = useState<Product[]>([])
+  const [isLoadingArtProducts, setIsLoadingArtProducts] = useState(false)
+  const [artSearch, setArtSearch] = useState('')
+
   // Store dropdown
   const [storeDropdownOpen, setStoreDropdownOpen] = useState(false)
   const storeDropdownRef = useRef<HTMLDivElement | null>(null)
@@ -504,6 +524,7 @@ export const ReviewsPage = ({
             requireText: s.require_text,
             delaySeconds: s.delay_seconds,
             storeIds: s.store_ids,
+            excludedNmIds: s.excluded_nm_ids ?? autoSettings.excludedNmIds,  // из DB, или local если колонка ещё не добавлена
           }
           setAutoSettings(fromDb)
           localStorage.setItem(AUTO_SETTINGS_KEY, JSON.stringify(fromDb))
@@ -600,6 +621,19 @@ export const ReviewsPage = ({
     window.addEventListener('pointerdown', handler)
     return () => window.removeEventListener('pointerdown', handler)
   }, [])
+
+  // ── Load products for article modal when store is selected
+  useEffect(() => {
+    if (!artModalOpen || !artModalStoreFilter) {
+      setArtModalProducts([])
+      return
+    }
+    setIsLoadingArtProducts(true)
+    fetchProducts(artModalStoreFilter)
+      .then(setArtModalProducts)
+      .catch(() => setArtModalProducts([]))
+      .finally(() => setIsLoadingArtProducts(false))
+  }, [artModalOpen, artModalStoreFilter])
 
   const canRefresh = !isFetching && cooldownLeft === 0
   const isAiConfigured = aiSettings?.provider === 'claude' ? !!aiSettings.claude_key : !!aiSettings?.openai_key
@@ -823,6 +857,7 @@ export const ReviewsPage = ({
         require_text: next.requireText,
         delay_seconds: next.delaySeconds,
         store_ids: next.storeIds,
+        excluded_nm_ids: next.excludedNmIds,
       }).catch(() => {})
     }
   }
@@ -852,6 +887,10 @@ export const ReviewsPage = ({
       if (!autoSettings.storeIds.includes(row.store_id)) return false
       if (autoSettings.requireText && !row.data.text?.trim()) return false
       if (!autoSettings.targetRatings.includes(row.data.productValuation)) return false
+      if (autoSettings.excludedNmIds.length > 0) {
+        const nmId = row.data.productDetails?.nmId
+        if (nmId && autoSettings.excludedNmIds.includes(nmId)) return false
+      }
       return true
     }).slice(0, remaining === Infinity ? undefined : remaining)
 
@@ -874,37 +913,19 @@ export const ReviewsPage = ({
       try {
         let text: string | null = null
 
-        if (autoSettings.source === 'ai' || autoSettings.source === 'ai_with_fallback') {
-          if (aiSettings && isAiConfigured) {
-            try {
-              text = await callOpenAi(aiSettings, {
-                text: row.data.text,
-                pros: row.data.pros,
-                cons: row.data.cons,
-                productValuation: row.data.productValuation,
-                userName: row.data.userName,
-                productName: row.data.productDetails?.productName ?? null,
-                photoLinks: row.data.photoLinks ?? null,
-                storePrompt: activeStore?.ai_prompt ?? undefined,
-                extraSystemPrompts: systemPrompts.map((p) => p.content),
-                extraStorePrompts: storePrompts.map((p) => p.content),
-              })
-            } catch {
-              if (autoSettings.source !== 'ai_with_fallback') throw new Error('Ошибка ИИ')
-            }
-          }
-        }
-
-        if (!text && (autoSettings.source === 'templates' || autoSettings.source === 'ai_with_fallback')) {
-          const matched = templates.find((tpl) => {
-            if (tpl.trigger_keywords.length > 0) {
-              const lower = (row.data.text ?? '').toLowerCase()
-              return tpl.trigger_keywords.some((kw) => lower.includes(kw.toLowerCase()))
-            }
-            if (tpl.trigger_ratings.length > 0) return tpl.trigger_ratings.includes(row.data.productValuation)
-            return true
+        if (aiSettings && isAiConfigured) {
+          text = await callOpenAi(aiSettings, {
+            text: row.data.text,
+            pros: row.data.pros,
+            cons: row.data.cons,
+            productValuation: row.data.productValuation,
+            userName: row.data.userName,
+            productName: row.data.productDetails?.productName ?? null,
+            photoLinks: row.data.photoLinks ?? null,
+            storePrompt: activeStore?.ai_prompt ?? undefined,
+            extraSystemPrompts: systemPrompts.map((p) => p.content),
+            extraStorePrompts: storePrompts.map((p) => p.content),
           })
-          if (matched) text = applyTemplate(matched.text, row.data)
         }
 
         if (!text) {
@@ -1601,55 +1622,57 @@ export const ReviewsPage = ({
       {tab === 'templates' && (
         <div className="flex flex-col gap-5">
 
-          {/* ── Магазины ──────────────────────────────────────── */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="text-sm font-semibold text-slate-800">Магазины</h3>
-            <p className="mt-0.5 text-xs text-slate-400">
-              {autoSettings.storeIds.length === 0
-                ? 'Ни один магазин не выбран'
-                : autoSettings.storeIds.length === storesWithKey.length
-                ? `Все магазины (${storesWithKey.length})`
-                : `Выбрано: ${autoSettings.storeIds.length} из ${storesWithKey.length}`}
-            </p>
-            <button
-              type="button"
-              onClick={() => { setPendingStoreIds(autoSettings.storeIds); setStoreModalOpen(true) }}
-              className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
-            >
-              Выбрать
-            </button>
-            {autoSettings.storeIds.length === 0 && storesWithKey.length > 0 && (
-              <p className="mt-2 text-[11px] text-amber-600">Выберите хотя бы один магазин для запуска автоматизации</p>
-            )}
-          </div>
+          {/* ── Магазины + Артикулы ───────────────────────────── */}
+          <div className="flex flex-wrap gap-4">
 
-          {/* ── Источник ответов ─────────────────────────────── */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h3 className="mb-3 text-sm font-semibold text-slate-800">Источник ответов</h3>
-            <div className="flex flex-col gap-2">
-              {([
-                { value: 'ai', label: 'ИИ (Claude / OpenAI)', desc: 'Генерирует уникальный ответ для каждого отзыва' },
-                { value: 'templates', label: 'Шаблоны', desc: 'Использует подходящий шаблон из вкладки «Автоматизация»' },
-                { value: 'ai_with_fallback', label: 'ИИ → Шаблоны (резервный)', desc: 'Пробует ИИ, при ошибке — шаблон' },
-              ] as const).map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`flex cursor-pointer items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${autoSettings.source === opt.value ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}
-                >
-                  <input
-                    type="radio"
-                    name="auto-source"
-                    checked={autoSettings.source === opt.value}
-                    onChange={() => saveAutoSettingsToStorage({ ...autoSettings, source: opt.value })}
-                    className="mt-0.5 accent-blue-500"
-                  />
-                  <div>
-                    <p className="text-sm font-medium text-slate-800">{opt.label}</p>
-                    <p className="text-xs text-slate-400">{opt.desc}</p>
-                  </div>
-                </label>
-              ))}
+            {/* Магазины */}
+            <div className="flex-1 min-w-[200px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-800">Магазины</h3>
+              <p className="mt-0.5 text-xs text-slate-400">
+                {autoSettings.storeIds.length === 0
+                  ? 'Ни один магазин не выбран'
+                  : autoSettings.storeIds.length === storesWithKey.length
+                  ? `Все магазины (${storesWithKey.length})`
+                  : `Выбрано: ${autoSettings.storeIds.length} из ${storesWithKey.length}`}
+              </p>
+              <button
+                type="button"
+                onClick={() => { setPendingStoreIds(autoSettings.storeIds); setStoreModalOpen(true) }}
+                className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
+              >
+                Выбрать
+              </button>
+              {autoSettings.storeIds.length === 0 && storesWithKey.length > 0 && (
+                <p className="mt-2 text-[11px] text-amber-600">Выберите хотя бы один магазин для запуска автоматизации</p>
+              )}
             </div>
+
+            {/* Артикулы */}
+            <div className="flex-1 min-w-[200px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-800">Артикулы</h3>
+              <p className="mt-0.5 text-xs text-slate-400">
+                {autoSettings.excludedNmIds.length === 0
+                  ? 'Все артикулы активны'
+                  : `Исключено: ${autoSettings.excludedNmIds.length} арт.`}
+              </p>
+              <button
+                type="button"
+                onClick={() => { setPendingExcludedIds(autoSettings.excludedNmIds); setArtModalStoreFilter(''); setArtModalProducts([]); setArtSearch(''); setArtModalOpen(true) }}
+                className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
+              >
+                Выбрать
+              </button>
+              {autoSettings.excludedNmIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => saveAutoSettingsToStorage({ ...autoSettings, excludedNmIds: [] })}
+                  className="mt-2 block text-[11px] text-slate-400 hover:text-red-500 transition"
+                >
+                  Включить все
+                </button>
+              )}
+            </div>
+
           </div>
 
           {/* ── Лимиты ────────────────────────────────────────── */}
@@ -2425,10 +2448,187 @@ export const ReviewsPage = ({
         </div>
       )}
 
+      {/* Модальное окно выбора артикулов */}
+      {artModalOpen && (() => {
+        // Все магазины с API-ключом (источник — список магазинов, не очередь)
+        const modalStores = storesWithKey
+
+        // Поиск по: артикул продавца, название, WB nmId, баркод
+        const q = artSearch.trim().toLowerCase()
+        const availableProducts = [...artModalProducts]
+          .sort((a, b) => (a.vendor_code ?? String(a.nm_id)).localeCompare(b.vendor_code ?? String(b.nm_id)))
+          .filter((p) => {
+            if (!q) return true
+            return (
+              (p.vendor_code ?? '').toLowerCase().includes(q) ||
+              (p.name ?? '').toLowerCase().includes(q) ||
+              String(p.nm_id).includes(q) ||
+              p.barcodes.some((b) => b.includes(q))
+            )
+          })
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { setArtModalOpen(false); setPhotoPreview(null) }}>
+            <div className="flex h-[85vh] max-h-[720px] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-800">Артикулы WB</h2>
+                  <p className="mt-0.5 text-[11px] text-slate-400">Галочка — отвечать. Снята — пропускать.</p>
+                </div>
+                <button type="button" onClick={() => setArtModalOpen(false)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+
+              {/* Фильтр по магазину */}
+              <div className="border-b border-slate-100 px-5 py-2.5">
+                <select
+                  value={artModalStoreFilter}
+                  onChange={(e) => { setArtModalStoreFilter(e.target.value); setArtSearch('') }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:border-blue-400 focus:outline-none"
+                >
+                  <option value="">— Выберите магазин —</option>
+                  {modalStores.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Поиск */}
+              {artModalStoreFilter && !isLoadingArtProducts && artModalProducts.length > 0 && (
+                <div className="border-b border-slate-100 px-5 py-2">
+                  <input
+                    type="text"
+                    value={artSearch}
+                    onChange={(e) => setArtSearch(e.target.value)}
+                    placeholder="Артикул, название, WB #, баркод..."
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {/* Список */}
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+                {!artModalStoreFilter ? (
+                  <p className="py-8 text-center text-xs text-slate-400">Выберите магазин для просмотра артикулов</p>
+                ) : isLoadingArtProducts ? (
+                  <p className="py-8 text-center text-xs text-slate-400">Загрузка...</p>
+                ) : artModalProducts.length === 0 ? (
+                  <p className="py-8 text-center text-xs text-slate-400">Товары не найдены. Синхронизируйте товары в разделе «Товары»</p>
+                ) : availableProducts.length === 0 ? (
+                  <p className="py-8 text-center text-xs text-slate-400">Ничего не найдено по запросу</p>
+                ) : (
+                  <>
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-[11px] text-slate-400">{availableProducts.length} из {artModalProducts.length} арт.</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const allIds = availableProducts.map((p) => p.nm_id)
+                          // Если все галочки (ни один не в excluded) — снять все, иначе — включить все
+                          const noneExcluded = allIds.every((id) => !pendingExcludedIds.includes(id))
+                          setPendingExcludedIds(
+                            noneExcluded
+                              ? [...new Set([...pendingExcludedIds, ...allIds])]  // исключить все
+                              : pendingExcludedIds.filter((id) => !allIds.includes(id))   // включить все
+                          )
+                        }}
+                        className="text-xs text-blue-500 hover:text-blue-700 transition"
+                      >
+                        {availableProducts.every((p) => !pendingExcludedIds.includes(p.nm_id))
+                          ? 'Исключить все'
+                          : 'Включить все'}
+                      </button>
+                    </div>
+                    <ul className="flex flex-col gap-1">
+                      {availableProducts.map((product) => {
+                        const isExcluded = pendingExcludedIds.includes(product.nm_id)
+                        const photos = product.photos as Array<{ c246x328?: string; big?: string }> | null
+                        const photoUrl = photos?.[0]?.c246x328 ?? photos?.[0]?.big ?? null
+                        return (
+                          <li key={product.nm_id}>
+                            <label className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 transition-colors ${isExcluded ? 'border-red-200 bg-red-50 opacity-60' : 'border-slate-200 hover:border-blue-200 hover:bg-blue-50/40'}`}>
+                              <input
+                                type="checkbox"
+                                checked={!isExcluded}
+                                onChange={() => setPendingExcludedIds(
+                                  isExcluded
+                                    ? pendingExcludedIds.filter((id) => id !== product.nm_id)
+                                    : [...pendingExcludedIds, product.nm_id]
+                                )}
+                                className="h-4 w-4 shrink-0 accent-blue-500"
+                              />
+                              {/* Фото товара */}
+                              {photoUrl ? (
+                                <img
+                                  src={photoUrl}
+                                  alt=""
+                                  className="h-9 w-9 shrink-0 cursor-zoom-in rounded-lg object-cover"
+                                  onMouseEnter={(e) => {
+                                    const rect = (e.currentTarget as HTMLImageElement).getBoundingClientRect()
+                                    const popW = 288; const popH = 384; const gap = 12
+                                    const x = rect.right + gap + popW > window.innerWidth ? rect.left - gap - popW : rect.right + gap
+                                    const y = Math.min(rect.top, window.innerHeight - popH - gap)
+                                    setPhotoPreview({ url: photoUrl, x, y })
+                                  }}
+                                  onMouseLeave={() => setPhotoPreview(null)}
+                                />
+                              ) : (
+                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                    <rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" />
+                                  </svg>
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-medium text-slate-800">
+                                  {product.vendor_code || `WB #${product.nm_id}`}
+                                </p>
+                                <p className="truncate text-[11px] text-slate-400">
+                                  {product.name && <span>{product.name} · </span>}
+                                  <span>WB #{product.nm_id}</span>
+                                </p>
+                              </div>
+                              {isExcluded && (
+                                <span className="shrink-0 rounded-md bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-500">Пропуск</span>
+                              )}
+                            </label>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
+                <span className="text-xs text-slate-400">
+                  {pendingExcludedIds.length === 0
+                    ? 'Все артикулы активны'
+                    : `Исключено: ${pendingExcludedIds.length} арт.`}
+                </span>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setArtModalOpen(false)} className="rounded-lg border border-slate-200 px-4 py-1.5 text-xs text-slate-600 hover:bg-slate-50 transition">Отмена</button>
+                  <button
+                    type="button"
+                    onClick={() => { saveAutoSettingsToStorage({ ...autoSettings, excludedNmIds: pendingExcludedIds }); setArtModalOpen(false) }}
+                    className="rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition"
+                  >Сохранить</button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Превью фото при наведении */}
       {photoPreview && (
         <div
-          className="pointer-events-none fixed z-50 overflow-hidden rounded-2xl shadow-2xl ring-1 ring-slate-200"
+          className="pointer-events-none fixed z-[60] overflow-hidden rounded-2xl shadow-2xl ring-1 ring-slate-200"
           style={{ left: photoPreview.x, top: photoPreview.y }}
         >
           <img src={photoPreview.url} alt="" className="h-96 w-72 object-cover" />

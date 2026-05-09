@@ -43,7 +43,10 @@ import {
   fetchArchivedTripLines as fetchArchivedTripLinesInSupabase,
   saveMarketplaceDate as saveMarketplaceDateInSupabase,
   getWbSupplyMarketplaceDate as getWbSupplyMarketplaceDateInSupabase,
+  getWbSupplyPackageCodes as getWbSupplyPackageCodesInSupabase,
 } from '../services/tripService'
+import { fetchSupplyByTripLineId } from '../services/fulfillmentService'
+import { downloadGoodsTemplate, downloadBoxesTemplate } from '../lib/wbExcelExport'
 import {
   updateTripCustomFieldsInSupabase,
   updateLineCustomFieldsInSupabase,
@@ -709,7 +712,8 @@ export const useAppData = (accountId: string | null) => {
   const fetchWbBarcodes = async (tripId: string, lineId: string, wbSupplyId: string) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const result = await getWbSupplyStickersInSupabase(accountId, lineId, wbSupplyId)
-    // Обновляем wb_supply_id и wb_cargo_type в локальном state
+    // Обновляем wb_supply_id, wb_cargo_type и wb_package_codes в локальном state
+    const packageCodes: string[] = (result as { package_codes?: string[] }).package_codes ?? []
     setTrips((current) =>
       current.map((t) =>
         t.id === tripId
@@ -720,6 +724,7 @@ export const useAppData = (accountId: string | null) => {
                   ...l,
                   wb_supply_id: result.wb_supply_id,
                   ...(result.cargo_type !== null ? { wb_cargo_type: result.cargo_type } : {}),
+                  ...(packageCodes.length > 0 ? { wb_package_codes: packageCodes } : {}),
                 } : l,
               ),
             }
@@ -770,6 +775,28 @@ export const useAppData = (accountId: string | null) => {
             : t,
         ),
       )
+    }
+  }
+
+  const downloadWbExcel = async (
+    tripId: string,
+    lineId: string,
+    type: 'goods' | 'boxes' | 'all',
+  ) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const supply = await fetchSupplyByTripLineId(lineId)
+    if (!supply) throw new Error('Данные фулфилмент-поставки не найдены. Убедитесь, что поставка создана через модуль Фулфилмент.')
+
+    if (type === 'goods' || type === 'all') {
+      downloadGoodsTemplate(supply)
+    }
+
+    if (type === 'boxes' || type === 'all') {
+      // Берём уже сохранённые ШК коробов (из синка синей кнопкой)
+      const line = trips.find((t) => t.id === tripId)?.lines.find((l) => l.id === lineId)
+      const codes = line?.wb_package_codes ?? []
+      if (codes.length === 0) throw new Error('ШК коробов не синхронизированы. Нажмите синюю кнопку QR-стикеров рядом со стикерами поставки.')
+      downloadBoxesTemplate(supply, codes)
     }
   }
 
@@ -832,6 +859,7 @@ export const useAppData = (accountId: string | null) => {
     refreshCargoType,
     saveMarketplaceDate,
     refreshMarketplaceDate,
+    downloadWbExcel,
     reload: hydrateFromSupabase,
   }
 }

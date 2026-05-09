@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { Carrier, CarrierTariff, WbUnloadTariff, Warehouse } from '../types'
+import type { AccountCurrency, Carrier, CarrierTariff, FulfillmentWorkTariff, WbUnloadTariff, Warehouse } from '../types'
 
 export const fetchCarriers = async (accountId: string): Promise<Carrier[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
@@ -156,7 +156,107 @@ export const upsertCarrierTariff = async (
   if (error) throw error
 }
 
-// ── Тарифы отгрузки на склады ВБ ─────────────────────────────────
+// ── Тарифы работ фулфилмента ──────────────────────────────────
+
+export const fetchWorkTariffs = async (accountId: string): Promise<FulfillmentWorkTariff[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('fulfillment_work_tariffs')
+    .select('*')
+    .eq('account_id', accountId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as FulfillmentWorkTariff[]
+}
+
+export const addWorkTariff = async (
+  accountId: string,
+  stage: string,
+  name: string,
+  pricePerUnit: number,
+  currency = 'RUB',
+): Promise<FulfillmentWorkTariff> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('fulfillment_work_tariffs')
+    .insert({ account_id: accountId, stage, name, price_per_unit: pricePerUnit, currency })
+    .select()
+    .single()
+  if (error) throw error
+  return data as FulfillmentWorkTariff
+}
+
+export const updateWorkTariff = async (
+  id: string,
+  patch: { name?: string; price_per_unit?: number; stage?: string; currency?: string },
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('fulfillment_work_tariffs')
+    .update(patch)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const deleteWorkTariff = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('fulfillment_work_tariffs')
+    .delete()
+    .eq('id', id)
+  if (error) throw error
+}
+
+// ── Валюты аккаунта ───────────────────────────────────────────
+
+export const fetchAccountCurrencies = async (accountId: string): Promise<AccountCurrency[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('account_currencies')
+    .select('*')
+    .eq('account_id', accountId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as AccountCurrency[]
+}
+
+export const addAccountCurrency = async (accountId: string, code: string): Promise<AccountCurrency> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('account_currencies')
+    .insert({ account_id: accountId, code })
+    .select()
+    .single()
+  if (error) throw error
+  return data as AccountCurrency
+}
+
+export const deleteAccountCurrency = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('account_currencies')
+    .delete()
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const fetchStageCurrencies = async (accountId: string): Promise<Record<string, string>> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase
+    .from('account_stage_currencies')
+    .select('stage, currency')
+    .eq('account_id', accountId)
+  if (error) throw error
+  return Object.fromEntries((data ?? []).map((r: { stage: string; currency: string }) => [r.stage, r.currency]))
+}
+
+export const upsertStageCurrency = async (accountId: string, stage: string, currency: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('account_stage_currencies')
+    .upsert({ account_id: accountId, stage, currency }, { onConflict: 'account_id,stage' })
+  if (error) throw error
+}
 
 export const fetchWbUnloadTariffs = async (accountId: string): Promise<WbUnloadTariff[]> => {
   if (!supabase) throw new Error('Supabase is not configured')

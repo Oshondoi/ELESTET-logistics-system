@@ -54,6 +54,7 @@ interface ShipmentsPageProps {
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onDownloadWbExcel?: (tripId: string, lineId: string, type: 'goods' | 'boxes' | 'all') => Promise<void>
   onSaveMarketplaceDate?: (tripId: string, lineId: string, date: string | null) => Promise<void>
   onRefreshMarketplaceDate?: (tripId: string, lineId: string) => Promise<void>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
@@ -93,6 +94,7 @@ export const ShipmentsPage = ({
   onFetchWbBarcodes,
   onSaveWbSupplyId,
   onRefreshCargoType,
+  onDownloadWbExcel,
   onSaveMarketplaceDate,
   onRefreshMarketplaceDate,
   onUploadWbPass,
@@ -514,6 +516,7 @@ export const ShipmentsPage = ({
           onFetchWbBarcodes={onFetchWbBarcodes}
           onSaveWbSupplyId={onSaveWbSupplyId}
           onRefreshCargoType={onRefreshCargoType}
+          onDownloadWbExcel={onDownloadWbExcel}
           onSaveMarketplaceDate={onSaveMarketplaceDate}
           onRefreshMarketplaceDate={onRefreshMarketplaceDate}
           onUploadWbPass={onUploadWbPass}

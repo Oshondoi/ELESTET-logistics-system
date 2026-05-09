@@ -688,6 +688,46 @@ export const updateSupply = async (
   if (error) throw error
 }
 
+/** Получить поставку Фулфилмент (с коробами и содержимым) по ID строки рейса */
+export const fetchSupplyByTripLineId = async (tripLineId: string): Promise<FulfillmentSupplyWithBoxes | null> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: supplies, error: sErr } = await (supabase as any)
+    .from('fulfillment_supplies')
+    .select('*')
+    .eq('trip_line_id', tripLineId)
+    .limit(1)
+  if (sErr) throw sErr
+  if (!supplies || supplies.length === 0) return null
+
+  const supply = supplies[0] as FulfillmentSupply
+
+  const { data: boxes, error: bErr } = await (supabase as any)
+    .from('fulfillment_boxes')
+    .select('*')
+    .eq('supply_id', supply.id)
+    .order('box_number', { ascending: true })
+  if (bErr) throw bErr
+
+  const boxIds: string[] = (boxes ?? []).map((b: FulfillmentBox) => b.id)
+  let items: FulfillmentBoxItem[] = []
+  if (boxIds.length > 0) {
+    const { data: itemData, error: iErr } = await (supabase as any)
+      .from('fulfillment_box_items')
+      .select('*')
+      .in('box_id', boxIds)
+      .order('created_at', { ascending: true })
+    if (iErr) throw iErr
+    items = itemData ?? []
+  }
+
+  const boxesWithItems = (boxes ?? []).map((box: FulfillmentBox) => ({
+    ...box,
+    items: items.filter((i: FulfillmentBoxItem) => i.box_id === box.id),
+  }))
+
+  return { ...supply, boxes: boxesWithItems }
+}
+
 // ── Packing: Boxes ────────────────────────────────────────────
 
 export const createBox = async (data: {

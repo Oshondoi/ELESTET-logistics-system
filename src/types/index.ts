@@ -307,6 +307,23 @@ export interface WbUnloadTariff {
   price_per_box: number
 }
 
+export interface FulfillmentWorkTariff {
+  id: string
+  account_id: string
+  stage: string
+  name: string
+  price_per_unit: number
+  currency: string
+  created_at: string
+}
+
+export interface AccountCurrency {
+  id: string
+  account_id: string
+  code: string
+  created_at: string
+}
+
 // ─── Рейсы ───────────────────────────────────────────────────
 
 export type TripStatus = 'Формируется' | 'Отправлен' | 'Прибыл' | 'Завершён'
@@ -354,6 +371,7 @@ export interface TripLine {
   wb_supply_id: string | null
   wb_cargo_type: number | null
   wb_acceptance_date: string | null
+  wb_package_codes: string[]
   wb_pass_url: string | null
   wb_pass_urls: string[]
   comment: string

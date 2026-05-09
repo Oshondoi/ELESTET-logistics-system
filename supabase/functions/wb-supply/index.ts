@@ -186,6 +186,21 @@ Deno.serve(async (req) => {
     return jsonOk({ cargo_type: cargoType })
   }
 
+  // action=package_info — список штрихкодов коробов WB (для Excel-шаблона распределения)
+  if (action === 'package_info') {
+    try {
+      const packages = await fetchPackages(apiKey, supplyId)
+      packages.sort((a, b) => {
+        const numA = parseInt(a.packageCode.replace(/\D/g, ''), 10) || 0
+        const numB = parseInt(b.packageCode.replace(/\D/g, ''), 10) || 0
+        return numA - numB
+      })
+      return jsonOk({ package_codes: packages.map((p) => p.packageCode) })
+    } catch (e) {
+      return jsonError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   // action=mp_date — плановая дата (supplyDate) + фактическая дата принятия (factDate)
   if (action === 'mp_date') {
     const { supplyDate, factDate } = await fetchSupplyDates(apiKey, supplyId)
@@ -215,9 +230,12 @@ Deno.serve(async (req) => {
     if (packages.length === 0) {
       return jsonError('В поставке нет упакованных товаров. Упакуйте товары в ЛК WB.')
     }
+    const packageCodes = packages.map((p) => p.packageCode)
+    // Сохраняем ШК коробов в БД — используются для Excel-шаблона распределения
+    await db.from('trip_lines').update({ wb_package_codes: packageCodes }).eq('id', line_id).eq('account_id', account_id)
     const pdfBytes = await buildPdf(packages)
     const stickerUrl = await uploadPdf(db, account_id, line_id, pdfBytes, 'qr-stickers')
-    return jsonOk({ wb_supply_id: supplyId, sticker_urls: [stickerUrl], cargo_type: cargoType })
+    return jsonOk({ wb_supply_id: supplyId, sticker_urls: [stickerUrl], cargo_type: cargoType, package_codes: packageCodes })
   } catch (e) {
     return jsonError(e instanceof Error ? e.message : String(e))
   }

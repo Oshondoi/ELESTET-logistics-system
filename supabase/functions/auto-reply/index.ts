@@ -186,6 +186,7 @@ interface AutoSettings {
   require_text: boolean
   delay_seconds: number
   store_ids: string[]
+  excluded_nm_ids: number[]
 }
 
 async function runForAccount(settings: AutoSettings, log: string[]): Promise<number> {
@@ -271,6 +272,11 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
         const rating = d['productValuation'] as number
         if (!settings.target_ratings.includes(rating)) return false
         if (settings.require_text && !((d['text'] as string | undefined)?.trim())) return false
+        // Фильтр по чёрному списку артикулов
+        if (settings.excluded_nm_ids && settings.excluded_nm_ids.length > 0) {
+          const nmId = (d['productDetails'] as { nmId?: number } | null | undefined)?.nmId
+          if (nmId && settings.excluded_nm_ids.includes(nmId)) return false
+        }
         return true
       })
       .slice(0, limit === Infinity ? undefined : Math.max(0, (limit as number) - sent))

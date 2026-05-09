@@ -216,6 +216,7 @@ function App() {
     refreshCargoType,
     saveMarketplaceDate,
     refreshMarketplaceDate,
+    downloadWbExcel,
     removeTrip,
     removeTripLine,
     restoreArchivedTripLine,
@@ -517,6 +518,7 @@ function App() {
                   onFetchWbBarcodes={fetchWbBarcodes}
                   onSaveWbSupplyId={saveWbSupplyId}
                   onRefreshCargoType={refreshCargoType}
+                  onDownloadWbExcel={downloadWbExcel}
                   onSaveMarketplaceDate={saveMarketplaceDate}
                   onRefreshMarketplaceDate={refreshMarketplaceDate}
                   onUploadWbPass={uploadWbPass}

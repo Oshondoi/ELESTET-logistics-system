@@ -368,6 +368,7 @@ interface TripTableProps {
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
+  onDownloadWbExcel?: (tripId: string, lineId: string, type: 'goods' | 'boxes' | 'all') => Promise<void>
   isOwnerOrAdmin?: boolean
   onSaveMarketplaceDate?: (tripId: string, lineId: string, date: string | null) => Promise<void>
   onRefreshMarketplaceDate?: (tripId: string, lineId: string) => Promise<void>
@@ -584,6 +585,7 @@ export const TripTable = ({
   onFetchWbBarcodes,
   onSaveWbSupplyId,
   onRefreshCargoType,
+  onDownloadWbExcel,
   onSaveMarketplaceDate,
   onRefreshMarketplaceDate,
   onUploadWbPass,
@@ -1363,6 +1365,7 @@ export const TripTable = ({
                                       onFetchWbBarcodes={(wbId) => onFetchWbBarcodes(trip.id, line.id, wbId)}
                                       onUploadPass={canManage ? (file) => onUploadWbPass(trip.id, line.id, file) : undefined}
                                       onRemovePass={canManage ? (idx) => onRemoveWbPass(trip.id, line.id, idx) : undefined}
+                                      onDownloadWbExcel={onDownloadWbExcel ? (type) => onDownloadWbExcel(trip.id, line.id, type) : undefined}
                                     />
                                   </td>
                                   {!lineHidden.has('payment') && (

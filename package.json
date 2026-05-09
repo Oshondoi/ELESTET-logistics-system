@@ -15,7 +15,8 @@
     "jsbarcode": "^3.12.3",
     "jspdf": "^4.2.1",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "latest",
