@@ -17,6 +17,8 @@ interface TripLineFormModalProps {
   /** Если передан — показывает селект «Рейс» первым полем (режим создания без привязки к рейсу) */
   trips?: TripWithLines[]
   onSubmitWithTrip?: (tripId: string, values: TripLineFormValues) => Promise<void>
+  /** ID партии фулфилмента — если задан, ключевые поля заблокированы (управляются фулфилментом) */
+  fulfillmentBatchId?: string | null
 }
 
 const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues => ({
@@ -36,8 +38,9 @@ const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues
   comment: '',
 })
 
-export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames, trips, onSubmitWithTrip }: TripLineFormModalProps) => {
+export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames, trips, onSubmitWithTrip, fulfillmentBatchId }: TripLineFormModalProps) => {
   const isEdit = Boolean(initialValues)
+  const isFulfillment = Boolean(fulfillmentBatchId)
   const warehouses = warehouseNames ?? []
   const [values, setValues] = useState<TripLineFormValues>(() => initialValues ?? makeDefaults(stores, warehouses))
   const [selectedTripId, setSelectedTripId] = useState<string>(() => trips?.[0]?.id ?? '')
@@ -101,6 +104,17 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
       }
     >
       <form id="trip-line-form" className="grid min-w-0 gap-5" onSubmit={handleSubmit}>
+        {isFulfillment && (
+          <div className="flex items-start gap-2.5 rounded-xl bg-blue-50 px-4 py-3">
+            <svg className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 16v-4M12 8h.01" />
+            </svg>
+            <p className="text-xs text-blue-700">
+              Поставка создана из модуля <strong>Фулфилмент</strong>. Склад, коробки, единицы и дата приёма управляются оттуда — эти поля заблокированы для редактирования здесь.
+            </p>
+          </div>
+        )}
         {trips && (
           <Select
             label="Рейс"
@@ -118,12 +132,14 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
             value={values.store_id}
             onChange={(e) => set('store_id', e.target.value)}
             options={storeOptions}
+            disabled={isFulfillment}
           />
           <Select
             label="Склад назначения"
             value={values.destination_warehouse}
             onChange={(e) => set('destination_warehouse', e.target.value)}
             options={warehouses.map((w) => ({ label: w, value: w }))}
+            disabled={isFulfillment}
           />
           <Input
             label="Коробов"
@@ -131,6 +147,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
             min={0}
             value={values.box_qty}
             onChange={(e) => set('box_qty', Number(e.target.value))}
+            disabled={isFulfillment}
           />
           <Input
             label="Единиц"
@@ -138,6 +155,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
             min={0}
             value={values.units_qty}
             onChange={(e) => set('units_qty', Number(e.target.value))}
+            disabled={isFulfillment}
           />
           <Input
             label="Вес (кг)"
@@ -152,19 +170,24 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
             type="date"
             value={values.reception_date}
             onChange={(e) => set('reception_date', e.target.value)}
+            disabled={isFulfillment}
           />
-          <Input
-            label="Прибыл"
-            type="date"
-            value={values.arrival_date}
-            onChange={(e) => set('arrival_date', e.target.value)}
-          />
-          <Input
-            label="Отгружено"
-            type="date"
-            value={values.shipped_date}
-            onChange={(e) => set('shipped_date', e.target.value)}
-          />
+          {isEdit && (
+            <Input
+              label="Прибыл"
+              type="date"
+              value={values.arrival_date}
+              onChange={(e) => set('arrival_date', e.target.value)}
+            />
+          )}
+          {isEdit && (
+            <Input
+              label="Отгружено"
+              type="date"
+              value={values.shipped_date}
+              onChange={(e) => set('shipped_date', e.target.value)}
+            />
+          )}
           <Input
             label="Дата МП"
             type="date"

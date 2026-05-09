@@ -11,7 +11,7 @@ export const Input = ({ label, hint, className, ...props }: InputProps) => (
     <span className="font-medium">{label}</span>
     <input
       className={cn(
-        'block w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-0 focus-visible:border-brand-500 focus-visible:ring-0',
+        'block w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-0 focus-visible:border-brand-500 focus-visible:ring-0 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400',
         className,
       )}
       {...props}

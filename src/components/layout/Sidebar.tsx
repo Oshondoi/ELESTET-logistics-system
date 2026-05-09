@@ -480,20 +480,19 @@ export const Sidebar = ({
       </div>
 
       <div className="mt-auto border-t border-slate-200 px-4 py-4">
-        <button
-          type="button"
-          onClick={onSignOut}
+        <a
+          href="https://t.me/+4e0mYW-2Bjw3NTYy"
+          target="_blank"
+          rel="noopener noreferrer"
           className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
         >
-          <span className="flex h-6.5 w-6.5 items-center justify-center rounded-md bg-slate-100 text-slate-500">
-            <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M10 17l5-5-5-5" />
-              <path d="M15 12H3" />
-              <path d="M20 4v16" />
+          <span className="flex h-6.5 w-6.5 items-center justify-center rounded-md bg-sky-100 text-sky-500">
+            <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="currentColor">
+              <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2Zm4.93 7.13-1.68 7.93c-.12.56-.46.7-.93.43l-2.57-1.89-1.24 1.19c-.14.14-.25.25-.51.25l.18-2.6 4.72-4.26c.2-.18-.05-.28-.32-.1L7.77 14.6 5.23 13.8c-.56-.18-.57-.56.12-.83l9.67-3.73c.46-.17.86.11.71.83-.01.02 0 .02-.1.06Z" />
             </svg>
           </span>
-          <span>Выход</span>
-        </button>
+          <span>Telegram-канал</span>
+        </a>
       </div>
     </aside>
   )

@@ -470,6 +470,21 @@ export const updateTripLineWbPassUrls = async (
   if (error) throw error
 }
 
+/** Пометить поставку как созданную из фулфилмента — блокирует ручное редактирование ключевых полей */
+export const setTripLineFulfillmentBatch = async (
+  lineId: string,
+  fulfillmentBatchId: string,
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ fulfillment_batch_id: fulfillmentBatchId } as any)
+    .eq('id', lineId)
+
+  if (error) throw error
+}
+
 /** Получить только тип отгрузки поставки (без генерации стикеров) */
 export const getWbSupplyCargoType = async (
   accountId: string,

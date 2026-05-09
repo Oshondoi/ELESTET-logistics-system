@@ -2,6 +2,19 @@
 
 MVP веб-приложения для логистики поставок на стеке `React + Vite + Tailwind CSS + Supabase`.
 
+## Принцип работы с кодом (хирургические изменения)
+
+> Делаем ровно то, что попросили. Ничего лишнего.
+
+- Изменять строго указанное место. Не трогать соседние компоненты, логику, стили без явной нужды.
+- Не рефакторить и не улучшать самостоятельно — только по явному запросу.
+- Не добавлять комментарии, типы, обработку ошибок там, где это не просили.
+- Понять задачу, выполнить правильно — но исключительно её одну.
+
+## UI-соглашения
+
+- **Числовые поля** (`input[type="number"]`) — стрелки (spinners) глобально отключены в `src/styles.css`. Никогда не добавлять стрелки при создании или редактировании числовых полей. Исключение только по явному указанию.
+
 ## Что уже есть
 
 - SaaS-структура данных: `profiles`, `accounts`, `account_members`, `stores`, `trips`, `trip_lines`, `carriers`, `warehouses`, `roles`
@@ -45,6 +58,7 @@ MVP веб-приложения для логистики поставок на 
 
 - **OTK и Marking логи** удаляются только soft-delete (`deleted_at`). FK `user_id` → `auth.users ON DELETE SET NULL`.
 - **Партии** при нажатии «Удалить» перемещаются в архив (`deleted_at`), не удаляются физически.
+- **Авто-создание trip_line**: добавление новой поставки к завершённой партии (через кнопку «Сохранить» на этапе Коробов) автоматически создаёт поставку в привязанном рейсе и проставляет `trip_line_id` + `fulfillment_batch_id`
 
 **Файлы:**
 - `supabase/patch_fulfillment.sql` — 4 таблицы: `fulfillment_settings`, `fulfillment_batches`, `fulfillment_items`, `fulfillment_stage_logs`
@@ -78,6 +92,9 @@ MVP веб-приложения для логистики поставок на 
 - **Настройка колонок**: показ/скрытие builtin и custom колонок через `columnConfigService`
 - **Режим фокуса**: затемняет всё кроме активного рейса
 - **Иконки оплаты** (`StatusDropdown` с `iconMap`): цветовая схема `bg-100 text-500 hover:bg-200`, совпадает с поведением иконок стикеров. `StatusDropdown` имеет отдельный `iconToneClasses` для иконочного режима
+- **Переключатель названия магазина**: тоггл-кнопка в тулбаре — переключает между `store.supplier` (юр. название) и `store.name` (WB-название) в колонке «Магазин»; `store_code` всегда отображается ниже; состояние сохраняется в localStorage
+- **Модалка создания поставки**: поля «Прибыл» и «Отгружено» скрыты (показываются только при редактировании)
+- **Блокировка ФФ-поставок**: поставки из Фулфилмента помечаются `fulfillment_batch_id`; в модалке редактирования заблокированы поля Магазин/Склад/Коробов/Единиц/Дата приёма + синий информационный баннер; ⚠️ требует `patch_trip_line_fulfillment_batch_id.sql` + `patch_trip_line_backfill_fulfillment_batch_id.sql`
 
 ### Фото накладных
 - Колонка `invoice_photo_urls text[]` в `trip_lines`
@@ -272,6 +289,8 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 38. patch_ai_providers.sql          ← Мульти-провайдер ИИ (Claude + OpenAI) + миграция model ID
 39. patch_ai_prompts_list.sql       ← Таблица ai_prompts (system/store промпты)
 40. cleanup_archived_accounts.sql   ← (однократно) Удаление архивных компаний для конкретного пользователя
+41. patch_trip_line_fulfillment_batch_id.sql ← Колонка fulfillment_batch_id в trip_lines
+42. patch_trip_line_backfill_fulfillment_batch_id.sql ← Бэкфилл fulfillment_batch_id для старых записей
 
 4. `npm run dev`
 

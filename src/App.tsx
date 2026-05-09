@@ -477,11 +477,15 @@ function App() {
                   accountId={activeAccount?.id ?? ''}
                   stores={stores}
                   trips={trips}
+                  warehouses={warehouses}
                   onEditTripLine={editTripLine}
+                  onAddTripLine={addTripLine}
                   onStoreCreated={appendStore}
                   canManage={isOwnerOrAdmin || permissions.fulfillment_manage}
                   canOtkAssign={isOwnerOrAdmin || permissions.fulfillment_otk_assign}
                   canStageJump={isOwnerOrAdmin || permissions.fulfillment_stage_jump}
+                  canPackingAutoAdd={isOwnerOrAdmin || permissions.fulfillment_packing_autoadd}
+                  canSupplyDeleteLocked={isOwnerOrAdmin || permissions.fulfillment_supply_delete_locked}
                   userId={session?.user?.id ?? ''}
                   userEmail={session?.user?.email ?? ''}
                   userName={profileUserName || (session?.user?.email ?? '')}

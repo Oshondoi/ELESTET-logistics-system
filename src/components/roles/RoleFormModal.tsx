@@ -81,6 +81,8 @@ const PERMISSION_GROUPS: PermGroup[] = [
     subItems: [
       { key: 'fulfillment_otk_assign', label: 'Выбор исполнителя в ОТК' },
       { key: 'fulfillment_stage_jump', label: 'Навигация по этапам (просмотр истории)' },
+      { key: 'fulfillment_packing_autoadd', label: 'Авто-добавление при сканировании (упаковка)' },
+      { key: 'fulfillment_supply_delete_locked', label: 'Удаление поставок после завершения этапа' },
     ],
   },
   {

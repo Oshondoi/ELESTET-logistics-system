@@ -378,6 +378,7 @@ interface TripTableProps {
   canDeleteTrip?: boolean
   focusMode?: boolean
   hoverAddMode?: boolean
+  showSupplier?: boolean
   onExpandedCountChange?: (count: number) => void
   collapseAllSignal?: number
   tripConfig?: ColumnConfig
@@ -593,6 +594,7 @@ export const TripTable = ({
   isOwnerOrAdmin = false,
   focusMode = false,
   hoverAddMode = true,
+  showSupplier = true,
   onExpandedCountChange,
   collapseAllSignal = 0,
   tripConfig = DEFAULT_COLUMN_CONFIG,
@@ -1156,7 +1158,9 @@ export const TripTable = ({
                                   <td className="px-3 py-2.5">
                                     <div className="flex flex-col leading-tight">
                                       <span className="font-medium text-slate-800">
-                                        {line.store?.name ?? '—'}
+                                        {showSupplier
+                                          ? (line.store?.supplier ?? line.store?.name ?? '—')
+                                          : (line.store?.name ?? '—')}
                                       </span>
                                       {line.store?.store_code && (
                                         <span className="text-[11px] text-slate-400">{line.store.store_code}</span>
@@ -1519,6 +1523,7 @@ export const TripTable = ({
         stores={stores}
         warehouseNames={warehouseNames}
         onClose={() => setEditingTripLine(null)}
+        fulfillmentBatchId={editingTripLine?.line.fulfillment_batch_id}
         initialValues={editingTripLine ? {
           store_id: editingTripLine.line.store_id,
           destination_warehouse: editingTripLine.line.destination_warehouse,

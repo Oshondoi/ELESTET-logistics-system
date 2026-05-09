@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type {
   FulfillmentBatch,
   FulfillmentBatchWithItems,
@@ -7,11 +8,14 @@ import type {
   FulfillmentOtkLogHistory,
   FulfillmentMarkingLog,
   FulfillmentMarkingLogHistory,
+  FulfillmentSupplyWithBoxes,
   FulfillmentSettings,
   FulfillmentStage,
   Store,
+  TripLine,
   TripWithLines,
   TripLineFormValues,
+  Warehouse,
 } from '../types'
 import {
   fetchBatches,
@@ -48,8 +52,23 @@ import {
   addMarkingLogHistory,
   fetchMarkingLogHistory,
   patchMarkingLogHistoryUserName,
+  fetchSupplies,
+  createSupply,
+  deleteSupply,
+  updateSupply,
+  createBox,
+  closeBox,
+  reopenBox,
+  deleteBox,
+  addBoxItem,
+  deleteBoxItem,
+  fetchStageCompletedAt,
 } from '../services/fulfillmentService'
-import type { CatalogProduct, OtkPerformer } from '../services/fulfillmentService'
+import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
+import {
+  findProductByBarcode,
+} from '../services/fulfillmentService'
+import { createTrip, addTripLine, setTripLineFulfillmentBatch } from '../services/tripService'
 import { Card } from '../components/ui/Card'
 import { InvoicePhotoCell } from '../components/ui/InvoicePhotoCell'
 import { createStoreInSupabase } from '../services/storeService'
@@ -92,11 +111,15 @@ interface FulfillmentPageProps {
   accountId: string
   stores: Store[]
   trips: TripWithLines[]
+  warehouses: Warehouse[]
   onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues) => Promise<void>
+  onAddTripLine?: (tripId: string, values: TripLineFormValues) => Promise<TripLine>
   onStoreCreated?: (store: Store) => void
   canManage?: boolean
   canOtkAssign?: boolean
   canStageJump?: boolean
+  canPackingAutoAdd?: boolean
+  canSupplyDeleteLocked?: boolean
   userId?: string
   userEmail?: string
   userName?: string
@@ -219,9 +242,12 @@ interface DetailModalProps {
   accountId: string
   stores: Store[]
   trips: TripWithLines[]
+  warehouses: Warehouse[]
   canManage: boolean
   canOtkAssign: boolean
   canStageJump: boolean
+  canPackingAutoAdd: boolean
+  canSupplyDeleteLocked: boolean
   userId: string
   userEmail: string
   userName: string
@@ -229,6 +255,7 @@ interface DetailModalProps {
   onBatchUpdated: (b: FulfillmentBatch) => void
   onItemsChanged: (items: FulfillmentItem[]) => void
   onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues) => Promise<void>
+  onAddTripLine?: (tripId: string, values: TripLineFormValues) => Promise<TripLine>
   zIndex?: number
 }
 
@@ -237,9 +264,12 @@ const BatchDetailModal = ({
   accountId,
   stores,
   trips,
+  warehouses,
   canManage,
   canOtkAssign,
   canStageJump,
+  canPackingAutoAdd,
+  canSupplyDeleteLocked,
   userId,
   userEmail,
   userName,
@@ -247,6 +277,7 @@ const BatchDetailModal = ({
   onBatchUpdated,
   onItemsChanged,
   onEditTripLine,
+  onAddTripLine,
   zIndex = 50,
 }: DetailModalProps) => {
   const [batch, setBatch] = useState<FulfillmentBatchWithItems>(initialBatch)
@@ -267,6 +298,14 @@ const BatchDetailModal = ({
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   const otkFileInputRef = useRef<HTMLInputElement>(null)
   const markingFileInputRef = useRef<HTMLInputElement>(null)
+  const markingBarcodeRef = useRef<HTMLInputElement>(null)
+  const markingVideoRef = useRef<HTMLVideoElement>(null)
+  const markingStreamRef = useRef<MediaStream | null>(null)
+  const markingDetectRef = useRef(false)
+  const markingItemsRef = useRef(items)
+  const packingVideoRef = useRef<HTMLVideoElement>(null)
+  const packingStreamRef = useRef<MediaStream | null>(null)
+  const packingDetectRef = useRef(false)
 
   // Режим «Навалом»
   const [bulkQty, setBulkQty] = useState('')
@@ -312,6 +351,8 @@ const BatchDetailModal = ({
   const [otkBuffer, setOtkBuffer] = useState<OtkBufferEntry[]>([])
   const [otkEdits, setOtkEdits] = useState<Record<string, { tariff: string; qty: number; qty_defect: number; notes: string }>>({})
   const [otkDeletedIds, setOtkDeletedIds] = useState<string[]>([])
+  const [otkAddModalOpen, setOtkAddModalOpen] = useState(false)
+  const [markingAddModalOpen, setMarkingAddModalOpen] = useState(false)
   const [otkDeletedLogs, setOtkDeletedLogs] = useState<FulfillmentOtkLog[]>([])
   const [otkEditingId, setOtkEditingId] = useState<string | null>(null)
   const [otkDeleteConfirmId, setOtkDeleteConfirmId] = useState<string | null>(null)
@@ -321,6 +362,14 @@ const BatchDetailModal = ({
   const [markingLogs, setMarkingLogs] = useState<FulfillmentMarkingLog[]>([])
   const [isLoadingMarking, setIsLoadingMarking] = useState(false)
   const [markingTariff, setMarkingTariff] = useState<string>(MARKING_TARIFFS[0].id)
+  const [markingBarcode, setMarkingBarcode] = useState('')
+  const [markingCameraOpen, setMarkingCameraOpen] = useState(false)
+  const [markingCameraError, setMarkingCameraError] = useState<string | null>(null)
+  const [markingScannedBarcode, setMarkingScannedBarcode] = useState<string | null>(null)
+  const [markingRescanKey, setMarkingRescanKey] = useState(0)
+  const [markingEditScanTarget, setMarkingEditScanTarget] = useState<{ type: 'log'; id: string } | { type: 'buffer'; tempId: string } | null>(null)
+  const [markingItemId, setMarkingItemId] = useState<string | null>(null)
+  const [markingItemName, setMarkingItemName] = useState<string | null>(null)
   const [markingQty, setMarkingQty] = useState('')
   const [markingDefect, setMarkingDefect] = useState('')
   const [markingNotes, setMarkingNotes] = useState('')
@@ -329,9 +378,9 @@ const BatchDetailModal = ({
   const [markingPerformers, setMarkingPerformers] = useState<OtkPerformer[]>([])
   const [isAddingMarking, setIsAddingMarking] = useState(false)
   const [markingPhotoFiles, setMarkingPhotoFiles] = useState<File[]>([])
-  type MarkingBufferEntry = { tempId: string; performer_user_id: string | null; performer_name: string; tariff: string; qty: number; qty_defect: number; notes: string; photo_files: File[] }
+  type MarkingBufferEntry = { tempId: string; performer_user_id: string | null; performer_name: string; tariff: string; qty: number; qty_defect: number; notes: string; photo_files: File[]; barcode: string | null; item_id: string | null; item_name: string | null }
   const [markingBuffer, setMarkingBuffer] = useState<MarkingBufferEntry[]>([])
-  const [markingEdits, setMarkingEdits] = useState<Record<string, { tariff: string; qty: number; qty_defect: number; notes: string }>>({})
+  const [markingEdits, setMarkingEdits] = useState<Record<string, { tariff: string; qty: number; qty_defect: number; notes: string; barcode: string }>>({})
   const [markingDeletedIds, setMarkingDeletedIds] = useState<string[]>([])
   const [markingDeletedLogs, setMarkingDeletedLogs] = useState<FulfillmentMarkingLog[]>([])
   const [markingEditingId, setMarkingEditingId] = useState<string | null>(null)
@@ -346,9 +395,47 @@ const BatchDetailModal = ({
   const [historyItemId, setHistoryItemId] = useState<string | null>(null)
 
   // Логистика
-  const [selectedTripId, setSelectedTripId] = useState('')
-  const [selectedLineId, setSelectedLineId] = useState('')
-  const [isLinkingLogistics, setIsLinkingLogistics] = useState(false)
+
+
+  // Формирование коробов
+  const [supplies, setSupplies] = useState<FulfillmentSupplyWithBoxes[]>([])
+  const [isLoadingSupplies, setIsLoadingSupplies] = useState(false)
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState('')
+  const [isWarehouseDropdownOpen, setIsWarehouseDropdownOpen] = useState(false)
+  const [packingSelectedTripId, setPackingSelectedTripId] = useState(batch.trip_id ?? '')
+  const [packingSelectedTripLabel, setPackingSelectedTripLabel] = useState(() => {
+    if (!batch.trip_id) return ''
+    const found = [...trips].find((t) => t.id === batch.trip_id)
+    if (!found) return 'Рейс (сохранён)'
+    return `${found.trip_number ?? `Рейс #${found.draft_number}`}${found.carrier ? ` · ${found.carrier}` : ''}${found.departure_date ? ` · ${new Date(found.departure_date).toLocaleDateString('ru-RU')}` : ''}`
+  })
+  const [isTripPickerOpen, setIsTripPickerOpen] = useState(false)
+  const [showAllTrips, setShowAllTrips] = useState(false)
+  const [isCreatingDraftTrip, setIsCreatingDraftTrip] = useState(false)
+  const [localDraftTrips, setLocalDraftTrips] = useState<TripWithLines[]>([])
+  const [warehouseSearch, setWarehouseSearch] = useState('')
+  const [isCreatingSupply, setIsCreatingSupply] = useState(false)
+  const [supplyCreateError, setSupplyCreateError] = useState<string | null>(null)
+  const [packingBoxBuffer, setPackingBoxBuffer] = useState<Record<string, { barcode: string; qty: number; name: string | null; itemId: string | null }[]>>({})
+  const [packingBoxBarcode, setPackingBoxBarcode] = useState<Record<string, string>>({})
+  const [packingBoxQty, setPackingBoxQty] = useState<Record<string, string>>({})
+  const [packingOpenBoxId, setPackingOpenBoxId] = useState<string | null>(null)
+  const [activeSupplyId, setActiveSupplyId] = useState<string | null>(null)
+  const [isSavingBox, setIsSavingBox] = useState<string | null>(null)
+  const packingBarcodeRef = useRef<HTMLInputElement>(null)
+  const packingQtyRef = useRef<HTMLInputElement>(null)
+  const [packingAutoAdd, setPackingAutoAdd] = useState(false)
+  const [packingProductCache, setPackingProductCache] = useState<Record<string, ProductInfo | null>>({})
+  const [packingPhotoPreview, setPackingPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
+  const [packingCameraOpen, setPackingCameraOpen] = useState(false)
+  const [packingCameraError, setPackingCameraError] = useState<string | null>(null)
+  const [packingCameraScanned, setPackingCameraScanned] = useState<string | null>(null)
+  const [packingCameraRescanKey, setPackingCameraRescanKey] = useState(0)
+  const [packingCameraTargetBoxId, setPackingCameraTargetBoxId] = useState<string | null>(null)
+  const [addBoxModal, setAddBoxModal] = useState<{ supplyId: string; nextNum: number } | null>(null)
+  const [addBoxNum, setAddBoxNum] = useState('')
+  const [deleteBoxConfirm, setDeleteBoxConfirm] = useState<{ supplyId: string; boxId: string } | null>(null)
+  const [deleteSupplyConfirm, setDeleteSupplyConfirm] = useState<string | null>(null) // supplyId
 
   // Буфер изменений приёмки
   const [receptionDraft, setReceptionDraft] = useState<Record<string, number>>(
@@ -366,6 +453,13 @@ const BatchDetailModal = ({
 
   // Текущий просматриваемый этап (может отличаться от batch.current_stage при навигации)
   const [viewStage, setViewStage] = useState<FulfillmentStage>(initialBatch.current_stage)
+
+  // Дата завершения этапа Приёмка
+  const [receptionCompletedDate, setReceptionCompletedDate] = useState<string | null>(null)
+  useEffect(() => {
+    void fetchStageCompletedAt(initialBatch.id, 'reception').then((d) => setReceptionCompletedDate(d))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialBatch.id])
 
   // Синхронизировать viewStage при реальном переходе этапа
   useEffect(() => { setViewStage(batch.current_stage) }, [batch.current_stage])
@@ -422,7 +516,23 @@ const BatchDetailModal = ({
     setOtkPerformerId(userId)
     setOtkPerformerName(userName || userEmail)
     Promise.all([fetchOtkLogs(batch.id), fetchDeletedOtkLogs(batch.id)])
-      .then(([active, deleted]) => { setOtkLogs(active); setOtkDeletedLogs(deleted) })
+      .then(([active, deleted]) => {
+        setOtkLogs(active)
+        setOtkDeletedLogs(deleted)
+        // Всегда пересчитывать discrepancy по актуальным данным из БД
+        const tReceived = items.reduce((s, it) => s + (it.qty_received ?? 0), 0)
+        const tOtk = active.reduce((s, l) => s + l.qty + l.qty_defect, 0)
+        // Если логов нет — discrepancy = 0 (или null). Если есть — считаем разницу.
+        const discrepancy = active.length > 0 ? tOtk - tReceived : 0
+        if (discrepancy !== (batch.otk_discrepancy ?? 0)) {
+          updateBatch(batch.id, { otk_discrepancy: discrepancy })
+            .then((updated) => {
+              setBatch((prev) => ({ ...prev, ...updated }))
+              onBatchUpdated(updated)
+            })
+            .catch(() => {/* тихо — не критично */})
+        }
+      })
       .catch(() => { setOtkLogs([]); setOtkDeletedLogs([]) })
       .finally(() => setIsLoadingOtk(false))
     if (canOtkAssign) {
@@ -449,7 +559,153 @@ const BatchDetailModal = ({
     }
   }, [batch.id, viewStage])
 
-  // Автолукап по баркоду
+  // Актуальные позиции для камерного лукапа (без stale closure)
+  useEffect(() => { markingItemsRef.current = items }, [items])
+
+  // Загрузить поставки при открытии этапа packing
+  useEffect(() => {
+    if (viewStage !== 'packing') return
+    setIsLoadingSupplies(true)
+    fetchSupplies(batch.id)
+      .then(setSupplies)
+      .catch(() => setSupplies([]))
+      .finally(() => setIsLoadingSupplies(false))
+  }, [batch.id, viewStage])
+
+  // Камера — BarcodeDetector (Chrome Android) + ZXing fallback (все остальные)
+  useEffect(() => {
+    if (!markingCameraOpen) {
+      markingDetectRef.current = false
+      markingStreamRef.current?.getTracks().forEach((t) => t.stop())
+      markingStreamRef.current = null
+      return
+    }
+    setMarkingCameraError(null)
+    setMarkingScannedBarcode(null)
+    markingDetectRef.current = true
+
+    let zxingControls: { stop: () => void } | null = null
+    let cancelled = false
+
+    const start = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return }
+        markingStreamRef.current = stream
+        if (!markingVideoRef.current) return
+
+        if ('BarcodeDetector' in window) {
+          // Нативный API (Chrome Android)
+          markingVideoRef.current.srcObject = stream
+          await markingVideoRef.current.play()
+          const detector = new (window as unknown as { BarcodeDetector: new (opts: object) => { detect: (src: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> } }).BarcodeDetector({
+            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'itf'],
+          })
+          const scan = async () => {
+            if (!markingDetectRef.current || !markingVideoRef.current) return
+            try {
+              const results = await detector.detect(markingVideoRef.current)
+              if (results.length > 0) {
+                markingDetectRef.current = false
+                setMarkingScannedBarcode(results[0].rawValue)
+                return
+              }
+            } catch { /* кадр не готов */ }
+            if (markingDetectRef.current) requestAnimationFrame(scan)
+          }
+          requestAnimationFrame(scan)
+        } else {
+          // ZXing — работает во всех браузерах (Chrome Desktop, Firefox, Safari)
+          const { BrowserMultiFormatReader } = await import('@zxing/browser')
+          if (cancelled) return
+          const reader = new BrowserMultiFormatReader()
+          const controls = await reader.decodeFromStream(
+            stream,
+            markingVideoRef.current,
+            (result) => {
+              if (result && markingDetectRef.current) {
+                markingDetectRef.current = false
+                setMarkingScannedBarcode((result as unknown as { getText(): string }).getText())
+              }
+            }
+          )
+          if (cancelled) { controls.stop(); return }
+          zxingControls = controls
+        }
+      } catch {
+        if (!cancelled) {
+          setMarkingCameraError('Нет доступа к камере. Используйте USB/BT-сканер или ручной ввод.')
+        }
+      }
+    }
+
+    void start()
+    return () => {
+      cancelled = true
+      markingDetectRef.current = false
+      zxingControls?.stop()
+      markingStreamRef.current?.getTracks().forEach((t) => t.stop())
+      markingStreamRef.current = null
+    }
+  }, [markingCameraOpen, markingRescanKey])
+
+  // Камера для этапа Коробов
+  useEffect(() => {
+    if (!packingCameraOpen) {
+      packingDetectRef.current = false
+      packingStreamRef.current?.getTracks().forEach((t) => t.stop())
+      packingStreamRef.current = null
+      return
+    }
+    setPackingCameraError(null)
+    setPackingCameraScanned(null)
+    packingDetectRef.current = true
+    let zxingControls: { stop: () => void } | null = null
+    let cancelled = false
+    const start = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return }
+        packingStreamRef.current = stream
+        if (!packingVideoRef.current) return
+        if ('BarcodeDetector' in window) {
+          packingVideoRef.current.srcObject = stream
+          await packingVideoRef.current.play()
+          const detector = new (window as unknown as { BarcodeDetector: new (opts: object) => { detect: (src: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> } }).BarcodeDetector({
+            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'itf'],
+          })
+          const scan = async () => {
+            if (!packingDetectRef.current || !packingVideoRef.current) return
+            try {
+              const results = await detector.detect(packingVideoRef.current)
+              if (results.length > 0) { packingDetectRef.current = false; setPackingCameraScanned(results[0].rawValue); return }
+            } catch { /* кадр не готов */ }
+            if (packingDetectRef.current) requestAnimationFrame(scan)
+          }
+          requestAnimationFrame(scan)
+        } else {
+          const { BrowserMultiFormatReader } = await import('@zxing/browser')
+          if (cancelled) return
+          const reader = new BrowserMultiFormatReader()
+          const controls = await reader.decodeFromStream(stream, packingVideoRef.current, (result) => {
+            if (result && packingDetectRef.current) { packingDetectRef.current = false; setPackingCameraScanned((result as unknown as { getText(): string }).getText()) }
+          })
+          if (cancelled) { controls.stop(); return }
+          zxingControls = controls
+        }
+      } catch {
+        if (!cancelled) setPackingCameraError('Нет доступа к камере. Используйте USB/BT-сканер или ручной ввод.')
+      }
+    }
+    void start()
+    return () => {
+      cancelled = true
+      packingDetectRef.current = false
+      zxingControls?.stop()
+      packingStreamRef.current?.getTracks().forEach((t) => t.stop())
+      packingStreamRef.current = null
+    }
+  }, [packingCameraOpen, packingCameraRescanKey])
   const handleBarcodeChange = useCallback(async (barcode: string) => {
     setNewBarcode(barcode)
     if (barcode.length < 8 || !store?.api_key) return
@@ -488,10 +744,11 @@ const BatchDetailModal = ({
       const next = [...items, item]
       setItems(next)
       onItemsChanged(next)
+      void recalcOtkDiscrepancy(next, otkLogs)
       setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize('')
       barcodeInputRef.current?.focus()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsAddingSaving(false)
     }
@@ -504,8 +761,9 @@ const BatchDetailModal = ({
       setItems(next)
       onItemsChanged(next)
       setReceptionDraft((p) => { const n = { ...p }; delete n[id]; return n })
+      void recalcOtkDiscrepancy(next, otkLogs)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     }
   }
 
@@ -532,9 +790,10 @@ const BatchDetailModal = ({
       const next = [...items, item]
       setItems(next)
       onItemsChanged(next)
+      void recalcOtkDiscrepancy(next, otkLogs)
       setBulkQty(''); setBulkNote('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsAddingSaving(false)
     }
@@ -563,9 +822,10 @@ const BatchDetailModal = ({
       const next = [...items, item]
       setItems(next)
       onItemsChanged(next)
+      void recalcOtkDiscrepancy(next, otkLogs)
       setSubjectName(''); setSubjectQty('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsAddingSaving(false)
     }
@@ -581,7 +841,7 @@ const BatchDetailModal = ({
       const item = await addItem({
         batch_id: batch.id,
         barcode: '',
-        product_name: boxesName.trim() || 'Готовые короба',
+        product_name: 'Готовые короба',
         size: null,
         article: null,
         qty_received: qty,
@@ -597,7 +857,7 @@ const BatchDetailModal = ({
       onItemsChanged(next)
       setBoxesName(''); setBoxesQty(''); setBoxesCount('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsAddingSaving(false)
     }
@@ -609,6 +869,19 @@ const BatchDetailModal = ({
     setIsDirty(true)
   }
 
+  // Пересчитать и сохранить otk_discrepancy по актуальным данным
+  const recalcOtkDiscrepancy = async (currentItems: FulfillmentItem[], currentOtkLogs: typeof otkLogs) => {
+    const tReceived = currentItems.reduce((s, it) => s + (it.qty_received ?? 0), 0)
+    const tOtk = currentOtkLogs.reduce((s, l) => s + l.qty + l.qty_defect, 0)
+    // Если логов нет — сбросить в 0, иначе считаем разницу
+    const discrepancy = currentOtkLogs.length > 0 ? tOtk - tReceived : 0
+    if (discrepancy !== (batch.otk_discrepancy ?? 0)) {
+      const updated = await updateBatch(batch.id, { otk_discrepancy: discrepancy })
+      setBatch((prev) => ({ ...prev, ...updated }))
+      onBatchUpdated(updated)
+    }
+  }
+
   // Сохранить изменения приёмки в БД (без перехода)
   const handleSaveReceptionDraft = async () => {
     setIsSavingDraft(true)
@@ -616,19 +889,85 @@ const BatchDetailModal = ({
     try {
       const toUpdate = items.filter((it) => receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received)
       const updated = await Promise.all(toUpdate.map((it) => updateItem(it.id, { qty_received: receptionDraft[it.id] })))
-      setItems((prev) => prev.map((it) => {
+      const nextItems = items.map((it) => {
         const upd = updated.find((u) => u.id === it.id)
         return upd ? upd : it
-      }))
-      onItemsChanged(items.map((it) => {
-        const upd = updated.find((u) => u.id === it.id)
-        return upd ? upd : it
-      }))
+      })
+      setItems(nextItems)
+      onItemsChanged(nextItems)
+      // Пересчитать расхождение ОТК с учётом новых qty_received
+      await recalcOtkDiscrepancy(nextItems, otkLogs)
       setIsDirty(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsSavingDraft(false)
+    }
+  }
+
+  // ── Обогащение баркода данными о товаре ─────────────────────
+  const lookupAndCacheBarcode = useCallback(async (bc: string) => {
+    if (packingProductCache[bc] !== undefined) return
+    // Сначала быстро ставим null чтобы не дублировать запросы
+    setPackingProductCache((prev) => ({ ...prev, [bc]: null }))
+    const info = await findProductByBarcode(accountId, batch.store_id, bc)
+    setPackingProductCache((prev) => ({ ...prev, [bc]: info }))
+  }, [packingProductCache, accountId, batch.store_id])
+
+  // Preload info для всех баркодов в активной поставке
+  useEffect(() => {
+    if (!activeSupplyId) return
+    const supply = supplies.find((s) => s.id === activeSupplyId)
+    if (!supply) return
+    const barcodes = [...new Set(supply.boxes.flatMap((b) => b.items.map((i) => i.barcode)))]
+    for (const bc of barcodes) {
+      if (packingProductCache[bc] !== undefined) continue
+      void lookupAndCacheBarcode(bc)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSupplyId])
+
+  // Сохранить локальные поставки/короба/позиции в БД
+  const persistLocalSupplies = async () => {
+    const localSupplies = supplies.filter((s) => s._local)
+    for (const supply of localSupplies) {
+      const created = await createSupply({
+        batch_id: supply.batch_id,
+        account_id: supply.account_id,
+        warehouse_id: supply.warehouse_id || null,
+        warehouse_name: supply.warehouse_name,
+        trip_id: supply.trip_id || null,
+        trip_line_id: supply.trip_line_id || null,
+        created_by: supply.created_by,
+      })
+      for (const box of supply.boxes) {
+        const createdBox = await createBox({ supply_id: created.id, account_id: box.account_id, box_number: box.box_number })
+        for (const item of box.items) {
+          await addBoxItem({ box_id: createdBox.id, account_id: item.account_id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
+        }
+        if (box.status === 'closed') await closeBox(createdBox.id)
+      }
+    }
+    // Также сохранить изменения статуса у уже существующих коробов (reopen/close)
+    const savedSupplies = supplies.filter((s) => !s._local)
+    for (const supply of savedSupplies) {
+      for (const box of supply.boxes) {
+        if (box._local) {
+          const createdBox = await createBox({ supply_id: supply.id, account_id: box.account_id, box_number: box.box_number })
+          for (const item of box.items) {
+            await addBoxItem({ box_id: createdBox.id, account_id: item.account_id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
+          }
+          if (box.status === 'closed') await closeBox(createdBox.id)
+        } else {
+          for (const item of box.items.filter((i) => i._local)) {
+            await addBoxItem({ box_id: box.id, account_id: item.account_id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
+          }
+        }
+      }
+    }
+    if (localSupplies.length > 0) {
+      const refreshed = await fetchSupplies(batch.id)
+      setSupplies(refreshed)
     }
   }
 
@@ -641,12 +980,55 @@ const BatchDetailModal = ({
         if (viewStage === 'marking') await updateItem(id, { qty_marked: val.qty })
         else if (viewStage === 'packing') await updateItem(id, { qty_packed: val.qty, boxes: val.boxes ?? 0 })
       }
+      if (viewStage === 'packing') {
+        await persistLocalSupplies()
+
+        // После завершения партии — автоматически привязать новые поставки к рейсу
+        if (batch.status === 'done' && packingSelectedTripId && batch.store_id) {
+          const freshSupplies = await fetchSupplies(batch.id)
+          const receptionCompletedAt = await fetchStageCompletedAt(batch.id, 'reception')
+          const receptionDateStr = receptionCompletedAt
+            ? new Date(receptionCompletedAt).toISOString().slice(0, 10)
+            : ''
+          for (const supply of freshSupplies.filter((s) => !s.trip_line_id)) {
+            const boxQty = supply.boxes.length
+            const unitsQty = supply.boxes.reduce(
+              (sum, box) => sum + box.items.reduce((s, item) => s + item.qty, 0),
+              0,
+            )
+            const tripLineValues: TripLineFormValues = {
+              store_id: batch.store_id!,
+              destination_warehouse: supply.warehouse_name,
+              box_qty: boxQty,
+              units_qty: unitsQty,
+              units_total: unitsQty,
+              arrived_box_qty: 0,
+              weight: 0,
+              planned_marketplace_delivery_date: '',
+              arrival_date: '',
+              reception_date: receptionDateStr,
+              shipped_date: '',
+              status: 'Ожидает отправки',
+              payment_status: 'Не оплачено',
+              comment: '',
+            }
+            const tripLine = onAddTripLine
+              ? await onAddTripLine(packingSelectedTripId, tripLineValues)
+              : await addTripLine(batch.account_id, packingSelectedTripId, tripLineValues)
+            await updateSupply(supply.id, { trip_id: packingSelectedTripId, trip_line_id: tripLine.id })
+            // Пометить поставку как созданную из фулфилмента — блокирует ручное редактирование
+            try { await setTripLineFulfillmentBatch(tripLine.id, batch.id) } catch {}
+          }
+          const refreshedSupplies = await fetchSupplies(batch.id)
+          setSupplies(refreshedSupplies)
+        }
+      }
       const refreshed = await fetchBatchWithItems(batch.id)
       setItems(refreshed.items)
       onItemsChanged(refreshed.items)
       setIsDirty(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsSavingDraft(false)
     }
@@ -692,9 +1074,10 @@ const BatchDetailModal = ({
       const next = [...items, item]
       setItems(next)
       onItemsChanged(next)
+      void recalcOtkDiscrepancy(next, otkLogs)
       setCatalogQties((prev) => { const n = { ...prev }; delete n[key]; return n })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsAddingSaving(false)
     }
@@ -724,6 +1107,59 @@ const BatchDetailModal = ({
       for (const [id, val] of Object.entries(stageDraft)) {
         if (batch.current_stage === 'packing') await updateItem(id, { qty_packed: val.qty, boxes: val.boxes ?? 0 })
       }
+      if (batch.current_stage === 'packing') await persistLocalSupplies()
+
+      // При завершении логистики — создаём trip_lines из поставок фулфилмента
+      if (batch.current_stage === 'logistics' && packingSelectedTripId && batch.store_id) {
+        // Убедиться что локальные поставки сохранены
+        const hasLocal = supplies.some((s) => s._local)
+        if (hasLocal) await persistLocalSupplies()
+        // Дата завершения этапа Приёмка (reception_date в trip_line = "Приём")
+        const receptionCompletedAt = await fetchStageCompletedAt(batch.id, 'reception')
+        const receptionDateStr = receptionCompletedAt
+          ? new Date(receptionCompletedAt).toISOString().slice(0, 10)
+          : ''
+        // Загрузить актуальные поставки из БД
+        const freshSupplies = await fetchSupplies(batch.id)
+        // Создать trip_line для каждой поставки без trip_line_id
+        for (const supply of freshSupplies.filter((s) => !s.trip_line_id)) {
+          const boxQty = supply.boxes.length
+          const unitsQty = supply.boxes.reduce(
+            (sum, box) => sum + box.items.reduce((s, item) => s + item.qty, 0),
+            0,
+          )
+          const tripLineValues: TripLineFormValues = {
+            store_id: batch.store_id!,
+            destination_warehouse: supply.warehouse_name,
+            box_qty: boxQty,
+            units_qty: unitsQty,
+            units_total: unitsQty,
+            arrived_box_qty: 0,
+            weight: 0,
+            planned_marketplace_delivery_date: '',
+            arrival_date: '',
+            reception_date: receptionDateStr,
+            shipped_date: '',
+            status: 'Ожидает отправки',
+            payment_status: 'Не оплачено',
+            comment: '',
+          }
+          // Используем onAddTripLine из useAppData чтобы обновить React-стейт Логистики
+          const tripLine = onAddTripLine
+            ? await onAddTripLine(packingSelectedTripId, tripLineValues)
+            : await addTripLine(batch.account_id, packingSelectedTripId, tripLineValues)
+          await updateSupply(supply.id, { trip_id: packingSelectedTripId, trip_line_id: tripLine.id })
+          // Пометить поставку как созданную из фулфилмента — блокирует ручное редактирование
+          try { await setTripLineFulfillmentBatch(tripLine.id, batch.id) } catch {}
+        }
+        // Сохранить trip_id в батч (требует применённого patch_fulfillment_trip_id.sql)
+        try {
+          await updateBatch(batch.id, { trip_id: packingSelectedTripId })
+        } catch {
+          // Колонка может ещё не существовать — некритично
+        }
+      }
+
       const refreshed = await fetchBatchWithItems(batch.id)
       setItems(refreshed.items)
       onItemsChanged(refreshed.items)
@@ -733,7 +1169,7 @@ const BatchDetailModal = ({
       onBatchUpdated(updated)
       setIsDirty(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsSavingStage(false)
     }
@@ -760,6 +1196,7 @@ const BatchDetailModal = ({
     setOtkDefect('')
     setOtkNotes('')
     setOtkPhotoFiles([])
+    setOtkAddModalOpen(false)
   }
 
   // ОТК — пометить запись для удаления (не удаляет сразу)
@@ -850,7 +1287,7 @@ const BatchDetailModal = ({
       setOtkLogHistories({})
       setIsDirty(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsSavingDraft(false)
     }
@@ -913,6 +1350,7 @@ const BatchDetailModal = ({
   const handleAddMarkingLog = () => {
     const qty = Number(markingQty) || 0
     const qtyDefect = Number(markingDefect) || 0
+    if (!markingBarcode.trim()) return
     if (qty <= 0 && qtyDefect <= 0) return
     setMarkingBuffer((prev) => [...prev, {
       tempId: crypto.randomUUID(),
@@ -923,12 +1361,19 @@ const BatchDetailModal = ({
       qty_defect: qtyDefect,
       notes: markingNotes.trim(),
       photo_files: markingPhotoFiles,
+      barcode: markingBarcode.trim() || null,
+      item_id: markingItemId,
+      item_name: markingItemName,
     }])
     setIsDirty(true)
+    setMarkingBarcode('')
+    setMarkingItemId(null)
+    setMarkingItemName(null)
     setMarkingQty('')
     setMarkingDefect('')
     setMarkingNotes('')
     setMarkingPhotoFiles([])
+    setMarkingAddModalOpen(false)
   }
 
   const handleDeleteMarkingLog = (id: string) => { setMarkingDeleteConfirmId(id) }
@@ -1017,6 +1462,8 @@ const BatchDetailModal = ({
           qty_defect: e.qty_defect,
           notes: e.notes || undefined,
           photo_urls: photoUrls,
+          barcode: e.barcode ?? undefined,
+          item_id: e.item_id ?? undefined,
         })
         await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls } })
         return log
@@ -1043,7 +1490,7 @@ const BatchDetailModal = ({
       setMarkingEditingId(null)
       setIsDirty(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsSavingDraft(false)
     }
@@ -1092,6 +1539,8 @@ const BatchDetailModal = ({
             qty_defect: e.qty_defect,
             notes: e.notes || undefined,
             photo_urls: photoUrls,
+            barcode: e.barcode ?? undefined,
+            item_id: e.item_id ?? undefined,
           })
           await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls } })
         }))
@@ -1105,7 +1554,7 @@ const BatchDetailModal = ({
       onBatchUpdated(updated)
       setIsDirty(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsSavingStage(false)
     }
@@ -1148,7 +1597,7 @@ const BatchDetailModal = ({
       onBatchUpdated(updated)
       setIsDirty(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsSavingStage(false)
     }
@@ -1168,50 +1617,9 @@ const BatchDetailModal = ({
       onBatchUpdated(updated)
       setIsDirty(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsSavingStage(false)
-    }
-  }
-
-  const handleLinkLogistics = async () => {
-    if (!selectedTripId || !selectedLineId) return
-    const trip = trips.find((t) => t.id === selectedTripId)
-    const line = trip?.lines.find((l) => l.id === selectedLineId)
-    if (!trip || !line) return
-    setIsLinkingLogistics(true)
-    setError(null)
-    try {
-      const tBoxes = sumField(items, 'boxes')
-      const tPacked = sumField(items, 'qty_packed')
-      const tReceived = sumField(items, 'qty_received')
-      await onEditTripLine(selectedTripId, selectedLineId, {
-        ...line,
-        box_qty: tBoxes || line.box_qty,
-        units_qty: tPacked || tReceived || line.units_qty,
-        units_total: line.units_total,
-        arrived_box_qty: line.arrived_box_qty,
-        weight: line.weight ?? 0,
-        planned_marketplace_delivery_date: line.planned_marketplace_delivery_date ?? '',
-        arrival_date: line.arrival_date ?? '',
-        reception_date: line.reception_date ?? '',
-        shipped_date: line.shipped_date ?? '',
-        status: line.status,
-        payment_status: line.payment_status,
-        comment: line.comment,
-        store_id: line.store_id,
-        destination_warehouse: line.destination_warehouse,
-      })
-      await updateBatch(batch.id, { trip_line_id: selectedLineId })
-      const updated = await advanceStage({ ...batch, trip_line_id: selectedLineId })
-      const newBatch = { ...batch, ...updated, trip_line_id: selectedLineId }
-      setBatch(newBatch)
-      onBatchUpdated(updated)
-      setIsDirty(false)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка при привязке')
-    } finally {
-      setIsLinkingLogistics(false)
     }
   }
 
@@ -1222,9 +1630,9 @@ const BatchDetailModal = ({
   const nextStageName = enabledStages[currentIdx + 1]
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-4" style={{ zIndex }} onClick={() => isDirty ? setPendingClose(true) : onClose()}>
+    <div className="fixed inset-0 flex items-center justify-center bg-black/40" style={{ zIndex }} onClick={() => isDirty ? setPendingClose(true) : onClose()}>
       <div
-        className="flex h-[90vh] w-full max-w-7xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        className="flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -1601,14 +2009,6 @@ const BatchDetailModal = ({
               {canManage && addMode === 'boxes' && (
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-orange-50 p-3 border border-orange-100">
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Наименование</span>
-                    <input type="text" value={boxesName} onChange={(e) => setBoxesName(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void handleBoxesAdd() }}
-                      placeholder="Готовые короба"
-                      className="w-48 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Единиц *</span>
                     <input type="text" inputMode="numeric" value={boxesQty} onChange={(e) => setBoxesQty(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') void handleBoxesAdd() }}
@@ -1756,7 +2156,14 @@ const BatchDetailModal = ({
                     </tbody>
                     <tfoot className="border-t border-slate-200 bg-slate-50 font-semibold">
                       <tr>
-                        <td colSpan={3} className="px-4 py-2.5 text-sm text-slate-500">Итого</td>
+                        <td colSpan={3} className="px-4 py-2.5 text-sm text-slate-500">
+                          <span>Итого</span>
+                          {receptionCompletedDate && (
+                            <span className="ml-3 text-xs font-normal text-slate-400">
+                              Завершена {new Date(receptionCompletedDate).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 text-center text-slate-800">{tReceived}</td>
                         {items.some((i) => i.boxes) && <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, i) => s + (i.boxes ?? 0), 0) || '—'}</td>}
                         {canManage && <td />}
@@ -1780,369 +2187,357 @@ const BatchDetailModal = ({
             const canAdvance = canManage || tOtk >= tReceived
             return (
               <div className="space-y-4">
-                {/* Форма добавления работы */}
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <p className="mb-3 text-sm font-medium text-slate-700">Добавить выполненную работу</p>
-                  <div className="flex flex-wrap gap-2">
-                    {/* Исполнитель */}
-                    {canOtkAssign && otkPerformers.length > 0 ? (
-                      <select
-                        value={otkPerformerId}
-                        onChange={(e) => {
-                          const p = otkPerformers.find((x) => x.user_id === e.target.value)
-                          setOtkPerformerId(e.target.value)
-                          setOtkPerformerName(p?.full_name || e.target.value)
-                        }}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {otkPerformers.map((p) => (
-                          <option key={p.user_id} value={p.user_id}>{p.full_name || p.email}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                        {otkPerformerName || userEmail}
+                {/* Модалка добавления работы */}
+                {otkAddModalOpen && createPortal(
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={(e) => { if (e.target === e.currentTarget) setOtkAddModalOpen(false) }}>
+                    <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+                      <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                        <h3 className="text-base font-semibold text-slate-800">Добавить выполненную работу</h3>
+                        <button type="button" onClick={() => setOtkAddModalOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100">
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                        </button>
                       </div>
-                    )}
-                    {/* Тариф */}
-                    <select
-                      value={otkTariff}
-                      onChange={(e) => setOtkTariff(e.target.value)}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {OTK_TARIFFS.map((t) => (
-                        <option key={t.id} value={t.id}>{t.label}</option>
-                      ))}
-                    </select>
-                    {/* Кол-во принятых */}
-                    <input
-                      type="number"
-                      min="1"
-                      placeholder="Кол-во"
-                      value={otkQty}
-                      onChange={(e) => setOtkQty(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void handleAddOtkLog() }}
-                      className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    {/* Кол-во брака */}
-                    <input
-                      type="number"
-                      min="0"
-                      placeholder="Брак"
-                      value={otkDefect}
-                      onChange={(e) => setOtkDefect(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void handleAddOtkLog() }}
-                      className="w-20 rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 placeholder-red-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-red-400"
-                    />
-                    {/* Примечание */}
-                    <input
-                      type="text"
-                      placeholder="Примечание"
-                      value={otkNotes}
-                      onChange={(e) => setOtkNotes(e.target.value)}
-                      className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    {/* Фото */}
-                    <input
-                      ref={otkFileInputRef}
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files ?? [])
-                        if (files.length) setOtkPhotoFiles((prev) => [...prev, ...files])
-                        e.target.value = ''
-                      }}
-                    />
-                    <button
-                      type="button"
-                      title="Прикрепить фото"
-                      onClick={() => otkFileInputRef.current?.click()}
-                      className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-slate-400 hover:bg-slate-50 hover:text-blue-500 ${otkPhotoFiles.length > 0 ? 'border-blue-400 text-blue-500' : 'border-slate-200'}`}
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="h-5 w-5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
-                      </svg>
-                      {otkPhotoFiles.length > 0 && (
-                        <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">
-                          {otkPhotoFiles.length}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleAddOtkLog()}
-                      disabled={isAddingOtk || ((!otkQty || Number(otkQty) <= 0) && (!otkDefect || Number(otkDefect) <= 0))}
-                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      {isAddingOtk ? 'Сохранение…' : '+ Добавить'}
-                    </button>
-                  </div>
-                  {/* Превью прикреплённых фото */}
-                  {otkPhotoFiles.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {otkPhotoFiles.map((f, i) => (
-                        <div key={i} className="group relative">
-                          <img
-                            src={URL.createObjectURL(f)}
-                            alt={f.name}
-                            className="h-16 w-16 rounded-lg object-cover border border-slate-200"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setOtkPhotoFiles((prev) => prev.filter((_, j) => j !== i))}
-                            className="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white text-xs group-hover:flex"
-                          >
-                            ×
-                          </button>
+                      <div className="space-y-3 p-5">
+                        {/* Исполнитель */}
+                        {canOtkAssign && otkPerformers.length > 0 ? (
+                          <div>
+                            <label className="mb-1 block text-xs font-medium text-slate-500">Исполнитель</label>
+                            <select value={otkPerformerId} onChange={(e) => { const p = otkPerformers.find((x) => x.user_id === e.target.value); setOtkPerformerId(e.target.value); setOtkPerformerName(p?.full_name || e.target.value) }}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                              {otkPerformers.map((p) => <option key={p.user_id} value={p.user_id}>{p.full_name || p.email}</option>)}
+                            </select>
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="mb-1 block text-xs font-medium text-slate-500">Исполнитель</label>
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">{otkPerformerName || userEmail}</div>
+                          </div>
+                        )}
+                        {/* Тариф */}
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Тариф</label>
+                          <select value={otkTariff} onChange={(e) => setOtkTariff(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            {OTK_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                          </select>
                         </div>
-                      ))}
+                        {/* Годный / Брак */}
+                        <div className="flex gap-3">
+                          <div className="flex-1">
+                            <label className="mb-1 block text-xs font-medium text-slate-500">Годный</label>
+                            <input type="number" min="0" placeholder="0" value={otkQty} onChange={(e) => setOtkQty(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') void handleAddOtkLog() }}
+                              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                          </div>
+                          <div className="flex-1">
+                            <label className="mb-1 block text-xs font-medium text-red-400">Брак</label>
+                            <input type="number" min="0" placeholder="0" value={otkDefect} onChange={(e) => setOtkDefect(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') void handleAddOtkLog() }}
+                              className="w-full rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 placeholder-red-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-red-400" />
+                          </div>
+                        </div>
+                        {/* Примечание */}
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Примечание</label>
+                          <input type="text" placeholder="Необязательно" value={otkNotes} onChange={(e) => setOtkNotes(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                        {/* Фото */}
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Фото</label>
+                          <input ref={otkFileInputRef} type="file" accept="image/*" multiple className="hidden"
+                            onChange={(e) => { const files = Array.from(e.target.files ?? []); if (files.length) setOtkPhotoFiles((prev) => [...prev, ...files]); e.target.value = '' }} />
+                          <button type="button" onClick={() => otkFileInputRef.current?.click()}
+                            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${otkPhotoFiles.length > 0 ? 'border-blue-300 bg-blue-50 text-blue-600' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="h-4 w-4 shrink-0">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+                            </svg>
+                            {otkPhotoFiles.length > 0 ? `${otkPhotoFiles.length} фото прикреплено` : 'Прикрепить фото'}
+                          </button>
+                          {otkPhotoFiles.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {otkPhotoFiles.map((f, i) => (
+                                <div key={i} className="group relative">
+                                  <img src={URL.createObjectURL(f)} alt={f.name} className="h-14 w-14 rounded-lg object-cover border border-slate-200" />
+                                  <button type="button" onClick={() => setOtkPhotoFiles((prev) => prev.filter((_, j) => j !== i))}
+                                    className="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white text-xs group-hover:flex">×</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-4">
+                        <button type="button" onClick={() => setOtkAddModalOpen(false)}
+                          className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">
+                          Отмена
+                        </button>
+                        <button type="button" onClick={() => void handleAddOtkLog()}
+                          disabled={isAddingOtk || ((!otkQty || Number(otkQty) <= 0) && (!otkDefect || Number(otkDefect) <= 0))}
+                          className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                          {isAddingOtk ? 'Сохранение…' : '+ Добавить'}
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
+                  </div>,
+                  document.body
+                )}
 
                 {/* Журнал работ */}
                 {isLoadingOtk ? (
                   <div className="py-6 text-center text-sm text-slate-400">Загрузка…</div>
                 ) : otkLogs.length === 0 && otkBuffer.length === 0 ? (
-                  <div className="rounded-2xl border-2 border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">
-                    Записей нет — добавьте первую работу
+                  <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 py-10">
+                    <p className="text-sm text-slate-400">Записей нет — добавьте первую работу</p>
+                    <button type="button" onClick={() => setOtkAddModalOpen(true)}
+                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                      + Добавить работу
+                    </button>
                   </div>
                 ) : (
-                  <div className="overflow-hidden rounded-2xl border border-slate-200">
-                    <table className="w-full text-sm">
-                      <thead className="text-xs text-slate-500">
-                        {/* Итого — первая строка над шапкой */}
-                        <tr className="bg-slate-100 border-b border-slate-200">
-                          <th colSpan={8} className="px-4 py-2.5 font-normal">
-                            {(() => {
-                              const activeLogs = otkLogs.filter((l) => !otkDeletedIds.includes(l.id))
-                              const allEntries = [...activeLogs, ...otkBuffer]
-                              const performers = new Set([
-                                ...activeLogs.map((l) => l.performer_user_id ?? l.user_id),
-                                ...otkBuffer.map((e) => e.performer_user_id),
-                              ]).size
-                              const tariffs = new Set([
-                                ...activeLogs.map((l) => otkEdits[l.id]?.tariff ?? l.tariff),
-                                ...otkBuffer.map((e) => e.tariff),
-                              ]).size
-                              const totalGood = activeLogs.reduce((s, l) => s + (otkEdits[l.id]?.qty ?? l.qty), 0) + otkBuffer.reduce((s, e) => s + e.qty, 0)
-                              const totalDefect = activeLogs.reduce((s, l) => s + (otkEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + otkBuffer.reduce((s, e) => s + e.qty_defect, 0)
-                              const totalNotes = allEntries.filter((e) => ('notes' in e ? e.notes : (otkEdits[(e as FulfillmentOtkLog).id]?.notes ?? (e as FulfillmentOtkLog).notes ?? '')) !== '').length
-                              const totalPhotos = activeLogs.filter((l) => l.photo_urls && l.photo_urls.length > 0).length + otkBuffer.filter((e) => e.photo_files.length > 0).length
-                              const stats: { label: string; value: number | string; color?: string }[] = [
-                                { label: 'Исполнителей', value: performers },
-                                { label: 'Тарифов', value: tariffs },
-                                { label: 'Годных', value: totalGood },
-                                { label: 'Браков', value: totalDefect, color: totalDefect > 0 ? 'text-red-600' : undefined },
-                                { label: 'Итого ОТК', value: totalGood + totalDefect },
-                                { label: 'Примечаний', value: totalNotes },
-                                { label: 'Фото', value: totalPhotos },
-                              ]
-                              return (
-                                <div className="flex w-full items-center justify-between">
-                                  <span className="font-semibold text-slate-600">Итого</span>
-                                  {stats.map(({ label, value, color }) => (
-                                    <span key={label} className="text-slate-500">
-                                      {label}: <span className={`font-semibold ${color ?? 'text-slate-800'}`}>{value}</span>
-                                    </span>
-                                  ))}
+                  <div className="space-y-3">
+                    {/* Итого + кнопка добавить */}
+                    {(() => {
+                      const activeLogs = otkLogs.filter((l) => !otkDeletedIds.includes(l.id))
+                      const performers = new Set([
+                        ...activeLogs.map((l) => l.performer_user_id ?? l.user_id),
+                        ...otkBuffer.map((e) => e.performer_user_id),
+                      ]).size
+                      const tariffs = new Set([
+                        ...activeLogs.map((l) => otkEdits[l.id]?.tariff ?? l.tariff),
+                        ...otkBuffer.map((e) => e.tariff),
+                      ]).size
+                      const totalGood = activeLogs.reduce((s, l) => s + (otkEdits[l.id]?.qty ?? l.qty), 0) + otkBuffer.reduce((s, e) => s + e.qty, 0)
+                      const totalDefect = activeLogs.reduce((s, l) => s + (otkEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + otkBuffer.reduce((s, e) => s + e.qty_defect, 0)
+                      const totalNotes = [...activeLogs, ...otkBuffer].filter((e) => ('notes' in e ? e.notes : (otkEdits[(e as FulfillmentOtkLog).id]?.notes ?? (e as FulfillmentOtkLog).notes ?? '')) !== '').length
+                      const totalPhotos = activeLogs.filter((l) => l.photo_urls && l.photo_urls.length > 0).length + otkBuffer.filter((e) => e.photo_files.length > 0).length
+                      const stats: { label: string; value: number | string; color?: string }[] = [
+                        { label: 'Исполнителей', value: performers },
+                        { label: 'Тарифов', value: tariffs },
+                        { label: 'Годных', value: totalGood },
+                        { label: 'Браков', value: totalDefect, color: totalDefect > 0 ? 'text-red-600' : undefined },
+                        { label: 'Итого ОТК', value: totalGood + totalDefect },
+                        { label: 'Примечаний', value: totalNotes },
+                        { label: 'Фото', value: totalPhotos },
+                      ]
+                      return (
+                        <div className="flex items-center gap-x-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5">
+                          <span className="font-semibold text-slate-600">Итого</span>
+                          <div className="flex flex-1 flex-wrap items-center gap-x-5 gap-y-1">
+                            {stats.map(({ label, value, color }) => (
+                              <span key={label} className="text-xs text-slate-500">
+                                {label}: <span className={`font-semibold ${color ?? 'text-slate-800'}`}>{value}</span>
+                              </span>
+                            ))}
+                          </div>
+                          <button type="button" onClick={() => setOtkAddModalOpen(true)}
+                            className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
+                            + Добавить работу
+                          </button>
+                        </div>
+                      )
+                    })()}
+
+                    {/* Сетка карточек */}
+                    <div className="grid grid-cols-6 gap-2">
+                      {/* Сохранённые записи */}
+                      {otkLogs.filter((l) => !otkDeletedIds.includes(l.id)).map((log) => {
+                        const isEditing = otkEditingId === log.id
+                        const edit = otkEdits[log.id] ?? { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' }
+                        const logTime = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                        const logDate = new Date(log.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                        const isOwn = log.user_id === userId
+                        const hasEdit = !!otkEdits[log.id] && (
+                          otkEdits[log.id].tariff !== log.tariff ||
+                          otkEdits[log.id].qty !== log.qty ||
+                          otkEdits[log.id].qty_defect !== log.qty_defect ||
+                          otkEdits[log.id].notes !== (log.notes ?? '')
+                        )
+                        const displayTariff = OTK_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
+                        return (
+                          <div key={log.id} className="relative">
+                          {/* Плейсхолдер — всегда занимает место в сетке */}
+                          <div className={`flex flex-col gap-1.5 rounded-2xl border px-3 py-2.5 ${isEditing ? 'invisible' : hasEdit ? 'border-amber-200 bg-amber-50/40' : isOwn ? 'border-blue-100 bg-blue-50/20' : 'border-slate-200 bg-white'}`}>
+                            {/* Вид по умолчанию */}
+                            <div className="flex items-start justify-between gap-1">
+                              <button type="button" onClick={() => { setOtkHistoryLog(log); setOtkHistoryTabId(log.id) }}
+                                className="group flex flex-col items-start leading-tight" title="История">
+                                <span className="text-[11px] font-semibold text-slate-700 tabular-nums">{logTime}</span>
+                                <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
+                              </button>
+                              {(isOwn || canManage) && (
+                                <div className="flex items-center gap-0.5">
+                                  <button type="button" onClick={() => {
+                                      // Чистим незакоммиченные edits предыдущей карточки если ничего не менялось
+                                      if (otkEditingId && otkEditingId !== log.id) {
+                                        const prev = otkEdits[otkEditingId]
+                                        const prevLog = otkLogs.find((l) => l.id === otkEditingId)
+                                        if (prev && prevLog &&
+                                          prev.tariff === prevLog.tariff &&
+                                          prev.qty === prevLog.qty &&
+                                          prev.qty_defect === prevLog.qty_defect &&
+                                          prev.notes === (prevLog.notes ?? '')
+                                        ) {
+                                          setOtkEdits((p) => { const n = { ...p }; delete n[otkEditingId]; return n })
+                                        }
+                                      }
+                                      setOtkEdits((p) => ({ ...p, [log.id]: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' } }))
+                                      setOtkEditingId(log.id)
+                                    }}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
+                                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                  </button>
+                                  <button type="button" onClick={() => handleDeleteOtkLog(log.id)}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500" title="Удалить">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                  </button>
                                 </div>
-                              )
-                            })()}
-                          </th>
-                        </tr>
-                        <tr className="bg-slate-50">
-                          <th className="px-4 py-2.5 text-left font-medium">Время</th>
-                          <th className="px-4 py-2.5 text-left font-medium">Исполнитель</th>
-                          <th className="px-4 py-2.5 text-left font-medium">Тариф</th>
-                          <th className="px-3 py-2.5 text-center font-medium">Годный</th>
-                          <th className="px-3 py-2.5 text-center font-medium">Брак</th>
-                          <th className="px-3 py-2.5 text-left font-medium">Примечание</th>
-                          <th className="px-3 py-2.5 text-left font-medium">Фото</th>
-                          <th className="w-10 px-3 py-2.5" />
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {otkLogs.filter((l) => !otkDeletedIds.includes(l.id)).map((log) => {
-                          const isEditing = otkEditingId === log.id
-                          const edit = otkEdits[log.id] ?? { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' }
-                          const logTime = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
-                          const logDate = new Date(log.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-                          const isOwn = log.user_id === userId
-                          if (isEditing) {
-                            return (
-                              <tr key={log.id} className="bg-amber-50/60">
-                                <td className="px-4 py-2 tabular-nums whitespace-nowrap">
-                                  <div className="flex flex-col items-start">
-                                    <span className="text-xs text-slate-400">{logTime}</span>
-                                    <span className="text-xs text-slate-400">{logDate}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2 text-slate-500 text-xs max-w-[140px] truncate">{log.performer_name}</td>
-                                <td className="px-4 py-2">
-                                  <select value={edit.tariff} onChange={(e) => setOtkEdits((p) => ({ ...p, [log.id]: { ...edit, tariff: e.target.value } }))}
-                                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                                    {OTK_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-                                  </select>
-                                </td>
-                                <td className="px-3 py-2">
+                              )}
+                            </div>
+                            <span className="truncate text-xs font-semibold text-slate-700 leading-tight" title={log.user_email}>{log.performer_name}</span>
+                            <span className="w-fit rounded-full bg-slate-100 px-2 py-0.5 text-[10px] leading-tight text-slate-600">{displayTariff}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-slate-400">Год: <span className="font-bold text-slate-800">{edit.qty}</span></span>
+                              <span className="text-[10px] text-slate-400">Бр: {edit.qty_defect > 0 ? <span className="font-bold text-red-600">{edit.qty_defect}</span> : <span className="text-slate-300">—</span>}</span>
+                            </div>
+                            {edit.notes && <span className="truncate text-[10px] italic text-slate-400" title={edit.notes}>{edit.notes}</span>}
+                            <InvoicePhotoCell
+                              photoUrls={log.photo_urls ?? []}
+                              onAdd={(isOwn || canManage) ? (file) => handleAddOtkPhoto(log.id, file) : undefined}
+                              onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceOtkPhoto(log.id, idx, file) : undefined}
+                              onRemove={(isOwn || canManage) ? (idx) => handleRemoveOtkPhoto(log.id, idx) : undefined}
+                            />
+                          </div>
+                          {/* Редактируемая карточка — абсолютный слой, не двигает сетку */}
+                          {isEditing && (
+                            <div className="absolute left-0 top-0 z-30 w-72 rounded-2xl border border-blue-200 bg-white px-3 py-2.5 shadow-xl">
+                              <div className="flex items-start justify-between gap-1">
+                                <button type="button" onClick={() => { setOtkHistoryLog(log); setOtkHistoryTabId(log.id) }}
+                                  className="group flex flex-col items-start leading-tight" title="История">
+                                  <span className="text-[11px] font-semibold text-blue-600 tabular-nums">{logTime}</span>
+                                  <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
+                                </button>
+                                <div className="flex items-center gap-0.5">
+                                  <button type="button" onClick={() => { setIsDirty(true); setOtkEditingId(null) }}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Применить">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                                  </button>
+                                  <button type="button" onClick={() => { setOtkEdits((p) => { const n = { ...p }; delete n[log.id]; return n }); setOtkEditingId(null) }}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100" title="Отмена">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                  </button>
+                                </div>
+                              </div>
+                              <span className="mt-1 block truncate text-xs font-semibold text-slate-700 leading-tight">{log.performer_name}</span>
+                              <select value={edit.tariff} onChange={(e) => setOtkEdits((p) => ({ ...p, [log.id]: { ...edit, tariff: e.target.value } }))}
+                                className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                {OTK_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                              </select>
+                              <div className="mt-1.5 flex items-center gap-3">
+                                <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  Годный
                                   <input type="number" min={0} value={edit.qty}
                                     onChange={(e) => setOtkEdits((p) => ({ ...p, [log.id]: { ...edit, qty: Number(e.target.value) } }))}
-                                    className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                                </td>
-                                <td className="px-3 py-2">
+                                    className="w-20 rounded-lg border border-slate-200 px-2 py-1.5 text-center text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                                </label>
+                                <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                                  Брак
                                   <input type="number" min={0} value={edit.qty_defect}
                                     onChange={(e) => setOtkEdits((p) => ({ ...p, [log.id]: { ...edit, qty_defect: Number(e.target.value) } }))}
-                                    className="w-16 rounded-lg border border-red-200 px-2 py-1 text-center text-xs text-red-700 focus:outline-none focus:ring-1 focus:ring-red-300" />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="text" value={edit.notes}
-                                    onChange={(e) => setOtkEdits((p) => ({ ...p, [log.id]: { ...edit, notes: e.target.value } }))}
-                                    className="w-full min-w-0 rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                                </td>
-                                <td className="px-3 py-2" />
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1">
-                                    <button type="button" onClick={() => { setIsDirty(true); setOtkEditingId(null) }}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Применить">
-                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
-                                    </button>
-                                    <button type="button" onClick={() => { setOtkEdits((p) => { const n = { ...p }; delete n[log.id]; return n }); setOtkEditingId(null) }}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100" title="Отмена">
-                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            )
-                          }
-                          const displayTariff = OTK_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
-                          const hasEdit = !!otkEdits[log.id]
-                          return (
-                            <tr key={log.id} className={hasEdit ? 'bg-amber-50/30' : isOwn ? 'bg-blue-50/40' : ''}>
-                              <td className="px-4 py-2.5 tabular-nums whitespace-nowrap">
-                                <button
-                                  type="button"
-                                  onClick={() => { setOtkHistoryLog(log); setOtkHistoryTabId(log.id) }}
-                                  className="group flex flex-col items-start text-left"
-                                  title="Посмотреть историю"
-                                >
-                                  <span className="text-xs text-slate-700 group-hover:text-blue-600 transition-colors">{logTime}</span>
-                                  <span className="text-xs text-slate-500 group-hover:text-blue-600 transition-colors">{logDate}</span>
-                                </button>
-                              </td>
-                              <td className="px-4 py-2.5 text-slate-700 max-w-[140px] truncate" title={log.user_email}>{log.performer_name}</td>
-                              <td className="px-4 py-2.5 text-slate-700 whitespace-nowrap">{displayTariff}</td>
-                              <td className="px-3 py-2.5 text-center font-semibold text-slate-800">{edit.qty}</td>
-                              <td className="px-3 py-2.5 text-center">
-                                {edit.qty_defect > 0
-                                  ? <span className="font-semibold text-red-600">{edit.qty_defect}</span>
-                                  : <span className="text-slate-300">—</span>}
-                              </td>
-                              <td className="px-3 py-2.5 text-slate-500 text-xs">{edit.notes}</td>
-                              <td className="px-3 py-2.5">
+                                    className="w-20 rounded-lg border border-red-200 px-2 py-1.5 text-center text-sm font-medium text-red-600 focus:outline-none focus:ring-2 focus:ring-red-300" />
+                                </label>
+                              </div>
+                              <input type="text" value={edit.notes}
+                                onChange={(e) => setOtkEdits((p) => ({ ...p, [log.id]: { ...edit, notes: e.target.value } }))}
+                                placeholder="Примечание"
+                                className="mt-1.5 w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                              <div className="mt-1.5">
                                 <InvoicePhotoCell
                                   photoUrls={log.photo_urls ?? []}
                                   onAdd={(isOwn || canManage) ? (file) => handleAddOtkPhoto(log.id, file) : undefined}
                                   onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceOtkPhoto(log.id, idx, file) : undefined}
                                   onRemove={(isOwn || canManage) ? (idx) => handleRemoveOtkPhoto(log.id, idx) : undefined}
                                 />
-                              </td>
-                              <td className="px-3 py-2.5">
-                                {(isOwn || canManage) && (
-                                  <div className="flex gap-1">
-                                    <button type="button"
-                                      onClick={() => { setOtkEdits((p) => ({ ...p, [log.id]: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' } })); setOtkEditingId(log.id) }}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
-                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                                    </button>
-                                    <button type="button" onClick={() => handleDeleteOtkLog(log.id)}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500" title="Удалить">
-                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                                    </button>
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                        {/* Буферные строки — ещё не сохранены */}
-                        {otkBuffer.map((entry) => {
-                          const isEditing = otkEditingId === entry.tempId
-                          const tariffLabel = OTK_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
-                          if (isEditing) {
-                            return (
-                              <tr key={entry.tempId} className="bg-amber-50">
-                                <td className="px-4 py-2 text-xs text-amber-600 italic whitespace-nowrap">Новая</td>
-                                <td className="px-4 py-2 text-xs text-slate-500">{entry.performer_name}</td>
-                                <td className="px-4 py-2">
-                                  <select value={entry.tariff} onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, tariff: e.target.value } : x))}
-                                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                                    {OTK_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-                                  </select>
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="number" min={0} value={entry.qty}
-                                    onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty: Number(e.target.value) } : x))}
-                                    className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-xs focus:outline-none" />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="number" min={0} value={entry.qty_defect}
-                                    onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty_defect: Number(e.target.value) } : x))}
-                                    className="w-16 rounded-lg border border-red-200 px-2 py-1 text-center text-xs text-red-700 focus:outline-none" />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="text" value={entry.notes}
-                                    onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, notes: e.target.value } : x))}
-                                    className="w-full min-w-0 rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none" />
-                                </td>
-                                <td className="px-3 py-2" />
-                                <td className="px-3 py-2">
-                                  <button type="button" onClick={() => setOtkEditingId(null)}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Готово">
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
-                                  </button>
-                                </td>
-                              </tr>
-                            )
-                          }
-                          return (
-                            <tr key={entry.tempId} className="bg-amber-50/70">
-                              <td className="px-4 py-2.5 text-xs text-amber-600 italic whitespace-nowrap">Новая</td>
-                              <td className="px-4 py-2.5 text-xs text-slate-600">{entry.performer_name}</td>
-                              <td className="px-4 py-2.5 text-xs text-slate-700">{tariffLabel}</td>
-                              <td className="px-3 py-2.5 text-center font-semibold text-slate-800">{entry.qty}</td>
-                              <td className="px-3 py-2.5 text-center">
-                                {entry.qty_defect > 0 ? <span className="font-semibold text-red-600">{entry.qty_defect}</span> : <span className="text-slate-300">—</span>}
-                              </td>
-                              <td className="px-3 py-2.5 text-xs text-slate-500">{entry.notes}</td>
-                              <td className="px-3 py-2.5">
-                                {entry.photo_files.length > 0 ? (
-                                  <InvoicePhotoCell
-                                    photoUrls={entry.photo_files.map((f) => URL.createObjectURL(f))}
-                                  />
-                                ) : <span className="text-slate-300">—</span>}
-                              </td>
-                              <td className="px-3 py-2.5">
-                                <div className="flex gap-1">
+                              </div>
+                            </div>
+                          )}
+                          </div>
+                        )
+                      })}
+
+                      {/* Буферные (несохранённые) записи */}
+                      {otkBuffer.map((entry) => {
+                        const isEditing = otkEditingId === entry.tempId
+                        const tariffLabel = OTK_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
+                        return (
+                          <div key={entry.tempId} className="relative">
+                            {/* Плейсхолдер */}
+                            <div className={`flex flex-col gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/60 px-3 py-2.5 ${isEditing ? 'invisible' : ''}`}>
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-[10px] font-semibold italic text-amber-500">Новая</span>
+                                <div className="flex items-center gap-0.5">
                                   <button type="button" onClick={() => setOtkEditingId(entry.tempId)}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
-                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
+                                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                   </button>
                                   <button type="button" onClick={() => handleDeleteOtkLog(entry.tempId)}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500" title="Удалить">
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500" title="Удалить">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
                                   </button>
                                 </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+                              </div>
+                              <span className="truncate text-xs font-semibold text-slate-700 leading-tight">{entry.performer_name}</span>
+                              <span className="w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] leading-tight text-amber-700">{tariffLabel}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-slate-400">Год: <span className="font-bold text-slate-800">{entry.qty}</span></span>
+                                <span className="text-[10px] text-slate-400">Бр: {entry.qty_defect > 0 ? <span className="font-bold text-red-600">{entry.qty_defect}</span> : <span className="text-slate-300">—</span>}</span>
+                              </div>
+                              {entry.notes && <span className="truncate text-[10px] italic text-slate-400">{entry.notes}</span>}
+                              {entry.photo_files.length > 0 && <InvoicePhotoCell photoUrls={entry.photo_files.map((f) => URL.createObjectURL(f))} />}
+                            </div>
+                            {/* Редактируемая — абсолютный слой */}
+                            {isEditing && (
+                              <div className="absolute left-0 top-0 z-30 w-72 rounded-2xl border border-amber-300 bg-white px-3 py-2.5 shadow-xl">
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-[10px] font-semibold italic text-amber-500">Новая</span>
+                                  <button type="button" onClick={() => setOtkEditingId(null)}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Готово">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                                  </button>
+                                </div>
+                                <span className="mt-1 block truncate text-xs font-semibold text-slate-700 leading-tight">{entry.performer_name}</span>
+                                <select value={entry.tariff} onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, tariff: e.target.value } : x))}
+                                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                  {OTK_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                                </select>
+                                <div className="mt-1.5 flex items-center gap-3">
+                                  <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    Годный
+                                    <input type="number" min={0} value={entry.qty}
+                                      onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty: Number(e.target.value) } : x))}
+                                      className="w-20 rounded-lg border border-slate-200 px-2 py-1.5 text-center text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                                  </label>
+                                  <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    Брак
+                                    <input type="number" min={0} value={entry.qty_defect}
+                                      onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty_defect: Number(e.target.value) } : x))}
+                                      className="w-20 rounded-lg border border-red-200 px-2 py-1.5 text-center text-sm font-medium text-red-600 focus:outline-none focus:ring-2 focus:ring-red-300" />
+                                  </label>
+                                </div>
+                                <input type="text" value={entry.notes}
+                                  onChange={(e) => setOtkBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, notes: e.target.value } : x))}
+                                  placeholder="Примечание"
+                                  className="mt-1.5 w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none" />
+                                {entry.photo_files.length > 0 && (
+                                  <div className="mt-1.5"><InvoicePhotoCell photoUrls={entry.photo_files.map((f) => URL.createObjectURL(f))} /></div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 )}
 
@@ -2169,321 +2564,435 @@ const BatchDetailModal = ({
             const canAdvance = canManage || tMarking >= tReceived
             return (
               <div className="space-y-4">
-                {/* Форма добавления работы */}
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <p className="mb-3 text-sm font-medium text-slate-700">Добавить выполненную работу</p>
-                  <div className="flex flex-wrap gap-2">
-                    {canOtkAssign && markingPerformers.length > 0 ? (
-                      <select
-                        value={markingPerformerId}
-                        onChange={(e) => {
-                          const p = markingPerformers.find((x) => x.user_id === e.target.value)
-                          setMarkingPerformerId(e.target.value)
-                          setMarkingPerformerName(p?.full_name || e.target.value)
-                        }}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {markingPerformers.map((p) => (
-                          <option key={p.user_id} value={p.user_id}>{p.full_name || p.email}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                        {markingPerformerName || userEmail}
+                {/* Модалка добавления работы */}
+                {markingAddModalOpen && createPortal(
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={(e) => { if (e.target === e.currentTarget) setMarkingAddModalOpen(false) }}>
+                    <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+                      <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                        <h3 className="text-base font-semibold text-slate-800">Добавить выполненную работу</h3>
+                        <button type="button" onClick={() => setMarkingAddModalOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100">
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                        </button>
                       </div>
-                    )}
-                    <select
-                      value={markingTariff}
-                      onChange={(e) => setMarkingTariff(e.target.value)}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {MARKING_TARIFFS.map((t) => (
-                        <option key={t.id} value={t.id}>{t.label}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="number" min="1" placeholder="Кол-во" value={markingQty}
-                      onChange={(e) => setMarkingQty(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddMarkingLog() }}
-                      className="w-24 rounded-xl border border-slate-200 px-3 py-2 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <input
-                      type="number" min="0" placeholder="Брак" value={markingDefect}
-                      onChange={(e) => setMarkingDefect(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddMarkingLog() }}
-                      className="w-20 rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 placeholder-red-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-red-400"
-                    />
-                    <input
-                      type="text" placeholder="Примечание" value={markingNotes}
-                      onChange={(e) => setMarkingNotes(e.target.value)}
-                      className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <input ref={markingFileInputRef} type="file" accept="image/*" multiple className="hidden"
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files ?? [])
-                        if (files.length) setMarkingPhotoFiles((prev) => [...prev, ...files])
-                        e.target.value = ''
-                      }}
-                    />
-                    <button type="button" title="Прикрепить фото" onClick={() => markingFileInputRef.current?.click()}
-                      className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-slate-400 hover:bg-slate-50 hover:text-blue-500 ${markingPhotoFiles.length > 0 ? 'border-blue-400 text-blue-500' : 'border-slate-200'}`}>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="h-5 w-5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
-                      </svg>
-                      {markingPhotoFiles.length > 0 && (
-                        <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">{markingPhotoFiles.length}</span>
-                      )}
-                    </button>
-                    <button type="button" onClick={handleAddMarkingLog}
-                      disabled={isAddingMarking || ((!markingQty || Number(markingQty) <= 0) && (!markingDefect || Number(markingDefect) <= 0))}
-                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                      {isAddingMarking ? 'Сохранение…' : '+ Добавить'}
-                    </button>
-                  </div>
-                  {markingPhotoFiles.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {markingPhotoFiles.map((f, i) => (
-                        <div key={i} className="group relative">
-                          <img src={URL.createObjectURL(f)} alt={f.name} className="h-16 w-16 rounded-lg object-cover border border-slate-200" />
-                          <button type="button" onClick={() => setMarkingPhotoFiles((prev) => prev.filter((_, j) => j !== i))}
-                            className="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white text-xs group-hover:flex">×</button>
+                      <div className="space-y-3 p-5">
+                        {/* ШК — обязательное */}
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Штрихкод <span className="text-red-400">*</span></label>
+                          <div className="flex items-center gap-2">
+                            <div className="relative flex-1">
+                              <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="1.75">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 13.5 9.375v-4.5Z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75ZM6.75 16.5h.75v.75h-.75v-.75ZM16.5 6.75h.75v.75h-.75v-.75ZM13.5 13.5h.75v.75h-.75v-.75ZM13.5 19.5h.75v.75h-.75v-.75ZM19.5 13.5h.75v.75h-.75v-.75ZM19.5 19.5h.75v.75h-.75v-.75ZM16.5 16.5h.75v.75h-.75v-.75Z" />
+                              </svg>
+                              <input
+                                ref={markingBarcodeRef}
+                                type="text"
+                                placeholder="Сканировать ШК…"
+                                value={markingBarcode}
+                                onChange={(e) => {
+                                  const v = e.target.value
+                                  setMarkingBarcode(v)
+                                  const found = items.find((it) => it.barcode === v.trim())
+                                  if (found) { setMarkingItemId(found.id); setMarkingItemName(found.product_name ?? found.barcode) }
+                                  else { setMarkingItemId(null); setMarkingItemName(null) }
+                                }}
+                                onKeyDown={(e) => { if (e.key === 'Enter' && markingBarcode.trim()) { e.preventDefault(); (e.target as HTMLElement).closest('.marking-modal-form')?.querySelector<HTMLInputElement>('.marking-qty-input')?.focus() } }}
+                                className={`w-full rounded-xl border bg-white pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${markingBarcode.trim() ? 'border-slate-200' : 'border-red-300 focus:ring-red-400'}`}
+                              />
+                            </div>
+                            <button type="button" title="Сканировать камерой" onClick={() => { setMarkingCameraOpen((p) => !p); setMarkingCameraError(null) }}
+                              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors ${markingCameraOpen ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-blue-500'}`}>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className="h-5 w-5">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+                              </svg>
+                            </button>
+                          </div>
+                          {markingBarcode.trim() && (
+                            markingItemName ? (
+                              <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-emerald-50 border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-700">
+                                <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" /></svg>
+                                {markingItemName}
+                              </span>
+                            ) : (
+                              <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 text-xs font-medium text-amber-700">
+                                <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" /></svg>
+                                Не найден в партии
+                              </span>
+                            )
+                          )}
                         </div>
-                      ))}
+                        {/* Исполнитель */}
+                        {canOtkAssign && markingPerformers.length > 0 ? (
+                          <div>
+                            <label className="mb-1 block text-xs font-medium text-slate-500">Исполнитель</label>
+                            <select value={markingPerformerId} onChange={(e) => { const p = markingPerformers.find((x) => x.user_id === e.target.value); setMarkingPerformerId(e.target.value); setMarkingPerformerName(p?.full_name || e.target.value) }}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                              {markingPerformers.map((p) => <option key={p.user_id} value={p.user_id}>{p.full_name || p.email}</option>)}
+                            </select>
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="mb-1 block text-xs font-medium text-slate-500">Исполнитель</label>
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">{markingPerformerName || userEmail}</div>
+                          </div>
+                        )}
+                        {/* Тариф */}
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Тариф</label>
+                          <select value={markingTariff} onChange={(e) => setMarkingTariff(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            {MARKING_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                          </select>
+                        </div>
+                        {/* Годный / Брак */}
+                        <div className="marking-modal-form flex gap-3">
+                          <div className="flex-1">
+                            <label className="mb-1 block text-xs font-medium text-slate-500">Годный</label>
+                            <input type="number" min="0" placeholder="0" value={markingQty} onChange={(e) => setMarkingQty(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleAddMarkingLog() }}
+                              className="marking-qty-input w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                          </div>
+                          <div className="flex-1">
+                            <label className="mb-1 block text-xs font-medium text-red-400">Брак</label>
+                            <input type="number" min="0" placeholder="0" value={markingDefect} onChange={(e) => setMarkingDefect(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleAddMarkingLog() }}
+                              className="w-full rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 placeholder-red-300 focus:outline-none focus:ring-2 focus:ring-red-400" />
+                          </div>
+                        </div>
+                        {/* Примечание */}
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Примечание</label>
+                          <input type="text" placeholder="Необязательно" value={markingNotes} onChange={(e) => setMarkingNotes(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                        {/* Фото */}
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Фото</label>
+                          <input ref={markingFileInputRef} type="file" accept="image/*" multiple className="hidden"
+                            onChange={(e) => { const files = Array.from(e.target.files ?? []); if (files.length) setMarkingPhotoFiles((prev) => [...prev, ...files]); e.target.value = '' }} />
+                          <button type="button" onClick={() => markingFileInputRef.current?.click()}
+                            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${markingPhotoFiles.length > 0 ? 'border-blue-300 bg-blue-50 text-blue-600' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="h-4 w-4 shrink-0">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+                            </svg>
+                            {markingPhotoFiles.length > 0 ? `${markingPhotoFiles.length} фото прикреплено` : 'Прикрепить фото'}
+                          </button>
+                          {markingPhotoFiles.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {markingPhotoFiles.map((f, i) => (
+                                <div key={i} className="group relative">
+                                  <img src={URL.createObjectURL(f)} alt={f.name} className="h-14 w-14 rounded-lg object-cover border border-slate-200" />
+                                  <button type="button" onClick={() => setMarkingPhotoFiles((prev) => prev.filter((_, j) => j !== i))}
+                                    className="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white text-xs group-hover:flex">×</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-4">
+                        <button type="button" onClick={() => setMarkingAddModalOpen(false)}
+                          className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">
+                          Отмена
+                        </button>
+                        <button type="button" onClick={handleAddMarkingLog}
+                          disabled={isAddingMarking || !markingBarcode.trim() || ((!markingQty || Number(markingQty) <= 0) && (!markingDefect || Number(markingDefect) <= 0))}
+                          className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                          {isAddingMarking ? 'Сохранение…' : '+ Добавить'}
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
+                  </div>,
+                  document.body
+                )}
 
                 {/* Журнал работ */}
                 {isLoadingMarking ? (
                   <div className="py-6 text-center text-sm text-slate-400">Загрузка…</div>
                 ) : markingLogs.length === 0 && markingBuffer.length === 0 ? (
-                  <div className="rounded-2xl border-2 border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">
-                    Записей нет — добавьте первую работу
+                  <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 py-10">
+                    <p className="text-sm text-slate-400">Записей нет — добавьте первую работу</p>
+                    <button type="button" onClick={() => setMarkingAddModalOpen(true)}
+                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                      + Добавить работу
+                    </button>
                   </div>
                 ) : (
-                  <div className="overflow-hidden rounded-2xl border border-slate-200">
-                    <table className="w-full text-sm">
-                      <thead className="text-xs text-slate-500">
-                        <tr className="bg-slate-100 border-b border-slate-200">
-                          <th colSpan={8} className="px-4 py-2.5 font-normal">
-                            {(() => {
-                              const activeLogs = markingLogs.filter((l) => !markingDeletedIds.includes(l.id))
-                              const allEntries = [...activeLogs, ...markingBuffer]
-                              const performers = new Set([
-                                ...activeLogs.map((l) => l.performer_user_id ?? l.user_id),
-                                ...markingBuffer.map((e) => e.performer_user_id ?? ''),
-                              ]).size
-                              const tariffs = new Set([
-                                ...activeLogs.map((l) => markingEdits[l.id]?.tariff ?? l.tariff),
-                                ...markingBuffer.map((e) => e.tariff),
-                              ]).size
-                              const totalGood = activeLogs.reduce((s, l) => s + (markingEdits[l.id]?.qty ?? l.qty), 0) + markingBuffer.reduce((s, e) => s + e.qty, 0)
-                              const totalDefect = activeLogs.reduce((s, l) => s + (markingEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + markingBuffer.reduce((s, e) => s + e.qty_defect, 0)
-                              const totalNotes = allEntries.filter((e) => {
-                                const n = 'notes' in e ? (markingEdits[(e as FulfillmentMarkingLog).id]?.notes ?? (e as FulfillmentMarkingLog).notes ?? '') : (e as MarkingBufferEntry).notes
-                                return n !== ''
-                              }).length
-                              const totalPhotos = activeLogs.filter((l) => l.photo_urls && l.photo_urls.length > 0).length + markingBuffer.filter((e) => e.photo_files.length > 0).length
-                              const stats = [
-                                { label: 'Исполнителей', value: performers },
-                                { label: 'Тарифов', value: tariffs },
-                                { label: 'Годных', value: totalGood },
-                                { label: 'Браков', value: totalDefect, color: totalDefect > 0 ? 'text-red-600' : undefined },
-                                { label: 'Итого Маркировка', value: totalGood + totalDefect },
-                                { label: 'Примечаний', value: totalNotes },
-                                { label: 'Фото', value: totalPhotos },
-                              ]
-                              return (
-                                <div className="flex w-full items-center justify-between">
-                                  <span className="font-semibold text-slate-600">Итого</span>
-                                  {stats.map(({ label, value, color }) => (
-                                    <span key={label} className="text-slate-500">{label}: <span className={`font-semibold ${color ?? 'text-slate-800'}`}>{value}</span></span>
-                                  ))}
+                  <div className="space-y-3">
+                    {/* Итого + кнопка добавить */}
+                    {(() => {
+                      const activeLogs = markingLogs.filter((l) => !markingDeletedIds.includes(l.id))
+                      const performers = new Set([
+                        ...activeLogs.map((l) => l.performer_user_id ?? l.user_id),
+                        ...markingBuffer.map((e) => e.performer_user_id ?? ''),
+                      ]).size
+                      const tariffs = new Set([
+                        ...activeLogs.map((l) => markingEdits[l.id]?.tariff ?? l.tariff),
+                        ...markingBuffer.map((e) => e.tariff),
+                      ]).size
+                      const totalGood = activeLogs.reduce((s, l) => s + (markingEdits[l.id]?.qty ?? l.qty), 0) + markingBuffer.reduce((s, e) => s + e.qty, 0)
+                      const totalDefect = activeLogs.reduce((s, l) => s + (markingEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + markingBuffer.reduce((s, e) => s + e.qty_defect, 0)
+                      const totalNotes = [...activeLogs, ...markingBuffer].filter((e) => {
+                        const n = 'notes' in e ? (markingEdits[(e as FulfillmentMarkingLog).id]?.notes ?? (e as FulfillmentMarkingLog).notes ?? '') : (e as MarkingBufferEntry).notes
+                        return n !== ''
+                      }).length
+                      const totalPhotos = activeLogs.filter((l) => l.photo_urls && l.photo_urls.length > 0).length + markingBuffer.filter((e) => e.photo_files.length > 0).length
+                      const stats: { label: string; value: number | string; color?: string }[] = [
+                        { label: 'Исполнителей', value: performers },
+                        { label: 'Тарифов', value: tariffs },
+                        { label: 'Годных', value: totalGood },
+                        { label: 'Браков', value: totalDefect, color: totalDefect > 0 ? 'text-red-600' : undefined },
+                        { label: 'Итого Маркировка', value: totalGood + totalDefect },
+                        { label: 'Примечаний', value: totalNotes },
+                        { label: 'Фото', value: totalPhotos },
+                      ]
+                      return (
+                        <div className="flex items-center gap-x-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5">
+                          <span className="font-semibold text-slate-600">Итого</span>
+                          <div className="flex flex-1 flex-wrap items-center gap-x-5 gap-y-1">
+                            {stats.map(({ label, value, color }) => (
+                              <span key={label} className="text-xs text-slate-500">
+                                {label}: <span className={`font-semibold ${color ?? 'text-slate-800'}`}>{value}</span>
+                              </span>
+                            ))}
+                          </div>
+                          <button type="button" onClick={() => setMarkingAddModalOpen(true)}
+                            className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
+                            + Добавить работу
+                          </button>
+                        </div>
+                      )
+                    })()}
+
+                    {/* Сетка карточек */}
+                    <div className="grid grid-cols-6 gap-2">
+                      {/* Сохранённые записи */}
+                      {markingLogs.filter((l) => !markingDeletedIds.includes(l.id)).map((log) => {
+                        const isEditing = markingEditingId === log.id
+                        const edit = markingEdits[log.id] ?? { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' }
+                        const logTime = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                        const logDate = new Date(log.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                        const isOwn = log.user_id === userId
+                        const hasEdit = !!markingEdits[log.id] && (
+                          markingEdits[log.id].tariff !== log.tariff ||
+                          markingEdits[log.id].qty !== log.qty ||
+                          markingEdits[log.id].qty_defect !== log.qty_defect ||
+                          markingEdits[log.id].notes !== (log.notes ?? '') ||
+                          markingEdits[log.id].barcode !== (log.barcode ?? '')
+                        )
+                        const displayTariff = MARKING_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
+                        return (
+                          <div key={log.id} className="relative">
+                            {/* Плейсхолдер — всегда занимает место в сетке */}
+                            <div className={`flex flex-col gap-1.5 rounded-2xl border px-3 py-2.5 ${isEditing ? 'invisible' : hasEdit ? 'border-amber-200 bg-amber-50/40' : isOwn ? 'border-blue-100 bg-blue-50/20' : 'border-slate-200 bg-white'}`}>
+                              <div className="flex items-start justify-between gap-1">
+                                <div className="flex flex-col items-start leading-tight">
+                                  <span className="text-[11px] font-semibold text-slate-700 tabular-nums">{logTime}</span>
+                                  <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
                                 </div>
-                              )
-                            })()}
-                          </th>
-                        </tr>
-                        <tr className="bg-slate-50">
-                          <th className="px-4 py-2.5 text-left font-medium">Время</th>
-                          <th className="px-4 py-2.5 text-left font-medium">Исполнитель</th>
-                          <th className="px-4 py-2.5 text-left font-medium">Тариф</th>
-                          <th className="px-3 py-2.5 text-center font-medium">Годный</th>
-                          <th className="px-3 py-2.5 text-center font-medium">Брак</th>
-                          <th className="px-3 py-2.5 text-left font-medium">Примечание</th>
-                          <th className="px-3 py-2.5 text-left font-medium">Фото</th>
-                          <th className="w-10 px-3 py-2.5" />
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {markingLogs.filter((l) => !markingDeletedIds.includes(l.id)).map((log) => {
-                          const isEditing = markingEditingId === log.id
-                          const edit = markingEdits[log.id] ?? { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' }
-                          const logTime = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
-                          const logDate = new Date(log.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-                          const isOwn = log.user_id === userId
-                          if (isEditing) {
-                            return (
-                              <tr key={log.id} className="bg-amber-50/60">
-                                <td className="px-4 py-2 tabular-nums whitespace-nowrap">
-                                  <div className="flex flex-col items-start">
-                                    <span className="text-xs text-slate-400">{logTime}</span>
-                                    <span className="text-xs text-slate-400">{logDate}</span>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-2 text-slate-500 text-xs max-w-[140px] truncate">{log.performer_name}</td>
-                                <td className="px-4 py-2">
-                                  <select value={edit.tariff} onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, tariff: e.target.value } }))}
-                                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                                    {MARKING_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-                                  </select>
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="number" min={0} value={edit.qty}
-                                    onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, qty: Number(e.target.value) } }))}
-                                    className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="number" min={0} value={edit.qty_defect}
-                                    onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, qty_defect: Number(e.target.value) } }))}
-                                    className="w-16 rounded-lg border border-red-200 px-2 py-1 text-center text-xs text-red-700 focus:outline-none focus:ring-1 focus:ring-red-300" />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="text" value={edit.notes}
-                                    onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, notes: e.target.value } }))}
-                                    className="w-full min-w-0 rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
-                                </td>
-                                <td className="px-3 py-2" />
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1">
-                                    <button type="button" onClick={() => { setIsDirty(true); setMarkingEditingId(null) }}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Применить">
-                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
-                                    </button>
-                                    <button type="button" onClick={() => { setMarkingEdits((p) => { const n = { ...p }; delete n[log.id]; return n }); setMarkingEditingId(null) }}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100" title="Отмена">
-                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            )
-                          }
-                          const displayTariff = MARKING_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
-                          const hasEdit = !!markingEdits[log.id]
-                          return (
-                            <tr key={log.id} className={hasEdit ? 'bg-amber-50/30' : isOwn ? 'bg-blue-50/40' : ''}>
-                              <td className="px-4 py-2.5 tabular-nums whitespace-nowrap">
-                                <div className="flex flex-col items-start">
-                                  <span className="text-xs font-semibold text-slate-600">{logTime}</span>
-                                  <span className="text-xs font-semibold text-slate-600">{logDate}</span>
-                                </div>
-                              </td>
-                              <td className="px-4 py-2.5 text-slate-700 max-w-[140px] truncate" title={log.user_email}>{log.performer_name}</td>
-                              <td className="px-4 py-2.5 text-slate-700 whitespace-nowrap">{displayTariff}</td>
-                              <td className="px-3 py-2.5 text-center font-semibold text-slate-800">{edit.qty}</td>
-                              <td className="px-3 py-2.5 text-center">
-                                {edit.qty_defect > 0 ? <span className="font-semibold text-red-600">{edit.qty_defect}</span> : <span className="text-slate-300">—</span>}
-                              </td>
-                              <td className="px-3 py-2.5 text-slate-500 text-xs">{edit.notes}</td>
-                              <td className="px-3 py-2.5">
-                                <InvoicePhotoCell
-                                  photoUrls={log.photo_urls ?? []}
-                                  onAdd={(isOwn || canManage) ? (file) => handleAddMarkingPhoto(log.id, file) : undefined}
-                                  onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
-                                  onRemove={(isOwn || canManage) ? (idx) => handleRemoveMarkingPhoto(log.id, idx) : undefined}
-                                />
-                              </td>
-                              <td className="px-3 py-2.5">
                                 {(isOwn || canManage) && (
-                                  <div className="flex gap-1">
-                                    <button type="button"
-                                      onClick={() => { setMarkingEdits((p) => ({ ...p, [log.id]: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' } })); setMarkingEditingId(log.id) }}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
-                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                  <div className="flex items-center gap-0.5">
+                                    <button type="button" onClick={() => {
+                                        if (markingEditingId && markingEditingId !== log.id) {
+                                          const prev = markingEdits[markingEditingId]
+                                          const prevLog = markingLogs.find((l) => l.id === markingEditingId)
+                                          if (prev && prevLog &&
+                                            prev.tariff === prevLog.tariff &&
+                                            prev.qty === prevLog.qty &&
+                                            prev.qty_defect === prevLog.qty_defect &&
+                                            prev.notes === (prevLog.notes ?? '') &&
+                                            prev.barcode === (prevLog.barcode ?? '')
+                                          ) {
+                                            setMarkingEdits((p) => { const n = { ...p }; delete n[markingEditingId]; return n })
+                                          }
+                                        }
+                                        setMarkingEdits((p) => ({ ...p, [log.id]: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', barcode: log.barcode ?? '' } }))
+                                        setMarkingEditingId(log.id)
+                                      }}
+                                      className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
+                                      <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                     </button>
                                     <button type="button" onClick={() => handleDeleteMarkingLog(log.id)}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500" title="Удалить">
-                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                      className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500" title="Удалить">
+                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
                                     </button>
                                   </div>
                                 )}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                        {markingBuffer.map((entry) => {
-                          const isEditing = markingEditingId === entry.tempId
-                          const tariffLabel = MARKING_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
-                          if (isEditing) {
-                            return (
-                              <tr key={entry.tempId} className="bg-amber-50">
-                                <td className="px-4 py-2 text-xs text-amber-600 italic whitespace-nowrap">Новая</td>
-                                <td className="px-4 py-2 text-xs text-slate-500">{entry.performer_name}</td>
-                                <td className="px-4 py-2">
-                                  <select value={entry.tariff} onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, tariff: e.target.value } : x))}
-                                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
-                                    {MARKING_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-                                  </select>
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="number" min={0} value={entry.qty}
-                                    onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty: Number(e.target.value) } : x))}
-                                    className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-xs focus:outline-none" />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="number" min={0} value={entry.qty_defect}
-                                    onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty_defect: Number(e.target.value) } : x))}
-                                    className="w-16 rounded-lg border border-red-200 px-2 py-1 text-center text-xs text-red-700 focus:outline-none" />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input type="text" value={entry.notes}
-                                    onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, notes: e.target.value } : x))}
-                                    className="w-full min-w-0 rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none" />
-                                </td>
-                                <td className="px-3 py-2" />
-                                <td className="px-3 py-2">
-                                  <button type="button" onClick={() => setMarkingEditingId(null)}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Готово">
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
-                                  </button>
-                                </td>
-                              </tr>
-                            )
-                          }
-                          return (
-                            <tr key={entry.tempId} className="bg-amber-50/70">
-                              <td className="px-4 py-2.5 text-xs text-amber-600 italic whitespace-nowrap">Новая</td>
-                              <td className="px-4 py-2.5 text-xs text-slate-600">{entry.performer_name}</td>
-                              <td className="px-4 py-2.5 text-xs text-slate-700">{tariffLabel}</td>
-                              <td className="px-3 py-2.5 text-center font-semibold text-slate-800">{entry.qty}</td>
-                              <td className="px-3 py-2.5 text-center">
-                                {entry.qty_defect > 0 ? <span className="font-semibold text-red-600">{entry.qty_defect}</span> : <span className="text-slate-300">—</span>}
-                              </td>
-                              <td className="px-3 py-2.5 text-xs text-slate-500">{entry.notes}</td>
-                              <td className="px-3 py-2.5">
-                                {entry.photo_files.length > 0 ? (
-                                  <InvoicePhotoCell photoUrls={entry.photo_files.map((f) => URL.createObjectURL(f))} />
-                                ) : <span className="text-slate-300">—</span>}
-                              </td>
-                              <td className="px-3 py-2.5">
-                                <div className="flex gap-1">
-                                  <button type="button" onClick={() => setMarkingEditingId(entry.tempId)}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
-                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                                  </button>
-                                  <button type="button" onClick={() => handleDeleteMarkingLog(entry.tempId)}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500" title="Удалить">
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                              </div>
+                              <span className="truncate text-xs font-semibold text-slate-700 leading-tight" title={log.user_email}>{log.performer_name}</span>
+                              {log.barcode && (
+                                <span className="truncate font-mono text-[10px] text-slate-400" title={log.barcode}>{log.barcode}</span>
+                              )}
+                              <span className="w-fit rounded-full bg-slate-100 px-2 py-0.5 text-[10px] leading-tight text-slate-600">{displayTariff}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-slate-400">Год: <span className="font-bold text-slate-800">{edit.qty}</span></span>
+                                <span className="text-[10px] text-slate-400">Бр: {edit.qty_defect > 0 ? <span className="font-bold text-red-600">{edit.qty_defect}</span> : <span className="text-slate-300">—</span>}</span>
+                              </div>
+                              {edit.notes && <span className="truncate text-[10px] italic text-slate-400" title={edit.notes}>{edit.notes}</span>}
+                              <InvoicePhotoCell
+                                photoUrls={log.photo_urls ?? []}
+                                onAdd={(isOwn || canManage) ? (file) => handleAddMarkingPhoto(log.id, file) : undefined}
+                                onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
+                                onRemove={(isOwn || canManage) ? (idx) => handleRemoveMarkingPhoto(log.id, idx) : undefined}
+                              />
+                            </div>
+                            {/* Редактируемая карточка — абсолютный слой, не двигает сетку */}
+                            {isEditing && (
+                              <div className="absolute left-0 top-0 z-30 w-72 rounded-2xl border border-blue-200 bg-white px-3 py-2.5 shadow-xl">
+                                <div className="flex items-start justify-between gap-1">
+                                  <div className="flex flex-col items-start leading-tight">
+                                    <span className="text-[11px] font-semibold text-blue-600 tabular-nums">{logTime}</span>
+                                    <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
+                                  </div>
+                                  <div className="flex items-center gap-0.5">
+                                    <button type="button" onClick={() => { setIsDirty(true); setMarkingEditingId(null) }}
+                                      className="flex h-6 w-6 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Применить">
+                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                                    </button>
+                                    <button type="button" onClick={() => { setMarkingEdits((p) => { const n = { ...p }; delete n[log.id]; return n }); setMarkingEditingId(null) }}
+                                      className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100" title="Отмена">
+                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                    </button>
+                                  </div>
+                                </div>
+                                <span className="mt-1 block truncate text-xs font-semibold text-slate-700 leading-tight">{log.performer_name}</span>
+                                <div className="relative mt-1 flex items-center">
+                                  <input type="text" autoFocus value={edit.barcode}
+                                    onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, barcode: e.target.value } }))}
+                                    placeholder="Штрих-код (13 цифр)"
+                                    className={`w-full rounded-lg border px-2 py-1 pr-7 font-mono text-[11px] text-slate-500 focus:outline-none focus:ring-1 ${edit.barcode.length === 0 ? 'border-slate-200 focus:ring-blue-400' : /^\d{13}$/.test(edit.barcode) ? 'border-emerald-400 focus:ring-emerald-200' : 'border-red-300 focus:ring-red-200'}`} />
+                                  <button type="button" title="Сканировать" className="absolute right-1.5 text-slate-400 hover:text-blue-500"
+                                    onClick={() => { setMarkingEditScanTarget({ type: 'log', id: log.id }); setMarkingCameraError(null); setMarkingCameraOpen(true) }}>
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2"/><line x1="7" y1="9" x2="7" y2="15"/><line x1="10" y1="9" x2="10" y2="15"/><line x1="13" y1="9" x2="13" y2="15"/><line x1="16" y1="9" x2="16" y2="15"/></svg>
                                   </button>
                                 </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+                                {edit.barcode.length > 0 && !/^\d{13}$/.test(edit.barcode) && (
+                                  <p className="mt-0.5 text-[10px] text-red-500 pl-0.5">{edit.barcode.replace(/\D/g, '').length}/13 · только цифры</p>
+                                )}
+                                <select value={edit.tariff} onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, tariff: e.target.value } }))}
+                                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                  {MARKING_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                                </select>
+                                <div className="mt-1.5 flex items-center gap-3">
+                                  <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    Годный
+                                    <input type="number" min={0} value={edit.qty}
+                                      onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, qty: Number(e.target.value) } }))}
+                                      className="w-20 rounded-lg border border-slate-200 px-2 py-1.5 text-center text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                                  </label>
+                                  <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    Брак
+                                    <input type="number" min={0} value={edit.qty_defect}
+                                      onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, qty_defect: Number(e.target.value) } }))}
+                                      className="w-20 rounded-lg border border-red-200 px-2 py-1.5 text-center text-sm font-medium text-red-600 focus:outline-none focus:ring-2 focus:ring-red-300" />
+                                  </label>
+                                </div>
+                                <input type="text" value={edit.notes}
+                                  onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, notes: e.target.value } }))}
+                                  placeholder="Примечание"
+                                  className="mt-1.5 w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                                <div className="mt-1.5">
+                                  <InvoicePhotoCell
+                                    photoUrls={log.photo_urls ?? []}
+                                    onAdd={(isOwn || canManage) ? (file) => handleAddMarkingPhoto(log.id, file) : undefined}
+                                    onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
+                                    onRemove={(isOwn || canManage) ? (idx) => handleRemoveMarkingPhoto(log.id, idx) : undefined}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+
+                      {/* Буферные (несохранённые) записи */}
+                      {markingBuffer.map((entry) => {
+                        const isEditing = markingEditingId === entry.tempId
+                        const tariffLabel = MARKING_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
+                        return (
+                          <div key={entry.tempId} className="relative">
+                            {/* Плейсхолдер */}
+                            <div className={`flex flex-col gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/60 px-3 py-2.5 ${isEditing ? 'invisible' : ''}`}>
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-[10px] font-semibold italic text-amber-500">Новая</span>
+                                <div className="flex items-center gap-0.5">
+                                  <button type="button" onClick={() => setMarkingEditingId(entry.tempId)}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
+                                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                  </button>
+                                  <button type="button" onClick={() => handleDeleteMarkingLog(entry.tempId)}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500" title="Удалить">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                  </button>
+                                </div>
+                              </div>
+                              <span className="truncate text-xs font-semibold text-slate-700 leading-tight">{entry.performer_name}</span>
+                              {entry.barcode && <span className="truncate font-mono text-[10px] text-slate-400">{entry.barcode}</span>}
+                              <span className="w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] leading-tight text-amber-700">{tariffLabel}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-slate-400">Год: <span className="font-bold text-slate-800">{entry.qty}</span></span>
+                                <span className="text-[10px] text-slate-400">Бр: {entry.qty_defect > 0 ? <span className="font-bold text-red-600">{entry.qty_defect}</span> : <span className="text-slate-300">—</span>}</span>
+                              </div>
+                              {entry.notes && <span className="truncate text-[10px] italic text-slate-400">{entry.notes}</span>}
+                              {entry.photo_files.length > 0 && <InvoicePhotoCell photoUrls={entry.photo_files.map((f) => URL.createObjectURL(f))} />}
+                            </div>
+                            {/* Редактируемая — абсолютный слой */}
+                            {isEditing && (
+                              <div className="absolute left-0 top-0 z-30 w-72 rounded-2xl border border-amber-300 bg-white px-3 py-2.5 shadow-xl">
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-[10px] font-semibold italic text-amber-500">Новая</span>
+                                  <button type="button" onClick={() => setMarkingEditingId(null)}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Готово">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                                  </button>
+                                </div>
+                                <span className="mt-1 block truncate text-xs font-semibold text-slate-700 leading-tight">{entry.performer_name}</span>
+                                <div className="relative mt-1 flex items-center">
+                                  <input type="text" autoFocus value={entry.barcode ?? ''}
+                                    onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, barcode: e.target.value } : x))}
+                                    placeholder="Штрих-код (13 цифр)"
+                                    className={`w-full rounded-lg border px-2 py-1 pr-7 font-mono text-[11px] text-slate-500 focus:outline-none focus:ring-1 ${(entry.barcode ?? '').length === 0 ? 'border-slate-200 focus:ring-blue-400' : /^\d{13}$/.test(entry.barcode ?? '') ? 'border-emerald-400 focus:ring-emerald-200' : 'border-red-300 focus:ring-red-200'}`} />
+                                  <button type="button" title="Сканировать" className="absolute right-1.5 text-slate-400 hover:text-blue-500"
+                                    onClick={() => { setMarkingEditScanTarget({ type: 'buffer', tempId: entry.tempId }); setMarkingCameraError(null); setMarkingCameraOpen(true) }}>
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2"/><line x1="7" y1="9" x2="7" y2="15"/><line x1="10" y1="9" x2="10" y2="15"/><line x1="13" y1="9" x2="13" y2="15"/><line x1="16" y1="9" x2="16" y2="15"/></svg>
+                                  </button>
+                                </div>
+                                {(entry.barcode ?? '').length > 0 && !/^\d{13}$/.test(entry.barcode ?? '') && (
+                                  <p className="mt-0.5 text-[10px] text-red-500 pl-0.5">{(entry.barcode ?? '').replace(/\D/g, '').length}/13 · только цифры</p>
+                                )}
+                                <select value={entry.tariff} onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, tariff: e.target.value } : x))}
+                                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                  {MARKING_TARIFFS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                                </select>
+                                <div className="mt-1.5 flex items-center gap-3">
+                                  <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    Годный
+                                    <input type="number" min={0} value={entry.qty}
+                                      onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty: Number(e.target.value) } : x))}
+                                      className="w-20 rounded-lg border border-slate-200 px-2 py-1.5 text-center text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                                  </label>
+                                  <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                                    Брак
+                                    <input type="number" min={0} value={entry.qty_defect}
+                                      onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty_defect: Number(e.target.value) } : x))}
+                                      className="w-20 rounded-lg border border-red-200 px-2 py-1.5 text-center text-sm font-medium text-red-600 focus:outline-none focus:ring-2 focus:ring-red-300" />
+                                  </label>
+                                </div>
+                                <input type="text" value={entry.notes}
+                                  onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, notes: e.target.value } : x))}
+                                  placeholder="Примечание"
+                                  className="mt-1.5 w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none" />
+                                {entry.photo_files.length > 0 && (
+                                  <div className="mt-1.5"><InvoicePhotoCell photoUrls={entry.photo_files.map((f) => URL.createObjectURL(f))} /></div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 )}
 
@@ -2496,121 +3005,790 @@ const BatchDetailModal = ({
             )
           })()}
 
+          {/* МОДАЛКА ВЫБОРА РЕЙСА */}
+          {isTripPickerOpen && (
+            <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" onClick={() => setIsTripPickerOpen(false)}>
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+              <div className="relative w-full max-w-md rounded-3xl bg-white shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                {/* Шапка */}
+                <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+                  <p className="font-semibold text-slate-800">Выбор рейса</p>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs text-slate-500 hover:text-slate-700">
+                      <div
+                        onClick={() => setShowAllTrips((v) => !v)}
+                        className={`relative flex h-4 w-7 flex-shrink-0 items-center rounded-full transition-colors ${showAllTrips ? 'bg-blue-500' : 'bg-slate-200'}`}
+                      >
+                        <span className={`absolute h-3 w-3 rounded-full bg-white shadow transition-transform ${showAllTrips ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                      </div>
+                      Все рейсы
+                    </label>
+                    <button onClick={() => setIsTripPickerOpen(false)} className="h-7 w-7 flex items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">✕</button>
+                  </div>
+                </div>
+
+                {/* Список рейсов */}
+                <div className="max-h-72 overflow-y-auto">
+                  {trips.length === 0 && localDraftTrips.length === 0 ? (
+                    <p className="py-8 text-center text-sm text-slate-400">Рейсов нет</p>
+                  ) : (
+                    <div className="py-2">
+                      {[
+                        ...(showAllTrips ? trips : trips.filter((t) => t.status === 'Формируется')),
+                        ...localDraftTrips.filter((ld) => !trips.some((t) => t.id === ld.id)),
+                      ].map((t) => {
+                        const label = `${t.trip_number ?? `Рейс #${t.draft_number}`}${t.carrier ? ` · ${t.carrier}` : ''}${t.departure_date ? ` · ${new Date(t.departure_date).toLocaleDateString('ru-RU')}` : ''}`
+                        const isSelected = packingSelectedTripId === t.id
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={async () => {
+                              setPackingSelectedTripId(t.id)
+                              setPackingSelectedTripLabel(label)
+                              setIsTripPickerOpen(false)
+                              try {
+                                const updated = await updateBatch(batch.id, { trip_id: t.id })
+                                setBatch((prev) => ({ ...prev, trip_id: t.id }))
+                                onBatchUpdated({ ...updated, trip_id: t.id })
+                              } catch (e) { console.error('[trip save]', e) }
+                            }}
+                            className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-blue-50 ${isSelected ? 'bg-blue-50' : ''}`}
+                          >
+                            <div className={`h-4 w-4 flex-shrink-0 rounded-full border-2 ${isSelected ? 'border-blue-500 bg-blue-500' : 'border-slate-300'}`} />
+                            <div>
+                              <p className={`text-sm font-medium ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>{t.trip_number ?? `Рейс #${t.draft_number}`}</p>
+                              {(t.carrier || t.departure_date) && (
+                                <p className="text-xs text-slate-400">{[t.carrier, t.departure_date ? new Date(t.departure_date).toLocaleDateString('ru-RU') : null].filter(Boolean).join(' · ')}</p>
+                              )}
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Создать черновик рейса */}
+                <div className="border-t border-slate-100 px-5 py-4">
+                  <button
+                    type="button"
+                    disabled={isCreatingDraftTrip}
+                    onClick={async () => {
+                      setIsCreatingDraftTrip(true)
+                      try {
+                        const newTrip = await createTrip(accountId, { carrier: '', comment: '' })
+                        const label = `Рейс #${newTrip.draft_number} (черновик)`
+                        const newTripWithLines: TripWithLines = { ...newTrip, lines: [] }
+                        setLocalDraftTrips((prev) => [...prev, newTripWithLines])
+                        setPackingSelectedTripId(newTrip.id)
+                        setPackingSelectedTripLabel(label)
+                        setIsTripPickerOpen(false)
+                        try {
+                          const updated = await updateBatch(batch.id, { trip_id: newTrip.id })
+                          setBatch((prev) => ({ ...prev, trip_id: newTrip.id }))
+                          onBatchUpdated({ ...updated, trip_id: newTrip.id })
+                        } catch (e) { console.error('[trip save]', e) }
+                      } catch (e: unknown) {
+                        // silent — ошибка покажется при создании поставки
+                      } finally {
+                        setIsCreatingDraftTrip(false)
+                      }
+                    }}
+                    className="w-full flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 py-2.5 text-sm font-medium text-slate-500 hover:border-blue-300 hover:text-blue-600 transition-colors disabled:opacity-40"
+                  >
+                    {isCreatingDraftTrip ? (
+                      <span>Создание…</span>
+                    ) : (
+                      <>
+                        <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" /></svg>
+                        Создать новый рейс (черновик)
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ФОРМИРОВАНИЕ КОРОБОВ */}
           {viewStage === 'packing' && (
             <div className="space-y-4">
-              <p className="text-sm text-slate-500">Укажите количество единиц и коробов для каждой позиции.</p>
-              <div className="overflow-hidden rounded-2xl border border-slate-200">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-4 py-2.5 text-left">Наименование</th>
-                      <th className="px-3 py-2.5 text-center">До этапа</th>
-                      <th className="px-3 py-2.5 text-center">В коробах</th>
-                      <th className="px-3 py-2.5 text-center">Коробов</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {items.map((it) => {
-                      const prev = it.qty_marked ?? it.qty_otk ?? it.qty_received
-                      return (
-                        <tr key={it.id} className="hover:bg-slate-50/50">
-                          <td className="px-4 py-2.5">
-                            <p className="font-medium text-slate-700">{it.product_name ?? <span className="text-slate-300">—</span>}</p>
-                            {it.size && <p className="text-xs text-slate-400">{it.size}</p>}
-                          </td>
-                          <td className="px-3 py-2.5 text-center text-slate-500">{prev}</td>
-                          <td className="px-3 py-2.5 text-center">
-                            {canManage ? (
-                              <input type="number" min={0} value={stageDraft[it.id]?.qty ?? prev}
-                                onChange={(e) => { setStageDraft((p) => ({ ...p, [it.id]: { ...p[it.id], qty: Number(e.target.value) } })); setIsDirty(true) }}
-                                className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-300"
-                              />
-                            ) : <span>{stageDraft[it.id]?.qty ?? prev}</span>}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            {canManage ? (
-                              <input type="number" min={0} value={stageDraft[it.id]?.boxes ?? 0}
-                                onChange={(e) => { setStageDraft((p) => ({ ...p, [it.id]: { ...p[it.id], boxes: Number(e.target.value) } })); setIsDirty(true) }}
-                                className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-300"
-                              />
-                            ) : <span>{stageDraft[it.id]?.boxes ?? 0}</span>}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                  <tfoot className="border-t border-slate-200 bg-slate-50 font-semibold">
-                    <tr>
-                      <td colSpan={3} className="px-4 py-2.5 text-sm text-slate-500">Итого</td>
-                      <td className="px-3 py-2.5 text-center text-slate-800">{Object.values(stageDraft).reduce((s, v) => s + v.qty, 0)}</td>
-                      <td className="px-3 py-2.5 text-center text-slate-800">{Object.values(stageDraft).reduce((s, v) => s + (v.boxes ?? 0), 0)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+
+              <>
+                  {/* Тулбар: склад + кнопка добавить */}
+                  <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                    {/* Пикер склада */}
+                    {canManage && (
+                      <div className="relative flex-1 min-w-0">
+                        {isWarehouseDropdownOpen ? (
+                          <div className="flex items-center gap-2 rounded-xl border border-blue-400 ring-2 ring-blue-100 px-2.5 py-1.5 bg-white">
+                            <svg className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.452 4.391l3.328 3.329a.75.75 0 1 1-1.06 1.06l-3.329-3.328A7 7 0 0 1 2 9Z" clipRule="evenodd" />
+                            </svg>
+                            <input
+                              autoFocus
+                              type="text"
+                              placeholder="Поиск склада…"
+                              value={warehouseSearch}
+                              onChange={(e) => setWarehouseSearch(e.target.value)}
+                              onBlur={(e) => { if (!e.currentTarget.closest('[data-warehouse-dropdown]')?.contains(e.relatedTarget as Node)) { setIsWarehouseDropdownOpen(false); setWarehouseSearch('') } }}
+                              className="flex-1 text-sm outline-none bg-transparent text-slate-800 placeholder-slate-400 min-w-0"
+                            />
+                            <button type="button" onMouseDown={(e) => { e.preventDefault(); setIsWarehouseDropdownOpen(false); setWarehouseSearch('') }} className="text-slate-400 hover:text-slate-600 flex-shrink-0">
+                              <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => { setIsWarehouseDropdownOpen(true); setWarehouseSearch('') }}
+                            className="w-full flex items-center justify-between rounded-xl border border-slate-200 hover:border-slate-300 px-2.5 py-1.5 text-sm outline-none transition-colors bg-white"
+                          >
+                            <span className={selectedWarehouseId ? 'text-slate-700 truncate' : 'text-slate-400'}>
+                              {selectedWarehouseId ? (warehouses.find((w) => w.id === selectedWarehouseId)?.name ?? '—') : '— склад назначения —'}
+                            </span>
+                            <svg className="ml-2 h-3.5 w-3.5 flex-shrink-0 text-slate-400" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                            </svg>
+                          </button>
+                        )}
+                        {isWarehouseDropdownOpen && (
+                          <div data-warehouse-dropdown className="absolute left-0 top-full z-50 mt-1.5 w-full min-w-[220px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60">
+                            <div className="max-h-52 overflow-y-auto py-1">
+                              {warehouses.filter((w) => w.name.toLowerCase().includes(warehouseSearch.toLowerCase())).length === 0 ? (
+                                <p className="px-4 py-3 text-sm text-slate-400">Ничего не найдено</p>
+                              ) : (
+                                warehouses
+                                  .filter((w) => w.name.toLowerCase().includes(warehouseSearch.toLowerCase()))
+                                  .map((w) => (
+                                    <button
+                                      key={w.id}
+                                      type="button"
+                                      onMouseDown={(e) => { e.preventDefault(); setSelectedWarehouseId(w.id); setIsWarehouseDropdownOpen(false); setWarehouseSearch('') }}
+                                      className={`w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-blue-50 hover:text-blue-700 ${selectedWarehouseId === w.id ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-700'}`}
+                                    >
+                                      {w.name}
+                                    </button>
+                                  ))
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* Кнопка добавить */}
+                    {canManage && (
+                      <button
+                        disabled={!selectedWarehouseId}
+                        onClick={() => {
+                          if (!selectedWarehouseId) return
+                          const wh = warehouses.find((w) => w.id === selectedWarehouseId)
+                          if (!wh) return
+                          const now = new Date().toISOString()
+                          setSupplies((prev) => [...prev, {
+                            id: crypto.randomUUID(),
+                            _local: true,
+                            batch_id: batch.id,
+                            account_id: accountId,
+                            warehouse_id: wh.id,
+                            warehouse_name: wh.name,
+                            trip_id: null,
+                            trip_line_id: null,
+                            created_by: userId || null,
+                            created_at: now,
+                            boxes: [],
+                          }])
+                          setSelectedWarehouseId('')
+                          setIsDirty(true)
+                        }}
+                        className="flex-shrink-0 rounded-xl bg-blue-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-40 hover:bg-blue-700 transition-colors"
+                      >
+                        + Поставка
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Список поставок — grid 6 колонок */}
+                  {isLoadingSupplies ? (
+                    <p className="text-center text-sm text-slate-400 py-4">Загрузка поставок…</p>
+                  ) : supplies.length === 0 ? (
+                    <div className="rounded-2xl border-2 border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">
+                      Поставок ещё нет. Создайте первую поставку выше.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-6 gap-2 auto-rows-[80px]">
+                      {supplies.map((supply) => {
+                        const totalBoxes = supply.boxes.length
+                        const totalItems = supply.boxes.reduce((s, b) => s + b.items.reduce((ss, i) => ss + i.qty, 0), 0)
+                        const closedBoxes = supply.boxes.filter((b) => b.status === 'closed').length
+                        const isActiveStage = batch.current_stage === 'packing'
+                        const canDeleteCard = canManage && (isActiveStage || canSupplyDeleteLocked)
+                        return (
+                          <div key={supply.id} className="relative h-full">
+                            <button
+                              type="button"
+                              onClick={() => setActiveSupplyId(supply.id)}
+                              className="relative flex h-full w-full flex-col items-start gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                            >
+                              {supply._local && (
+                                <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-amber-400" title="не сохранено" />
+                              )}
+                              <p className="text-xs font-semibold text-slate-800 leading-tight line-clamp-2 w-full pr-6">{supply.warehouse_name}</p>
+                              <p className="text-xs text-slate-400">{totalBoxes} кор. · {totalItems} ед.</p>
+                              {totalBoxes > 0 && (
+                                <p className="text-xs text-slate-400">{closedBoxes}/{totalBoxes} закрыто</p>
+                              )}
+                            </button>
+                            {canDeleteCard && (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setDeleteSupplyConfirm(supply.id) }}
+                                className="absolute right-1.5 top-1.5 flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 hover:bg-red-50 hover:text-red-400 transition-colors"
+                                title="Удалить поставку"
+                              >
+                                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clipRule="evenodd" /></svg>
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* Модалка работы с поставкой */}
+                  {activeSupplyId && (() => {
+                    const supply = supplies.find((s) => s.id === activeSupplyId)
+                    if (!supply) return null
+                    const totalBoxes = supply.boxes.length
+                    const nextBoxNum = totalBoxes + 1
+                    return (
+                      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onClick={() => setActiveSupplyId(null)}>
+                        <div className="relative flex h-[90vh] w-[80%] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                          {/* Шапка модалки поставки */}
+                          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <p className="font-semibold text-slate-800">{supply.warehouse_name}</p>
+                              {supply._local && (
+                                <span className="text-xs font-medium text-amber-600 bg-amber-50 rounded-full px-2 py-0.5">не сохранено</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              {(() => {
+                                const isActiveStage = batch.current_stage === 'packing'
+                                const canDelete = canManage && (isActiveStage || canSupplyDeleteLocked)
+                                return canDelete ? (
+                                  <button
+                                    onClick={() => setDeleteSupplyConfirm(supply.id)}
+                                    className="text-sm text-red-400 hover:text-red-600"
+                                  >
+                                    Удалить
+                                  </button>
+                                ) : null
+                              })()}
+                              <button onClick={() => setActiveSupplyId(null)} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
+                                <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Табы коробов */}
+                          {supply.boxes.length > 0 && (
+                            <div className="flex gap-1 overflow-x-auto border-b border-slate-100 px-5 py-2 scrollbar-none">
+                              {supply.boxes.map((box) => {
+                                const isActive = packingOpenBoxId === box.id
+                                const boxTotal = box.items.reduce((s, i) => s + i.qty, 0)
+                                return (
+                                  <button
+                                    key={box.id}
+                                    type="button"
+                                    onClick={() => setPackingOpenBoxId(box.id)}
+                                    className={`flex-shrink-0 rounded-xl px-3 py-1.5 text-xs font-medium transition-colors ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                  >
+                                    Короб #{box.box_number}
+                                    {box.items.length > 0 && <span className={`ml-1 ${isActive ? 'text-blue-200' : 'text-slate-400'}`}>· {boxTotal} ед.</span>}
+                                    {box.status === 'closed' && <span className={`ml-1 ${isActive ? 'text-blue-200' : 'text-green-500'}`}>✓</span>}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+
+                          {/* Содержимое активного короба */}
+                          <div className="flex-1 overflow-y-auto">
+                            {supply.boxes.length === 0 ? (
+                              <div className="flex flex-col items-center justify-center h-full gap-2 text-sm text-slate-400">
+                                <p>Коробов ещё нет</p>
+                              </div>
+                            ) : (() => {
+                              const box = supply.boxes.find((b) => b.id === packingOpenBoxId) ?? supply.boxes[0]
+                              if (!box) return null
+                              const isOpen = box.status === 'open'
+                              const boxTotal = box.items.reduce((s, i) => s + i.qty, 0)
+                              return (
+                                <div className="flex flex-col h-full">
+                                  {/* Строка управления коробом */}
+                                  <div className="flex items-center gap-3 px-5 border-b border-slate-100 bg-slate-50 min-h-[44px]">
+                                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isOpen ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                                      {isOpen ? 'открыт' : 'закрыт'}
+                                    </span>
+                                    <span className="text-xs text-slate-400">{box.items.length} позиций · {boxTotal} ед.</span>
+                                    <div className="flex-1" />
+                                    {/* Авто-добавление (если есть право) */}
+                                    {canPackingAutoAdd && canManage && isOpen && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setPackingAutoAdd((v) => !v)}
+                                        className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                                          packingAutoAdd
+                                            ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                                        }`}
+                                        title="Авто-добавление: скан сразу добавляет позицию"
+                                      >
+                                        <span className={`h-2 w-2 rounded-full transition-colors ${packingAutoAdd ? 'bg-blue-500' : 'bg-slate-300'}`} />
+                                        Авто
+                                      </button>
+                                    )}
+                                    {canManage && isOpen && (
+                                      <button
+                                        onClick={() => {
+                                          setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, status: 'closed' } : b) } : s))
+                                          setIsDirty(true)
+                                        }}
+                                        className="text-xs font-medium text-green-600 hover:text-green-800"
+                                      >
+                                        Закрыть ✓
+                                      </button>
+                                    )}
+                                    {canManage && !isOpen && (
+                                      <button
+                                        onClick={() => {
+                                          if (!box._local) void reopenBox(box.id)
+                                          setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, status: 'open' } : b) } : s))
+                                        }}
+                                        className="text-xs text-slate-500 hover:text-slate-700 font-medium"
+                                      >
+                                        Открыть повторно
+                                      </button>
+                                    )}
+                                    {canManage && (
+                                      <button
+                                        onClick={() => setDeleteBoxConfirm({ supplyId: supply.id, boxId: box.id })}
+                                        className="text-xs text-red-400 hover:text-red-600"
+                                      >
+                                        Удалить
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  {/* Список позиций */}
+                                  <div className="flex-1 overflow-y-scroll px-5 py-3 space-y-1" style={{ scrollbarGutter: 'stable' }}>
+                                    {box.items.length === 0 ? (
+                                      <p className="text-sm text-slate-400 py-4 text-center">Позиций нет</p>
+                                    ) : (
+                                      box.items.map((item) => {
+                                        const batchItem = items.find((it) => it.barcode === item.barcode)
+                                        const info = packingProductCache[item.barcode]
+                                        const displayName = info?.name ?? batchItem?.product_name ?? item.product_name
+                                        const displaySize = info?.size ?? batchItem?.size
+                                        const displayArticle = info?.vendor_code ?? batchItem?.article
+                                        return (
+                                          <div key={item.id} className="rounded-xl bg-slate-50 px-3 py-2.5 text-sm">
+                                            <div className="flex items-start justify-between gap-3">
+                                              {/* Фото товара */}
+                                              <div className="flex-shrink-0 self-center">
+                                                {info?.photo_url ? (
+                                                  <img
+                                                    src={info.photo_url}
+                                                    alt=""
+                                                    className="h-9 w-9 cursor-zoom-in rounded-lg object-cover"
+                                                    onMouseEnter={(e) => {
+                                                      const rect = (e.currentTarget as HTMLImageElement).getBoundingClientRect()
+                                                      const popW = 288; const popH = 384; const gap = 12
+                                                      const x = rect.right + gap + popW > window.innerWidth ? rect.left - gap - popW : rect.right + gap
+                                                      const y = Math.min(rect.top, window.innerHeight - popH - gap)
+                                                      setPackingPhotoPreview({ url: info.photo_url!, x, y })
+                                                    }}
+                                                    onMouseLeave={() => setPackingPhotoPreview(null)}
+                                                  />
+                                                ) : (
+                                                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100">
+                                                    <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                      <rect x="3" y="3" width="18" height="18" rx="3" />
+                                                      <circle cx="8.5" cy="8.5" r="1.5" />
+                                                      <path d="m21 15-5-5L5 21" />
+                                                    </svg>
+                                                  </div>
+                                                )}
+                                              </div>
+                                              <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                  <span className="font-medium text-slate-800 truncate max-w-[280px]">{displayName ?? '—'}</span>
+                                                  {displaySize && <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 flex-shrink-0">{displaySize}</span>}
+                                                  {info?.color && <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 flex-shrink-0">{info.color}</span>}
+                                                  {info?.category && <span className="text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 flex-shrink-0">{info.category}</span>}
+                                                </div>
+                                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                                  <span className="font-mono text-xs text-slate-400">{item.barcode}</span>
+                                                  {displayArticle && <span className="text-xs text-slate-500">{displayArticle}</span>}
+                                                  {info?.nm_id && <span className="text-xs text-slate-400">WB&nbsp;{info.nm_id}</span>}
+                                                  {info?.brand && <span className="text-xs text-slate-400">{info.brand}</span>}
+                                                </div>
+                                              </div>
+                                              <div className="flex items-center gap-2 flex-shrink-0 pt-0.5">
+                                                <span className="text-slate-700 font-medium text-xs">{item.qty}&nbsp;ед.</span>
+                                                {canManage && isOpen && (
+                                                  <button
+                                                    onClick={async () => {
+                                                      if (!item._local) await deleteBoxItem(item.id)
+                                                      setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, items: b.items.filter((i) => i.id !== item.id) } : b) } : s))
+                                                    }}
+                                                    className="text-red-400 hover:text-red-600"
+                                                  >✕</button>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )
+                                      })
+                                    )}
+                                  </div>
+
+                                  {/* Форма добавления позиции (только открытый короб) */}
+                                  {canManage && isOpen && (
+                                    <div className="border-t border-slate-100 px-5 py-4 space-y-3">
+                                      <div className="flex items-center gap-2">
+                                        <div className="relative flex-1">
+                                        <input
+                                          ref={packingBarcodeRef}
+                                          autoFocus
+                                          type="text"
+                                          placeholder="Баркод"
+                                          value={packingBoxBarcode[box.id] ?? ''}
+                                          onChange={(e) => setPackingBoxBarcode((p) => ({ ...p, [box.id]: e.target.value }))}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              const bc = (packingBoxBarcode[box.id] ?? '').trim()
+                                              if (!bc || !/^\d{13}$/.test(bc)) return
+                                              if (packingAutoAdd) {
+                                                // Авто-режим: сразу добавляем с текущим qty
+                                                const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
+                                                const matched = items.find((it) => it.barcode === bc)
+                                                const now = new Date().toISOString()
+                                                setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((bx) => bx.id === box.id ? {
+                                                  ...bx, items: (() => {
+                                                    const ex = bx.items.find((i) => i.barcode === bc)
+                                                    if (ex) return bx.items.map((i) => i.barcode === bc ? { ...i, qty: i.qty + qty } : i)
+                                                    return [...bx.items, { id: crypto.randomUUID(), _local: true, box_id: box.id, account_id: accountId, barcode: bc, item_id: matched?.id ?? null, product_name: matched?.product_name ?? null, qty, created_at: now }]
+                                                  })()
+                                                } : bx) } : s))
+                                                setPackingBoxBarcode((p) => ({ ...p, [box.id]: '' }))
+                                                setPackingBoxQty((p) => ({ ...p, [box.id]: '1' }))
+                                                setIsDirty(true)
+                                                void lookupAndCacheBarcode(bc)
+                                                setTimeout(() => packingBarcodeRef.current?.focus(), 0)
+                                              } else {
+                                                // Ручной режим: переводим фокус на кол-во
+                                                setTimeout(() => { packingQtyRef.current?.focus(); packingQtyRef.current?.select() }, 0)
+                                              }
+                                            }
+                                          }}
+                                          className={`w-full rounded-xl border pl-3 pr-9 py-2 text-sm outline-none ${(packingBoxBarcode[box.id] ?? '').length === 0 ? 'border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100' : /^\d{13}$/.test(packingBoxBarcode[box.id] ?? '') ? 'border-emerald-400 focus:ring-2 focus:ring-emerald-100' : 'border-red-300 focus:ring-2 focus:ring-red-100'}`}
+                                        />
+                                        <button type="button" title="Сканировать камерой"
+                                          onClick={() => { setPackingCameraTargetBoxId(box.id); setPackingCameraError(null); setPackingCameraOpen(true) }}
+                                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-500 transition-colors">
+                                          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M2 7V5a2 2 0 0 1 2-2h2M2 17v2a2 2 0 0 0 2 2h2M22 7V5a2 2 0 0 0-2-2h-2M22 17v2a2 2 0 0 1-2 2h-2" />
+                                            <rect x="6" y="8" width="12" height="8" rx="1.5" strokeLinecap="round" />
+                                            <line x1="9" y1="11" x2="9" y2="13" strokeLinecap="round" />
+                                            <line x1="11.5" y1="10" x2="11.5" y2="14" strokeLinecap="round" />
+                                            <line x1="14" y1="11" x2="14" y2="13" strokeLinecap="round" />
+                                          </svg>
+                                        </button>
+                                        </div>
+                                        {(packingBoxBarcode[box.id] ?? '').length > 0 && !/^\d{13}$/.test(packingBoxBarcode[box.id] ?? '') && (
+                                          <p className="col-span-full -mt-1 text-xs text-red-500 pl-1">{(packingBoxBarcode[box.id] ?? '').replace(/\D/g, '').length}/13 · только цифры EAN-13</p>
+                                        )}
+                                        <input
+                                          ref={packingQtyRef}
+                                          type="number"
+                                          min={1}
+                                          placeholder="Кол-во"
+                                          value={packingBoxQty[box.id] ?? '1'}
+                                          onChange={(e) => setPackingBoxQty((p) => ({ ...p, [box.id]: e.target.value }))}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              const bc = (packingBoxBarcode[box.id] ?? '').trim()
+                                              const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
+                                              if (!bc || !/^\d{13}$/.test(bc)) return
+                                              const matched = items.find((it) => it.barcode === bc)
+                                              const now = new Date().toISOString()
+                                              setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((bx) => bx.id === box.id ? {
+                                                ...bx, items: (() => {
+                                                  const ex = bx.items.find((i) => i.barcode === bc)
+                                                  if (ex) return bx.items.map((i) => i.barcode === bc ? { ...i, qty: i.qty + qty } : i)
+                                                  return [...bx.items, { id: crypto.randomUUID(), _local: true, box_id: box.id, account_id: accountId, barcode: bc, item_id: matched?.id ?? null, product_name: matched?.product_name ?? null, qty, created_at: now }]
+                                                })()
+                                              } : bx) } : s))
+                                              setPackingBoxBarcode((p) => ({ ...p, [box.id]: '' }))
+                                              setPackingBoxQty((p) => ({ ...p, [box.id]: '1' }))
+                                              setIsDirty(true)
+                                              void lookupAndCacheBarcode(bc)
+                                              setTimeout(() => packingBarcodeRef.current?.focus(), 0)
+                                            }
+                                          }}
+                                          className="w-20 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                        />
+                                        <button
+                                          disabled={!/^\d{13}$/.test((packingBoxBarcode[box.id] ?? '').trim())}
+                                          onClick={() => {
+                                            const bc = (packingBoxBarcode[box.id] ?? '').trim()
+                                            const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
+                                            if (!bc) return
+                                            const matched = items.find((it) => it.barcode === bc)
+                                            const now = new Date().toISOString()
+                                            setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((bx) => bx.id === box.id ? {
+                                              ...bx, items: (() => {
+                                                const ex = bx.items.find((i) => i.barcode === bc)
+                                                if (ex) return bx.items.map((i) => i.barcode === bc ? { ...i, qty: i.qty + qty } : i)
+                                                return [...bx.items, { id: crypto.randomUUID(), _local: true, box_id: box.id, account_id: accountId, barcode: bc, item_id: matched?.id ?? null, product_name: matched?.product_name ?? null, qty, created_at: now }]
+                                              })()
+                                            } : bx) } : s))
+                                            setPackingBoxBarcode((p) => ({ ...p, [box.id]: '' }))
+                                            setPackingBoxQty((p) => ({ ...p, [box.id]: '1' }))
+                                            setIsDirty(true)
+                                            void lookupAndCacheBarcode(bc)
+                                            setTimeout(() => packingBarcodeRef.current?.focus(), 0)
+                                          }}
+                                          className="flex-shrink-0 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 hover:bg-blue-700 transition-colors"
+                                        >
+                                          + Добавить
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })()}
+                          </div>
+
+                          {/* Подвал: добавить короб */}
+                          {canManage && (
+                            <div className="border-t border-slate-100 px-5 py-3">
+                              <button
+                                onClick={() => { setAddBoxNum(String(nextBoxNum)); setAddBoxModal({ supplyId: supply.id, nextNum: nextBoxNum }) }}
+                                className="w-full rounded-xl border border-dashed border-blue-300 py-2.5 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors"
+                              >
+                                + Добавить короб #{nextBoxNum}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Модалка: добавить коробa */}
+                  {addBoxModal && (() => {
+                    const addSup = supplies.find((s) => s.id === addBoxModal.supplyId)
+                    if (!addSup) return null
+                    return createPortal(
+                      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40" onClick={() => setAddBoxModal(null)}>
+                        <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl p-6 space-y-5" onClick={(e) => e.stopPropagation()}>
+                          <p className="text-base font-semibold text-slate-800">Новый короб</p>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-medium text-slate-500">Номер короба</label>
+                            <input
+                              type="number"
+                              autoFocus
+                              value={addBoxNum}
+                              onChange={(e) => setAddBoxNum(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.form?.requestSubmit?.() }}
+                              className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setAddBoxModal(null)}
+                              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const now = new Date().toISOString()
+                                const newBoxes = [{
+                                  id: crypto.randomUUID(),
+                                  _local: true,
+                                  supply_id: addBoxModal.supplyId,
+                                  account_id: accountId,
+                                  box_number: parseInt(addBoxNum) || addBoxModal.nextNum,
+                                  status: 'open' as const,
+                                  created_at: now,
+                                  items: [],
+                                }]
+                                setSupplies((prev) => prev.map((s) => s.id === addBoxModal.supplyId ? { ...s, boxes: [...s.boxes, ...newBoxes] } : s))
+                                setPackingOpenBoxId(newBoxes[0].id)
+                                setIsDirty(true)
+                                setAddBoxModal(null)
+                                setAddBoxNum('')
+                              }}
+                              className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                            >
+                              Добавить
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    , document.body)
+                  })()}
+
+                  {/* Модалка: подтверждение удаления короба */}
+                  {deleteBoxConfirm && (() => {
+                    const dSup = supplies.find((s) => s.id === deleteBoxConfirm.supplyId)
+                    const dBox = dSup?.boxes.find((b) => b.id === deleteBoxConfirm.boxId)
+                    if (!dBox) return null
+                    return createPortal(
+                      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40" onClick={() => setDeleteBoxConfirm(null)}>
+                        <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-red-100">
+                              <svg className="h-5 w-5 text-red-500" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clipRule="evenodd" /></svg>
+                            </div>
+                            <div>
+                              <p className="font-semibold text-slate-800">Удалить короб #{dBox.box_number}?</p>
+                              <p className="text-xs text-slate-400 mt-0.5">Это действие нельзя отменить</p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDeleteBoxConfirm(null)}
+                              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!dBox._local) await deleteBox(dBox.id)
+                                const remaining = dSup!.boxes.filter((b) => b.id !== dBox.id)
+                                setSupplies((prev) => prev.map((s) => s.id === deleteBoxConfirm.supplyId ? { ...s, boxes: remaining } : s))
+                                setPackingOpenBoxId(remaining.length > 0 ? remaining[remaining.length - 1].id : null)
+                                setDeleteBoxConfirm(null)
+                              }}
+                              className="flex-1 rounded-xl bg-red-500 py-2.5 text-sm font-medium text-white hover:bg-red-600 transition-colors"
+                            >
+                              Удалить
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    , document.body)
+                  })()}
+
+                  {/* Модалка: подтверждение удаления поставки */}
+                  {deleteSupplyConfirm && (() => {
+                    const dSup = supplies.find((s) => s.id === deleteSupplyConfirm)
+                    if (!dSup) return null
+                    const boxCount = dSup.boxes.length
+                    return createPortal(
+                      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40" onClick={() => setDeleteSupplyConfirm(null)}>
+                        <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-red-100">
+                              <svg className="h-5 w-5 text-red-500" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clipRule="evenodd" /></svg>
+                            </div>
+                            <div>
+                              <p className="font-semibold text-slate-800">Удалить поставку «{dSup.warehouse_name}»?</p>
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                {boxCount > 0 ? `${boxCount} кор. и все позиции будут удалены. ` : ''}Это действие нельзя отменить.
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDeleteSupplyConfirm(null)}
+                              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!dSup._local) await deleteSupply(dSup.id)
+                                setSupplies((prev) => prev.filter((s) => s.id !== dSup.id))
+                                setDeleteSupplyConfirm(null)
+                                setActiveSupplyId(null)
+                              }}
+                              className="flex-1 rounded-xl bg-red-500 py-2.5 text-sm font-medium text-white hover:bg-red-600 transition-colors"
+                            >
+                              Удалить
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    , document.body)
+                  })()}
+
+                  {/* Превью фото товара при наведении */}
+                  {packingPhotoPreview && createPortal(
+                    <div
+                      className="pointer-events-none fixed z-[200] overflow-hidden rounded-2xl shadow-2xl ring-1 ring-slate-200"
+                      style={{ left: packingPhotoPreview.x, top: packingPhotoPreview.y }}
+                    >
+                      <img src={packingPhotoPreview.url} alt="" className="h-96 w-72 object-cover" />
+                    </div>
+                  , document.body)}
+              </>
             </div>
           )}
 
           {/* ПЕРЕДАЧА НА ЛОГИСТИКУ */}
           {viewStage === 'logistics' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-3">
-                <SummaryCard label="Позиций" value={items.length} />
-                <SummaryCard label="Коробов" value={tBoxes} />
-                <SummaryCard label="Единиц" value={tPacked || tReceived} />
-              </div>
-              <p className="text-sm text-slate-500">Привяжите партию к строке поставки в рейсе — объём обновится автоматически.</p>
-
-              {trips.length > 0 ? (
-                <div className="space-y-3">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-slate-500">Рейс</label>
-                    <select value={selectedTripId} onChange={(e) => { setSelectedTripId(e.target.value); setSelectedLineId(''); setIsDirty(true) }}
-                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100">
-                      <option value="">— выберите рейс —</option>
-                      {trips.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.trip_number}{t.carrier ? ` • ${t.carrier}` : ''}{t.departure_date ? ` (${new Date(t.departure_date).toLocaleDateString('ru-RU')})` : ''}
-                        </option>
-                      ))}
-                    </select>
+              {!packingSelectedTripId ? (
+                <div className="flex flex-col items-center justify-center py-10 space-y-5">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-500">
+                    <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
+                    </svg>
                   </div>
-                  {selectedTripId && (
-                    <div className="flex flex-col gap-1">
-                      <label className="text-xs font-medium text-slate-500">Поставка</label>
-                      <select value={selectedLineId} onChange={(e) => { setSelectedLineId(e.target.value); setIsDirty(true) }}
-                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100">
-                        <option value="">— выберите поставку —</option>
-                        {trips.find((t) => t.id === selectedTripId)?.lines.map((l) => {
-                          const ls = stores.find((s) => s.id === l.store_id)
-                          return (
-                            <option key={l.id} value={l.id}>
-                              {ls?.name ?? '?'} — Поставка #{l.shipment_number} ({l.box_qty} коробов, {l.units_qty} ед.)
-                            </option>
-                          )
-                        })}
-                      </select>
-                    </div>
-                  )}
-                  {selectedLineId && (
-                    <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm text-blue-700">
-                      Будет обновлено: <strong>{tBoxes}</strong> коробов, <strong>{tPacked || tReceived}</strong> единиц
-                    </div>
-                  )}
+                  <div className="text-center">
+                    <p className="font-semibold text-slate-800">Выберите рейс</p>
+                    <p className="text-sm text-slate-400 mt-1">Привяжите партию к рейсу для передачи в логистику</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsTripPickerOpen(true)}
+                    className="rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                  >
+                    Выбрать рейс
+                  </button>
                 </div>
               ) : (
-                <div className="rounded-2xl border-2 border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">
-                  Нет рейсов. Сначала создайте рейс в разделе Логистика.
-                </div>
-              )}
-
-              {batch.trip_line_id && (
-                <div className="flex items-center gap-2 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
-                  Партия уже привязана к поставке
+                <div className="flex flex-col items-center justify-center py-8 space-y-4">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-500">
+                    <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
+                    </svg>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Рейс выбран</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-800">{packingSelectedTripLabel}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsTripPickerOpen(true)}
+                    className="rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                  >
+                    Сменить рейс
+                  </button>
                 </div>
               )}
             </div>
@@ -2683,21 +3861,11 @@ const BatchDetailModal = ({
                   </button>
                 )
               })()}
-              {(batch.current_stage === 'marking' || batch.current_stage === 'packing') && (
+              {(batch.current_stage === 'marking' || batch.current_stage === 'packing' || batch.current_stage === 'logistics') && (
                 <button type="button" onClick={() => setPendingAdvance(true)}
                   disabled={isSavingStage}
                   className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                   {`Завершить ${STAGE_LABELS[batch.current_stage]}`}
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M5 12h14M12 5l7 7-7 7" />
-                  </svg>
-                </button>
-              )}
-              {batch.current_stage === 'logistics' && (
-                <button type="button" onClick={() => setPendingAdvance(true)}
-                  disabled={isLinkingLogistics || (!selectedLineId && !batch.trip_line_id)}
-                  className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                  Передать в логистику
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="M5 12h14M12 5l7 7-7 7" />
                   </svg>
@@ -2716,9 +3884,7 @@ const BatchDetailModal = ({
             <div className="px-6 py-5">
               <p className="font-semibold text-slate-800">Завершить этап?</p>
               <p className="mt-1 text-sm text-slate-500">
-                {batch.current_stage === 'logistics'
-                  ? 'Партия будет передана в логистику. Убедитесь, что рейс и поставка выбраны.'
-                  : `Этап «${STAGE_LABELS[batch.current_stage]}» будет завершён. Вернуться назад без участия администратора нельзя.`}
+                {`Этап «${STAGE_LABELS[batch.current_stage]}» будет завершён. Вернуться назад без участия администратора нельзя.`}
               </p>
             </div>
             <div className="flex gap-3 border-t border-slate-100 px-6 py-4">
@@ -2728,12 +3894,11 @@ const BatchDetailModal = ({
                   if (batch.current_stage === 'reception') void handleCompleteReception()
                   else if (batch.current_stage === 'otk') void handleAdvanceOtk()
                   else if (batch.current_stage === 'marking') void handleMarkingAndAdvance()
-                  else if (batch.current_stage === 'packing') void handleSaveStageAndAdvance()
-                  else if (batch.current_stage === 'logistics') void handleLinkLogistics()
+                  else if (batch.current_stage === 'packing' || batch.current_stage === 'logistics') void handleSaveStageAndAdvance()
                 }}
-                disabled={isSavingStage || isLinkingLogistics}
+                disabled={isSavingStage}
                 className="flex-1 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                {isSavingStage || isLinkingLogistics ? 'Сохранение…' : 'Да, завершить'}
+                {isSavingStage ? 'Сохранение…' : 'Да, завершить'}
               </button>
               <button type="button"
                 onClick={() => setPendingAdvance(false)}
@@ -3400,6 +4565,204 @@ const BatchDetailModal = ({
           </div>
         </div>
       )}
+
+      {/* ── Модалка камерного скана ШК ───────────────────────── */}
+      {markingCameraOpen && (
+        <div className="fixed inset-0 z-[200] flex flex-col bg-black" onClick={(e) => e.stopPropagation()}>
+          {/* Шапка */}
+          <div className="flex items-center justify-between bg-black/80 px-5 py-3.5 safe-top">
+            <span className="text-base font-semibold text-white">Сканирование штрихкода</span>
+            <button
+              type="button"
+              onClick={() => { setMarkingCameraOpen(false); setMarkingEditScanTarget(null) }}
+              className="rounded-xl px-3 py-1.5 text-sm text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+            >
+              Отмена
+            </button>
+          </div>
+
+          {/* Видео или ошибка */}
+          {markingCameraError ? (
+            <div className="flex flex-1 items-center justify-center px-6">
+              <div className="flex items-start gap-3 rounded-2xl bg-amber-50 px-5 py-4">
+                <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-5 w-5 shrink-0 text-amber-500">
+                  <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
+                </svg>
+                <p className="text-sm text-amber-800">{markingCameraError}</p>
+              </div>
+            </div>
+          ) : (
+            <div className="relative flex-1 overflow-hidden">
+              <video ref={markingVideoRef} muted playsInline className="h-full w-full object-cover" />
+              {/* прицел */}
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="h-32 w-64 rounded-xl border-2 border-blue-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" />
+              </div>
+              {!markingScannedBarcode && (
+                <p className="absolute bottom-4 left-0 right-0 text-center text-xs text-white/50">
+                  Наведите камеру на штрихкод
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Нижняя панель */}
+          <div className="bg-white px-4 py-4 space-y-3 safe-bottom">
+            {markingScannedBarcode ? (() => {
+              const foundItem = markingItemsRef.current.find((it) => it.barcode === markingScannedBarcode)
+              return (
+                <>
+                  <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500">
+                      <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" />
+                    </svg>
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-emerald-700 mb-0.5">Обнаружен штрихкод</p>
+                      <p className="font-mono text-base font-semibold text-slate-800 break-all">{markingScannedBarcode}</p>
+                      {foundItem && (
+                        <p className="mt-0.5 text-xs text-slate-500 truncate">{foundItem.product_name ?? foundItem.barcode}</p>
+                      )}
+                      {!foundItem && (
+                        <p className="mt-0.5 text-xs text-amber-600">Не найден в партии</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setMarkingScannedBarcode(null); setMarkingRescanKey((k) => k + 1) }}
+                      className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition-colors"
+                    >
+                      Сканировать снова
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const raw = markingScannedBarcode
+                        if (markingEditScanTarget) {
+                          if (markingEditScanTarget.type === 'log') {
+                            const id = markingEditScanTarget.id
+                            setMarkingEdits((p) => ({ ...p, [id]: { ...p[id], barcode: raw ?? '' } }))
+                          } else {
+                            const tid = markingEditScanTarget.tempId
+                            setMarkingBuffer((p) => p.map((x) => x.tempId === tid ? { ...x, barcode: raw } : x))
+                          }
+                          setMarkingEditScanTarget(null)
+                          setMarkingCameraOpen(false)
+                        } else {
+                          setMarkingBarcode(raw)
+                          const found = markingItemsRef.current.find((it) => it.barcode === raw)
+                          if (found) {
+                            setMarkingItemId(found.id)
+                            setMarkingItemName(found.product_name ?? found.barcode)
+                          } else {
+                            setMarkingItemId(null)
+                            setMarkingItemName(null)
+                          }
+                          setMarkingCameraOpen(false)
+                          setTimeout(() => {
+                            document.querySelector<HTMLInputElement>('.marking-qty-input')?.focus()
+                          }, 80)
+                        }
+                      }}
+                      className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
+                    >
+                      Сохранить
+                    </button>
+                  </div>
+                </>
+              )
+            })() : (
+              <div className="flex items-center justify-center py-2">
+                <div className="flex items-center gap-2 text-sm text-slate-400">
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                  Ожидание сканирования...
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Камера для этапа Коробов */}
+      {packingCameraOpen && (
+        <div className="fixed inset-0 z-[200] flex flex-col bg-black" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between bg-black/80 px-5 py-3.5 safe-top">
+            <span className="text-base font-semibold text-white">Сканирование штрихкода</span>
+            <button type="button" onClick={() => { setPackingCameraOpen(false); setPackingCameraTargetBoxId(null) }}
+              className="rounded-xl px-3 py-1.5 text-sm text-white/60 hover:bg-white/10 hover:text-white transition-colors">
+              Отмена
+            </button>
+          </div>
+          {packingCameraError ? (
+            <div className="flex flex-1 items-center justify-center px-6">
+              <div className="flex items-start gap-3 rounded-2xl bg-amber-50 px-5 py-4">
+                <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-5 w-5 shrink-0 text-amber-500"><path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" /></svg>
+                <p className="text-sm text-amber-800">{packingCameraError}</p>
+              </div>
+            </div>
+          ) : (
+            <div className="relative flex-1 overflow-hidden">
+              <video ref={packingVideoRef} muted playsInline className="h-full w-full object-cover" />
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="h-32 w-64 rounded-xl border-2 border-blue-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" />
+              </div>
+              {!packingCameraScanned && (
+                <p className="absolute bottom-4 left-0 right-0 text-center text-xs text-white/50">Наведите камеру на штрихкод</p>
+              )}
+            </div>
+          )}
+          <div className="bg-white px-4 py-4 space-y-3 safe-bottom">
+            {packingCameraScanned ? (() => {
+              const boxId = packingCameraTargetBoxId
+              const bc = packingCameraScanned
+              const matched = items.find((it) => it.barcode === bc)
+              return (
+                <>
+                  <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" /></svg>
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-emerald-700 mb-0.5">Обнаружен штрихкод</p>
+                      <p className="font-mono text-base font-semibold text-slate-800 break-all">{bc}</p>
+                      {matched ? <p className="mt-0.5 text-xs text-slate-500 truncate">{matched.product_name ?? matched.barcode}</p>
+                        : <p className="mt-0.5 text-xs text-amber-600">Не найден в партии</p>}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => { setPackingCameraScanned(null); setPackingCameraRescanKey((k) => k + 1) }}
+                      className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition-colors">
+                      Сканировать снова
+                    </button>
+                    <button type="button"
+                      onClick={() => {
+                        if (!boxId) return
+                        setPackingBoxBarcode((p) => ({ ...p, [boxId]: bc }))
+                        void lookupAndCacheBarcode(bc)
+                        setPackingCameraOpen(false)
+                        setPackingCameraTargetBoxId(null)
+                        setTimeout(() => { packingQtyRef.current?.focus(); packingQtyRef.current?.select() }, 80)
+                      }}
+                      className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 transition-colors">
+                      Использовать
+                    </button>
+                  </div>
+                </>
+              )
+            })() : (
+              <div className="flex items-center justify-center py-2">
+                <div className="flex items-center gap-2 text-sm text-slate-400">
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                  Ожидание сканирования...
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -3457,7 +4820,7 @@ const EditBatchModal = ({ batch, stores, onClose, onSave }: EditBatchModalProps)
     try {
       await onSave({ name: name.trim(), store_id: storeId || null, stage_otk: stageOtk, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
       setIsSaving(false)
     }
   }
@@ -3630,7 +4993,7 @@ const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onSt
       setNewStoreName('')
       setNewStoreCode('')
     } catch (err) {
-      setCreateStoreError(err instanceof Error ? err.message : 'Ошибка')
+      setCreateStoreError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
       setIsCreatingStore(false)
     }
@@ -3660,7 +5023,7 @@ const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onSt
     try {
       await onSubmit({ name: name.trim(), store_id: effectiveStoreId || null, stage_otk: stageOtk, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics }, closeOnlyRef.current)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка')
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
       setIsSaving(false)
     }
   }
@@ -3941,7 +5304,7 @@ const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
 // ══════════════════════════════════════════════════════════════
 // FulfillmentPage
 // ══════════════════════════════════════════════════════════════
-export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, userId = '', userEmail = '', userName = '' }: FulfillmentPageProps) => {
+export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTripLine, onAddTripLine, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '' }: FulfillmentPageProps) => {
   const [batches, setBatches] = useState<FulfillmentBatch[]>([])
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -3956,10 +5319,10 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
   const [editTarget, setEditTarget] = useState<FulfillmentBatch | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [archivedBatches, setArchivedBatches] = useState<FulfillmentBatch[]>([])
-  const [isArchiveOpen, setIsArchiveOpen] = useState(false)
   const [isArchiveLoading, setIsArchiveLoading] = useState(false)
   const [isRestoring, setIsRestoring] = useState<string | null>(null)
   const [detailFromArchive, setDetailFromArchive] = useState(false)
+  const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
     if (!accountId) return
@@ -4023,8 +5386,9 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
     } finally { setIsRestoring(null) }
   }
 
-  const handleOpenArchive = async () => {
-    setIsArchiveOpen(true)
+  // Загрузить архив при переключении на вкладку
+  const handleSelectArchiveTab = async () => {
+    setFilterStatus('archived')
     if (archivedBatches.length === 0) {
       setIsArchiveLoading(true)
       try {
@@ -4041,7 +5405,19 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
     setSettingsOpen(false)
   }
 
-  const filtered = batches.filter((b) => filterStatus === 'all' || b.status === filterStatus)
+  const isArchiveTab = filterStatus === 'archived'
+  const filtered = isArchiveTab
+    ? archivedBatches
+    : batches.filter((b) => filterStatus === 'all' || b.status === filterStatus)
+
+  // Нумерация П-1, П-2... по возрастанию даты создания среди ВСЕХ партий
+  const batchNumberMap = (() => {
+    const all = [...batches, ...archivedBatches]
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    const map = new Map<string, number>()
+    all.forEach((b, i) => map.set(b.id, i + 1))
+    return map
+  })()
 
   const stageLabel = (b: FulfillmentBatch) => {
     if (b.status === 'done') return 'Завершена'
@@ -4057,11 +5433,12 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
       {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
       {detailData && (
         <BatchDetailModal
-          batch={detailData} accountId={accountId} stores={stores} trips={trips}
-          canManage={canManage} canOtkAssign={canOtkAssign} canStageJump={canStageJump} userId={userId} userEmail={userEmail} userName={userName}
+          batch={detailData} accountId={accountId} stores={stores} trips={trips} warehouses={warehouses}
+          canManage={canManage} canOtkAssign={canOtkAssign} canStageJump={canStageJump} canPackingAutoAdd={canPackingAutoAdd} canSupplyDeleteLocked={canSupplyDeleteLocked} userId={userId} userEmail={userEmail} userName={userName}
           onClose={() => { setDetailData(null); setDetailFromArchive(false) }}
           onBatchUpdated={handleBatchUpdated} onItemsChanged={handleItemsChanged}
           onEditTripLine={onEditTripLine}
+          onAddTripLine={onAddTripLine}
           zIndex={detailFromArchive ? 60 : 50}
         />
       )}
@@ -4094,6 +5471,10 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
                 {s === 'all' ? 'Все' : STATUS_LABELS[s]}
               </button>
             ))}
+            <button type="button" onClick={() => void handleSelectArchiveTab()}
+              className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${isArchiveTab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+              Архив
+            </button>
           </div>
           {canManage && (
             <button type="button" onClick={() => setSettingsOpen(true)}
@@ -4102,15 +5483,6 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
-            </button>
-          )}
-          {canManage && (
-            <button type="button" onClick={() => void handleOpenArchive()}
-              className="flex h-9 items-center gap-1.5 rounded-2xl border border-slate-200 px-3 text-sm font-medium text-slate-500 hover:bg-slate-50">
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />
-              </svg>
-              Архив
             </button>
           )}
           {canManage && (
@@ -4147,6 +5519,17 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
           <table className="w-full text-sm">
             <thead className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
               <tr>
+                <th className="w-8 px-3 py-3">
+                  <input type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                    checked={filtered.length > 0 && filtered.every((b) => selectedBatchIds.has(b.id))}
+                    onChange={(e) => {
+                      if (e.target.checked) setSelectedBatchIds(new Set(filtered.map((b) => b.id)))
+                      else setSelectedBatchIds(new Set())
+                    }}
+                  />
+                </th>
+                <th className="px-4 py-3 text-left">ID</th>
                 <th className="px-4 py-3 text-left">Партия</th>
                 <th className="px-4 py-3 text-left">Магазин</th>
                 <th className="px-4 py-3 text-center">Этап</th>
@@ -4160,15 +5543,42 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
               {filtered.map((b) => {
                 const s = stores.find((st) => st.id === b.store_id)
                 const disc = b.otk_discrepancy
+                const batchNum = batchNumberMap.get(b.id)
+                const isSelected = selectedBatchIds.has(b.id)
+                const isArchived = isArchiveTab
                 return (
-                  <tr key={b.id} onClick={() => isOpeningDetail !== b.id && void handleOpenDetail(b.id)}
-                    className="cursor-pointer hover:bg-slate-50/80 transition-colors">
+                  <tr key={b.id} onClick={() => !isArchived && isOpeningDetail !== b.id && void handleOpenDetail(b.id)}
+                    className={`transition-colors ${isArchived ? '' : 'cursor-pointer hover:bg-slate-50/80'} ${isSelected ? 'bg-blue-50/60' : ''}`}>
+                    <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                        checked={isSelected}
+                        onChange={(e) => {
+                          setSelectedBatchIds((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(b.id)
+                            else next.delete(b.id)
+                            return next
+                          })
+                        }}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-slate-400 text-xs font-mono">
+                      {batchNum != null ? `П-${batchNum}` : '—'}
+                    </td>
                     <td className="px-4 py-3">
                       <p className="font-medium text-slate-800">{b.name}</p>
                     </td>
-                    <td className="px-4 py-3 text-slate-500">{s?.name ?? <span className="text-slate-300">—</span>}</td>
+                    <td className="px-4 py-3">
+                      {s ? (
+                        <div>
+                          <p className="font-semibold text-slate-800">{s.supplier || s.name}</p>
+                          {s.supplier && <p className="text-xs text-slate-400 leading-tight">{s.name}</p>}
+                        </div>
+                      ) : <span className="text-slate-300">—</span>}
+                    </td>
                     <td className="px-4 py-3 text-center">
-                      <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-600">
+                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${isArchived ? 'bg-slate-100 text-slate-500' : 'bg-blue-50 text-blue-600'}`}>
                         {stageLabel(b)}
                       </span>
                     </td>
@@ -4182,31 +5592,43 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[b.status]}`}>
-                        {STATUS_LABELS[b.status]}
-                      </span>
+                      {isArchived ? (
+                        <span className="text-xs text-slate-400">
+                          {b.deleted_at ? new Date(b.deleted_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
+                        </span>
+                      ) : (
+                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[b.status]}`}>
+                          {STATUS_LABELS[b.status]}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-slate-400">
                       {new Date(b.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                     </td>
-                    <td className="px-3 py-3 text-right">
-                      {canManage && (
+                    <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                      {isArchived ? (
+                        <button type="button" disabled={isRestoring === b.id}
+                          onClick={() => void handleRestore(b)}
+                          className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
+                          {isRestoring === b.id ? 'Восстановление…' : 'Восстановить'}
+                        </button>
+                      ) : canManage ? (
                         <div className="flex items-center justify-end gap-1">
-                          <button type="button" onClick={(e) => { e.stopPropagation(); setEditTarget(b) }}
+                          <button type="button" onClick={() => setEditTarget(b)}
                             className="rounded-xl p-1.5 text-slate-300 hover:bg-blue-50 hover:text-blue-400">
                             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                             </svg>
                           </button>
-                          <button type="button" onClick={(e) => { e.stopPropagation(); setDeleteTarget(b) }}
+                          <button type="button" onClick={() => setDeleteTarget(b)}
                             className="rounded-xl p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-400">
                             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                               <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
                             </svg>
                           </button>
                         </div>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 )
@@ -4216,71 +5638,7 @@ export const FulfillmentPage = ({ accountId, stores, trips, onEditTripLine, onSt
         )}
       </Card>
 
-      {/* Модалка архива */}
-      {isArchiveOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => setIsArchiveOpen(false)}>
-          <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" style={{ maxHeight: '80vh' }} onClick={(e) => e.stopPropagation()}>
-            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
-              <p className="font-semibold text-slate-800">Архив партий</p>
-              <button type="button" onClick={() => setIsArchiveOpen(false)}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100">
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {isArchiveLoading ? (
-                <div className="flex items-center justify-center py-16 text-sm text-slate-400">Загрузка…</div>
-              ) : archivedBatches.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-                  <p className="font-medium text-slate-600">Архив пуст</p>
-                  <p className="text-sm text-slate-400">Архивированные партии появятся здесь</p>
-                </div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-4 py-3 text-left">Партия</th>
-                      <th className="px-4 py-3 text-left">Магазин</th>
-                      <th className="px-4 py-3 text-center">Этап</th>
-                      <th className="px-4 py-3 text-left">Архивирована</th>
-                      <th className="px-4 py-3" />
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {archivedBatches.map((b) => {
-                      const s = stores.find((st) => st.id === b.store_id)
-                      return (
-                        <tr key={b.id} className="cursor-pointer hover:bg-slate-50/80"
-                          onClick={() => { setDetailFromArchive(true); void handleOpenDetail(b.id) }}>
-                          <td className="cursor-pointer px-4 py-3">
-                            <p className="font-medium text-slate-800">{b.name}</p>
-                          </td>
-                          <td className="px-4 py-3 text-slate-500">{s?.name ?? <span className="text-slate-300">—</span>}</td>
-                          <td className="px-4 py-3 text-center">
-                            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">
-                              {stageLabel(b)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-slate-400 text-xs">
-                            {b.deleted_at ? new Date(b.deleted_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
-                          </td>
-                          <td className="px-3 py-3 text-right">
-                            <button type="button" disabled={isRestoring === b.id}
-                              onClick={(e) => { e.stopPropagation(); void handleRestore(b) }}
-                              className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
-                              {isRestoring === b.id ? 'Восстановление…' : 'Восстановить'}
-                            </button>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
+

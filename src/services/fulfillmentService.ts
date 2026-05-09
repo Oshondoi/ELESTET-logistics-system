@@ -6,6 +6,10 @@ import type {
   FulfillmentOtkLog,
   FulfillmentSettings,
   FulfillmentStage,
+  FulfillmentSupply,
+  FulfillmentSupplyWithBoxes,
+  FulfillmentBox,
+  FulfillmentBoxItem,
   Product,
 } from '../types'
 
@@ -103,6 +107,7 @@ export const updateBatch = async (
       | 'name'
       | 'status'
       | 'current_stage'
+      | 'trip_id'
       | 'trip_line_id'
       | 'comment'
       | 'stage_otk'
@@ -225,6 +230,25 @@ export const advanceStage = async (batch: FulfillmentBatch): Promise<Fulfillment
   return updateBatch(batch.id, { current_stage: nextStage, status: newStatus as FulfillmentBatch['status'] })
 }
 
+// ── Stage log helpers ─────────────────────────────────────────
+
+/** Возвращает ISO-дату завершения этапа (completed_at из fulfillment_stage_logs) или null */
+export const fetchStageCompletedAt = async (
+  batchId: string,
+  stage: string,
+): Promise<string | null> => {
+  if (!supabase) return null
+  const { data } = await (supabase as any)
+    .from('fulfillment_stage_logs')
+    .select('completed_at')
+    .eq('batch_id', batchId)
+    .eq('stage', stage)
+    .order('completed_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return (data as { completed_at: string } | null)?.completed_at ?? null
+}
+
 // ── Product barcode lookup ────────────────────────────────────
 
 export const lookupProductByBarcode = async (
@@ -265,6 +289,52 @@ export interface CatalogProduct {
   vendor_code: string | null
   barcodes: string[]
   sizes: Array<{ techSize?: string; skus?: string[] }>
+}
+
+export interface ProductInfo {
+  nm_id: number | null
+  name: string | null
+  vendor_code: string | null
+  category: string | null
+  color: string | null
+  brand: string | null
+  size: string | null
+  photo_url: string | null
+}
+
+export const findProductByBarcode = async (
+  accountId: string,
+  storeId: string | null,
+  barcode: string,
+): Promise<ProductInfo | null> => {
+  if (!supabase || !storeId) return null
+  const { data } = await (supabase as any)
+    .from('products')
+    .select('nm_id, name, vendor_code, category, color, brand, sizes, photos')
+    .eq('account_id', accountId)
+    .eq('store_id', storeId)
+    .contains('barcodes', [barcode])
+    .limit(1)
+    .maybeSingle()
+  if (!data) return null
+  let size: string | null = null
+  if (Array.isArray(data.sizes)) {
+    for (const s of data.sizes as Array<{ techSize?: string; skus?: string[] }>) {
+      if (s.skus?.includes(barcode)) { size = s.techSize ?? null; break }
+    }
+  }
+  const photos = data.photos as Array<{ c246x328?: string; big?: string }> | null
+  const photo_url = photos?.[0]?.c246x328 ?? photos?.[0]?.big ?? null
+  return {
+    nm_id: data.nm_id ?? null,
+    name: data.name ?? null,
+    vendor_code: data.vendor_code ?? null,
+    category: data.category ?? null,
+    color: data.color ?? null,
+    brand: data.brand ?? null,
+    size,
+    photo_url,
+  }
 }
 
 export const searchProducts = async (
@@ -456,6 +526,8 @@ export const addMarkingLog = async (entry: {
   qty_defect?: number
   notes?: string
   photo_urls?: string[]
+  barcode?: string | null
+  item_id?: string | null
 }): Promise<import('../types').FulfillmentMarkingLog> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
@@ -529,4 +601,168 @@ export const fetchMarkingLogHistory = async (logId: string) => {
     .order('created_at', { ascending: true })
   if (error) throw error
   return (data ?? []) as import('../types').FulfillmentMarkingLogHistory[]
+}
+
+// ── Packing: Supplies ─────────────────────────────────────────
+
+export const fetchSupplies = async (batchId: string): Promise<FulfillmentSupplyWithBoxes[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: supplies, error: sErr } = await (supabase as any)
+    .from('fulfillment_supplies')
+    .select('*')
+    .eq('batch_id', batchId)
+    .order('created_at', { ascending: true })
+  if (sErr) throw sErr
+
+  const supplyIds: string[] = (supplies ?? []).map((s: FulfillmentSupply) => s.id)
+  if (supplyIds.length === 0) return []
+
+  const { data: boxes, error: bErr } = await (supabase as any)
+    .from('fulfillment_boxes')
+    .select('*')
+    .in('supply_id', supplyIds)
+    .order('box_number', { ascending: true })
+  if (bErr) throw bErr
+
+  const boxIds: string[] = (boxes ?? []).map((b: FulfillmentBox) => b.id)
+  let items: FulfillmentBoxItem[] = []
+  if (boxIds.length > 0) {
+    const { data: itemData, error: iErr } = await (supabase as any)
+      .from('fulfillment_box_items')
+      .select('*')
+      .in('box_id', boxIds)
+      .order('created_at', { ascending: true })
+    if (iErr) throw iErr
+    items = itemData ?? []
+  }
+
+  return (supplies ?? []).map((supply: FulfillmentSupply) => {
+    const supplyBoxes: FulfillmentBox[] = (boxes ?? []).filter(
+      (b: FulfillmentBox) => b.supply_id === supply.id
+    )
+    const boxesWithItems = supplyBoxes.map((box: FulfillmentBox) => ({
+      ...box,
+      items: items.filter((i: FulfillmentBoxItem) => i.box_id === box.id),
+    }))
+    return { ...supply, boxes: boxesWithItems }
+  })
+}
+
+export const createSupply = async (data: {
+  batch_id: string
+  account_id: string
+  warehouse_id: string | null
+  warehouse_name: string
+  trip_id: string | null
+  trip_line_id: string | null
+  created_by: string | null
+}): Promise<FulfillmentSupply> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: row, error } = await (supabase as any)
+    .from('fulfillment_supplies')
+    .insert(data)
+    .select()
+    .single()
+  if (error) throw error
+  return row as FulfillmentSupply
+}
+
+export const deleteSupply = async (supplyId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_supplies')
+    .delete()
+    .eq('id', supplyId)
+  if (error) throw error
+}
+
+export const updateSupply = async (
+  supplyId: string,
+  updates: Partial<Pick<FulfillmentSupply, 'trip_id' | 'trip_line_id'>>,
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_supplies')
+    .update(updates)
+    .eq('id', supplyId)
+  if (error) throw error
+}
+
+// ── Packing: Boxes ────────────────────────────────────────────
+
+export const createBox = async (data: {
+  supply_id: string
+  account_id: string
+  box_number: number
+}): Promise<FulfillmentBox> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: row, error } = await (supabase as any)
+    .from('fulfillment_boxes')
+    .insert({ ...data, status: 'open' })
+    .select()
+    .single()
+  if (error) throw error
+  return row as FulfillmentBox
+}
+
+export const closeBox = async (boxId: string): Promise<FulfillmentBox> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: row, error } = await (supabase as any)
+    .from('fulfillment_boxes')
+    .update({ status: 'closed' })
+    .eq('id', boxId)
+    .select()
+    .single()
+  if (error) throw error
+  return row as FulfillmentBox
+}
+
+export const reopenBox = async (boxId: string): Promise<FulfillmentBox> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: row, error } = await (supabase as any)
+    .from('fulfillment_boxes')
+    .update({ status: 'open' })
+    .eq('id', boxId)
+    .select()
+    .single()
+  if (error) throw error
+  return row as FulfillmentBox
+}
+
+export const deleteBox = async (boxId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_boxes')
+    .delete()
+    .eq('id', boxId)
+  if (error) throw error
+}
+
+// ── Packing: Box Items ────────────────────────────────────────
+
+export const addBoxItem = async (data: {
+  box_id: string
+  account_id: string
+  barcode: string
+  item_id: string | null
+  product_name: string | null
+  qty: number
+}): Promise<FulfillmentBoxItem> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: row, error } = await (supabase as any)
+    .from('fulfillment_box_items')
+    .insert(data)
+    .select()
+    .single()
+  if (error) throw error
+  return row as FulfillmentBoxItem
+}
+
+export const deleteBoxItem = async (itemId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_box_items')
+    .delete()
+    .eq('id', itemId)
+  if (error) throw error
 }

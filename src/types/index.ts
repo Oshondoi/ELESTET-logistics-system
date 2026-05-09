@@ -69,6 +69,8 @@ export interface RolePermissions {
   fulfillment_manage: boolean
   fulfillment_otk_assign: boolean
   fulfillment_stage_jump: boolean
+  fulfillment_packing_autoadd: boolean
+  fulfillment_supply_delete_locked: boolean
   // Администрирование
   roles_manage: boolean
   members_manage: boolean
@@ -99,6 +101,8 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   fulfillment_manage: false,
   fulfillment_otk_assign: false,
   fulfillment_stage_jump: false,
+  fulfillment_packing_autoadd: false,
+  fulfillment_supply_delete_locked: false,
   roles_manage: false,
   members_manage: false,
 }
@@ -128,6 +132,8 @@ export const FULL_PERMISSIONS: RolePermissions = {
   fulfillment_manage: true,
   fulfillment_otk_assign: true,
   fulfillment_stage_jump: true,
+  fulfillment_packing_autoadd: true,
+  fulfillment_supply_delete_locked: true,
   roles_manage: true,
   members_manage: true,
 }
@@ -355,6 +361,7 @@ export interface TripLine {
   created_at: string
   updated_at: string
   deleted_at?: string | null
+  fulfillment_batch_id?: string | null
 }
 
 export interface TripLineWithStore extends TripLine {
@@ -573,6 +580,7 @@ export interface FulfillmentBatch {
   stage_marking: boolean
   stage_packing: boolean
   stage_logistics: boolean
+  trip_id: string | null
   trip_line_id: string | null
   comment: string | null
   otk_discrepancy: number | null
@@ -630,7 +638,10 @@ export interface FulfillmentOtkLog {
   deleted_at: string | null
 }
 
-export type FulfillmentMarkingLog = FulfillmentOtkLog
+export interface FulfillmentMarkingLog extends FulfillmentOtkLog {
+  barcode: string | null
+  item_id: string | null
+}
 
 export interface FulfillmentOtkLogHistory {
   id: string
@@ -654,4 +665,58 @@ export interface FulfillmentMarkingLogHistory {
   old_values: Record<string, unknown> | null
   new_values: Record<string, unknown>
   created_at: string
+}
+
+// ─── Формирование коробов ─────────────────────────────────────
+
+export interface FulfillmentSupply {
+  id: string
+  batch_id: string
+  account_id: string
+  warehouse_id: string | null
+  warehouse_name: string
+  trip_id: string | null
+  trip_line_id: string | null
+  created_by: string | null
+  created_at: string
+  _local?: boolean
+}
+
+export interface FulfillmentBox {
+  id: string
+  supply_id: string
+  account_id: string
+  box_number: number
+  status: 'open' | 'closed'
+  created_at: string
+  _local?: boolean
+}
+
+export interface FulfillmentBoxItem {
+  id: string
+  box_id: string
+  account_id: string
+  barcode: string
+  item_id: string | null
+  product_name: string | null
+  qty: number
+  created_at: string
+  _local?: boolean
+  _info?: {
+    nm_id: number | null
+    name: string | null
+    vendor_code: string | null
+    category: string | null
+    color: string | null
+    brand: string | null
+    size: string | null
+  }
+}
+
+export interface FulfillmentBoxWithItems extends FulfillmentBox {
+  items: FulfillmentBoxItem[]
+}
+
+export interface FulfillmentSupplyWithBoxes extends FulfillmentSupply {
+  boxes: FulfillmentBoxWithItems[]
 }
