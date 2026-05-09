@@ -535,26 +535,6 @@ export interface WbFeedback {
   photoLinks?: { fullSize: string; miniSize: string }[] | null
 }
 
-export interface ReviewTemplate {
-  id: string
-  account_id: string
-  name: string
-  text: string
-  trigger_ratings: number[]   // [] = any rating
-  trigger_keywords: string[]  // [] = no keyword filter
-  is_auto: boolean
-  sort_order: number
-  created_at: string
-}
-
-export interface ReviewTemplateFormValues {
-  name: string
-  text: string
-  trigger_ratings: number[]
-  trigger_keywords: string[]
-  is_auto: boolean
-}
-
 export interface AiPrompt {
   id: string
   account_id: string

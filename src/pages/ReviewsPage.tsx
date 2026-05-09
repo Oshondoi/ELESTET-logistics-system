@@ -16,9 +16,6 @@ import {
   updateAiPrompt,
   deleteAiPrompt,
   fetchAiPrompts,
-  createReviewTemplate,
-  deleteReviewTemplate,
-  fetchReviewTemplates,
   getAiSettings,
   loadFeedbackRowsFromDb,
   markReplySent,
@@ -26,7 +23,6 @@ import {
   saveAiSettings,
   sendWbReply,
   syncFeedbacksFromWb,
-  updateReviewTemplate,
 } from '../services/reviewsService'
 import {
   loadAutomationSettings,
@@ -41,23 +37,10 @@ import type {
   AiPromptFormValues,
   AiSettings,
   AiSettingsFormValues,
-  ReviewTemplate,
-  ReviewTemplateFormValues,
   Store,
   WbFeedback,
   WbFeedbackRow,
 } from '../types'
-
-// ── Helpers ────────────────────────────────────────────────────
-
-function applyTemplate(text: string, fb: WbFeedback): string {
-  const buyer = fb.userName || 'Покупатель'
-  const product = fb.productDetails?.productName || 'товар'
-  return text
-    .replace(/\{buyer_name\}/g, buyer)
-    .replace(/\{product_name\}/g, product)
-    .replace(/\{stars\}/g, String(fb.productValuation))
-}
 
 // ── Stars ──────────────────────────────────────────────────────
 
@@ -76,155 +59,6 @@ const Stars = ({ value }: { value: number }) => (
     ))}
   </span>
 )
-
-// ── TemplateFormModal ──────────────────────────────────────────
-
-const RATING_OPTIONS = [1, 2, 3, 4, 5] as const
-
-interface TemplateFormModalProps {
-  open: boolean
-  initial?: ReviewTemplate | null
-  onClose: () => void
-  onSubmit: (values: ReviewTemplateFormValues) => Promise<void>
-}
-
-const TemplateFormModal = ({ open, initial, onClose, onSubmit }: TemplateFormModalProps) => {
-  const [name, setName] = useState('')
-  const [text, setText] = useState('')
-  const [ratings, setRatings] = useState<number[]>([])
-  const [keywords, setKeywords] = useState('')
-  const [isAuto, setIsAuto] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (open) {
-      setName(initial?.name ?? '')
-      setText(initial?.text ?? '')
-      setRatings(initial?.trigger_ratings ?? [])
-      setKeywords((initial?.trigger_keywords ?? []).join(', '))
-      setIsAuto(initial?.is_auto ?? false)
-      setError(null)
-    }
-  }, [open, initial])
-
-  const toggleRating = (r: number) =>
-    setRatings((prev) =>
-      prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r].sort((a, b) => a - b),
-    )
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!name.trim()) { setError('Введите название'); return }
-    if (!text.trim()) { setError('Введите текст ответа'); return }
-    setIsSaving(true)
-    setError(null)
-    try {
-      const kws = keywords.split(',').map((k) => k.trim()).filter(Boolean)
-      await onSubmit({ name: name.trim(), text: text.trim(), trigger_ratings: ratings, trigger_keywords: kws, is_auto: isAuto })
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка сохранения')
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} title={initial ? 'Редактировать шаблон' : 'Новый шаблон'}>
-      <form className="grid gap-5" onSubmit={(e) => void handleSubmit(e)}>
-        <Input
-          label="Название шаблона"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Например: Положительный ответ"
-        />
-
-        <div className="grid gap-1.5">
-          <Textarea
-            label="Текст ответа"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Спасибо, {buyer_name}! Рады, что товар понравился."
-            rows={4}
-          />
-          <p className="text-[11px] text-slate-400">
-            Переменные:{' '}
-            <code className="rounded bg-slate-100 px-1">{'{buyer_name}'}</code>,{' '}
-            <code className="rounded bg-slate-100 px-1">{'{product_name}'}</code>,{' '}
-            <code className="rounded bg-slate-100 px-1">{'{stars}'}</code>
-          </p>
-        </div>
-
-        <div className="grid gap-2">
-          <label className="text-sm font-medium text-slate-700">
-            Триггер: оценка{' '}
-            <span className="font-normal text-slate-400">(пусто = любая)</span>
-          </label>
-          <div className="flex gap-2">
-            {RATING_OPTIONS.map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => toggleRating(r)}
-                className={cn(
-                  'flex h-9 w-9 flex-col items-center justify-center rounded-xl border text-sm font-semibold transition-colors',
-                  ratings.includes(r)
-                    ? 'border-amber-400 bg-amber-50 text-amber-700'
-                    : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:text-slate-600',
-                )}
-              >
-                {r}
-                <span className="text-[8px] leading-none">★</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <Input
-          label="Триггер: ключевые слова (через запятую)"
-          value={keywords}
-          onChange={(e) => setKeywords(e.target.value)}
-          placeholder="брак, не работает, маломерит"
-        />
-
-        <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-          <div
-            role="switch"
-            aria-checked={isAuto}
-            onClick={() => setIsAuto((v) => !v)}
-            className={cn(
-              'relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors',
-              isAuto ? 'bg-blue-500' : 'bg-slate-200',
-            )}
-          >
-            <div
-              className={cn(
-                'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
-                isAuto ? 'translate-x-4' : 'translate-x-0.5',
-              )}
-            />
-          </div>
-          <div>
-            <div className="text-sm font-medium text-slate-800">Авто-ответ (legacy)</div>
-            <div className="text-xs text-slate-500">Использовать в будущем авто-режиме</div>
-          </div>
-        </label>
-
-        {error ? <p className="text-sm text-rose-500">{error}</p> : null}
-
-        <div className="flex justify-end gap-3 pt-1">
-          <Button type="button" variant="secondary" onClick={onClose} disabled={isSaving}>
-            Отмена
-          </Button>
-          <Button type="submit" disabled={isSaving}>
-            {isSaving ? 'Сохранение...' : 'Сохранить'}
-          </Button>
-        </div>
-      </form>
-    </Modal>
-  )
-}
 
 // ── NegativeSendModal ─────────────────────────────────────────
 
@@ -280,7 +114,7 @@ const AUTO_SENT_TODAY_KEY = 'reviews_auto_sent_today'
 type Tab = 'queue' | 'answered' | 'templates' | 'test'
 
 interface AutoSettings {
-  source: 'ai' | 'templates' | 'ai_with_fallback'
+  source: 'ai'
   dailyLimit: number
   targetRatings: number[]
   requireText: boolean
@@ -400,14 +234,6 @@ export const ReviewsPage = ({
   const [tariffsTab, setTariffsTab] = useState<'text' | 'photo'>('text')
   const [systemPrompts, setSystemPrompts] = useState<AiPrompt[]>([])
   const [storePrompts, setStorePrompts] = useState<AiPrompt[]>([])
-
-  // Templates
-  const [templates, setTemplates] = useState<ReviewTemplate[]>([])
-  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false)
-  const [templateModalOpen, setTemplateModalOpen] = useState(false)
-  const [editingTemplate, setEditingTemplate] = useState<ReviewTemplate | null>(null)
-  const [deletingTemplate, setDeletingTemplate] = useState<ReviewTemplate | null>(null)
-  const [isDeletingTemplate, setIsDeletingTemplate] = useState(false)
 
   // Test tab
   const [testText, setTestText] = useState('')
@@ -603,16 +429,6 @@ export const ReviewsPage = ({
     return () => clearInterval(timer)
   }, [cooldownEndAt])
 
-  // ── Load templates
-  useEffect(() => {
-    if (!activeAccountId) return
-    setIsLoadingTemplates(true)
-    fetchReviewTemplates(activeAccountId)
-      .then(setTemplates)
-      .catch(() => {})
-      .finally(() => setIsLoadingTemplates(false))
-  }, [activeAccountId])
-
   // ── Close store dropdown on outside click
   useEffect(() => {
     const handler = (e: PointerEvent) => {
@@ -790,29 +606,6 @@ export const ReviewsPage = ({
       }))
     } finally {
       setSendingIds((prev) => { const n = new Set(prev); n.delete(row.id); return n })
-    }
-  }
-
-  // ── Template CRUD
-  const handleTemplateSubmit = async (values: ReviewTemplateFormValues) => {
-    if (editingTemplate) {
-      await updateReviewTemplate(editingTemplate.id, values)
-      setTemplates((prev) => prev.map((t) => (t.id === editingTemplate.id ? { ...t, ...values } : t)))
-    } else {
-      const created = await createReviewTemplate(activeAccountId, values)
-      setTemplates((prev) => [...prev, created])
-    }
-  }
-
-  const handleDeleteTemplate = async () => {
-    if (!deletingTemplate) return
-    setIsDeletingTemplate(true)
-    try {
-      await deleteReviewTemplate(deletingTemplate.id)
-      setTemplates((prev) => prev.filter((t) => t.id !== deletingTemplate.id))
-      setDeletingTemplate(null)
-    } finally {
-      setIsDeletingTemplate(false)
     }
   }
 
@@ -1157,7 +950,7 @@ export const ReviewsPage = ({
           [
             { key: 'queue' as Tab, label: 'Без ответа' },
             { key: 'answered' as Tab, label: 'Отвечено' },
-            { key: 'templates' as Tab, label: `Автоматизация${templates.length > 0 ? ` (${templates.length})` : ''}` },
+            { key: 'templates' as Tab, label: 'Автоматизация' },
             { key: 'test' as Tab, label: '🧪 Тест ИИ-ответа' },
           ] as const
         ).map(({ key, label }) => (
@@ -1500,28 +1293,6 @@ export const ReviewsPage = ({
                           style={{ minHeight: '80px', maxHeight: '240px' }}
                           className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:outline-none overflow-y-auto"
                         />
-
-                        {/* Template chips */}
-                        {templates.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[11px] text-slate-400">Шаблоны:</span>
-                            {templates.slice(0, 8).map((tpl) => (
-                              <button
-                                key={tpl.id}
-                                type="button"
-                                onClick={() =>
-                                  setLocalTexts((prev) => ({
-                                    ...prev,
-                                    [row.id]: applyTemplate(tpl.text, fb),
-                                  }))
-                                }
-                                className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-600"
-                              >
-                                {tpl.name}
-                              </button>
-                            ))}
-                          </div>
-                        )}
 
                         {genError && <p className="text-xs text-rose-500">{genError}</p>}
                         {sendError && <p className="text-xs text-rose-500">{sendError}</p>}
@@ -2076,50 +1847,6 @@ export const ReviewsPage = ({
             )}
           </div>
 
-          {/* ── Шаблоны (компактный список для fallback) ─────── */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-800">Шаблоны ответов</h3>
-                <p className="mt-0.5 text-xs text-slate-400">Приоритет: ключевые слова → оценка → универсальный</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => { setEditingTemplate(null); setTemplateModalOpen(true) }}
-                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
-              >
-                + Шаблон
-              </button>
-            </div>
-            {isLoadingTemplates && <p className="py-4 text-center text-xs text-slate-400">Загрузка...</p>}
-            {!isLoadingTemplates && templates.length === 0 && (
-              <p className="py-4 text-center text-xs text-slate-400">Шаблонов нет. Нажмите «+ Шаблон».</p>
-            )}
-            <div className="flex flex-col gap-2">
-              {templates.map((tpl) => (
-                <div key={tpl.id} className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
-                      <span className="text-xs font-semibold text-slate-700">{tpl.name}</span>
-                      {tpl.is_auto && <span className="rounded-full bg-blue-50 px-1.5 py-px text-[10px] font-bold text-blue-600">Авто</span>}
-                      {tpl.trigger_ratings.length > 0 && <span className="text-[11px] text-amber-600">{tpl.trigger_ratings.map((r) => `${r}★`).join(' ')}</span>}
-                      {tpl.trigger_keywords.length > 0 && <span className="rounded-full bg-slate-200 px-1.5 py-px text-[10px] text-slate-500">{tpl.trigger_keywords.slice(0, 2).join(', ')}{tpl.trigger_keywords.length > 2 ? ` +${tpl.trigger_keywords.length - 2}` : ''}</span>}
-                      {tpl.trigger_ratings.length === 0 && tpl.trigger_keywords.length === 0 && <span className="rounded-full bg-emerald-50 px-1.5 py-px text-[10px] text-emerald-600">Универсальный</span>}
-                    </div>
-                    <p className="line-clamp-1 text-xs text-slate-400">{tpl.text}</p>
-                  </div>
-                  <div className="flex shrink-0 gap-0.5">
-                    <button type="button" onClick={() => { setEditingTemplate(tpl); setTemplateModalOpen(true) }} className="rounded-lg p-1.5 text-slate-400 hover:bg-white hover:text-slate-600 transition">
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                    </button>
-                    <button type="button" onClick={() => setDeletingTemplate(tpl)} className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition">
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4h6v2" /></svg>
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
           </>
           )}
 
@@ -2349,22 +2076,6 @@ export const ReviewsPage = ({
           setNegativePending(null)
         }}
         onClose={() => setNegativePending(null)}
-      />
-
-      <TemplateFormModal
-        open={templateModalOpen}
-        initial={editingTemplate}
-        onClose={() => { setTemplateModalOpen(false); setEditingTemplate(null) }}
-        onSubmit={handleTemplateSubmit}
-      />
-
-      <DeleteConfirmModal
-        open={deletingTemplate !== null}
-        title="Удалить шаблон?"
-        description={`Шаблон «${deletingTemplate?.name ?? ''}» будет удалён. Это действие нельзя отменить.`}
-        isSubmitting={isDeletingTemplate}
-        onClose={() => setDeletingTemplate(null)}
-        onConfirm={() => void handleDeleteTemplate()}
       />
 
       {/* ── Модалка выбора магазинов ── */}

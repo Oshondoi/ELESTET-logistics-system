@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 export interface AutomationSettings {
   account_id: string
   is_enabled: boolean
-  source: 'ai' | 'templates' | 'ai_with_fallback'
+  source: 'ai'
   daily_limit: number
   target_ratings: number[]
   require_text: boolean

@@ -6,8 +6,6 @@ import type {
   AiReplyStatus,
   AiSettings,
   AiSettingsFormValues,
-  ReviewTemplate,
-  ReviewTemplateFormValues,
   WbFeedback,
   WbFeedbackRow,
 } from '../types'
@@ -134,55 +132,6 @@ export async function sendWbReply(
   }
 
   throw new Error('WB API: не удалось найти рабочий endpoint для отправки ответа (405 на всех попытках). Возможно, WB ограничил вызовы из браузера (CORS).')
-}
-
-// ─── Supabase — шаблоны ───────────────────────────────────────
-
-export async function fetchReviewTemplates(accountId: string): Promise<ReviewTemplate[]> {
-  if (!supabase) throw new Error('Supabase not configured')
-  const { data, error } = await supabase
-    .from('review_templates')
-    .select('*')
-    .eq('account_id', accountId)
-    .order('sort_order', { ascending: true })
-    .order('created_at', { ascending: true })
-  if (error) throw error
-  return (data ?? []) as ReviewTemplate[]
-}
-
-export async function createReviewTemplate(
-  accountId: string,
-  values: ReviewTemplateFormValues,
-): Promise<ReviewTemplate> {
-  if (!supabase) throw new Error('Supabase not configured')
-  const { data, error } = await supabase
-    .from('review_templates')
-    .insert({ account_id: accountId, sort_order: 0, ...values })
-    .select()
-    .single()
-  if (error) throw error
-  return data as ReviewTemplate
-}
-
-export async function updateReviewTemplate(
-  id: string,
-  values: Partial<ReviewTemplateFormValues>,
-): Promise<void> {
-  if (!supabase) throw new Error('Supabase not configured')
-  const { error } = await supabase
-    .from('review_templates')
-    .update(values)
-    .eq('id', id)
-  if (error) throw error
-}
-
-export async function deleteReviewTemplate(id: string): Promise<void> {
-  if (!supabase) throw new Error('Supabase not configured')
-  const { error } = await supabase
-    .from('review_templates')
-    .delete()
-    .eq('id', id)
-  if (error) throw error
 }
 
 // ─── Supabase — кэш отзывов wb_feedbacks ─────────────────────
