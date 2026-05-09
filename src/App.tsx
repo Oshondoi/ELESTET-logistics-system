@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { AccountFormModal } from './components/accounts/AccountFormModal'
 import { DeleteAccountModal } from './components/accounts/DeleteAccountModal'
 import { ProfileModal } from './components/accounts/ProfileModal'
@@ -33,6 +34,26 @@ import { DiaryPage } from './pages/DiaryPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
 type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
+
+const PAGE_ROUTES: Record<PageKey, string> = {
+  home: '/',
+  fulfillment: '/fulfillment',
+  shipments: '/shipments',
+  stores: '/stores',
+  directories: '/directories',
+  products: '/products',
+  reviews: '/reviews',
+  roles: '/roles',
+  stickers: '/stickers',
+  admin: '/admin',
+  glossary: '/glossary',
+  diary: '/diary',
+}
+
+const ROUTE_PAGES: Record<string, PageKey> = Object.fromEntries(
+  Object.entries(PAGE_ROUTES).map(([k, v]) => [v, k as PageKey])
+)
+
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
 const ACTIVE_STORE_ID_STORAGE_KEY = 'elestet-active-store-id'
@@ -107,25 +128,15 @@ const pageTitles: Record<PageKey, string> = {
 
 function App() {
   const { session, isLoading: isAuthLoading, signIn, signOut, signUp } = useAuth()
+  const navigate = useNavigate()
+  const location = useLocation()
+
   const [activePage, setActivePage] = useState<PageKey>(() => {
+    // Приоритет: URL > localStorage > 'home'
+    const fromUrl = ROUTE_PAGES[location.pathname]
+    if (fromUrl) return fromUrl
     const storedPage = window.localStorage.getItem(ACTIVE_PAGE_STORAGE_KEY)
-
-    if (
-      storedPage === 'home' ||
-      storedPage === 'fulfillment' ||
-      storedPage === 'shipments' ||
-      storedPage === 'stores' ||
-      storedPage === 'directories' ||
-      storedPage === 'products' ||
-      storedPage === 'reviews' ||
-      storedPage === 'roles' ||
-      storedPage === 'stickers' ||
-      storedPage === 'admin' ||
-      storedPage === 'diary'
-    ) {
-      return storedPage
-    }
-
+    if (storedPage && storedPage in PAGE_ROUTES) return storedPage as PageKey
     return 'home'
   })
   const [activeAccountId, setActiveAccountId] = useState<string | null>(() => {
@@ -299,7 +310,19 @@ function App() {
 
   useEffect(() => {
     window.localStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, activePage)
+    const route = PAGE_ROUTES[activePage]
+    if (location.pathname !== route) {
+      navigate(route, { replace: false })
+    }
   }, [activePage])
+
+  // Синхронизация URL → activePage (кнопка "назад" / прямой переход по ссылке)
+  useEffect(() => {
+    const pageFromUrl = ROUTE_PAGES[location.pathname]
+    if (pageFromUrl && pageFromUrl !== activePage) {
+      setActivePage(pageFromUrl)
+    }
+  }, [location.pathname])
 
   useEffect(() => {
     if (activeAccountId) {
