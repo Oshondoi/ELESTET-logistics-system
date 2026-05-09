@@ -1,6 +1,9 @@
 import { supabase } from '../lib/supabase'
 import type { AccountCurrency, Carrier, CarrierTariff, FulfillmentWorkTariff, WbUnloadTariff, Warehouse } from '../types'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const db = () => supabase as any
+
 export const fetchCarriers = async (accountId: string): Promise<Carrier[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase
@@ -160,7 +163,7 @@ export const upsertCarrierTariff = async (
 
 export const fetchWorkTariffs = async (accountId: string): Promise<FulfillmentWorkTariff[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('fulfillment_work_tariffs')
     .select('*')
     .eq('account_id', accountId)
@@ -177,7 +180,7 @@ export const addWorkTariff = async (
   currency = 'RUB',
 ): Promise<FulfillmentWorkTariff> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('fulfillment_work_tariffs')
     .insert({ account_id: accountId, stage, name, price_per_unit: pricePerUnit, currency })
     .select()
@@ -191,7 +194,7 @@ export const updateWorkTariff = async (
   patch: { name?: string; price_per_unit?: number; stage?: string; currency?: string },
 ): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await supabase
+  const { error } = await db()
     .from('fulfillment_work_tariffs')
     .update(patch)
     .eq('id', id)
@@ -200,7 +203,7 @@ export const updateWorkTariff = async (
 
 export const deleteWorkTariff = async (id: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await supabase
+  const { error } = await db()
     .from('fulfillment_work_tariffs')
     .delete()
     .eq('id', id)
@@ -211,7 +214,7 @@ export const deleteWorkTariff = async (id: string): Promise<void> => {
 
 export const fetchAccountCurrencies = async (accountId: string): Promise<AccountCurrency[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('account_currencies')
     .select('*')
     .eq('account_id', accountId)
@@ -222,7 +225,7 @@ export const fetchAccountCurrencies = async (accountId: string): Promise<Account
 
 export const addAccountCurrency = async (accountId: string, code: string): Promise<AccountCurrency> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('account_currencies')
     .insert({ account_id: accountId, code })
     .select()
@@ -233,7 +236,7 @@ export const addAccountCurrency = async (accountId: string, code: string): Promi
 
 export const deleteAccountCurrency = async (id: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await supabase
+  const { error } = await db()
     .from('account_currencies')
     .delete()
     .eq('id', id)
@@ -242,7 +245,7 @@ export const deleteAccountCurrency = async (id: string): Promise<void> => {
 
 export const fetchStageCurrencies = async (accountId: string): Promise<Record<string, string>> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('account_stage_currencies')
     .select('stage, currency')
     .eq('account_id', accountId)
@@ -252,7 +255,7 @@ export const fetchStageCurrencies = async (accountId: string): Promise<Record<st
 
 export const upsertStageCurrency = async (accountId: string, stage: string, currency: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await supabase
+  const { error } = await db()
     .from('account_stage_currencies')
     .upsert({ account_id: accountId, stage, currency }, { onConflict: 'account_id,stage' })
   if (error) throw error
