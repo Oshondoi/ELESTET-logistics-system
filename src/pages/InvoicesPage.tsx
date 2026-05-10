@@ -121,7 +121,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     setLogisticsLoading(true)
     const fetchLogistics = async () => {
       const [{ data: t }, { data: l }] = await Promise.all([
-        supabase!.from('trips').select('*').eq('id', batch.trip_id).single(),
+        supabase!.from('trips').select('*').eq('id', batch.trip_id as string).single(),
         batch.trip_line_id
           ? supabase!.from('trip_lines').select('*').eq('id', batch.trip_line_id).single()
           : Promise.resolve({ data: null }),
