@@ -28,6 +28,7 @@ const permLabels: Record<string, string> = {
   directories_view: 'Справочники (просмотр)',
   directories_manage: 'Справочники (управление)',
   directories_delete: 'Удаление справочников',
+  directories_tariff_manage: 'Редактирование тарифов работ',
   stickers_view: 'Стикеры (просмотр)',
   stickers_manage: 'Стикеры (управление)',
   stickers_delete: 'Удаление стикеров',

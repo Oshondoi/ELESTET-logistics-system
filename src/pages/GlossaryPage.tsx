@@ -170,6 +170,62 @@ export const GlossaryPage = () => {
       category: 'WB API',
       description: 'Тип упаковки поставки WB: 1 = короба (QR), 2 = паллеты. Берётся из GET /api/v1/supplies/{id} поля boxTypeID + isBoxOnPallet при синке стикеров. Хранится в trip_lines.wb_cargo_type. Влияет на отображение иконок в ячейке стикеров.',
     },
+    {
+      name: 'Безопасность проекта',
+      category: 'Инфраструктура',
+      description: `Ключевые вопросы безопасности ELESTET. Скажи «задача о безопасности проекта» — и ИИ сразу поймёт контекст.
+
+GITHUB — ПУБЛИЧНЫЙ РЕПО:
+  Vercel бесплатный тариф = репо обязан быть публичным. Любой может скачать код.
+  Защита: добавить файл LICENSE с запретом использования.
+    - Commons Clause поверх MIT: запрет продажи/коммерции
+    - «All Rights Reserved» (проприетарная): полный запрет
+    Юридический барьер, технически не блокирует скачивание.
+  Альтернатива без публичного репо:
+    - Vercel Pro ($20/мес) — поддерживает приватные репо
+    - vercel deploy через CLI — файлы идут напрямую, GitHub не нужен
+
+SUPABASE — БЕЗОПАСНОСТЬ БД:
+  Anon key в коде — НОРМАЛЬНО. Публичный по дизайну Supabase. Безопасен при включённом RLS.
+  Service role key — НИКОГДА в фронтенд. Только Edge Functions / серверный .env.
+    Если утёк в публичный репо → немедленно ротировать в Supabase Dashboard → Settings → API.
+  RLS (Row Level Security) — главная защита. Пока политики правильные — чужие данные закрыты.
+  Откат назад:
+    Supabase Pro ($25/мес) = PITR (Point-in-time recovery), любая секунда за 7 дней
+    Бесплатный = ежедневные бэкапы, восстановление только через поддержку Supabase
+  Снапшот БД: supabase db dump (CLI) или pg_dump через дашборд → один SQL файл структуры+данных
+
+ПРИОРИТЕТЫ (в порядке важности):
+  1. service_role key нигде нет в коде/репо — КРИТИЧНО
+  2. Добавить LICENSE файл в репо — правовая защита кода
+  3. Supabase Pro — если данные клиентов критически важны (PITR)`,
+    },
+    {
+      name: 'Свернуть / Развернуть список',
+      category: 'Логистика',
+      description: `Кнопка в тулбаре страницы Логистики (ShipmentsPage). Иконка: двойная стрелка вверх = свернуть, двойная стрелка вниз = развернуть. Стиль: квадратная 40×40 px, variant="secondary", синий фон (#E3EAF6) когда хоть один рейс раскрыт.
+
+СОСТОЯНИЕ:
+  expandAllTrips: boolean — в useState, инициализируется из localStorage ('elestet-expand-all')
+  collapseSignal: number — счётчик, инкрементируется при принудительном схлопывании
+  anyTripExpanded: boolean — true если хоть один рейс раскрыт (приходит через onExpandedCountChange от TripTable)
+
+ЛОГИКА КНОПКИ:
+  anyTripExpanded=true  → setExpandAllTrips(false) + setCollapseSignal(n+1) + localStorage='false'
+  anyTripExpanded=false → setExpandAllTrips(true)  + localStorage='true'
+  Примечание: collapseSignal нужен потому что setExpandAllTrips(false) не форсирует схлопывание если expandAll уже был false
+
+TripTable получает:
+  expandAll={expandAllTrips}           → при true все рейсы раскрываются
+  collapseAllSignal={collapseSignal}   → при изменении — все рейсы схлопываются
+  onExpandedCountChange={(count) => { setAnyTripExpanded(count > 0); if (count===0) setExpandAllTrips(false) }}
+
+ИКОНКА SVG:
+  Свернуть (anyTripExpanded=true):  двойные шевроны вверх  (m7.5 11 4.5-4.5 4.5 4.5 / m7.5 17 4.5-4.5 4.5 4.5)
+  Развернуть (anyTripExpanded=false): двойные шевроны вниз (m7.5 7 4.5 4.5 4.5-4.5 / m7.5 13 4.5 4.5 4.5-4.5)
+
+ФАЙЛЫ: src/pages/ShipmentsPage.tsx, src/components/trips/TripTable.tsx`,
+    },
   ]
 
   const categories = [...new Set(items.map((i) => i.category))]

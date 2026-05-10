@@ -79,7 +79,7 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
     store_code: values.store_code?.trim() || undefined,
     ...(values.api_key !== undefined ? { api_key: values.api_key.trim() || null } : {}),
     supplier: values.supplier?.trim() || null,
-    supplier_full: values.supplier_full?.trim() || null,
+    ...(values.supplier_full !== undefined ? { supplier_full: values.supplier_full.trim() || null } : {}),
     address: values.address?.trim() || null,
     inn: values.inn?.trim() || null,
   }

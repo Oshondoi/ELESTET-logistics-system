@@ -4,8 +4,8 @@ import { cn } from '../../lib/utils'
 import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -50,9 +50,11 @@ const items = [
     permKey: 'shipments_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M4 7h16" />
-        <path d="M4 12h16" />
-        <path d="M4 17h10" />
+        <rect x="1" y="9" width="14" height="10" rx="1.5" />
+        <path d="M15 13h4.5L22 16.5V19h-7" />
+        <circle cx="5.5" cy="20.5" r="1.5" />
+        <circle cx="18.5" cy="20.5" r="1.5" />
+        <path d="M15 9V5H1" />
       </svg>
     ),
   },
@@ -123,6 +125,20 @@ const items = [
     ),
   },
   {
+    key: 'invoices',
+    label: 'Счета',
+    permKey: null,
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="16" y1="13" x2="8" y2="13" />
+        <line x1="16" y1="17" x2="8" y2="17" />
+        <polyline points="10 9 9 9 8 9" />
+      </svg>
+    ),
+  },
+  {
     key: 'roles',
     label: 'Роли',
     permKey: 'roles_manage' as keyof import('../../types').RolePermissions,
@@ -161,7 +177,7 @@ export const Sidebar = ({
   const dropdownRef = useRef<HTMLDivElement | null>(null)
   const hasActiveAccount = Boolean(activeAccount)
   const companyName = activeAccount ? activeAccount.name : 'Нет компании'
-  const companyIdLabel = activeAccount ? `ID: ${activeAccount.id.slice(0, 8)}` : 'Создайте компанию'
+  const companyIdLabel = activeAccount ? (activeAccount.short_id != null ? `C-${activeAccount.short_id}` : `ID: ${activeAccount.id.slice(0, 8)}`) : 'Создайте компанию'
 
   const openDropdown = () => {
     if (!triggerRef.current) return
@@ -262,7 +278,7 @@ export const Sidebar = ({
               >
                 {accounts.map((account) => {
                   const isSelected = activeAccount?.id === account.id
-                  const listCompanyIdLabel = `ID: ${account.id.slice(0, 8)}`
+                  const listCompanyIdLabel = account.short_id != null ? `C-${account.short_id}` : `ID: ${account.id.slice(0, 8)}`
 
                   const isOwner = account.my_role === 'owner'
 

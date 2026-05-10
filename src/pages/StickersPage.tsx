@@ -600,18 +600,19 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                   )}
                 </div>
               )}
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                className={[
+                  '!h-10 !w-10 !min-w-10 !rounded-2xl !px-0',
+                  importAnyExpanded
+                    ? '!bg-[#E3EAF6] !text-slate-700 hover:!bg-[#E3EAF6]'
+                    : '!text-slate-500',
+                ].join(' ')}
                 onClick={handleImportToggleAll}
                 aria-pressed={importAnyExpanded}
-                aria-label={importAnyExpanded ? 'Свернуть все' : 'Развернуть все'}
-                title={importAnyExpanded ? 'Свернуть все' : 'Развернуть все'}
-                className={[
-                  'flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition',
-                  importAnyExpanded
-                    ? 'bg-[#E3EAF6] text-slate-700 hover:bg-[#d6e0f5]'
-                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
-                ].join(' ')}
+                aria-label={importAnyExpanded ? 'Свернуть список' : 'Развернуть список'}
+                title={importAnyExpanded ? 'Свернуть список' : 'Развернуть список'}
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -634,7 +635,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                     </>
                   )}
                 </svg>
-              </button>
+              </Button>
               {importDone !== null && <span className="text-xs text-emerald-600">✓ Создано стикеров: {importDone}</span>}
               {importError && <span className="text-xs text-rose-500">{importError}</span>}
             </div>

@@ -39,6 +39,11 @@ body {
   min-width: 320px;
 }
 
+body.elestet-focus-mode aside,
+body.elestet-focus-mode main > div:first-child {
+  display: none;
+}
+
 #root {
   height: 100%;
 }

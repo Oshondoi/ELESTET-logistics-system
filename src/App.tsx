@@ -28,12 +28,13 @@ import { StoresPage } from './pages/StoresPage'
 import { DirectoriesPage } from './pages/DirectoriesPage'
 import { StickersPage } from './pages/StickersPage'
 import { ReviewsPage } from './pages/ReviewsPage'
+import { InvoicesPage } from './pages/InvoicesPage'
 import { AdminPage } from './pages/AdminPage'
 import { GlossaryPage } from './pages/GlossaryPage'
 import { DiaryPage } from './pages/DiaryPage'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
 
 const PAGE_ROUTES: Record<PageKey, string> = {
   home: '/',
@@ -43,6 +44,7 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   directories: '/directories',
   products: '/products',
   reviews: '/reviews',
+  invoices: '/invoices',
   roles: '/roles',
   stickers: '/stickers',
   admin: '/admin',
@@ -120,6 +122,7 @@ const pageTitles: Record<PageKey, string> = {
   products: 'Товары',
   stickers: 'Стикеры',
   reviews: 'Отзывы',
+  invoices: 'Счета',
   roles: 'Роли',
   admin: 'Администратор',
   glossary: 'Словарь',
@@ -131,14 +134,44 @@ function App() {
   const navigate = useNavigate()
   const location = useLocation()
 
+  // Разбираем URL вида /fulfillment/C-{n}/P-{m} при первом рендере
+  const parsedFulfillmentUrl = (() => {
+    const m = location.pathname.match(/^\/fulfillment\/C-(\d+)\/P-(\d+)$/)
+    if (!m) return null
+    return { accountShortId: parseInt(m[1], 10), batchShortId: parseInt(m[2], 10) }
+  })()
+  // Разбираем URL вида /invoices/C-{n}/I-{m} при первом рендере
+  const parsedInvoiceUrl = (() => {
+    const m = location.pathname.match(/^\/invoices\/C-(\d+)\/I-(\d+)$/)
+    if (!m) return null
+    return { accountShortId: parseInt(m[1], 10), invoiceShortId: parseInt(m[2], 10) }
+  })()
+
   const [activePage, setActivePage] = useState<PageKey>(() => {
     // Приоритет: URL > localStorage > 'home'
     const fromUrl = ROUTE_PAGES[location.pathname]
     if (fromUrl) return fromUrl
+    if (location.pathname.startsWith('/fulfillment/')) return 'fulfillment'
+    if (location.pathname.startsWith('/invoices/')) return 'invoices'
     const storedPage = window.localStorage.getItem(ACTIVE_PAGE_STORAGE_KEY)
     if (storedPage && storedPage in PAGE_ROUTES) return storedPage as PageKey
     return 'home'
   })
+  // short_id партии из URL — для авто-открытия модалки
+  const [initialBatchShortId, setInitialBatchShortId] = useState<number | null>(
+    () => parsedFulfillmentUrl?.batchShortId ?? null
+  )
+  // short_id компании из URL — для переключения аккаунта
+  const [pendingAccountShortId] = useState<number | null>(
+    () => parsedFulfillmentUrl?.accountShortId ?? null
+  )
+  // short_id счёта из URL — для авто-открытия модалки счёта
+  const [initialInvoiceShortId, setInitialInvoiceShortId] = useState<number | null>(
+    () => parsedInvoiceUrl?.invoiceShortId ?? null
+  )
+  const [pendingInvoiceAccountShortId] = useState<number | null>(
+    () => parsedInvoiceUrl?.accountShortId ?? null
+  )
   const [activeAccountId, setActiveAccountId] = useState<string | null>(() => {
     return window.localStorage.getItem(ACTIVE_ACCOUNT_STORAGE_KEY)
   })
@@ -270,6 +303,7 @@ function App() {
     directories: 'directories_view',
     stickers: 'stickers_view',
     reviews: 'reviews_view',
+    invoices: null,
     roles: 'roles_manage',
     admin: null,
     glossary: null,
@@ -311,6 +345,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, activePage)
     const route = PAGE_ROUTES[activePage]
+    // Не сбрасываем URL партии если уже на /fulfillment/*
+    if (activePage === 'fulfillment' && location.pathname.startsWith('/fulfillment/')) return
+    // Не сбрасываем URL счёта если уже на /invoices/*
+    if (activePage === 'invoices' && location.pathname.startsWith('/invoices/')) return
     if (location.pathname !== route) {
       navigate(route, { replace: false })
     }
@@ -321,8 +359,25 @@ function App() {
     const pageFromUrl = ROUTE_PAGES[location.pathname]
     if (pageFromUrl && pageFromUrl !== activePage) {
       setActivePage(pageFromUrl)
+    } else if (!pageFromUrl && location.pathname.startsWith('/fulfillment/') && activePage !== 'fulfillment') {
+      setActivePage('fulfillment')
+    } else if (!pageFromUrl && location.pathname.startsWith('/invoices/') && activePage !== 'invoices') {
+      setActivePage('invoices')
     }
   }, [location.pathname])
+
+  // Переключаемся на компанию из URL (после загрузки списка компаний)
+  useEffect(() => {
+    if (!pendingAccountShortId || accounts.length === 0) return
+    const target = accounts.find((a) => a.short_id === pendingAccountShortId)
+    if (target) setActiveAccountId(target.id)
+  }, [accounts, pendingAccountShortId])
+
+  useEffect(() => {
+    if (!pendingInvoiceAccountShortId || accounts.length === 0) return
+    const target = accounts.find((a) => a.short_id === pendingInvoiceAccountShortId)
+    if (target) setActiveAccountId(target.id)
+  }, [accounts, pendingInvoiceAccountShortId])
 
   useEffect(() => {
     if (activeAccountId) {
@@ -450,7 +505,7 @@ function App() {
       marketplace: store.marketplace,
       store_code: store.store_code,
       supplier: shortLegalName || store.supplier || '',
-      supplier_full: store.supplier_full ?? '',
+      supplier_full: store.supplier_full ?? undefined,
       address: store.address ?? '',
       inn: (data.tin ?? store.inn ?? '').trim(),
     })
@@ -499,6 +554,7 @@ function App() {
               ) : effectivePage === 'fulfillment' ? (
                 <FulfillmentPage
                   accountId={activeAccount?.id ?? ''}
+                  accountShortId={activeAccount?.short_id ?? null}
                   stores={stores}
                   trips={trips}
                   warehouses={warehouses}
@@ -513,6 +569,8 @@ function App() {
                   userId={session?.user?.id ?? ''}
                   userEmail={session?.user?.email ?? ''}
                   userName={profileUserName || (session?.user?.email ?? '')}
+                  initialBatchShortId={initialBatchShortId}
+                  onBatchUrlConsumed={() => setInitialBatchShortId(null)}
                 />
               ) : effectivePage === 'shipments' ? (
                 <ShipmentsPage
@@ -551,6 +609,7 @@ function App() {
                   canDeleteTrip={isOwnerOrAdmin || permissions.shipments_delete_trip}
                   isOwnerOrAdmin={isOwnerOrAdmin}
                   accountId={activeAccount?.id ?? ''}
+                  userId={session?.user?.id ?? ''}
                   onUpdateTripCustomFields={updateTripCustomFields}
                   onUpdateLineCustomFields={updateLineCustomFields}
                 />
@@ -571,6 +630,7 @@ function App() {
                   onRenameWarehouse={renameWarehouse}
                   canManage={permissions.directories_manage}
                   canDelete={isOwnerOrAdmin || permissions.directories_delete}
+                  canManageTariffs={isOwnerOrAdmin || permissions.directories_tariff_manage}
                 />
               ) : effectivePage === 'products' ? (
                 <ProductsPage stores={stores} activeAccountId={activeAccount?.id ?? ''} selectedStoreId={activeStoreId} onStoreChange={setActiveStoreId} />
@@ -612,6 +672,14 @@ function App() {
                   canManage={isOwnerOrAdmin || permissions.reviews_manage}
                   canUseAi={isOwnerOrAdmin || permissions.reviews_ai}
                   canManageAutomation={isOwnerOrAdmin || permissions.reviews_automation}
+                />
+              ) : effectivePage === 'invoices' ? (
+                <InvoicesPage
+                  accountId={activeAccount?.id ?? ''}
+                  accountShortId={activeAccount?.short_id ?? null}
+                  stores={stores}
+                  initialInvoiceShortId={initialInvoiceShortId}
+                  onInvoiceUrlConsumed={() => setInitialInvoiceShortId(null)}
                 />
               ) : effectivePage === 'admin' ? (
                 <AdminPage />
@@ -670,7 +738,7 @@ function App() {
 
       <StoreFormModal
         open={storeModalOpen}
-        initialValues={editingStore ? { name: editingStore.name, marketplace: editingStore.marketplace, store_code: editingStore.store_code, supplier: editingStore.supplier ?? '', address: editingStore.address ?? '', inn: editingStore.inn ?? '' } : undefined}
+        initialValues={editingStore ? { name: editingStore.name, marketplace: editingStore.marketplace, store_code: editingStore.store_code, supplier: editingStore.supplier ?? '', supplier_full: editingStore.supplier_full ?? '', address: editingStore.address ?? '', inn: editingStore.inn ?? '' } : undefined}
         hasApiKey={Boolean(editingStore?.api_key)}
         onClose={() => { setStoreModalOpen(false); setEditingStore(null) }}
         onSubmit={(values) => editingStore ? updateStore(editingStore.id, values) : addStore(values)}

@@ -42,28 +42,47 @@ export const upsertFulfillmentSettings = async (
 
 // ── Batches ───────────────────────────────────────────────────
 
+type RawItem = { qty_received: number; qty_otk: number | null; qty_marked: number | null; qty_packed: number | null }
+type RawLog = { qty: number; qty_defect: number; deleted_at: string | null }
+const sumQty = (items: RawItem[], f: (i: RawItem) => number | null) => items.reduce((s, i) => s + (f(i) ?? 0), 0)
+const sumLog = (logs: RawLog[]) => logs.filter((l) => !l.deleted_at).reduce((s, l) => s + l.qty + l.qty_defect, 0)
+const attachQtySums = (row: any): FulfillmentBatch => {
+  const items: RawItem[] = row.fulfillment_items ?? []
+  const otkLogs: RawLog[] = row.fulfillment_otk_logs ?? []
+  const markingLogs: RawLog[] = row.fulfillment_marking_logs ?? []
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { fulfillment_items: _, fulfillment_otk_logs: __, fulfillment_marking_logs: ___, ...batch } = row
+  return {
+    ...batch,
+    qty_received_sum: sumQty(items, (i) => i.qty_received),
+    qty_otk_sum: sumLog(otkLogs),
+    qty_marked_sum: sumLog(markingLogs),
+    qty_packed_sum: sumQty(items, (i) => i.qty_packed),
+  }
+}
+
 export const fetchBatches = async (accountId: string): Promise<FulfillmentBatch[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
-    .select('*')
+    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at)')
     .eq('account_id', accountId)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
   if (error) throw error
-  return (data ?? []) as FulfillmentBatch[]
+  return (data ?? []).map(attachQtySums) as FulfillmentBatch[]
 }
 
 export const fetchArchivedBatches = async (accountId: string): Promise<FulfillmentBatch[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
-    .select('*')
+    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at)')
     .eq('account_id', accountId)
     .not('deleted_at', 'is', null)
     .order('deleted_at', { ascending: false })
   if (error) throw error
-  return (data ?? []) as FulfillmentBatch[]
+  return (data ?? []).map(attachQtySums) as FulfillmentBatch[]
 }
 
 export const fetchBatchWithItems = async (batchId: string): Promise<FulfillmentBatchWithItems> => {

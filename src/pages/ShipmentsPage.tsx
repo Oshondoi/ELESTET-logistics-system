@@ -66,6 +66,7 @@ interface ShipmentsPageProps {
   canDeleteTrip?: boolean
   isOwnerOrAdmin?: boolean
   accountId?: string
+  userId?: string
 }
 
 export const ShipmentsPage = ({
@@ -106,13 +107,37 @@ export const ShipmentsPage = ({
   canDeleteTrip = false,
   isOwnerOrAdmin = false,
   accountId,
+  userId,
 }: ShipmentsPageProps) => {
-  const [expandAllTrips, setExpandAllTrips] = useState(() => localStorage.getItem('elestet-expand-all') === 'true')
+  const lsKey = (k: string) => userId ? `${k}-${userId}` : k
+  const [expandAllTrips, setExpandAllTrips] = useState(() => localStorage.getItem(lsKey('elestet-expand-all')) === 'true')
   const [collapseSignal, setCollapseSignal] = useState(0)
   const [anyTripExpanded, setAnyTripExpanded] = useState(false)
-  const [focusMode, setFocusMode] = useState(() => localStorage.getItem('elestet-focus-mode') === 'true')
-  const [hoverAddMode, setHoverAddMode] = useState(() => localStorage.getItem('elestet-hover-add-mode') !== 'false')
-  const [showSupplier, setShowSupplier] = useState(() => localStorage.getItem('elestet-logistics-show-supplier') !== 'false')
+  const [focusMode, setFocusMode] = useState(() => sessionStorage.getItem('elestet-focus-mode') === 'true')
+
+  useEffect(() => {
+    if (focusMode) document.body.classList.add('elestet-focus-mode')
+    else document.body.classList.remove('elestet-focus-mode')
+    return () => { document.body.classList.remove('elestet-focus-mode') }
+  }, [focusMode])
+
+  // При F5 (beforeunload) помечаем что это перезагрузка — cleanup не удалит ключ
+  useEffect(() => {
+    const markReload = () => sessionStorage.setItem('elestet-focus-mode-reloading', '1')
+    window.addEventListener('beforeunload', markReload)
+    return () => {
+      window.removeEventListener('beforeunload', markReload)
+      if (sessionStorage.getItem('elestet-focus-mode-reloading')) {
+        // Перезагрузка — оставляем elestet-focus-mode, только убираем флаг
+        sessionStorage.removeItem('elestet-focus-mode-reloading')
+      } else {
+        // Уход со страницы (SPA-навигация) — сбрасываем
+        sessionStorage.removeItem('elestet-focus-mode')
+      }
+    }
+  }, [])
+  const [hoverAddMode, setHoverAddMode] = useState(() => localStorage.getItem(lsKey('elestet-hover-add-mode')) !== 'false')
+  const [showSupplier, setShowSupplier] = useState(() => localStorage.getItem(lsKey('elestet-logistics-show-supplier')) !== 'false')
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false)
   const [addLineOpen, setAddLineOpen] = useState(false)
   const [tripConfig, setTripConfig] = useState<ColumnConfig>(DEFAULT_COLUMN_CONFIG)
@@ -128,6 +153,29 @@ export const ShipmentsPage = ({
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null)
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  const filteredTrips = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return trips
+    const matchesLine = (line: (typeof trips)[0]['lines'][0]) => {
+      if (line.store?.name?.toLowerCase().includes(q)) return true
+      if (line.store?.supplier_full?.toLowerCase().includes(q)) return true
+      if (line.store?.store_code?.toLowerCase().includes(q)) return true
+      if (line.destination_warehouse.toLowerCase().includes(q)) return true
+      if (String(line.shipment_number).includes(q)) return true
+      if (line.wb_supply_id?.toLowerCase().includes(q)) return true
+      return false
+    }
+    const tripMatches = (trip: (typeof trips)[0]) =>
+      trip.trip_number?.toLowerCase().includes(q) || trip.carrier.toLowerCase().includes(q)
+    return trips
+      .filter((trip) => tripMatches(trip) || trip.lines.some(matchesLine))
+      .map((trip) => {
+        if (tripMatches(trip)) return trip
+        return { ...trip, lines: trip.lines.filter(matchesLine) }
+      })
+  }, [trips, searchQuery])
 
   const lineToTripId = useMemo(() => {
     const next = new Map<string, string>()
@@ -291,9 +339,23 @@ export const ShipmentsPage = ({
       <div className="space-y-4">
         <Card className="rounded-3xl p-2.5">
           <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
-            <div className="grid gap-2.5 md:grid-cols-[minmax(220px,1fr)_auto_auto_minmax(170px,220px)] xl:flex">
-              <div className="flex h-10 min-w-[220px] items-center rounded-2xl bg-slate-100 px-4 text-sm text-slate-400">
-                Поиск по рейсу, перевозчику
+            <div className="grid gap-2.5 md:grid-cols-[minmax(400px,1fr)_auto_auto_minmax(170px,220px)] xl:flex">
+              <div className="relative min-w-[400px]">
+                <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+                </svg>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Поиск по рейсу, перевозчику..."
+                  className="h-10 w-full rounded-2xl border border-transparent bg-slate-100 pl-9 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+                {searchQuery && (
+                  <button type="button" onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                  </button>
+                )}
               </div>
               <Button
                 type="button"
@@ -309,15 +371,15 @@ export const ShipmentsPage = ({
                     // Есть открытые — закрываем все
                     setExpandAllTrips(false)
                     setCollapseSignal((n) => n + 1) // форсируем даже если expandAll уже false
-                    localStorage.setItem('elestet-expand-all', 'false')
+                    localStorage.setItem(lsKey('elestet-expand-all'), 'false')
                   } else {
                     setExpandAllTrips(true)
-                    localStorage.setItem('elestet-expand-all', 'true')
+                    localStorage.setItem(lsKey('elestet-expand-all'), 'true')
                   }
                 }}
                 aria-pressed={anyTripExpanded}
-                aria-label={anyTripExpanded ? 'Свернуть все поставки' : 'Развернуть все поставки'}
-                title={anyTripExpanded ? 'Свернуть все поставки' : 'Развернуть все поставки'}
+                aria-label={anyTripExpanded ? 'Свернуть список' : 'Развернуть список'}
+                title={anyTripExpanded ? 'Свернуть список' : 'Развернуть список'}
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -351,7 +413,7 @@ export const ShipmentsPage = ({
                     ? '!bg-[#E3EAF6] !text-blue-600 hover:!bg-[#E3EAF6]'
                     : '!text-slate-400',
                 ].join(' ')}
-                onClick={() => setFocusMode((prev) => { const next = !prev; localStorage.setItem('elestet-focus-mode', String(next)); return next })}
+                onClick={() => setFocusMode((prev) => { const next = !prev; if (next) sessionStorage.setItem('elestet-focus-mode', 'true'); else sessionStorage.removeItem('elestet-focus-mode'); return next })}
                 aria-pressed={focusMode}
                 aria-label="Режим фокуса"
                 title="Режим фокуса"
@@ -383,7 +445,7 @@ export const ShipmentsPage = ({
                     ? '!bg-[#E3EAF6] !text-blue-600 hover:!bg-[#E3EAF6]'
                     : '!text-slate-400',
                 ].join(' ')}
-                onClick={() => setHoverAddMode((prev) => { const next = !prev; localStorage.setItem('elestet-hover-add-mode', String(next)); return next })}
+                onClick={() => setHoverAddMode((prev) => { const next = !prev; localStorage.setItem(lsKey('elestet-hover-add-mode'), String(next)); return next })}
                 aria-pressed={hoverAddMode}
                 aria-label="Показывать «+ Добавить поставку» при наведении"
                 title="Добавить поставку при наведении"
@@ -412,7 +474,7 @@ export const ShipmentsPage = ({
                     ? '!bg-[#E3EAF6] !text-blue-600 hover:!bg-[#E3EAF6]'
                     : '!text-slate-400',
                 ].join(' ')}
-                onClick={() => setShowSupplier((prev) => { const next = !prev; localStorage.setItem('elestet-logistics-show-supplier', String(next)); return next })}
+                onClick={() => setShowSupplier((prev) => { const next = !prev; localStorage.setItem(lsKey('elestet-logistics-show-supplier'), String(next)); return next })}
                 aria-pressed={showSupplier}
                 aria-label={showSupplier ? 'Показывать: юр. название — переключить на название WB' : 'Показывать: название WB — переключить на юр. название'}
                 title={showSupplier ? 'Юр. название (ИП / ООО)' : 'Название магазина WB'}
@@ -478,12 +540,11 @@ export const ShipmentsPage = ({
         </Card>
 
         <TripTable
-          trips={trips}
+          trips={filteredTrips}
           stores={stores}
           carrierNames={carrierNames}
           warehouseNames={warehouseNames}
-          expandAll={expandAllTrips}
-          focusMode={focusMode}
+          expandAll={expandAllTrips || searchQuery.trim().length > 0}
           hoverAddMode={hoverAddMode}
           showSupplier={showSupplier}
           collapseAllSignal={collapseSignal}

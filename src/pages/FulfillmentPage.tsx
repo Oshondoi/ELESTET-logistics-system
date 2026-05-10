@@ -1,4 +1,5 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import type {
   FulfillmentBatch,
@@ -111,6 +112,7 @@ const STATUS_COLORS: Record<string, string> = {
 // ── Props ─────────────────────────────────────────────────────
 interface FulfillmentPageProps {
   accountId: string
+  accountShortId: number | null
   stores: Store[]
   trips: TripWithLines[]
   warehouses: Warehouse[]
@@ -125,6 +127,8 @@ interface FulfillmentPageProps {
   userId?: string
   userEmail?: string
   userName?: string
+  initialBatchShortId?: number | null
+  onBatchUrlConsumed?: () => void
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -242,6 +246,7 @@ const MARKING_TARIFFS = [
 interface DetailModalProps {
   batch: FulfillmentBatchWithItems
   accountId: string
+  accountShortId: number | null
   stores: Store[]
   trips: TripWithLines[]
   warehouses: Warehouse[]
@@ -264,6 +269,7 @@ interface DetailModalProps {
 const BatchDetailModal = ({
   batch: initialBatch,
   accountId,
+  accountShortId,
   stores,
   trips,
   warehouses,
@@ -283,6 +289,11 @@ const BatchDetailModal = ({
   zIndex = 50,
 }: DetailModalProps) => {
   const [batch, setBatch] = useState<FulfillmentBatchWithItems>(initialBatch)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
+  const [tgClicked, setTgClicked] = useState(false)
+  const [waClicked, setWaClicked] = useState(false)
+  const shareRef = useRef<HTMLDivElement>(null)
   const [items, setItems] = useState<FulfillmentItem[]>(initialBatch.items)
   const [isSavingStage, setIsSavingStage] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -484,6 +495,18 @@ const BatchDetailModal = ({
 
   // Синхронизировать viewStage при реальном переходе этапа
   useEffect(() => { setViewStage(batch.current_stage) }, [batch.current_stage])
+
+  // Закрывать share-попап по клику снаружи
+  useEffect(() => {
+    if (!shareOpen) return
+    const handler = (e: MouseEvent) => {
+      if (shareRef.current && !shareRef.current.contains(e.target as Node)) {
+        setShareOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [shareOpen])
 
   // Инициализировать черновики и сбрасывать isDirty при смене РЕАЛЬНОГО этапа
   useEffect(() => {
@@ -1662,6 +1685,70 @@ const BatchDetailModal = ({
             <p className="text-lg font-semibold text-slate-800 truncate">{batch.name}</p>
             {store && <p className="shrink-0 text-sm text-slate-400">{store.name}</p>}
           </div>
+          {/* Share */}
+          {accountShortId != null && batch.short_id != null && (() => {
+            const batchUrl = `${window.location.origin}/fulfillment/C-${accountShortId}/P-${batch.short_id}`
+            const tgUrl = `https://t.me/share/url?url=${encodeURIComponent(batchUrl)}`
+            const waUrl = `https://wa.me/?text=${encodeURIComponent(batchUrl)}`
+            return (
+              <div className="relative" ref={shareRef}>
+                <button type="button"
+                  onClick={() => setShareOpen((v) => !v)}
+                  title="Поделиться"
+                  className={`flex h-8 w-8 items-center justify-center rounded-2xl border transition-colors ${shareOpen ? 'border-blue-200 bg-blue-50 text-blue-600' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                    <path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98" strokeLinecap="round"/>
+                  </svg>
+                </button>
+                {shareOpen && (
+                  <div className="absolute right-0 top-10 z-50 flex flex-col gap-1 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl" style={{ minWidth: 180 }}>
+                    {/* Telegram */}
+                    <a href={tgUrl} target="_blank" rel="noreferrer"
+                      onClick={() => { setTgClicked(true); setTimeout(() => setTgClicked(false), 600); setShareOpen(false) }}
+                      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50 active:bg-slate-100 ${tgClicked ? 'bg-[#e8f4fd]' : ''}`}>
+                      <span className={`flex h-7 w-7 items-center justify-center rounded-xl transition-colors ${tgClicked ? 'bg-[#29b6f6] text-white' : 'bg-[#e8f4fd] text-[#29b6f6]'}`}>
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
+                          <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/>
+                        </svg>
+                      </span>
+                      Telegram
+                    </a>
+                    {/* WhatsApp */}
+                    <a href={waUrl} target="_blank" rel="noreferrer"
+                      onClick={() => { setWaClicked(true); setTimeout(() => setWaClicked(false), 600); setShareOpen(false) }}
+                      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50 active:bg-slate-100 ${waClicked ? 'bg-[#e8f5e9]' : ''}`}>
+                      <span className={`flex h-7 w-7 items-center justify-center rounded-xl transition-colors ${waClicked ? 'bg-[#25d366] text-white' : 'bg-[#e8f5e9] text-[#25d366]'}`}>
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
+                          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/>
+                        </svg>
+                      </span>
+                      WhatsApp
+                    </a>
+                    {/* Divider */}
+                    <div className="mx-2 my-0.5 h-px bg-slate-100" />
+                    {/* Copy link */}
+                    <button type="button"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(batchUrl).then(() => {
+                          setLinkCopied(true)
+                          setTimeout(() => setLinkCopied(false), 2000)
+                        })
+                      }}
+                      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50 active:bg-slate-100`}>
+                      <span className={`flex h-7 w-7 items-center justify-center rounded-xl transition-colors ${linkCopied ? 'bg-emerald-50 text-emerald-500' : 'bg-slate-100 text-slate-500'}`}>
+                        {linkCopied
+                          ? <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          : <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M13.828 10.172a4 4 0 0 0-5.656 0l-4 4a4 4 0 1 0 5.656 5.656l1.102-1.101m-.758-4.899a4 4 0 0 0 5.656 0l4-4a4 4 0 0 0-5.656-5.656l-1.1 1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        }
+                      </span>
+                      Копировать ссылку
+                    </button>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
           <button type="button" onClick={() => {
             setOtkHistoryStageTab(viewStage)
             if (viewStage === 'otk' && otkLogs.length > 0 && !otkHistoryTabId) setOtkHistoryTabId(otkLogs[0].id)
@@ -1691,8 +1778,8 @@ const BatchDetailModal = ({
           <span className={`rounded-full px-3 py-1 text-xs font-medium ${STATUS_COLORS[batch.status]}`}>
             {STATUS_LABELS[batch.status]}
           </span>
-          <button type="button" onClick={() => isDirty ? setPendingClose(true) : onClose()} className="flex h-8 w-8 items-center justify-center rounded-2xl text-slate-400 hover:bg-slate-100">
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+          <button type="button" onClick={() => isDirty ? setPendingClose(true) : onClose()} className="flex h-10 w-10 items-center justify-center rounded-2xl text-slate-400 hover:bg-red-50 hover:text-red-500">
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
@@ -1749,18 +1836,18 @@ const BatchDetailModal = ({
                         className={`relative z-10 flex shrink-0 items-center justify-center rounded-full font-bold transition-all duration-300 ease-in-out
                           ${isSelected ? 'h-16 w-16' : 'h-12 w-12'}
                           ${isClickable ? 'cursor-pointer' : 'cursor-default'}
-                          ${isDone ? 'bg-emerald-500 text-white' :
+                          ${!isEnabled ? 'border-2 border-dashed border-slate-200 bg-white text-slate-300' :
+                            isDone ? 'bg-emerald-500 text-white' :
                             isCurrent ? 'bg-blue-600 text-white' :
-                            !isEnabled ? 'border-2 border-dashed border-slate-200 bg-white text-slate-300' :
                             canToggle ? 'bg-slate-100 text-slate-400 hover:bg-slate-200' :
                             'bg-slate-100 text-slate-400'}`}>
-                        {isDone ? (
+                        {!isEnabled ? (
+                          <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-7 w-7' : 'h-5 w-5'}`} fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                          </svg>
+                        ) : isDone ? (
                           <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-7 w-7' : 'h-5 w-5'}`} fill="none" stroke="currentColor" strokeWidth="3">
                             <path d="M20 6 9 17l-5-5" />
-                          </svg>
-                        ) : !isEnabled ? (
-                          <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-7 w-7' : 'h-5 w-5'}`} fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <path d="M18 6 6 18M6 6l12 12" />
                           </svg>
                         ) : (
                           <span className={`transition-all duration-300 ease-in-out leading-none ${isSelected ? 'text-2xl' : 'text-sm'}`}>{idx + 1}</span>
@@ -1844,59 +1931,96 @@ const BatchDetailModal = ({
           {/* Сводная статистика — для всех этапов кроме приёмки */}
           {viewStage !== 'reception' && viewStage !== 'done' && (() => {
             const sReceived = items.reduce((s, it) => s + (it.qty_received ?? 0), 0)
-            const sOtk = otkLogs.filter((l) => !otkDeletedIds.includes(l.id))
-              .reduce((s, l) => s + (otkEdits[l.id]?.qty ?? l.qty) + (otkEdits[l.id]?.qty_defect ?? l.qty_defect), 0) +
-              (viewStage === 'otk' ? otkBuffer.reduce((s, e) => s + e.qty + e.qty_defect, 0) : 0)
-            const sMarking = viewStage === 'marking' || viewStage === 'packing' || viewStage === 'logistics'
-              ? (viewStage === 'marking'
-                  ? markingLogs.filter((l) => !markingDeletedIds.includes(l.id)).reduce((s, l) => s + (markingEdits[l.id]?.qty ?? l.qty) + (markingEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + markingBuffer.reduce((s, e) => s + e.qty + e.qty_defect, 0)
-                  : items.reduce((s, it) => s + (it.qty_marked ?? it.qty_otk ?? it.qty_received), 0))
-              : null
-            const sPacking = viewStage === 'packing' || viewStage === 'logistics'
-              ? (viewStage === 'packing'
-                  ? items.reduce((s, it) => s + (stageDraft[it.id]?.qty ?? it.qty_packed ?? it.qty_marked ?? it.qty_otk ?? it.qty_received), 0)
-                  : items.reduce((s, it) => s + (it.qty_packed ?? it.qty_marked ?? it.qty_otk ?? it.qty_received), 0))
-              : null
-            const cards: Array<{ label: string; value: number; isDiff: boolean }> = [
-              { label: 'Принято', value: sReceived, isDiff: false },
-              { label: 'ОТК итого', value: sOtk, isDiff: false },
-            ]
-            if (viewStage === 'otk') cards.push({ label: 'Расхождение', value: sOtk - sReceived, isDiff: true })
-            if (sMarking !== null) {
-              cards.push({ label: 'Маркировка', value: sMarking, isDiff: false })
-              cards.push({ label: 'Расхождение', value: sMarking - sOtk, isDiff: true })
-            }
-            if (sPacking !== null) {
-              cards.push({ label: 'Короба', value: sPacking, isDiff: false })
-              cards.push({ label: 'Расхождение', value: sPacking - (sMarking ?? sOtk), isDiff: true })
-            }
-            const PRIMARY_COLORS = [
-              ['text-emerald-700', 'bg-emerald-50', 'text-emerald-500'],
-              ['text-blue-700', 'bg-blue-50', 'text-blue-400'],
-              ['text-violet-700', 'bg-violet-50', 'text-violet-500'],
-              ['text-purple-700', 'bg-purple-50', 'text-purple-500'],
-            ]
-            let pIdx = 0
+
+            // OTK: по логам, разбивка годные/браки
+            const activeOtkLogs = otkLogs.filter((l) => !otkDeletedIds.includes(l.id))
+            const sOtkGood = activeOtkLogs.reduce((s, l) => s + (otkEdits[l.id]?.qty ?? l.qty), 0)
+              + (viewStage === 'otk' ? otkBuffer.reduce((s, e) => s + e.qty, 0) : 0)
+            const sOtkDefect = activeOtkLogs.reduce((s, l) => s + (otkEdits[l.id]?.qty_defect ?? l.qty_defect), 0)
+              + (viewStage === 'otk' ? otkBuffer.reduce((s, e) => s + e.qty_defect, 0) : 0)
+            const sOtk = sOtkGood + sOtkDefect
+
+            // Маркировка: по логам, разбивка годные/браки
+            const activeMarkingLogs = markingLogs.filter((l) => !markingDeletedIds.includes(l.id))
+            const sMarkGood = activeMarkingLogs.reduce((s, l) => s + (markingEdits[l.id]?.qty ?? l.qty), 0)
+              + (viewStage === 'marking' ? markingBuffer.reduce((s, e) => s + e.qty, 0) : 0)
+            const sMarkDefect = activeMarkingLogs.reduce((s, l) => s + (markingEdits[l.id]?.qty_defect ?? l.qty_defect), 0)
+              + (viewStage === 'marking' ? markingBuffer.reduce((s, e) => s + e.qty_defect, 0) : 0)
+            const sMarking = sMarkGood + sMarkDefect
+
+            // Короба: единицы, коробов, баркодов (через stageDraft при текущем этапе)
+            const sPackUnits = viewStage === 'packing'
+              ? items.reduce((s, it) => s + (stageDraft[it.id]?.qty ?? it.qty_packed ?? it.qty_marked ?? it.qty_otk ?? it.qty_received), 0)
+              : items.reduce((s, it) => s + (it.qty_packed ?? it.qty_marked ?? it.qty_otk ?? it.qty_received), 0)
+            const sPackBoxes = viewStage === 'packing'
+              ? items.reduce((s, it) => s + (stageDraft[it.id]?.boxes ?? it.boxes ?? 0), 0)
+              : items.reduce((s, it) => s + (it.boxes ?? 0), 0)
+            const sPackBarcodes = viewStage === 'packing'
+              ? new Set([
+                  ...supplies.flatMap(s => s.boxes.flatMap(b => [
+                    ...b.items.map(i => i.barcode),
+                    ...(packingBoxBuffer[b.id] ?? []).map(i => i.barcode),
+                  ]))
+                ]).size
+              : new Set(
+                  supplies.flatMap(s => s.boxes.flatMap(b => b.items.map(i => i.barcode)))
+                ).size
+
+            // Предыдущий этап через items (корректно даже если этап отключён)
+            const sPrevForMarking = items.reduce((s, it) => s + (it.qty_otk ?? it.qty_received), 0)
+            const sPrevForPacking = items.reduce((s, it) => s + (it.qty_marked ?? it.qty_otk ?? it.qty_received), 0)
+
+            const diffCard = (label: string, val: number) => (
+              <div className={`flex-1 rounded-2xl px-3 py-3 text-center ${val === 0 ? 'bg-emerald-50' : val > 0 ? 'bg-amber-50' : 'bg-red-50'}`}>
+                <p className={`text-xl font-bold ${val === 0 ? 'text-emerald-700' : val > 0 ? 'text-amber-700' : 'text-red-600'}`}>{val > 0 ? `+${val}` : val}</p>
+                <p className={`text-xs ${val === 0 ? 'text-emerald-500' : val > 0 ? 'text-amber-500' : 'text-red-400'}`}>{label}</p>
+              </div>
+            )
+            const simpleCard = (label: string, val: number, bg: string, tv: string, tl: string) => (
+              <div className={`flex-1 rounded-2xl px-3 py-3 text-center ${bg}`}>
+                <p className={`text-xl font-bold ${tv}`}>{val}</p>
+                <p className={`text-xs ${tl}`}>{label}</p>
+              </div>
+            )
+            const splitCard = (title: string, cols: [string, number][], bg: string, tv: string, tl: string) => (
+              <div className={`flex-1 rounded-2xl px-3 py-2 ${bg}`}>
+                <p className={`text-center text-[10px] font-semibold mb-1.5 ${tl}`}>{title}</p>
+                <div className="flex justify-around">
+                  {cols.map(([lbl, val]) => (
+                    <div key={lbl} className="text-center">
+                      <p className={`text-base font-bold ${tv}`}>{val}</p>
+                      <p className={`text-[10px] ${tl}`}>{lbl}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+
             return (
               <div className="mb-4 flex gap-2">
-                {cards.map((card, i) => {
-                  if (card.isDiff) {
-                    const d = card.value
-                    return (
-                      <div key={i} className={`flex-1 rounded-2xl px-3 py-3 text-center ${d === 0 ? 'bg-emerald-50' : d > 0 ? 'bg-amber-50' : 'bg-red-50'}`}>
-                        <p className={`text-xl font-bold ${d === 0 ? 'text-emerald-700' : d > 0 ? 'text-amber-700' : 'text-red-600'}`}>{d > 0 ? `+${d}` : d}</p>
-                        <p className={`text-xs ${d === 0 ? 'text-emerald-500' : d > 0 ? 'text-amber-500' : 'text-red-400'}`}>{card.label}</p>
-                      </div>
-                    )
-                  }
-                  const clrs = PRIMARY_COLORS[pIdx++ % PRIMARY_COLORS.length]
-                  return (
-                    <div key={i} className={`flex-1 rounded-2xl px-3 py-3 text-center ${clrs[1]}`}>
-                      <p className={`text-xl font-bold ${clrs[0]}`}>{card.value}</p>
-                      <p className={`text-xs ${clrs[2]}`}>{card.label}</p>
-                    </div>
-                  )
-                })}
+                {simpleCard('Принято', sReceived, 'bg-emerald-50', 'text-emerald-700', 'text-emerald-500')}
+
+                {viewStage === 'otk' && (<>
+                  {splitCard('ОТК', [['Годные', sOtkGood], ['Браки', sOtkDefect], ['Итого', sOtk]], 'bg-blue-50', 'text-blue-700', 'text-blue-400')}
+                  {diffCard('Расхождение', sOtk - sReceived)}
+                </>)}
+
+                {viewStage === 'marking' && (<>
+                  {simpleCard('ОТК итого', sOtk, 'bg-blue-50', 'text-blue-700', 'text-blue-400')}
+                  {splitCard('Маркировка', [['Годные', sMarkGood], ['Браки', sMarkDefect], ['Итого', sMarking]], 'bg-violet-50', 'text-violet-700', 'text-violet-400')}
+                  {diffCard('Расхождение', sMarking - sPrevForMarking)}
+                </>)}
+
+                {viewStage === 'packing' && (<>
+                  {simpleCard('Маркировка', sPrevForPacking, 'bg-violet-50', 'text-violet-700', 'text-violet-400')}
+                  {splitCard('Короба', [['Коробов', sPackBoxes], ['Баркодов', sPackBarcodes], ['Единиц', sPackUnits]], 'bg-purple-50', 'text-purple-700', 'text-purple-400')}
+                  {diffCard('Расхождение', sPackUnits - sPrevForPacking)}
+                </>)}
+
+                {viewStage === 'logistics' && (<>
+                  {simpleCard('Упаковано', sPackUnits, 'bg-purple-50', 'text-purple-700', 'text-purple-400')}
+                  {diffCard('Расхождение', sPackUnits - sPrevForPacking)}
+                </>)}
               </div>
             )
           })()}
@@ -5325,7 +5449,8 @@ const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
 // ══════════════════════════════════════════════════════════════
 // FulfillmentPage
 // ══════════════════════════════════════════════════════════════
-export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTripLine, onAddTripLine, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '' }: FulfillmentPageProps) => {
+export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, warehouses, onEditTripLine, onAddTripLine, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
+  const navigate = useNavigate()
   const [batches, setBatches] = useState<FulfillmentBatch[]>([])
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -5344,6 +5469,18 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
   const [isRestoring, setIsRestoring] = useState<string | null>(null)
   const [detailFromArchive, setDetailFromArchive] = useState(false)
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(new Set())
+  const [shareMenuPos, setShareMenuPos] = useState<{ left: number; anchorTop: number; anchorBottom: number; openUp: boolean; batchId: string; batchUrl: string } | null>(null)
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+  const [linkCopiedId, setLinkCopiedId] = useState<string | null>(null)
+  const [batchSearch, setBatchSearch] = useState('')
+
+  useEffect(() => {
+    if (!shareMenuPos) return
+    const close = () => setShareMenuPos(null)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [shareMenuPos])
 
   const load = useCallback(async () => {
     if (!accountId) return
@@ -5362,11 +5499,25 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
 
   useEffect(() => { void load() }, [load])
 
+  // Авто-открытие партии из URL (например /fulfillment/C-3/P-7)
+  useEffect(() => {
+    if (!initialBatchShortId || isLoading) return
+    const target = batches.find((b) => b.short_id === initialBatchShortId)
+    if (target) {
+      onBatchUrlConsumed?.()
+      void handleOpenDetail(target.id)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialBatchShortId, isLoading])
+
   const handleOpenDetail = async (batchId: string) => {
     setIsOpeningDetail(batchId)
     try {
       const data = await fetchBatchWithItems(batchId)
       setDetailData(data)
+      if (accountShortId != null && data.short_id != null) {
+        navigate(`/fulfillment/C-${accountShortId}/P-${data.short_id}`, { replace: true })
+      }
     } catch { /* silent */ }
     finally { setIsOpeningDetail(null) }
   }
@@ -5396,6 +5547,21 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
       setDeleteTarget(null)
       if (detailData?.id === batch.id) setDetailData(null)
     } finally { setIsDeleting(false) }
+  }
+
+  const handleBulkDelete = async () => {
+    setIsBulkDeleting(true)
+    try {
+      const ids = [...selectedBatchIds]
+      for (const id of ids) {
+        const batch = batches.find((b) => b.id === id)
+        await deleteBatch(id)
+        if (batch) setArchivedBatches((prev) => [{ ...batch, deleted_at: new Date().toISOString() }, ...prev])
+        setBatches((prev) => prev.filter((b) => b.id !== id))
+      }
+      setSelectedBatchIds(new Set())
+      setBulkDeleteConfirm(false)
+    } finally { setIsBulkDeleting(false) }
   }
 
   const handleRestore = async (batch: FulfillmentBatch) => {
@@ -5431,14 +5597,25 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
     ? archivedBatches
     : batches.filter((b) => filterStatus === 'all' || b.status === filterStatus)
 
-  // Нумерация П-1, П-2... по возрастанию даты создания среди ВСЕХ партий
-  const batchNumberMap = (() => {
-    const all = [...batches, ...archivedBatches]
-      .sort((a, b) => a.created_at.localeCompare(b.created_at))
-    const map = new Map<string, number>()
-    all.forEach((b, i) => map.set(b.id, i + 1))
-    return map
-  })()
+  const filteredBatches = useMemo(() => {
+    const q = batchSearch.trim().toLowerCase()
+    if (!q) return filtered
+    return filtered.filter((b) => {
+      const store = stores.find((st) => st.id === b.store_id)
+      const dateStr = new Date(b.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+      const haystack = [
+        b.short_id != null ? `p-${b.short_id}` : '',
+        b.name,
+        store?.name ?? '',
+        store?.supplier ?? '',
+        store?.supplier_full ?? '',
+        store?.store_code ?? '',
+        dateStr,
+        STATUS_LABELS[b.status] ?? '',
+      ].join(' ').toLowerCase()
+      return haystack.includes(q)
+    })
+  }, [filtered, batchSearch, stores])
 
   const stageLabel = (b: FulfillmentBatch) => {
     if (b.status === 'done') return 'Завершена'
@@ -5454,15 +5631,79 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
       {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
       {detailData && (
         <BatchDetailModal
-          batch={detailData} accountId={accountId} stores={stores} trips={trips} warehouses={warehouses}
+          batch={detailData} accountId={accountId} accountShortId={accountShortId} stores={stores} trips={trips} warehouses={warehouses}
           canManage={canManage} canOtkAssign={canOtkAssign} canStageJump={canStageJump} canPackingAutoAdd={canPackingAutoAdd} canSupplyDeleteLocked={canSupplyDeleteLocked} userId={userId} userEmail={userEmail} userName={userName}
-          onClose={() => { setDetailData(null); setDetailFromArchive(false) }}
+          onClose={() => { setDetailData(null); setDetailFromArchive(false); navigate('/fulfillment', { replace: true }) }}
           onBatchUpdated={handleBatchUpdated} onItemsChanged={handleItemsChanged}
           onEditTripLine={onEditTripLine}
           onAddTripLine={onAddTripLine}
           zIndex={detailFromArchive ? 60 : 50}
         />
       )}
+      {shareMenuPos && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: shareMenuPos.left,
+            ...(shareMenuPos.openUp
+              ? { bottom: window.innerHeight - shareMenuPos.anchorTop + 4 }
+              : { top: shareMenuPos.anchorBottom + 4 }),
+            zIndex: 9999,
+          }}
+          className="w-52 rounded-xl border border-slate-100 bg-white py-1 shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <a href={`https://t.me/share/url?url=${encodeURIComponent(shareMenuPos.batchUrl)}`} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50"
+            onClick={() => setShareMenuPos(null)}>
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-500 shrink-0" fill="currentColor">
+              <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/>
+            </svg>
+            Telegram
+          </a>
+          <a href={`https://wa.me/?text=${encodeURIComponent(shareMenuPos.batchUrl)}`} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50"
+            onClick={() => setShareMenuPos(null)}>
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-green-500 shrink-0" fill="currentColor">
+              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+            </svg>
+            WhatsApp
+          </a>
+          <div className="my-1 border-t border-slate-100" />
+          <button type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 whitespace-nowrap"
+            onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(shareMenuPos.batchUrl); setLinkCopiedId(shareMenuPos.batchId); setTimeout(() => setLinkCopiedId(null), 2000) }}>
+            {linkCopiedId === shareMenuPos.batchId ? (
+              <svg viewBox="0 0 24 24" className="h-4 w-4 text-emerald-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6 9 17l-5-5"/></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+            )}
+            {linkCopiedId === shareMenuPos.batchId ? 'Скопировано!' : 'Копировать ссылку'}
+          </button>
+        </div>,
+        document.body
+      )}
+
+      {bulkDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setBulkDeleteConfirm(false)}>
+          <div className="w-full max-w-sm overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5">
+              <p className="font-semibold text-slate-800">Переместить в архив?</p>
+              <p className="mt-1 text-sm text-slate-500">{selectedBatchIds.size} {selectedBatchIds.size === 1 ? 'партия будет перемещена' : 'партий будет перемещено'} в архив. Все данные и история сохранятся. Вы сможете восстановить их из архива.</p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+              <button type="button" onClick={() => setBulkDeleteConfirm(false)} className="rounded-2xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50">Отмена</button>
+              <button type="button" onClick={() => void handleBulkDelete()} disabled={isBulkDeleting}
+                className="rounded-2xl bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50">
+                {isBulkDeleting ? 'Архивирование…' : 'В архив'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setDeleteTarget(null)}>
           <div className="w-full max-w-sm overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -5484,7 +5725,30 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
       {/* Header */}
       <Card className="rounded-3xl p-3">
         <div className="flex flex-wrap items-center gap-2.5">
-          <p className="flex-1 text-base font-semibold text-slate-800">Партии</p>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="relative flex min-w-[280px] items-center">
+              <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <input
+                type="text"
+                value={batchSearch}
+                onChange={(e) => setBatchSearch(e.target.value)}
+                placeholder="Поиск по партиям…"
+                className="h-9 w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-8 text-sm text-slate-800 placeholder-slate-400 outline-none transition focus:border-blue-200 focus:bg-white focus:ring-2 focus:ring-blue-100"
+              />
+              {batchSearch && (
+                <button type="button" onClick={() => setBatchSearch('')} className="absolute right-2.5 flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-600">
+                  <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              )}
+            </div>
+            {batchSearch && (
+              <span className="whitespace-nowrap text-xs text-slate-400">
+                {filteredBatches.length === 0 ? 'Не найдено' : `${filteredBatches.length} из ${filtered.length}`}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
             {(['all', 'active', 'done', 'cancelled'] as const).map((s) => (
               <button key={s} type="button" onClick={() => setFilterStatus(s)}
@@ -5523,7 +5787,7 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
       <Card className="overflow-hidden rounded-3xl p-0">
         {isLoading ? (
           <div className="flex items-center justify-center py-16 text-sm text-slate-400">Загрузка…</div>
-        ) : filtered.length === 0 ? (
+        ) : filteredBatches.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
               <svg viewBox="0 0 24 24" className="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -5543,9 +5807,9 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
                 <th className="w-8 px-3 py-3">
                   <input type="checkbox"
                     className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
-                    checked={filtered.length > 0 && filtered.every((b) => selectedBatchIds.has(b.id))}
+                    checked={filteredBatches.length > 0 && filteredBatches.every((b) => selectedBatchIds.has(b.id))}
                     onChange={(e) => {
-                      if (e.target.checked) setSelectedBatchIds(new Set(filtered.map((b) => b.id)))
+                      if (e.target.checked) setSelectedBatchIds(new Set(filteredBatches.map((b) => b.id)))
                       else setSelectedBatchIds(new Set())
                     }}
                   />
@@ -5553,22 +5817,35 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
                 <th className="px-4 py-3 text-left">ID</th>
                 <th className="px-4 py-3 text-left">Партия</th>
                 <th className="px-4 py-3 text-left">Магазин</th>
-                <th className="px-4 py-3 text-center">Этап</th>
-                <th className="px-4 py-3 text-center">ОТК</th>
-                <th className="px-4 py-3 text-center">Статус</th>
+                <th className="px-4 py-3 text-left">Этап</th>
+                <th className="px-4 py-3 text-left">Статус</th>
                 <th className="px-4 py-3 text-left">Создана</th>
-                <th className="px-4 py-3" />
+                <th className="px-4 py-3 text-right">
+                  <button
+                    type="button"
+                    title="Переместить выбранные в архив"
+                    disabled={selectedBatchIds.size === 0}
+                    onClick={() => setBulkDeleteConfirm(true)}
+                    className={`inline-flex items-center justify-center rounded-lg p-1 transition ${selectedBatchIds.size > 0 ? 'text-red-500 hover:bg-red-50' : 'cursor-default text-slate-300'}`}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                    </svg>
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((b) => {
+              {filteredBatches.map((b) => {
                 const s = stores.find((st) => st.id === b.store_id)
                 const disc = b.otk_discrepancy
-                const batchNum = batchNumberMap.get(b.id)
                 const isSelected = selectedBatchIds.has(b.id)
                 const isArchived = isArchiveTab
                 return (
-                  <tr key={b.id} onClick={() => !isArchived && isOpeningDetail !== b.id && void handleOpenDetail(b.id)}
+                  <tr key={b.id} onClick={() => {
+                      if (shareMenuPos) { setShareMenuPos(null); return }
+                      if (!isArchived && isOpeningDetail !== b.id) void handleOpenDetail(b.id)
+                    }}
                     className={`transition-colors ${isArchived ? '' : 'cursor-pointer hover:bg-slate-50/80'} ${isSelected ? 'bg-blue-50/60' : ''}`}>
                     <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox"
@@ -5584,8 +5861,31 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
                         }}
                       />
                     </td>
-                    <td className="px-4 py-3 text-slate-400 text-xs font-mono">
-                      {batchNum != null ? `П-${batchNum}` : '—'}
+                    <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-1.5">
+                        <span>{b.short_id != null ? `P-${b.short_id}` : '—'}</span>
+                        {accountShortId != null && b.short_id != null && (() => {
+                          const batchUrl = `${window.location.origin}/fulfillment/C-${accountShortId}/P-${b.short_id}`
+                          return (
+                            <div>
+                              <button type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (shareMenuPos?.batchId === b.id) { setShareMenuPos(null); return }
+                                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                                  const openUp = rect.bottom + 130 > window.innerHeight - 20
+                                  setShareMenuPos({ left: rect.left, anchorTop: rect.top, anchorBottom: rect.bottom, openUp, batchId: b.id, batchUrl })
+                                }}
+                                className="flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-50">
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                                  <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                                </svg>
+                              </button>
+                            </div>
+                          )
+                        })()}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <p className="font-medium text-slate-800">{b.name}</p>
@@ -5598,29 +5898,88 @@ export const FulfillmentPage = ({ accountId, stores, trips, warehouses, onEditTr
                         </div>
                       ) : <span className="text-slate-300">—</span>}
                     </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${isArchived ? 'bg-slate-100 text-slate-500' : 'bg-blue-50 text-blue-600'}`}>
-                        {stageLabel(b)}
-                      </span>
+                    <td className="px-4 py-3">
+                      {(() => {
+                        const miniLabels: Record<string, string> = { reception: 'Приём', otk: 'ОТК', marking: 'Марк.', packing: 'Короба', logistics: 'Лог.' }
+                        const stageQty: Record<string, number | undefined> = {
+                          reception: b.qty_received_sum,
+                          otk: b.qty_otk_sum,
+                          marking: b.qty_marked_sum,
+                          packing: b.qty_packed_sum,
+                          logistics: b.qty_packed_sum,
+                        }
+                        const stages = getEnabledStages(b).filter((s) => s !== 'done')
+                        const currentIdx = b.status === 'done' || b.current_stage === 'done' ? stages.length : stages.indexOf(b.current_stage)
+                        return (
+                          <div className="flex items-start">
+                            {stages.map((st, i) => {
+                              const isPast = i < currentIdx
+                              const isCurrent = i === currentIdx
+                              const qty = stageQty[st]
+                              const prevQty = i > 0 ? stageQty[stages[i - 1]] : undefined
+                              const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
+                              let qtyColor = 'text-slate-400'
+                              if (showQty && prevQty !== undefined) {
+                                if (qty === prevQty) qtyColor = 'text-emerald-600'
+                                else if (qty > prevQty) qtyColor = 'text-blue-500'
+                                else qtyColor = 'text-red-500'
+                              } else if (showQty && i === 0) {
+                                qtyColor = 'text-emerald-600'
+                              }
+                              return (
+                                <div key={st} className="flex items-start">
+                                  <div className="flex w-10 flex-col items-center">
+                                    <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
+                                      {isPast && (
+                                        <svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none">
+                                          <path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                      )}
+                                      {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                    </div>
+                                    <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>
+                                      {miniLabels[st] ?? st}
+                                    </span>
+                                    <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>
+                                      {showQty ? qty : '0'}
+                                    </span>
+                                  </div>
+                                  {i < stages.length - 1 && (
+                                    <div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < currentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )
+                      })()}
                     </td>
-                    <td className="px-4 py-3 text-center">
-                      {disc !== null && disc !== undefined && disc !== 0 ? (
-                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${disc > 0 ? 'bg-amber-50 text-amber-600' : 'bg-red-50 text-red-500'}`}>
-                          {disc > 0 ? `+${disc}` : disc}
-                        </span>
-                      ) : (
-                        <span className="text-slate-300">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3">
                       {isArchived ? (
                         <span className="text-xs text-slate-400">
                           {b.deleted_at ? new Date(b.deleted_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
                         </span>
                       ) : (
-                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[b.status]}`}>
-                          {STATUS_LABELS[b.status]}
-                        </span>
+                        <div className="flex flex-col items-start">
+                          {b.status === 'active' && (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" strokeWidth="2">
+                              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                            </svg>
+                          )}
+                          {b.status === 'done' && (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+                            </svg>
+                          )}
+                          {b.status === 'cancelled' && (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
+                              <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+                            </svg>
+                          )}
+                          <span className={`mt-0.5 text-[10px] leading-tight font-medium ${
+                            b.status === 'active' ? 'text-orange-600' : b.status === 'done' ? 'text-emerald-600' : 'text-slate-400'
+                          }`}>{STATUS_LABELS[b.status]}</span>
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-slate-400">

@@ -54,6 +54,7 @@ export interface RolePermissions {
   directories_view: boolean
   directories_manage: boolean
   directories_delete: boolean
+  directories_tariff_manage: boolean
   // Стикеры
   stickers_view: boolean
   stickers_manage: boolean
@@ -89,6 +90,7 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   directories_view: false,
   directories_manage: false,
   directories_delete: false,
+  directories_tariff_manage: false,
   stickers_view: false,
   stickers_manage: false,
   stickers_delete: false,
@@ -120,6 +122,7 @@ export const FULL_PERMISSIONS: RolePermissions = {
   directories_view: true,
   directories_manage: true,
   directories_delete: true,
+  directories_tariff_manage: true,
   stickers_view: true,
   stickers_manage: true,
   stickers_delete: true,
@@ -186,6 +189,7 @@ export interface Account {
   created_at: string
   deleted_at?: string | null
   my_role?: MemberRole
+  short_id?: number | null
 }
 
 export interface AccountMember {
@@ -313,6 +317,8 @@ export interface FulfillmentWorkTariff {
   stage: string
   name: string
   price_per_unit: number
+  price_worker: number
+  price_senior: number
   currency: string
   created_at: string
 }
@@ -572,6 +578,7 @@ export interface FulfillmentBatch {
   account_id: string
   store_id: string | null
   name: string
+  short_id: number | null
   status: FulfillmentBatchStatus
   current_stage: FulfillmentStage
   stage_otk: boolean
@@ -586,6 +593,11 @@ export interface FulfillmentBatch {
   updated_at: string
   created_by: string | null
   deleted_at: string | null
+  // агрегированные суммы из fulfillment_items (заполняются при fetchBatches)
+  qty_received_sum?: number
+  qty_otk_sum?: number
+  qty_marked_sum?: number
+  qty_packed_sum?: number
 }
 
 export interface FulfillmentItem {

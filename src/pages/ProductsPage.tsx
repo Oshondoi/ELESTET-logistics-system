@@ -60,6 +60,8 @@ function getSizeRows(product: Product): SizeRow[] {
 export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: ProductsPageProps) => {
   const storesWithKey = stores.filter((s) => s.api_key)
 
+  const [activeTab, setActiveTab] = useState<'import' | 'defects'>('import')
+
   const [products, setProducts] = useState<Product[]>([])
   const [lastSync, setLastSync] = useState<StoreSyncLog | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -174,6 +176,41 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
 
   return (
     <div className="space-y-4">
+      {/* ── Табы ───────────────────────────────────────────────── */}
+      <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-1 w-fit">
+        {(['import', 'defects'] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            className={`rounded-xl px-4 py-1.5 text-sm font-medium transition ${
+              activeTab === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {tab === 'import' ? 'Импорт ВБ' : 'Браки'}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'defects' ? (
+        <Card className="rounded-3xl">
+          <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
+              <svg viewBox="0 0 24 24" className="h-6 w-6 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.7">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <path d="M12 8v4" />
+                <path d="M12 16h.01" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-600">Раздел в разработке</p>
+              <p className="mt-0.5 text-xs text-slate-400">Учёт брака появится здесь</p>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {activeTab === 'import' && <>
       {/* ── Панель управления ─────────────────────────────────── */}
       <Card className="rounded-3xl p-2.5">
         <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
@@ -221,18 +258,20 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
             </div>
 
             {/* Кнопка раскрыть/свернуть все */}
-            <button
+            <Button
               type="button"
+              variant="secondary"
+              className={[
+                '!h-10 !w-10 !min-w-10 !rounded-2xl !px-0',
+                anyExpanded
+                  ? '!bg-[#E3EAF6] !text-slate-700 hover:!bg-[#E3EAF6]'
+                  : '!text-slate-500',
+              ].join(' ')}
               onClick={handleToggleAll}
               aria-pressed={anyExpanded}
-              aria-label={anyExpanded ? 'Свернуть все товары' : 'Развернуть все товары'}
-              title={anyExpanded ? 'Свернуть все товары' : 'Развернуть все товары'}
-              className={[
-                'flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition',
-                anyExpanded
-                  ? 'bg-[#E3EAF6] text-slate-700 hover:bg-[#d6e0f5]'
-                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
-              ].join(' ')}>
+              aria-label={anyExpanded ? 'Свернуть список' : 'Развернуть список'}
+              title={anyExpanded ? 'Свернуть список' : 'Развернуть список'}
+            >
               <svg
                 viewBox="0 0 24 24"
                 className="h-[15px] w-[15px] shrink-0"
@@ -254,7 +293,7 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
                   </>
                 )}
               </svg>
-            </button>
+            </Button>
 
             <div className="relative flex-1">
               <svg
@@ -520,6 +559,7 @@ export const ProductsPage = ({ stores, selectedStoreId, onStoreChange }: Product
           <img src={photoPreview.url} alt="" className="h-96 w-72 object-cover" />
         </div>
       )}
+      </> }
     </div>
   )
 }

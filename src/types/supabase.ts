@@ -98,11 +98,13 @@ export interface Database {
           id: string
           name: string
           created_at: string
+          short_id: number | null
         }
         Insert: {
           id?: string
           name: string
           created_at?: string
+          short_id?: number | null
         }
         Update: Partial<Database['public']['Tables']['accounts']['Insert']>
         Relationships: []
@@ -576,6 +578,7 @@ export interface Database {
           name: string
           created_at: string
           my_role: string
+          short_id: number | null
         }>
       }
       get_my_archived_accounts: {
@@ -586,6 +589,7 @@ export interface Database {
           created_at: string
           deleted_at: string
           my_role: string
+          short_id: number | null
         }>
       }
       restore_account: {

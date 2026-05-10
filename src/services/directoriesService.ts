@@ -178,11 +178,13 @@ export const addWorkTariff = async (
   name: string,
   pricePerUnit: number,
   currency = 'RUB',
+  priceWorker = 0,
+  priceSenior = 0,
 ): Promise<FulfillmentWorkTariff> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await db()
     .from('fulfillment_work_tariffs')
-    .insert({ account_id: accountId, stage, name, price_per_unit: pricePerUnit, currency })
+    .insert({ account_id: accountId, stage, name, price_per_unit: pricePerUnit, currency, price_worker: priceWorker, price_senior: priceSenior })
     .select()
     .single()
   if (error) throw error
@@ -191,7 +193,7 @@ export const addWorkTariff = async (
 
 export const updateWorkTariff = async (
   id: string,
-  patch: { name?: string; price_per_unit?: number; stage?: string; currency?: string },
+  patch: { name?: string; price_per_unit?: number; price_worker?: number; price_senior?: number; stage?: string; currency?: string },
 ): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await db()

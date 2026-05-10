@@ -1,6 +1,83 @@
 # Active Context
 
-## Current Focus (06.05.2026) — обновлено
+## Current Focus (10.05.2026) — обновлено (последнее: тарифы + права)
+
+### Тарифы работ — двойная цена + hover-редактирование (10.05.2026)
+
+**`WorkTariffsPanel` в `DirectoriesPage.tsx`:**
+- Три колонки цен: **Заказчику** (`price_per_unit`), **Исполнителю** (`price_worker`, зелёный), **Старшему** (`price_senior`, синий)
+- БД: `supabase/patch_work_tariffs_worker_senior.sql` — `alter table ... add column price_worker numeric, price_senior numeric` ✅ применён
+- Типы: `FulfillmentWorkTariff` в `types/index.ts` — добавлены `price_worker`, `price_senior`
+- Сервис: `addWorkTariff` + `updateWorkTariff` в `directoriesService.ts` работают с тремя ценами
+
+**UX редактирования:**
+- **Клик по ячейке** — входит в edit-режим с фокусом на конкретное поле
+- **Placeholder = текущее значение** (field empty on start edit, placeholder shows current)
+- **Auto-save on blur** — 120ms таймер (`saveTimerRef`), отменяется при переключении между полями той же строки
+- **Escape** — отмена без сохранения
+- **Hover per-cell** — `hover:ring-1` только на конкретной ячейке, не на всей строке
+- **Кнопка удаления** — только при hover строки, `onMouseDown + e.preventDefault()` против race с blur-save
+- **Если поле не тронуто** — при сохранении оставляет оригинальное значение (не 0)
+- Убрана иконка карандаша
+
+### Права доступа — directories_tariff_manage (10.05.2026)
+
+Новое гранулярное право для управления тарифами работ (отдельно от общих справочников):
+
+| Файл | Изменение |
+|---|---|
+| `src/types/index.ts` | `directories_tariff_manage: boolean` в `RolePermissions`, `DEFAULT` = `false`, `FULL` = `true` |
+| `src/components/roles/RoleFormModal.tsx` | Чекбокс «Редактирование тарифов работ» в subItems группы Справочники |
+| `src/pages/RolesPage.tsx` | Лейбл `'Редактирование тарифов работ'` |
+| `src/pages/DirectoriesPage.tsx` | Новый prop `canManageTariffs?: boolean`, передаётся в `WorkTariffsPanel` вместо `canManage` |
+| `src/App.tsx` | `canManageTariffs={isOwnerOrAdmin \|\| permissions.directories_tariff_manage}` |
+| `supabase/patch_roles_tariff_manage.sql` | UPDATE roles SET permissions = permissions \|\| '{...}' для существующих записей |
+
+⚠️ **Запустить `patch_roles_tariff_manage.sql` в Supabase.**
+
+### ProductsPage — вкладки (10.05.2026)
+- Вкладки «Импорт ВБ» / «Браки» (`activeTab` state)
+- «Браки» — заглушка «Раздел в разработке»
+- Весь старый контент обёрнут в `{activeTab === 'import' && ...}`
+
+### FulfillmentPage — исправления (10.05.2026)
+- **Белый экран**: `useMemo` использовался, но не был импортирован из React → добавлен в import
+- **Прогресс-бар**: `h-0.5` (2px целое) вместо `h-[1.5px]` — убрал неравномерный рендер субпикселей
+- **Цвет коннектора**: `emerald-300` / `slate-300` (вместо `emerald-400`) — баланс с толщиной
+
+### React Router — URL-роутинг (10.05.2026)
+- **`react-router-dom`** установлен. `BrowserRouter` в `main.tsx` оборачивает `<App />`
+- `PAGE_ROUTES` / `ROUTE_PAGES` — карты PageKey ↔ путь (`/fulfillment`, `/shipments`, …)
+- `activePage` ↔ URL синхронизируются двусторонне через `useNavigate` + `useEffect([location.pathname])`
+- **`vercel.json`**: `{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }` — SPA fallback
+- Страница авторизации не имеет отдельного роута — рендерится на `/` при отсутствии сессии (стандартная практика)
+- **Ветки Git**: `main` = с роутингом (деплой на Vercel); `master` = backup без роутинга (c9c5718)
+
+### URL партий фулфилмента (10.05.2026)
+**Схема**: `/fulfillment/C-{accountShortId}/P-{batchShortId}`
+- `C-3` = третья компания в системе (глобальный счётчик)
+- `P-7` = седьмая партия в рамках компании (per-account счётчик)
+- Числа совпадают с отображаемыми пользователю (П-7 в UI = P-7 в URL)
+
+**БД**:
+- `accounts.short_id integer` — глобальный SERIAL, SQL: `patch_accounts_short_id.sql` ✅ применён
+- `fulfillment_batches.short_id integer` — per-account через триггер `assign_batch_short_id()`, SQL: `patch_batches_short_id.sql` ✅ применён
+- RPC `get_my_accounts` и `get_my_archived_accounts` обновлены — возвращают `short_id`
+
+**Фронтенд**:
+- `App.tsx`: парсит URL при первом рендере, переключает аккаунт по `accountShortId`, передаёт `initialBatchShortId` + `onBatchUrlConsumed` в FulfillmentPage
+- `FulfillmentPage.tsx`: при открытии модалки → `navigate('/fulfillment/C-{n}/P-{m}')`, при закрытии → `navigate('/fulfillment')`; авто-открытие партии из URL после загрузки
+- `FulfillmentBatch.short_id: number | null` добавлен в типы
+- П-N в таблице берётся из `batch.short_id` (не из локальной нумерации)
+
+**Кнопка «Поделиться»** в шапке BatchDetailModal:
+- Иконка share (три точки с линиями), слева от «История»
+- Клик → dropdown с тремя пунктами:
+  - Telegram (открывает `t.me/share/url?url=…` в новой вкладке)
+  - WhatsApp (открывает `wa.me/?text=…` в новой вкладке)
+  - «Копировать ссылку» — иконка цепочки, при копировании 2 сек показывает зелёную птичку, текст не меняется
+- Закрывается по клику снаружи через `useEffect` + `shareRef`
+- Скрыта если `accountShortId` или `batch.short_id` равно null
 
 ### Дневник — UI и навигация
 - **Кнопка "Дневник"** перенесена из сайдбара в Topbar (рядом со "Словарь" и "Админ", только для `my_role === 'owner'`)
@@ -40,11 +117,12 @@
 - `SpeechRecognition` объявлен в `src/vite-env.d.ts` — исправлена ошибка `TS2552` на Vercel (TypeScript DOM lib не содержит SpeechRecognition в части конфигураций)
 
 ## Следующие возможные шаги
-- Добавить группу «Фулфилмент» в UI страницы Ролей (`fulfillment_view` / `fulfillment_manage`)
+- **Вкладка «Браки»** в ProductsPage — реализовать функционал (сейчас заглушка)
+- **Вкладка «Сотрудники»** в Справочниках — список исполнителей с назначением роли (сотрудник/старший), для будущей системы расчёта зарплат
 - Отмена партии (смена status = 'cancelled')
-- Поиск и фильтры в Логистике
-- Участники компании (Members)
+- Фильтр по статусу в Логистике (дропдаун «Все статусы» пока декоративный)
 - SQL-патч `patch_auto_account.sql` — триггер в Supabase для автосоздания компании при регистрации
+- ⚠️ Запустить `supabase/patch_roles_tariff_manage.sql` в Supabase (если ещё не выполнено)
 
 ## Фиксированный порядок дат (02.05.2026) — НИКОГДА НЕ МЕНЯТЬ
 1. Приём (`reception_date`)

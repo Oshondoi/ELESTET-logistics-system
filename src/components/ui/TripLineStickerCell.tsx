@@ -51,28 +51,40 @@ export const TripLineStickerCell = ({ fileUrls, combinedUrls = [], wbSupplyId, p
 
   useEffect(() => {
     if (!menuOpen) return
-    const handler = () => setMenuOpen(false)
+    const handler = (e: MouseEvent) => {
+      if (menuBtnRef.current?.contains(e.target as Node)) return
+      setMenuOpen(false)
+    }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [menuOpen])
 
   useEffect(() => {
     if (!combinedMenuOpen) return
-    const handler = () => setCombinedMenuOpen(false)
+    const handler = (e: MouseEvent) => {
+      if (combinedBtnRef.current?.contains(e.target as Node)) return
+      setCombinedMenuOpen(false)
+    }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [combinedMenuOpen])
 
   useEffect(() => {
     if (!passMenuOpen) return
-    const handler = () => setPassMenuOpen(false)
+    const handler = (e: MouseEvent) => {
+      if (passBtnRef.current?.contains(e.target as Node)) return
+      setPassMenuOpen(false)
+    }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [passMenuOpen])
 
   useEffect(() => {
     if (!excelMenuOpen) return
-    const handler = () => setExcelMenuOpen(false)
+    const handler = (e: MouseEvent) => {
+      if (excelBtnRef.current?.contains(e.target as Node)) return
+      setExcelMenuOpen(false)
+    }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [excelMenuOpen])

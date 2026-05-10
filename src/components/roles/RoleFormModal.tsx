@@ -18,6 +18,19 @@ interface PermGroup {
 
 const PERMISSION_GROUPS: PermGroup[] = [
   {
+    label: 'Фулфилмент',
+    items: [
+      { key: 'fulfillment_view', label: 'Просмотр фулфилмента' },
+      { key: 'fulfillment_manage', label: 'Управление партиями и этапами' },
+    ],
+    subItems: [
+      { key: 'fulfillment_otk_assign', label: 'Выбор исполнителя в ОТК' },
+      { key: 'fulfillment_stage_jump', label: 'Навигация по этапам (просмотр истории)' },
+      { key: 'fulfillment_packing_autoadd', label: 'Авто-добавление при сканировании (упаковка)' },
+      { key: 'fulfillment_supply_delete_locked', label: 'Удаление поставок после завершения этапа' },
+    ],
+  },
+  {
     label: 'Логистика',
     items: [
       { key: 'shipments_view', label: 'Просмотр отправлений' },
@@ -48,6 +61,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
     ],
     subItems: [
       { key: 'directories_delete', label: 'Удаление перевозчиков и складов' },
+      { key: 'directories_tariff_manage', label: 'Редактирование тарифов работ' },
     ],
   },
   {
@@ -70,19 +84,6 @@ const PERMISSION_GROUPS: PermGroup[] = [
     subItems: [
       { key: 'reviews_ai', label: 'Генерация ИИ-ответов' },
       { key: 'reviews_automation', label: 'Управление автоматизацией' },
-    ],
-  },
-  {
-    label: 'Фулфилмент',
-    items: [
-      { key: 'fulfillment_view', label: 'Просмотр фулфилмента' },
-      { key: 'fulfillment_manage', label: 'Управление партиями и этапами' },
-    ],
-    subItems: [
-      { key: 'fulfillment_otk_assign', label: 'Выбор исполнителя в ОТК' },
-      { key: 'fulfillment_stage_jump', label: 'Навигация по этапам (просмотр истории)' },
-      { key: 'fulfillment_packing_autoadd', label: 'Авто-добавление при сканировании (упаковка)' },
-      { key: 'fulfillment_supply_delete_locked', label: 'Удаление поставок после завершения этапа' },
     ],
   },
   {
