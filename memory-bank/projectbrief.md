@@ -68,8 +68,9 @@ The product should feel like a practical operations system, not a marketing land
 
 ### Приоритеты (в порядке важности)
 1. Убедиться что `service_role` key нигде нет в коде/репо — критично
-2. Добавить `LICENSE` файл — минимальная правовая защита кода
-3. Supabase Pro — если данные клиентов критически важны (PITR)
+2. `sourcemap: false` в `vite.config.ts` — ✅ сделано. Без этого любой видит исходный TypeScript через DevTools
+3. Добавить `LICENSE` файл — минимальная правовая защита кода
+4. Supabase Pro — если данные клиентов критически важны (PITR)
 
 ## Счёт клиенту — InvoicesPage (10.05.2026)
 Страница `/invoices` — выставление счётов клиентам на основе данных FulfillmentBatch.

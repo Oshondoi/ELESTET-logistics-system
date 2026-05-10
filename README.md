@@ -415,9 +415,29 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Company dropdown Portal** | ✅ Готово | createPortal → document.body, position:fixed, z-9999; dropdownRef фикс click-outside; архив в отдельной модалке |
 | **API keys browser block** | ✅ Готово | autoComplete=new-password + data-lpignore + data-1p-ignore на всех полях ключей |
 | **TS/Vercel build fix** | ✅ Готово | SpeechRecognition объявлен в vite-env.d.ts (TS2552 на Vercel устранена) |
+| **Sourcemap отключен** | ✅ Готово | `sourcemap: false` в vite.config.ts — исходники невидны через DevTools |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
+
+## Безопасность проекта («задача о безопасности проекта»)
+
+### GitHub — публичный репо
+- Vercel бесплатный тариф требует публичного репо. Код виден всем — скачать может любой
+- Защита: добавить файл `LICENSE` (Commons Clause поверх MIT или проприетарная). Альтернатива: Vercel Pro ($20/мес) или `vercel deploy` CLI
+- **Исходники через DevTools**: закрыто — `sourcemap: false` в `vite.config.ts` ✅
+
+### Supabase — безопасность БД
+- **Anon key** в `.env` — нормально, публичный по дизайну. Безопасен при включённом RLS
+- **Service role key** — НИКОГДА в фронтенд. Только Edge Functions / .env сервера. Утек в репо → немедленно ротировать в Supabase Dashboard
+- **RLS** — главная защита. Откат: Pro ($25/мес) = PITR 7 дней; бесплатный = ежедневные бэкапы
+- Снапшот БД: `supabase db dump` (CLI) → один SQL-файл
+
+### Приоритеты (в порядке важности)
+1. `service_role` key нигде нет в коде/репо — **критично**
+2. `sourcemap: false` в `vite.config.ts` — ✅ сделано
+3. Добавить `LICENSE` файл — правовая защита
+4. Supabase Pro — если данные клиентов критически важны (PITR)
 
 ## Правила внесения изменений
 
@@ -425,8 +445,6 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 - Не менять бизнес-логику, UX, визуальный стиль, тексты вне рамок задачи
 - Не делать попутные рефакторинги без явного запроса
 - Локальная и минимально достаточная правка
-
-## Ключевые паттерны / ловушки
 
 ### Account / Company модель
 - **Account** = «Компания» в UI. Это SaaS tenant-сущность, не профиль пользователя.
