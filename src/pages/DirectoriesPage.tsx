@@ -1569,7 +1569,7 @@ const WorkTariffsPanel = ({
                             value={editPrice}
                             autoFocus
                             onChange={(e) => setEditPrice(e.target.value)}
-                            onBlur={() => void saveCurrentValues(t.id)}
+                            onBlur={() => { void saveCurrentValues(t.id); setEditPrice('') }}
                             onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                             className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                           />
@@ -1590,7 +1590,7 @@ const WorkTariffsPanel = ({
                               value={editPricePerKg}
                               autoFocus
                               onChange={(e) => setEditPricePerKg(e.target.value)}
-                              onBlur={() => void saveCurrentValues(t.id)}
+                              onBlur={() => { void saveCurrentValues(t.id); setEditPricePerKg('') }}
                               onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                               className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                             />
@@ -1611,7 +1611,7 @@ const WorkTariffsPanel = ({
                             value={editPriceWorker}
                             autoFocus
                             onChange={(e) => setEditPriceWorker(e.target.value)}
-                            onBlur={() => void saveCurrentValues(t.id)}
+                            onBlur={() => { void saveCurrentValues(t.id); setEditPriceWorker('') }}
                             onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                             className="w-full rounded-lg border border-emerald-200 px-2 py-1 text-center text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                           />
@@ -1631,7 +1631,7 @@ const WorkTariffsPanel = ({
                             value={editPriceSenior}
                             autoFocus
                             onChange={(e) => setEditPriceSenior(e.target.value)}
-                            onBlur={() => void saveCurrentValues(t.id)}
+                            onBlur={() => { void saveCurrentValues(t.id); setEditPriceSenior('') }}
                             onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                             className="w-full rounded-lg border border-blue-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                           />
