@@ -1174,7 +1174,7 @@ const WorkTariffsPanel = ({
   const [editPriceWorker, setEditPriceWorker] = useState('')
   const [editPriceSenior, setEditPriceSenior] = useState('')
   const [focusField, setFocusField] = useState<'name' | 'price' | 'pricekg' | 'worker' | 'senior'>('name')
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // kept for unused-ref safety
   // delete tariff
   const [deleteTarget, setDeleteTarget] = useState<FulfillmentWorkTariff | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -1239,7 +1239,6 @@ const WorkTariffsPanel = ({
   }
 
   const startEdit = (t: FulfillmentWorkTariff, field: 'name' | 'price' | 'pricekg' | 'worker' | 'senior' = 'name') => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     setEditingId(t.id)
     setEditName(t.name)
     setEditPrice('')
@@ -1250,17 +1249,10 @@ const WorkTariffsPanel = ({
     setFocusField(field)
   }
 
-  const scheduleBlurSave = (id: string) => {
-    saveTimerRef.current = setTimeout(() => void saveEdit(id), 120)
-  }
-
-  const cancelBlurSave = () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-  }
-
-  const saveEdit = async (id: string) => {
+  const saveCurrentValues = async (id: string) => {
     const forcedCurrency = stageCurrencies[activeStage]
-    const current = tariffs.find((t) => t.id === id)!
+    const current = tariffs.find((t) => t.id === id)
+    if (!current) return
     const patch = {
       name: editName.trim(),
       price_per_unit: editPrice.trim() === '' ? current.price_per_unit : Number(editPrice),
@@ -1275,6 +1267,10 @@ const WorkTariffsPanel = ({
     } catch (e) {
       console.error(e)
     }
+  }
+
+  const saveEdit = async (id: string) => {
+    await saveCurrentValues(id)
     setEditingId(null)
   }
 
@@ -1535,7 +1531,7 @@ const WorkTariffsPanel = ({
                   const cellBase = canManage ? 'cursor-text' : ''
                   const viewCell = `px-4 py-1.5 ${cellBase}`
                   return (
-                    <tr key={t.id} className="group hover:bg-slate-50">
+                    <tr key={t.id} className="group hover:bg-slate-50" onBlur={(e) => { if (isEditing && !e.currentTarget.contains(e.relatedTarget as Node)) setEditingId(null) }}>
                       <td className={viewCell}>
                         {isEditing && focusField === 'name' ? (
                           isWarehouseStage ? (
@@ -1544,8 +1540,7 @@ const WorkTariffsPanel = ({
                               onChange={setEditName}
                               warehouses={warehouses}
                               autoOpen
-                              onFocus={cancelBlurSave}
-                              onBlur={() => scheduleBlurSave(t.id)}
+                              onBlur={() => void saveCurrentValues(t.id)}
                             />
                           ) : (
                             <input
@@ -1553,16 +1548,15 @@ const WorkTariffsPanel = ({
                               value={editName}
                               onChange={(e) => setEditName(e.target.value)}
                               autoFocus
-                              onFocus={cancelBlurSave}
-                              onBlur={() => scheduleBlurSave(t.id)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') { cancelBlurSave(); void saveEdit(t.id) } if (e.key === 'Escape') { cancelBlurSave(); setEditingId(null) } }}
+                              onBlur={() => void saveCurrentValues(t.id)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                               className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
                             />
                           )
                         ) : (
                           <div
                             className="rounded-lg px-2 py-1 text-sm text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-200"
-                            onMouseDown={isEditing ? (e) => { e.preventDefault(); cancelBlurSave() } : undefined}
+                            onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
                             onClick={canManage ? (isEditing ? () => setFocusField('name') : () => startEdit(t, 'name')) : undefined}
                           >{isEditing ? editName : t.name}</div>
                         )}
@@ -1575,15 +1569,14 @@ const WorkTariffsPanel = ({
                             value={editPrice}
                             autoFocus
                             onChange={(e) => setEditPrice(e.target.value)}
-                            onFocus={cancelBlurSave}
-                            onBlur={() => scheduleBlurSave(t.id)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { cancelBlurSave(); void saveEdit(t.id) } if (e.key === 'Escape') { cancelBlurSave(); setEditingId(null) } }}
+                            onBlur={() => void saveCurrentValues(t.id)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                             className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                           />
                         ) : (
                           <div
                             className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-800 hover:bg-white hover:ring-1 hover:ring-slate-200"
-                            onMouseDown={isEditing ? (e) => { e.preventDefault(); cancelBlurSave() } : undefined}
+                            onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
                             onClick={canManage ? (isEditing ? () => setFocusField('price') : () => startEdit(t, 'price')) : undefined}
                           >{editPrice !== '' && isEditing ? editPrice : t.price_per_unit}</div>
                         )}
@@ -1597,15 +1590,14 @@ const WorkTariffsPanel = ({
                               value={editPricePerKg}
                               autoFocus
                               onChange={(e) => setEditPricePerKg(e.target.value)}
-                              onFocus={cancelBlurSave}
-                              onBlur={() => scheduleBlurSave(t.id)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') { cancelBlurSave(); void saveEdit(t.id) } if (e.key === 'Escape') { cancelBlurSave(); setEditingId(null) } }}
+                              onBlur={() => void saveCurrentValues(t.id)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                               className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                             />
                           ) : (
                             <div
                               className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-800 hover:bg-white hover:ring-1 hover:ring-slate-200"
-                              onMouseDown={isEditing ? (e) => { e.preventDefault(); cancelBlurSave() } : undefined}
+                              onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
                               onClick={canManage ? (isEditing ? () => setFocusField('pricekg') : () => startEdit(t, 'pricekg')) : undefined}
                             >{editPricePerKg !== '' && isEditing ? editPricePerKg : (t.price_per_kg ?? 0)}</div>
                           )}
@@ -1619,15 +1611,14 @@ const WorkTariffsPanel = ({
                             value={editPriceWorker}
                             autoFocus
                             onChange={(e) => setEditPriceWorker(e.target.value)}
-                            onFocus={cancelBlurSave}
-                            onBlur={() => scheduleBlurSave(t.id)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { cancelBlurSave(); void saveEdit(t.id) } if (e.key === 'Escape') { cancelBlurSave(); setEditingId(null) } }}
+                            onBlur={() => void saveCurrentValues(t.id)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                             className="w-full rounded-lg border border-emerald-200 px-2 py-1 text-center text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                           />
                         ) : (
                           <div
                             className="rounded-lg px-2 py-1 text-center text-sm font-medium text-emerald-700 hover:bg-white hover:ring-1 hover:ring-emerald-200"
-                            onMouseDown={isEditing ? (e) => { e.preventDefault(); cancelBlurSave() } : undefined}
+                            onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
                             onClick={canManage ? (isEditing ? () => setFocusField('worker') : () => startEdit(t, 'worker')) : undefined}
                           >{editPriceWorker !== '' && isEditing ? editPriceWorker : (t.price_worker ?? 0)}</div>
                         )}
@@ -1640,15 +1631,14 @@ const WorkTariffsPanel = ({
                             value={editPriceSenior}
                             autoFocus
                             onChange={(e) => setEditPriceSenior(e.target.value)}
-                            onFocus={cancelBlurSave}
-                            onBlur={() => scheduleBlurSave(t.id)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { cancelBlurSave(); void saveEdit(t.id) } if (e.key === 'Escape') { cancelBlurSave(); setEditingId(null) } }}
+                            onBlur={() => void saveCurrentValues(t.id)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
                             className="w-full rounded-lg border border-blue-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                           />
                         ) : (
                           <div
                             className="rounded-lg px-2 py-1 text-center text-sm font-medium text-blue-700 hover:bg-white hover:ring-1 hover:ring-blue-200"
-                            onMouseDown={isEditing ? (e) => { e.preventDefault(); cancelBlurSave() } : undefined}
+                            onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
                             onClick={canManage ? (isEditing ? () => setFocusField('senior') : () => startEdit(t, 'senior')) : undefined}
                           >{editPriceSenior !== '' && isEditing ? editPriceSenior : (t.price_senior ?? 0)}</div>
                         )}
@@ -1661,8 +1651,7 @@ const WorkTariffsPanel = ({
                             <select
                               value={editCurrency}
                               onChange={(e) => setEditCurrency(e.target.value)}
-                              onFocus={cancelBlurSave}
-                              onBlur={() => scheduleBlurSave(t.id)}
+                              onBlur={() => void saveCurrentValues(t.id)}
                               className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-blue-400"
                             >
                               {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
@@ -1679,7 +1668,7 @@ const WorkTariffsPanel = ({
                           <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
                               type="button"
-                              onMouseDown={(e) => { e.preventDefault(); cancelBlurSave(); setEditingId(null) }}
+                              onMouseDown={(e) => { e.preventDefault(); setEditingId(null) }}
                               onClick={() => setDeleteTarget(t)}
                               className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500"
                             >
