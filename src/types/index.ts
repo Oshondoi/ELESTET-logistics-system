@@ -36,6 +36,19 @@ export interface SyncResult {
   count: number
 }
 
+export interface ProductDefect {
+  id: string
+  account_id: string
+  store_id: string
+  barcode: string
+  nm_id: number | null
+  product_name: string | null
+  tech_size: string | null
+  quantity: number
+  reason: string | null
+  created_at: string
+}
+
 // ─── Роли / Доступы ───────────────────────────────────────────
 
 export interface RolePermissions {
@@ -317,6 +330,7 @@ export interface FulfillmentWorkTariff {
   stage: string
   name: string
   price_per_unit: number
+  price_per_kg: number
   price_worker: number
   price_senior: number
   currency: string

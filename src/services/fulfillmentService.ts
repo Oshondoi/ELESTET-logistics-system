@@ -825,3 +825,50 @@ export const deleteBoxItem = async (itemId: string): Promise<void> => {
     .eq('id', itemId)
   if (error) throw error
 }
+
+// ── Defects by store (from marking logs) ─────────────────────
+
+export interface MarkingDefectRow {
+  id: string
+  batch_id: string
+  batch_name: string
+  batch_short_id: number | null
+  barcode: string | null
+  qty_defect: number
+  created_at: string
+}
+
+export const fetchMarkingDefectsByStore = async (
+  storeId: string,
+  accountId: string,
+): Promise<MarkingDefectRow[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: batches } = await (supabase as any)
+    .from('fulfillment_batches')
+    .select('id, name, short_id')
+    .eq('store_id', storeId)
+    .eq('account_id', accountId)
+  if (!batches?.length) return []
+  const batchMap: Record<string, { name: string; short_id: number | null }> = {}
+  for (const b of batches as Array<{ id: string; name: string; short_id: number | null }>) {
+    batchMap[b.id] = { name: b.name, short_id: b.short_id }
+  }
+  const batchIds = Object.keys(batchMap)
+  const { data: logs, error } = await (supabase as any)
+    .from('fulfillment_marking_logs')
+    .select('id, batch_id, barcode, qty_defect, created_at')
+    .in('batch_id', batchIds)
+    .gt('qty_defect', 0)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return ((logs ?? []) as Array<{ id: string; batch_id: string; barcode: string | null; qty_defect: number; created_at: string }>).map((l) => ({
+    id: l.id,
+    batch_id: l.batch_id,
+    batch_name: batchMap[l.batch_id]?.name ?? '',
+    batch_short_id: batchMap[l.batch_id]?.short_id ?? null,
+    barcode: l.barcode,
+    qty_defect: l.qty_defect,
+    created_at: l.created_at,
+  }))
+}

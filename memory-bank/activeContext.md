@@ -1,63 +1,95 @@
 # Active Context
 
-## Current Focus (10.05.2026) — обновлено (последнее: тарифы + права)
+## Current Focus (11.05.2026) — обновлено
+
+### Android-баг: обесцвечивание интерфейса (11.05.2026)
+**Проблема:** На планшете E60 (Android 12, Chrome 105 с флагом `--disable-composited-antialiasing`) `‑webkit‑font‑smoothing: antialiased` на `:root` вызывало обесцвечивание всего UI.
+**Решение:** `@media (pointer: coarse)` переопределяет оба smoothing-свойства в `auto`. Сенсорные устройства = `pointer: coarse`; macOS + мышь = `pointer: fine` (не затронуто).
+
+```css
+@media (pointer: coarse) {
+  :root {
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+  }
+}
+```
+
+**Файл:** `src/styles.css`
+
+---
+
+### Справочники — Склады назначения: сортировка + D&D (11.05.2026)
+**Компонент `WarehousesPanel`** в `DirectoriesPage.tsx`:
+- Кнопка «Алфавитный порядок» (lines-icon) и «Свой порядок» (6-dots-icon) в шапке
+- Активная кнопка: `bg-blue-50 text-blue-500`; неактивная: **`text-slate-400 hover:text-slate-700`** (было `slate-300/slate-500` — слишком блёкло)
+- Режим `alpha`: `useMemo` сортировка по `name`
+- Режим `custom`: drag-and-drop через HTML5 native `draggable` API (`onDragStart/Over/Drop/End`)
+- Порядок и режим сохраняются в `localStorage` (`warehouse_sort_mode`, `warehouse_order_{accountId}`)
+
+---
+
+### Sidebar — формат ID компании (11.05.2026)
+Изменён формат: было `C-1`, стало **`ID: C-1`** (в двух местах `Sidebar.tsx`).
+
+---
+
+### ProductsPage — вкладка Браки (11.05.2026)
+- **Автозагрузка** из `fulfillment_marking_logs` где `qty_defect > 0`
+- Только чтение, нет ручного ввода
+- Шапка: 4 чипа статистики (Позиций / Всего браков rose-500 / Баркодов / Партий)
+- Таблица: Дата | Партия (П-N) | Баркод | Кол-во брак
+- Фильтр по магазину (все магазины, не только с API-ключом)
+- Сервис: `fetchMarkingDefectsByStore` + `MarkingDefectRow` в `fulfillmentService.ts`
+
+---
+
+### InvoicesPage — Расходники (11.05.2026)
+- Добавлена третья карточка «Расходники» → `grid-cols-3` (было `grid-cols-2`)
+- Пустая таблица-заглушка «Расходники не добавлены»
+- Фикс share-кнопки: добавлен `font-[inherit]` на `<button>` (браузеры не наследуют font для кнопок)
+
+---
+
+### WB склады (11.05.2026)
+- SQL `patch_wb_system_warehouses.sql` — удалены строки `?????` + вставлены 120+ реальных складов WB + 5 международных (Алматы, Астана, Бишкек, Минск, Ташкент)
+- `ON CONFLICT DO NOTHING` — пользовательские склады не тронуты
+- ✅ Применён в production
+
+---
+
+### Тарифы работ — Логистика: склад + цена за кг (11.05.2026)
+
+**`WorkTariffsPanel` в `DirectoriesPage.tsx`:**
+
+**Поле «Выбрать склад»** для стейджей `logistics_rf` и `wb_unload`:
+- Кастомный компонент `WarehouseSearchSelect` (не нативный `<select>`)
+- Поиск по подстроке в любом месте названия (нечувствительный к регистру)
+- Позиционирование через `fixed` + `getBoundingClientRect()` — выходит за пределы `overflow:hidden` родителей
+- Открывается вниз, если не помещается — вверх
+- При открытии фокус автоматически переходит в поле поиска
+- Enter — выбирает первый из отфильтрованных; Esc — закрывает
+
+**Поле «Цена / за кг»** (только для логистических стейджей):
+- Новая колонка в таблице: «Заказчику / цена / за кг»
+- В форме добавления — второй инпут рядом с «за короб»
+- БД: `patch_work_tariffs_price_per_kg.sql` — `add column price_per_kg numeric default 0`
+- ⚠️ **Применить в Supabase**
+
+**UX-правки всего `WorkTariffsPanel`:**
+- Форма добавления тарифа **перемещена вверх** (под «Валюта раздела»), список тарифов — ниже
+- Шапка таблицы **всегда видна** (пустое состояние = строка `<tr>` с `colSpan` внутри `<tbody>`)
+
+---
 
 ### Тарифы работ — двойная цена + hover-редактирование (10.05.2026)
 
 **`WorkTariffsPanel` в `DirectoriesPage.tsx`:**
 - Три колонки цен: **Заказчику** (`price_per_unit`), **Исполнителю** (`price_worker`, зелёный), **Старшему** (`price_senior`, синий)
-- БД: `supabase/patch_work_tariffs_worker_senior.sql` — `alter table ... add column price_worker numeric, price_senior numeric` ✅ применён
-- Типы: `FulfillmentWorkTariff` в `types/index.ts` — добавлены `price_worker`, `price_senior`
-- Сервис: `addWorkTariff` + `updateWorkTariff` в `directoriesService.ts` работают с тремя ценами
-
-**UX редактирования:**
-- **Клик по ячейке** — входит в edit-режим с фокусом на конкретное поле
-- **Placeholder = текущее значение** (field empty on start edit, placeholder shows current)
-- **Auto-save on blur** — 120ms таймер (`saveTimerRef`), отменяется при переключении между полями той же строки
-- **Escape** — отмена без сохранения
-- **Hover per-cell** — `hover:ring-1` только на конкретной ячейке, не на всей строке
-- **Кнопка удаления** — только при hover строки, `onMouseDown + e.preventDefault()` против race с blur-save
-- **Если поле не тронуто** — при сохранении оставляет оригинальное значение (не 0)
-- Убрана иконка карандаша
-
-### Права доступа — directories_tariff_manage (10.05.2026)
-
-Новое гранулярное право для управления тарифами работ (отдельно от общих справочников):
-
-| Файл | Изменение |
-|---|---|
-| `src/types/index.ts` | `directories_tariff_manage: boolean` в `RolePermissions`, `DEFAULT` = `false`, `FULL` = `true` |
-| `src/components/roles/RoleFormModal.tsx` | Чекбокс «Редактирование тарифов работ» в subItems группы Справочники |
-| `src/pages/RolesPage.tsx` | Лейбл `'Редактирование тарифов работ'` |
-| `src/pages/DirectoriesPage.tsx` | Новый prop `canManageTariffs?: boolean`, передаётся в `WorkTariffsPanel` вместо `canManage` |
-| `src/App.tsx` | `canManageTariffs={isOwnerOrAdmin \|\| permissions.directories_tariff_manage}` |
-| `supabase/patch_roles_tariff_manage.sql` | UPDATE roles SET permissions = permissions \|\| '{...}' для существующих записей |
-
-⚠️ **Запустить `patch_roles_tariff_manage.sql` в Supabase.**
-
-### ProductsPage — вкладки (10.05.2026)
-- Вкладки «Импорт ВБ» / «Браки» (`activeTab` state)
-- «Браки» — заглушка «Раздел в разработке»
-- Весь старый контент обёрнут в `{activeTab === 'import' && ...}`
-
-### FulfillmentPage — исправления (10.05.2026)
-- **Белый экран**: `useMemo` использовался, но не был импортирован из React → добавлен в import
-- **Прогресс-бар**: `h-0.5` (2px целое) вместо `h-[1.5px]` — убрал неравномерный рендер субпикселей
-- **Цвет коннектора**: `emerald-300` / `slate-300` (вместо `emerald-400`) — баланс с толщиной
-
-### React Router — URL-роутинг (10.05.2026)
-- **`react-router-dom`** установлен. `BrowserRouter` в `main.tsx` оборачивает `<App />`
-- `PAGE_ROUTES` / `ROUTE_PAGES` — карты PageKey ↔ путь (`/fulfillment`, `/shipments`, …)
-- `activePage` ↔ URL синхронизируются двусторонне через `useNavigate` + `useEffect([location.pathname])`
-- **`vercel.json`**: `{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }` — SPA fallback
-- Страница авторизации не имеет отдельного роута — рендерится на `/` при отсутствии сессии (стандартная практика)
-- **Ветки Git**: `main` = с роутингом (деплой на Vercel); `master` = backup без роутинга (c9c5718)
-
-### URL партий фулфилмента (10.05.2026)
-**Схема**: `/fulfillment/C-{accountShortId}/P-{batchShortId}`
-- `C-3` = третья компания в системе (глобальный счётчик)
-- `P-7` = седьмая партия в рамках компании (per-account счётчик)
-- Числа совпадают с отображаемыми пользователю (П-7 в UI = P-7 в URL)
+- БД: `supabase/patch_work_tariffs_worker_senior.sql` ✅ применён
+- **Клик по ячейке** — edit-режим с фокусом; auto-save on blur 120ms; Escape — отмена
+- **Право `directories_tariff_manage`**: отдельно от `directories_manage`
+  - ⚠️ SQL: `supabase/patch_roles_tariff_manage.sql` запустить в Supabase
 
 **БД**:
 - `accounts.short_id integer` — глобальный SERIAL, SQL: `patch_accounts_short_id.sql` ✅ применён

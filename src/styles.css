@@ -13,6 +13,17 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* На touch-устройствах (Android) отключаем font-smoothing — на некоторых
+   кастомных Chrome-сборках (E60 и подобных) antialiased на :root
+   вызывает обесцвечивание всего интерфейса из-за флага
+   --disable-composited-antialiasing */
+@media (pointer: coarse) {
+  :root {
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

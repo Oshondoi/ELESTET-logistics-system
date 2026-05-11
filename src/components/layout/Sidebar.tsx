@@ -177,7 +177,7 @@ export const Sidebar = ({
   const dropdownRef = useRef<HTMLDivElement | null>(null)
   const hasActiveAccount = Boolean(activeAccount)
   const companyName = activeAccount ? activeAccount.name : 'Нет компании'
-  const companyIdLabel = activeAccount ? (activeAccount.short_id != null ? `C-${activeAccount.short_id}` : `ID: ${activeAccount.id.slice(0, 8)}`) : 'Создайте компанию'
+  const companyIdLabel = activeAccount ? (activeAccount.short_id != null ? `ID: C-${activeAccount.short_id}` : `ID: ${activeAccount.id.slice(0, 8)}`) : 'Создайте компанию'
 
   const openDropdown = () => {
     if (!triggerRef.current) return
@@ -278,7 +278,7 @@ export const Sidebar = ({
               >
                 {accounts.map((account) => {
                   const isSelected = activeAccount?.id === account.id
-                  const listCompanyIdLabel = account.short_id != null ? `C-${account.short_id}` : `ID: ${account.id.slice(0, 8)}`
+                  const listCompanyIdLabel = account.short_id != null ? `ID: C-${account.short_id}` : `ID: ${account.id.slice(0, 8)}`
 
                   const isOwner = account.my_role === 'owner'
 

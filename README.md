@@ -23,38 +23,48 @@ MVP веб-приложения для логистики поставок на 
 - Деплой на Vercel: env переменные, email-подтверждение → Vercel-домен
 - Левый сайдбар: зафиксирован по высоте (`h-screen sticky`), бренд, company switcher (edit + delete), nav, выход
 - Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / Роли
+- **Sidebar**: ID компании отображается как `ID: C-1` (с префиксом)
 
-### Счёт клиенту — InvoicesPage (10.05.2026)
+### Android-совместимость (11.05.2026)
+- `src/styles.css`: `@media (pointer: coarse) { :root { -webkit-font-smoothing: auto; -moz-osx-font-smoothing: auto } }`
+- Исправляет полное обесцвечивание UI на планшетах с кастомными сборками Chrome и флагом `--disable-composited-antialiasing`
+
+### Браки — авто-загрузка из БД (11.05.2026)
+- Вкладка «Браки» в `ProductsPage` читает `fulfillment_marking_logs` где `qty_defect > 0`
+- Только чтение, фильтр по магазину, 4 чипа статистики в шапке
+- Сервис: `fetchMarkingDefectsByStore` + `MarkingDefectRow` в `fulfillmentService.ts`
+
+### Счёт клиенту — InvoicesPage (10–11.05.2026)
 Модуль выставления счётов на основе данных FulfillmentБатч: каждая партия = один счёт.
-
-#### Список счётов
-- **Колонки**: ID (`I-N`), Партия (`P-N` prefix + название), Магазин (две строки), Статус (иконка + текст), Создана, Принято, ОТК, Маркировка, Коробов, Сумма
-- **Статус иконки**: `done` → зелёная галочка SVG; `active` → оранжевые часы; `cancelled` → серый крестик
-- **Кнопка Share в колонке ID**: иконка граф-шаринга рядом с `I-N`; createPortal-попап с Telegram / WhatsApp / Копировать ссылку; открывается вверх/вниз автоматически; закрывается по click-outside; птичка при копировании (2с)
-- **Поиск**: по I-N, по P-N, по числу, по названию, по магазину
 
 #### Модальное окно счёта (InvoiceModal)
 - **Формат**: полноэкранное (`fixed inset-0`, `h-full w-full`), без закругленных углов
-- **шапка**: I-N бэдж, статус бэдж, название партии, магазин + дата; кнопка Share (дропдаун TG/WA) + закрыть
-- **Тело**: две карточки `grid-cols-2 gap-4`, обе `rounded-3xl border border-slate-200 bg-white`
+- **Тело**: **три карточки** `grid-cols-3 gap-4`: «Фулфилмент», «Логистика», **«Расходники»** (новая, 11.05)
 - **Карточка «Фулфилмент»**:
-  - Шапка: название + Итого фулфилмент справа
-  - Таблица `УСЛУГА / ЦЕНА / КОЛ-ВО / СУММА`
-  - Строки: Приёмка (тариф через `stage=reception`), ОТК+Маркировка (`buildWorkLines`, тариф по UUID), Формирование коробов (`stage=packing`, qty=фактические короба из `fetchSupplies`)
-  - **Критично**: `tariffMap` ключ = `t.id` (UUID), НЕ `t.name`; Приёмка/Packing — `Object.values(tariffMap).find(x => x.stage === ...)`
-- **Карточка «Логистика»** (полный паритет с «Фулфилмент»):
-  - Шапка: название + Итого логистика справа
-  - Таблица `УСЛУГА / ЦЕНА / КОЛ-ВО / СУММА` (идентичная шапка)
-  - Метаданные рейса (Рейс, Перевозчик, Даты, Поставка, Склад) — под таблицей через `border-t`
-  - Тарифы логистики TBD (заготовлен `logisticsSubtotal = 0`)
-- **Футер**: «Итого к оплате» = `fulfillmentSubtotal + logisticsSubtotal`; кнопка «Сохранить»
+  - Строки: Приёмка (`stage=reception`), ОТК+Маркировка (`buildWorkLines`), Формирование коробов (`stage=packing`)
+  - **Критично**: `tariffMap` ключ = `t.id` (UUID), НЕ `t.name`
+- **Карточка «Расходники»**: пустая заглушка, TBD
+- **Share-кнопка**: `font-[inherit]` на `<button>` для совпадения размера текста с соседними ссылками
+- **URL-роутинг**: `/invoices/C-{accountShortId}/I-{batch.short_id}`
 
-#### URL-роутинг счётов
-- Схема: `/invoices/C-{accountShortId}/I-{batch.short_id}`
-- Открытие модалки → `navigate('/invoices/C-N/I-N', {replace: true})`
-- Закрытие → `navigate('/invoices', {replace: true})`
-- Прямая ссылка: `App.tsx` парсит URL при старте, переключает аккаунт через `pendingInvoiceAccountShortId`, авто-открывает нужную партию
-- Guard в `useEffect([activePage])`: если путь уже `/invoices/...` — не сбрасывать URL
+### Справочники — WB склады (11.05.2026)
+- `patch_wb_system_warehouses.sql`: 120+ реальных складов WB + 5 международных (Алматы, Астана, Бишкек, Минск, Ташкент)
+- Удалены строки с `?????` (артефакт неверной кодировки предыдущего патча)
+- `ON CONFLICT DO NOTHING` — пользовательские склады компаний не тронуты
+
+### Справочники — Склады назначения: сортировка + D&D (11.05.2026)
+- Компонент `WarehousesPanel` вместо `DirectoryPanel` для секции складов
+- Режим `alpha`: сортировка A→Я через `useMemo`
+- Режим `custom`: HTML5 drag-and-drop, ручка (6-dots), синяя подсветка цели
+- Иконки-кнопки переключения: `text-slate-400 hover:text-slate-700` (видимые по умолчанию)
+- Состояние в localStorage: `warehouse_sort_mode`, `warehouse_order_{accountId}`
+
+### Справочники — Тарифы работ: логистика (11.05.2026)
+- Стейджи `logistics_rf` + `wb_unload`: поле «Склад» (кастомный `WarehouseSearchSelect`) вместо текстового поля
+- `WarehouseSearchSelect`: `position: fixed` (выходит за overflow-parent), поиск по подстроке, фокус при открытии
+- Новое поле `price_per_kg` (`patch_work_tariffs_price_per_kg.sql` ⚠️ применить)
+- Форма добавления тарифа поднята вверх (под «Валюта раздела»)
+- Шапка таблицы всегда видна (пустое состояние внутри `<tbody>`)
 
 ### Справочники — тарифы работ (10.05.2026)
 - **Три колонки цен** в таблице тарифов: «Заказчику», «Исполнителю» (зелёный), «Старшему» (синий)
@@ -62,35 +72,20 @@ MVP веб-приложения для логистики поставок на 
 - **Hover-редактирование**: клик по ячейке → edit на конкретное поле; no pencil icon
 - Placeholder = текущее значение; auto-save on blur (120ms); Escape — отмена; blur-delete race исправлен `onMouseDown+preventDefault`
 - **Право `directories_tariff_manage`**: гранулярное, отдельно от `directories_manage`
-  - Чекбокс в настройках роли (subItems группы «Справочники»)
   - `canManageTariffs` prop в `DirectoriesPage` и `WorkTariffsPanel`
   - ⚠️ SQL: `supabase/patch_roles_tariff_manage.sql` запустить в Supabase
-
-### ProductsPage — вкладки (10.05.2026)
-- Вкладки «Импорт ВБ» / «Браки» (state `activeTab`)
-- «Браки» — заглушка «Раздел в разработке»
 
 ### URL-роутинг (10.05.2026)
 - `react-router-dom` (BrowserRouter) — SPA с реальными URL
 - `PAGE_ROUTES` / `ROUTE_PAGES` — карты PageKey ↔ путь (`/fulfillment`, `/shipments`, …)
 - `vercel.json`: `{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }` — fallback для SPA
-- Страница авторизации рендерится на `/` без отдельного роута (стандартная практика Notion/Linear)
 
 ### Фулфилмент — URL партий (10.05.2026)
 - **Схема**: `/fulfillment/C-{accountShortId}/P-{batchShortId}`
 - `C-N` — глобальный порядковый номер компании (`accounts.short_id`, SERIAL), `patch_accounts_short_id.sql` ✅
 - `P-N` — порядковый номер партии внутри компании (`fulfillment_batches.short_id`, per-account через триггер), `patch_batches_short_id.sql` ✅
-- RPC `get_my_accounts` / `get_my_archived_accounts` обновлены — возвращают `short_id`
 - `App.tsx` парсит URL при первом рендере, переключает активный аккаунт, передаёт `initialBatchShortId`
-- `FulfillmentPage` при открытии модалки → `navigate('/fulfillment/C-{n}/P-{m}')`, при закрытии → `navigate('/fulfillment')`
-- П-N в таблице берётся из `batch.short_id` (не из локальной нумерации)
-- **Кнопка «Поделиться»** в шапке BatchDetailModal:
-  - Иконка share (три точки с линиями), dropdown с тремя пунктами
-  - **Telegram** — открывает `t.me/share/url?url=…` в новой вкладке
-  - **WhatsApp** — открывает `wa.me/?text=…` в новой вкладке
-  - **«Копировать ссылку»** — `navigator.clipboard.writeText(url)`, иконка меняется на зелёную птичку на 2 сек, текст не меняется
-  - Скрыта если `accountShortId` или `batch.short_id` равно null
-  - Закрывается по клику снаружи (`useEffect` + `shareRef`)
+- **Кнопка «Поделиться»**: Telegram / WhatsApp / Копировать ссылку (птичка 2с)
 
 ### Фулфилмент (04.05.2026)
 Полный модуль управления производственным/фулфилментным процессом: от приёмки товара до передачи на логистику.

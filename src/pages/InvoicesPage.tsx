@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 import type {
   FulfillmentBatch, FulfillmentBatchStatus, FulfillmentOtkLog, FulfillmentMarkingLog,
   FulfillmentWorkTariff, FulfillmentSupplyWithBoxes, Store, Trip, TripLine,
+  CarrierTariff, WbUnloadTariff,
 } from '../types'
 
 type Tab = 'invoice' | 'payroll' | 'earned'
@@ -86,6 +87,8 @@ interface InvoiceModalProps {
 const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) => {
   const [trip, setTrip] = useState<Trip | null>(null)
   const [tripLine, setTripLine] = useState<TripLine | null>(null)
+  const [carrierTariff, setCarrierTariff] = useState<CarrierTariff | null>(null)
+  const [wbUnloadTariff, setWbUnloadTariff] = useState<WbUnloadTariff | null>(null)
   const [logisticsLoading, setLogisticsLoading] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [tgClicked, setTgClicked] = useState(false)
@@ -119,6 +122,8 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
   useEffect(() => {
     if (!batch.trip_id || !supabase) return
     setLogisticsLoading(true)
+    setCarrierTariff(null)
+    setWbUnloadTariff(null)
     const fetchLogistics = async () => {
       const [{ data: t }, { data: l }] = await Promise.all([
         supabase!.from('trips').select('*').eq('id', batch.trip_id as string).single(),
@@ -128,9 +133,28 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
       ])
       setTrip(t as Trip | null)
       setTripLine(l as TripLine | null)
+      // Лукап тарифов по имени перевозчика и склада
+      if (t && l) {
+        const trip_ = t as Trip
+        const line_ = l as TripLine
+        const [{ data: carriers }, { data: warehouses }] = await Promise.all([
+          supabase!.from('carriers').select('id').eq('account_id', batch.account_id).eq('name', trip_.carrier).limit(1),
+          supabase!.from('warehouses').select('id').eq('name', line_.destination_warehouse).limit(1),
+        ])
+        const carrierId = (carriers as Array<{ id: string }> | null)?.[0]?.id
+        const warehouseId = (warehouses as Array<{ id: string }> | null)?.[0]?.id
+        if (carrierId && warehouseId) {
+          const [{ data: ct }, { data: wb }] = await Promise.all([
+            supabase!.from('carrier_tariffs').select('*').eq('carrier_id', carrierId).eq('warehouse_id', warehouseId).maybeSingle(),
+            supabase!.from('wb_unload_tariffs').select('*').eq('account_id', batch.account_id).eq('warehouse_id', warehouseId).maybeSingle(),
+          ])
+          setCarrierTariff(ct as CarrierTariff | null)
+          setWbUnloadTariff(wb as WbUnloadTariff | null)
+        }
+      }
     }
     fetchLogistics().catch(console.error).finally(() => setLogisticsLoading(false))
-  }, [batch.trip_id, batch.trip_line_id])
+  }, [batch.trip_id, batch.trip_line_id, batch.account_id])
 
   // Close share dropdown on outside click
   useEffect(() => {
@@ -172,7 +196,18 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     }
     return total
   }, [tariffMap, batch.qty_received_sum, batch.stage_packing, allWorkLines, totalBoxes])
-  const logisticsSubtotal = 0 // logistics tariffs TBD
+  const logisticsSubtotal = useMemo(() => {
+    if (!tripLine) return 0
+    let total = 0
+    if (carrierTariff) {
+      total += (carrierTariff.price_per_box ?? 0) * tripLine.box_qty
+      total += (carrierTariff.price_per_kg ?? 0) * (tripLine.weight ?? 0)
+    }
+    if (wbUnloadTariff) {
+      total += wbUnloadTariff.price_per_box * tripLine.box_qty
+    }
+    return total
+  }, [tripLine, carrierTariff, wbUnloadTariff])
   const grandTotal = fulfillmentSubtotal + logisticsSubtotal
 
   const formatDate = (iso: string | null | undefined) =>
@@ -266,7 +301,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
 
         {/* Body */}
         <div className="px-6 py-4 overflow-y-auto flex-1">
-          <div className="grid grid-cols-2 gap-4 min-h-0">
+          <div className="grid grid-cols-3 gap-4 min-h-0">
 
             {/* Фулфилмент — карточка */}
             <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
@@ -373,7 +408,38 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {/* Строки тарифов логистики — добавить по готовности */}
+                        {/* Перевозка (короба) */}
+                        {(carrierTariff?.price_per_box ?? 0) > 0 && tripLine && (
+                          <tr key="carrier-box">
+                            <td className="py-2 text-slate-800">Перевозка</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff!.price_per_box}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{tripLine.box_qty}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff!.price_per_box! * tripLine.box_qty}</td>
+                          </tr>
+                        )}
+                        {/* Перевозка (кг) */}
+                        {(carrierTariff?.price_per_kg ?? 0) > 0 && (tripLine?.weight ?? 0) > 0 && tripLine && (
+                          <tr key="carrier-kg">
+                            <td className="py-2 text-slate-800">Перевозка (кг)</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff!.price_per_kg}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{tripLine.weight}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff!.price_per_kg! * tripLine.weight!}</td>
+                          </tr>
+                        )}
+                        {/* Разгрузка ВБ */}
+                        {(wbUnloadTariff?.price_per_box ?? 0) > 0 && tripLine && (
+                          <tr key="wb-unload">
+                            <td className="py-2 text-slate-800">Разгрузка ВБ</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{wbUnloadTariff!.price_per_box}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{tripLine.box_qty}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{wbUnloadTariff!.price_per_box * tripLine.box_qty}</td>
+                          </tr>
+                        )}
+                        {!carrierTariff && !wbUnloadTariff && (
+                          <tr key="no-tariffs">
+                            <td colSpan={4} className="py-3 text-xs text-slate-400">Тарифы не настроены</td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
 
@@ -412,6 +478,30 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                     )}
                   </>
                 )}
+              </div>
+            </div>
+
+            {/* Расходники — карточка */}
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                <span className="text-sm font-semibold text-slate-900">Расходники</span>
+              </div>
+              <div className="px-4 py-2">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100">
+                      <th className="py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-400">Услуга</th>
+                      <th className="w-16 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Цена</th>
+                      <th className="w-14 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Кол-во</th>
+                      <th className="w-16 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Сумма</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td colSpan={4} className="py-8 text-center text-xs text-slate-300">Расходники не добавлены</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 
@@ -754,7 +844,7 @@ export const InvoicesPage = ({ accountId, accountShortId, stores, initialInvoice
           </a>
           <div className="my-1 border-t border-slate-100" />
           <button type="button"
-            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 whitespace-nowrap"
+            className="flex w-full items-center gap-2 px-3 py-2 font-[inherit] text-xs text-slate-700 hover:bg-slate-50"
             onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(shareMenuPos.batchUrl); setLinkCopiedId(shareMenuPos.batchId); setTimeout(() => setLinkCopiedId(null), 2000) }}>
             {linkCopiedId === shareMenuPos.batchId ? (
               <svg viewBox="0 0 24 24" className="h-4 w-4 text-emerald-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6 9 17l-5-5"/></svg>
