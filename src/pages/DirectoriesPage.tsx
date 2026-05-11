@@ -1274,6 +1274,16 @@ const WorkTariffsPanel = ({
     setEditingId(null)
   }
 
+  // Переключение фокуса внутри строки: сохраняем + сбрасываем текущее поле
+  const switchFocusField = async (newField: typeof focusField, rowId: string) => {
+    await saveCurrentValues(rowId)
+    if (focusField === 'price') setEditPrice('')
+    else if (focusField === 'pricekg') setEditPricePerKg('')
+    else if (focusField === 'worker') setEditPriceWorker('')
+    else if (focusField === 'senior') setEditPriceSenior('')
+    setFocusField(newField)
+  }
+
   const handleDelete = async () => {
     if (!deleteTarget) return
     setIsDeleting(true)
@@ -1557,7 +1567,7 @@ const WorkTariffsPanel = ({
                           <div
                             className="rounded-lg px-2 py-1 text-sm text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-200"
                             onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                            onClick={canManage ? (isEditing ? () => setFocusField('name') : () => startEdit(t, 'name')) : undefined}
+                            onClick={canManage ? (isEditing ? () => void switchFocusField('name', t.id) : () => startEdit(t, 'name')) : undefined}
                           >{isEditing ? editName : t.name}</div>
                         )}
                       </td>
@@ -1577,7 +1587,7 @@ const WorkTariffsPanel = ({
                           <div
                             className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-800 hover:bg-white hover:ring-1 hover:ring-slate-200"
                             onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                            onClick={canManage ? (isEditing ? () => setFocusField('price') : () => startEdit(t, 'price')) : undefined}
+                            onClick={canManage ? (isEditing ? () => void switchFocusField('price', t.id) : () => startEdit(t, 'price')) : undefined}
                           >{editPrice !== '' && isEditing ? editPrice : t.price_per_unit}</div>
                         )}
                       </td>
@@ -1598,7 +1608,7 @@ const WorkTariffsPanel = ({
                             <div
                               className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-800 hover:bg-white hover:ring-1 hover:ring-slate-200"
                               onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                              onClick={canManage ? (isEditing ? () => setFocusField('pricekg') : () => startEdit(t, 'pricekg')) : undefined}
+                              onClick={canManage ? (isEditing ? () => void switchFocusField('pricekg', t.id) : () => startEdit(t, 'pricekg')) : undefined}
                             >{editPricePerKg !== '' && isEditing ? editPricePerKg : (t.price_per_kg ?? 0)}</div>
                           )}
                         </td>
@@ -1619,7 +1629,7 @@ const WorkTariffsPanel = ({
                           <div
                             className="rounded-lg px-2 py-1 text-center text-sm font-medium text-emerald-700 hover:bg-white hover:ring-1 hover:ring-emerald-200"
                             onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                            onClick={canManage ? (isEditing ? () => setFocusField('worker') : () => startEdit(t, 'worker')) : undefined}
+                            onClick={canManage ? (isEditing ? () => void switchFocusField('worker', t.id) : () => startEdit(t, 'worker')) : undefined}
                           >{editPriceWorker !== '' && isEditing ? editPriceWorker : (t.price_worker ?? 0)}</div>
                         )}
                       </td>
@@ -1639,7 +1649,7 @@ const WorkTariffsPanel = ({
                           <div
                             className="rounded-lg px-2 py-1 text-center text-sm font-medium text-blue-700 hover:bg-white hover:ring-1 hover:ring-blue-200"
                             onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                            onClick={canManage ? (isEditing ? () => setFocusField('senior') : () => startEdit(t, 'senior')) : undefined}
+                            onClick={canManage ? (isEditing ? () => void switchFocusField('senior', t.id) : () => startEdit(t, 'senior')) : undefined}
                           >{editPriceSenior !== '' && isEditing ? editPriceSenior : (t.price_senior ?? 0)}</div>
                         )}
                       </td>
