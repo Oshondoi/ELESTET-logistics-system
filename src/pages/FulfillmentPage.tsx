@@ -2745,7 +2745,7 @@ const BatchDetailModal = ({
                                 className={`w-full rounded-xl border bg-white pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${markingBarcode.trim() ? 'border-slate-200' : 'border-red-300 focus:ring-red-400'}`}
                               />
                             </div>
-                            <button type="button" title="Сканировать камерой" onClick={() => { setMarkingCameraOpen((p) => !p); setMarkingCameraError(null) }}
+                            <button type="button" title="Сканировать камерой" onClick={() => { setMarkingAddModalOpen(false); setMarkingCameraOpen(true); setMarkingCameraError(null) }}
                               className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors ${markingCameraOpen ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-blue-500'}`}>
                               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className="h-5 w-5">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
@@ -4719,7 +4719,7 @@ const BatchDetailModal = ({
             <span className="text-base font-semibold text-white">Сканирование штрихкода</span>
             <button
               type="button"
-              onClick={() => { setMarkingCameraOpen(false); setMarkingEditScanTarget(null) }}
+              onClick={() => { setMarkingCameraOpen(false); setMarkingEditScanTarget(null); if (!markingEditScanTarget) setMarkingAddModalOpen(true) }}
               className="rounded-xl px-3 py-1.5 text-sm text-white/60 hover:bg-white/10 hover:text-white transition-colors"
             >
               Отмена
@@ -4805,6 +4805,7 @@ const BatchDetailModal = ({
                             setMarkingItemName(null)
                           }
                           setMarkingCameraOpen(false)
+                          setMarkingAddModalOpen(true)
                           setTimeout(() => {
                             document.querySelector<HTMLInputElement>('.marking-qty-input')?.focus()
                           }, 80)
