@@ -4712,7 +4712,7 @@ const BatchDetailModal = ({
       )}
 
       {/* ── Модалка камерного скана ШК ───────────────────────── */}
-      {markingCameraOpen && (
+      {markingCameraOpen && createPortal(
         <div className="fixed inset-0 z-[9999] flex flex-col bg-black" onClick={(e) => e.stopPropagation()}>
           {/* Шапка */}
           <div className="flex items-center justify-between bg-black/80 px-5 py-3.5 safe-top">
@@ -4829,10 +4829,10 @@ const BatchDetailModal = ({
             )}
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* Камера для этапа Коробов */}
-      {packingCameraOpen && (
+      {packingCameraOpen && createPortal(
         <div className="fixed inset-0 z-[9999] flex flex-col bg-black" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between bg-black/80 px-5 py-3.5 safe-top">
             <span className="text-base font-semibold text-white">Сканирование штрихкода</span>
@@ -4907,7 +4907,7 @@ const BatchDetailModal = ({
             )}
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   )
 }
