@@ -49,6 +49,12 @@
 - Production RLS включён на всех таблицах
 - Рекурсивные политики `account_members` исправлены (`user_id = auth.uid()`)
 
+## Домен
+- Домен `elestet.net` зарегистрирован на **Namecheap**
+- DNS настраивается в Namecheap → Advanced DNS
+- Нужные записи: `A @ → 76.76.21.21`, `CNAME www → cname.vercel-dns.com`
+- При падении сайта (ERR_CONNECTION_REFUSED) — сначала проверить Namecheap Advanced DNS + Vercel → Domains
+
 ## Future Technical Direction
 - Мобильное приложение: React Native (Expo) + TypeScript, та же Supabase БД
 - При росте сложности: React Router, TanStack Query, генерированные Supabase types

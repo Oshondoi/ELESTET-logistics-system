@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { fetchBatches, fetchOtkLogs, fetchMarkingLogs, fetchSupplies } from '../services/fulfillmentService'
-import { fetchWorkTariffs } from '../services/directoriesService'
+import { fetchBatches, fetchOtkLogs, fetchMarkingLogs, fetchSupplies, fetchBatchConsumables } from '../services/fulfillmentService'
+import { fetchWorkTariffs, fetchConsumables } from '../services/directoriesService'
 import { supabase } from '../lib/supabase'
 import type {
   FulfillmentBatch, FulfillmentBatchStatus, FulfillmentOtkLog, FulfillmentMarkingLog,
-  FulfillmentWorkTariff, FulfillmentSupplyWithBoxes, Store, Trip, TripLine,
+  FulfillmentWorkTariff, FulfillmentSupplyWithBoxes, BatchConsumable, Consumable, Store, Trip, TripLine,
   CarrierTariff, WbUnloadTariff,
 } from '../types'
 
@@ -98,22 +98,28 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
   const [markingLogs, setMarkingLogs] = useState<FulfillmentMarkingLog[]>([])
   const [supplies, setSupplies] = useState<FulfillmentSupplyWithBoxes[]>([])
   const [tariffs, setTariffs] = useState<FulfillmentWorkTariff[]>([])
+  const [batchConsumables, setBatchConsumables] = useState<BatchConsumable[]>([])
+  const [accountConsumables, setAccountConsumables] = useState<Consumable[]>([])
   const [worksLoading, setWorksLoading] = useState(true)
 
   // Fetch works (OTK, marking, supplies, tariffs)
   useEffect(() => {
     setWorksLoading(true)
     const fetchWorks = async () => {
-      const [otk, marking, suppliesData, tariffsData] = await Promise.all([
+      const [otk, marking, suppliesData, tariffsData, consumablesData, accountConsumablesData] = await Promise.all([
         fetchOtkLogs(batch.id),
         fetchMarkingLogs(batch.id),
         fetchSupplies(batch.id),
         fetchWorkTariffs(batch.account_id),
+        fetchBatchConsumables(batch.id),
+        fetchConsumables(batch.account_id),
       ])
       setOtkLogs(otk)
       setMarkingLogs(marking)
       setSupplies(suppliesData)
       setTariffs(tariffsData)
+      setBatchConsumables(consumablesData)
+      setAccountConsumables(accountConsumablesData as Consumable[])
     }
     fetchWorks().catch(console.error).finally(() => setWorksLoading(false))
   }, [batch.id, batch.account_id])
@@ -190,12 +196,27 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     const recTariff = Object.values(tariffMap).find(x => x.stage === 'reception')
     total += (recTariff?.price_per_unit ?? 0) * (batch.qty_received_sum ?? 0)
     for (const line of allWorkLines) total += line.price * line.qty
+    if (batch.stage_packaging && batchConsumables.length > 0) {
+      for (const bc of batchConsumables) {
+        const cons = accountConsumables.find(c => c.id === bc.consumable_id)
+        if (cons) total += cons.price * bc.qty
+      }
+    }
     if (batch.stage_packing && totalBoxes > 0) {
       const packTariff = Object.values(tariffMap).find(x => x.stage === 'packing')
       total += (packTariff?.price_per_unit ?? 0) * totalBoxes
     }
     return total
-  }, [tariffMap, batch.qty_received_sum, batch.stage_packing, allWorkLines, totalBoxes])
+  }, [tariffMap, batch.qty_received_sum, batch.stage_packing, batch.stage_packaging, allWorkLines, totalBoxes, batchConsumables, accountConsumables])
+  const consumablesSubtotal = useMemo(() => {
+    if (!batch.stage_packaging) return 0
+    let total = 0
+    for (const bc of batchConsumables) {
+      const cons = accountConsumables.find(c => c.id === bc.consumable_id)
+      if (cons) total += cons.price * bc.qty
+    }
+    return total
+  }, [batch.stage_packaging, batchConsumables, accountConsumables])
   const logisticsSubtotal = useMemo(() => {
     if (!tripLine) return 0
     let total = 0
@@ -352,6 +373,20 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                           <td className="py-2 text-right font-medium text-slate-900">{line.price > 0 ? line.price * line.qty : '—'}</td>
                         </tr>
                       ))}
+
+                      {/* Упаковка — расходники */}
+                      {batch.stage_packaging && batchConsumables.map((bc) => {
+                        const cons = accountConsumables.find(c => c.id === bc.consumable_id)
+                        if (!cons) return null
+                        return (
+                          <tr key={bc.id}>
+                            <td className="py-2 text-slate-800">Упаковка · {cons.name}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{cons.price > 0 ? cons.price : '—'}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{bc.qty}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{cons.price > 0 ? cons.price * bc.qty : '—'}</td>
+                          </tr>
+                        )
+                      })}
 
                       {/* Packing */}
                       {batch.stage_packing && totalBoxes > 0 && (() => {

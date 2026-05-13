@@ -225,6 +225,7 @@ export interface Store {
   address?: string | null
   deleted_at?: string | null
   inn?: string | null
+  phone?: string | null
   ai_prompt?: string | null
   created_at: string
 }
@@ -287,6 +288,7 @@ export interface StoreFormValues {
   supplier_full?: string
   address?: string
   inn?: string
+  phone?: string
 }
 
 export interface Carrier {
@@ -342,6 +344,25 @@ export interface AccountCurrency {
   account_id: string
   code: string
   created_at: string
+}
+
+export interface Consumable {
+  id: string
+  account_id: string
+  name: string
+  price: number
+  cost: number
+  currency: string
+  created_at: string
+}
+
+export interface BatchConsumable {
+  id: string
+  batch_id: string
+  consumable_id: string
+  qty: number
+  created_at: string
+  consumable?: Consumable
 }
 
 // ─── Рейсы ───────────────────────────────────────────────────
@@ -573,13 +594,14 @@ export interface AiPromptFormValues {
 
 // ─── Фулфилмент ───────────────────────────────────────────────
 
-export type FulfillmentStage = 'reception' | 'otk' | 'marking' | 'packing' | 'logistics' | 'done'
+export type FulfillmentStage = 'reception' | 'otk' | 'packaging' | 'marking' | 'packing' | 'logistics' | 'done'
 export type FulfillmentBatchStatus = 'active' | 'done' | 'cancelled'
 
 export interface FulfillmentSettings {
   id: string
   account_id: string
   stage_otk: boolean
+  stage_packaging: boolean
   stage_marking: boolean
   stage_packing: boolean
   stage_logistics: boolean
@@ -596,6 +618,8 @@ export interface FulfillmentBatch {
   status: FulfillmentBatchStatus
   current_stage: FulfillmentStage
   stage_otk: boolean
+  stage_packaging: boolean
+  packaging_qty: number | null
   stage_marking: boolean
   stage_packing: boolean
   stage_logistics: boolean
@@ -603,6 +627,7 @@ export interface FulfillmentBatch {
   trip_line_id: string | null
   comment: string | null
   otk_discrepancy: number | null
+  logistics_tariff_type: 'per_box' | 'per_kg' | null
   created_at: string
   updated_at: string
   created_by: string | null
@@ -667,6 +692,11 @@ export interface FulfillmentMarkingLog extends FulfillmentOtkLog {
   item_id: string | null
 }
 
+// Аналог OtkLog для этапа Упаковки (без barcode/item_id)
+export interface FulfillmentPackagingLog extends FulfillmentOtkLog {
+  consumable_id: string | null
+}
+
 export interface FulfillmentOtkLogHistory {
   id: string
   log_id: string
@@ -701,6 +731,7 @@ export interface FulfillmentSupply {
   warehouse_name: string
   trip_id: string | null
   trip_line_id: string | null
+  weight: number | null
   created_by: string | null
   created_at: string
   _local?: boolean

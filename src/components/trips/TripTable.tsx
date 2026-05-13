@@ -1047,14 +1047,14 @@ export const TripTable = ({
                           <button
                             type="button"
                             aria-label={trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
-                            title={trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
+                            title={selectedLineIds.size > 0 ? 'Снимите галочки с поставок чтобы удалить рейс' : trip.trip_number ? `Удалить рейс ${trip.trip_number}` : `Удалить черновик-${trip.draft_number}`}
                             className={`flex h-8 w-8 items-center justify-center rounded-xl transition ${
-                              canDeleteTrip
+                              canDeleteTrip && selectedLineIds.size === 0
                                 ? 'text-slate-300 hover:bg-rose-50 hover:text-rose-500'
                                 : 'cursor-not-allowed text-slate-200'
                             }`}
-                            disabled={!canDeleteTrip}
-                            onClick={event => canDeleteTrip && handleDeleteTripClick(trip, event)}
+                            disabled={!canDeleteTrip || selectedLineIds.size > 0}
+                            onClick={event => (canDeleteTrip && selectedLineIds.size === 0) && handleDeleteTripClick(trip, event)}
                           >
                             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
                               <path d="M9 4h6" />

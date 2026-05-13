@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Carrier, FulfillmentWorkTariff, Warehouse } from '../types'
+import type { Carrier, Consumable, FulfillmentWorkTariff, Warehouse } from '../types'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
@@ -18,6 +18,10 @@ import {
   deleteAccountCurrency,
   fetchStageCurrencies,
   upsertStageCurrency,
+  fetchConsumables,
+  addConsumable,
+  updateConsumable,
+  deleteConsumable,
 } from '../services/directoriesService'
 import type { CarrierUpdateData } from '../services/directoriesService'
 
@@ -975,6 +979,371 @@ const CurrenciesPanel = ({
   )
 }
 
+// ── Расходники ────────────────────────────────────────────────
+
+const ConsumablesPanel = ({
+  accountId,
+  canManage,
+}: {
+  accountId: string
+  canManage: boolean
+}) => {
+  const [items, setItems] = useState<Consumable[]>([])
+  const [loading, setLoading] = useState(true)
+  const [enabledCurrencies, setEnabledCurrencies] = useState<string[]>([])
+  // add
+  const [addName, setAddName] = useState('')
+  const [addPrice, setAddPrice] = useState('')
+  const [addCost, setAddCost] = useState('')
+  const [addCurrency, setAddCurrency] = useState('RUB')
+  const [isAdding, setIsAdding] = useState(false)
+  // edit
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editPrice, setEditPrice] = useState('')
+  const [editCost, setEditCost] = useState('')
+  const [editCurrency, setEditCurrency] = useState('RUB')
+  const [focusField, setFocusField] = useState<'name' | 'price' | 'cost'>('name')
+  // section currency
+  const [defaultCurrency, setDefaultCurrency] = useState('')
+  const [isApplyingToAll, setIsApplyingToAll] = useState(false)
+  // delete
+  const [deleteTarget, setDeleteTarget] = useState<Consumable | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    Promise.all([fetchConsumables(accountId), fetchAccountCurrencies(accountId)])
+      .then(([data, cs]) => {
+        setItems(data)
+        const codes = cs.map((c) => c.code)
+        setEnabledCurrencies(codes)
+        setAddCurrency(codes[0] ?? 'RUB')
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [accountId])
+
+  const handleDefaultCurrencyChange = (currency: string) => {
+    setDefaultCurrency(currency)
+    if (currency) setAddCurrency(currency)
+  }
+
+  const handleApplyToAll = async () => {
+    if (!defaultCurrency) return
+    setIsApplyingToAll(true)
+    try {
+      await Promise.all(items.map((i) => updateConsumable(i.id, { currency: defaultCurrency })))
+      setItems((prev) => prev.map((i) => ({ ...i, currency: defaultCurrency })))
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setIsApplyingToAll(false)
+    }
+  }
+
+  const handleAdd = async () => {
+    if (!addName.trim()) return
+    setIsAdding(true)
+    try {
+      const item = await addConsumable(accountId, addName.trim(), Number(addPrice) || 0, Number(addCost) || 0, addCurrency)
+      setItems((prev) => [...prev, item])
+      setAddName('')
+      setAddPrice('')
+      setAddCost('')
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setIsAdding(false)
+    }
+  }
+
+  const startEdit = (item: Consumable, field: 'name' | 'price' | 'cost' = 'name') => {
+    setEditingId(item.id)
+    setEditName(item.name)
+    setEditPrice('')
+    setEditCost('')
+    setEditCurrency(item.currency ?? 'RUB')
+    setFocusField(field)
+  }
+
+  const saveCurrentValues = async (id: string) => {
+    const current = items.find((i) => i.id === id)
+    if (!current) return
+    const patch = {
+      name: editName.trim() || current.name,
+      price: editPrice.trim() === '' ? current.price : Number(editPrice),
+      cost: editCost.trim() === '' ? current.cost : Number(editCost),
+      currency: editCurrency,
+    }
+    try {
+      await updateConsumable(id, patch)
+      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const saveEdit = async (id: string) => {
+    await saveCurrentValues(id)
+    setEditingId(null)
+  }
+
+  const switchFocusField = async (newField: typeof focusField, rowId: string) => {
+    await saveCurrentValues(rowId)
+    if (focusField === 'price') setEditPrice('')
+    else if (focusField === 'cost') setEditCost('')
+    setFocusField(newField)
+  }
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setIsDeleting(true)
+    try {
+      await deleteConsumable(deleteTarget.id)
+      setItems((prev) => prev.filter((i) => i.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden rounded-3xl">
+      <div className="border-b border-slate-100 px-4 py-3">
+        <span className="text-sm font-semibold text-slate-900">Расходники</span>
+      </div>
+
+      {/* Section currency bar */}
+      {canManage && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2">
+          <span className="text-xs text-slate-400">Валюта раздела:</span>
+          <select
+            value={defaultCurrency}
+            onChange={(e) => handleDefaultCurrencyChange(e.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-blue-400"
+          >
+            <option value="">— не задано —</option>
+            {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          {defaultCurrency && items.length > 0 && (
+            <button
+              type="button"
+              disabled={isApplyingToAll}
+              onClick={() => void handleApplyToAll()}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
+            >
+              {isApplyingToAll ? '…' : `Применить ко всем (${items.length})`}
+            </button>
+          )}
+          <span className="ml-auto text-xs text-slate-300">Применяется к новым расходникам автоматически</span>
+        </div>
+      )}
+
+      {/* Single table: header + add row + data rows */}
+      {loading ? (
+        <div className="flex items-center justify-center py-10 text-sm text-slate-400">Загрузка…</div>
+      ) : (
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50/60">
+            <tr>
+              <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Название</th>
+              <th className="w-28 px-4 py-2 text-center">
+                <div className="text-xs font-medium text-slate-500">Цена</div>
+                <div className="text-[10px] font-normal text-slate-400">для заказчика</div>
+              </th>
+              <th className="w-28 px-4 py-2 text-center">
+                <div className="text-xs font-medium text-emerald-600">Себестоимость</div>
+                <div className="text-[10px] font-normal text-emerald-400">закупочная цена</div>
+              </th>
+              <th className="w-24 px-4 py-2 text-center text-xs font-medium text-slate-500">Валюта</th>
+              {canManage && <th className="w-[120px] px-4 py-2" />}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {/* Add row */}
+            {canManage && (
+              <tr className="bg-slate-50/40">
+                <td className="px-4 py-2">
+                  <input
+                    type="text"
+                    placeholder="Название (коробка, ZIP-пакет…)"
+                    value={addName}
+                    onChange={(e) => setAddName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-400 placeholder:text-slate-400"
+                  />
+                </td>
+                <td className="px-4 py-2">
+                  <input
+                    type="number" min="0" step="any" placeholder="0"
+                    value={addPrice}
+                    onChange={(e) => setAddPrice(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                    title="Цена"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-sm outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                </td>
+                <td className="px-4 py-2">
+                  <input
+                    type="number" min="0" step="any" placeholder="0"
+                    value={addCost}
+                    onChange={(e) => setAddCost(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                    title="Себестоимость"
+                    className="w-full rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-center text-sm text-emerald-700 outline-none focus:border-emerald-400 placeholder:text-emerald-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                </td>
+                <td className="px-4 py-2 text-center">
+                  {defaultCurrency ? (
+                    <span className="rounded-md bg-amber-100 px-2 py-1.5 text-xs font-medium text-amber-700">{defaultCurrency}</span>
+                  ) : (
+                    <select
+                      value={addCurrency}
+                      onChange={(e) => setAddCurrency(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-blue-400"
+                    >
+                      {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => void handleAdd()}
+                    disabled={isAdding || !addName.trim()}
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {isAdding ? '…' : '+ Добавить'}
+                  </button>
+                </td>
+              </tr>
+            )}
+            {/* Data rows */}
+            {items.length === 0 ? (
+              <tr>
+                <td colSpan={canManage ? 5 : 4} className="py-8 text-center text-sm text-slate-400">Расходники не добавлены</td>
+              </tr>
+            ) : (
+              items.map((item) => {
+                const isEditing = editingId === item.id
+                const cellBase = canManage ? 'cursor-text' : ''
+                const viewCell = `px-4 py-1.5 ${cellBase}`
+                return (
+                  <tr key={item.id} className="group hover:bg-slate-50" onBlur={(e) => { if (isEditing && !e.currentTarget.contains(e.relatedTarget as Node)) setEditingId(null) }}>
+                    <td className={viewCell}>
+                      {isEditing && focusField === 'name' ? (
+                        <input
+                          type="text"
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          autoFocus
+                          onBlur={() => void saveCurrentValues(item.id)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(item.id); if (e.key === 'Escape') setEditingId(null) }}
+                          className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+                        />
+                      ) : (
+                        <div
+                          className="rounded-lg px-2 py-1 text-sm text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-200"
+                          onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
+                          onClick={canManage ? (isEditing ? () => void switchFocusField('name', item.id) : () => startEdit(item, 'name')) : undefined}
+                        >{isEditing ? editName : item.name}</div>
+                      )}
+                    </td>
+                    <td className={viewCell}>
+                      {isEditing && focusField === 'price' ? (
+                        <input
+                          type="number" min="0" step="any"
+                          placeholder={String(item.price)}
+                          value={editPrice}
+                          autoFocus
+                          onChange={(e) => setEditPrice(e.target.value)}
+                          onBlur={() => { void saveCurrentValues(item.id); setEditPrice('') }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(item.id); if (e.key === 'Escape') setEditingId(null) }}
+                          className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        />
+                      ) : (
+                        <div
+                          className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-800 hover:bg-white hover:ring-1 hover:ring-slate-200"
+                          onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
+                          onClick={canManage ? (isEditing ? () => void switchFocusField('price', item.id) : () => startEdit(item, 'price')) : undefined}
+                        >{editPrice !== '' && isEditing ? editPrice : item.price}</div>
+                      )}
+                    </td>
+                    <td className={viewCell}>
+                      {isEditing && focusField === 'cost' ? (
+                        <input
+                          type="number" min="0" step="any"
+                          placeholder={String(item.cost)}
+                          value={editCost}
+                          autoFocus
+                          onChange={(e) => setEditCost(e.target.value)}
+                          onBlur={() => { void saveCurrentValues(item.id); setEditCost('') }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(item.id); if (e.key === 'Escape') setEditingId(null) }}
+                          className="w-full rounded-lg border border-emerald-200 px-2 py-1 text-center text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        />
+                      ) : (
+                        <div
+                          className="rounded-lg px-2 py-1 text-center text-sm font-medium text-emerald-700 hover:bg-white hover:ring-1 hover:ring-emerald-200"
+                          onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
+                          onClick={canManage ? (isEditing ? () => void switchFocusField('cost', item.id) : () => startEdit(item, 'cost')) : undefined}
+                        >{editCost !== '' && isEditing ? editCost : item.cost}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-1.5 text-center">
+                      {isEditing ? (
+                        <select
+                          value={editCurrency}
+                          onChange={(e) => setEditCurrency(e.target.value)}
+                          onBlur={() => void saveCurrentValues(item.id)}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-blue-400"
+                        >
+                          {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{item.currency}</span>
+                      )}
+                    </td>
+                    {canManage && (
+                      <td className="px-4 py-1.5">
+                        <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onMouseDown={(e) => { e.preventDefault(); setEditingId(null) }}
+                            onClick={() => setDeleteTarget(item)}
+                            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500"
+                          >
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      )}
+
+      <DeleteConfirmModal
+        open={Boolean(deleteTarget)}
+        title="Удалить расходник?"
+        description={`«${deleteTarget?.name ?? ''}» будет удалён.`}
+        isSubmitting={isDeleting}
+        onClose={() => { if (!isDeleting) setDeleteTarget(null) }}
+        onConfirm={() => void handleDelete()}
+      />
+    </Card>
+  )
+}
+
 // ── Тарифы работ фулфилмента ─────────────────────────────────
 
 const WORK_GROUPS = [
@@ -983,8 +1352,9 @@ const WORK_GROUPS = [
     label: 'Фулфилмент',
     stages: [
       { id: 'reception', label: 'Приёмка' },
-      { id: 'otk',       label: 'ОТК' },
-      { id: 'marking',   label: 'Маркировка' },
+      { id: 'otk',        label: 'ОТК' },
+      { id: 'packaging',  label: 'Упаковка' },
+      { id: 'marking',    label: 'Маркировка' },
       { id: 'packing',   label: 'Формирование коробов' },
     ],
   },
@@ -1409,133 +1779,133 @@ const WorkTariffsPanel = ({
         </div>
       )}
 
-      {/* Add tariff row */}
-      {canManage && (
-        <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50/40 px-4 py-2">
-          {isWarehouseStage ? (
-            <WarehouseSearchSelect
-              value={addName}
-              onChange={setAddName}
-              warehouses={warehouses}
-            />
-          ) : (
-            <input
-              type="text"
-              placeholder="Название тарифа"
-              value={addName}
-              onChange={(e) => setAddName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-              className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-400 placeholder:text-slate-400"
-            />
-          )}
-          <input
-            type="number"
-            min="0"
-            step="any"
-            placeholder="0"
-            value={addPrice}
-            onChange={(e) => setAddPrice(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-            title="Заказчику / за короб"
-            className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-sm outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-          />
-          {isWarehouseStage && (
-            <input
-              type="number"
-              min="0"
-              step="any"
-              placeholder="0"
-              value={addPricePerKg}
-              onChange={(e) => setAddPricePerKg(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-              title="Заказчику / за кг"
-              className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-sm outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            />
-          )}
-          <input
-            type="number"
-            min="0"
-            step="any"
-            placeholder="0"
-            value={addPriceWorker}
-            onChange={(e) => setAddPriceWorker(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-            title="Исполнителю"
-            className="w-24 rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-center text-sm text-emerald-700 outline-none focus:border-emerald-400 placeholder:text-emerald-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-          />
-          <input
-            type="number"
-            min="0"
-            step="any"
-            placeholder="0"
-            value={addPriceSenior}
-            onChange={(e) => setAddPriceSenior(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-            title="Старшему"
-            className="w-24 rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-center text-sm text-blue-700 outline-none focus:border-blue-400 placeholder:text-blue-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-          />
-          <span className="text-xs text-slate-400">/ед</span>
-          {stageCurrencies[activeStage] ? (
-            <span className="rounded-md bg-amber-100 px-2 py-1.5 text-xs font-medium text-amber-700">{stageCurrencies[activeStage]}</span>
-          ) : (
-            <select
-              value={addCurrency}
-              onChange={(e) => setAddCurrency(e.target.value)}
-              className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-blue-400"
-            >
-              {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          )}
-          <button
-            type="button"
-            onClick={() => void handleAdd()}
-            disabled={isAdding || !addName.trim()}
-            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            {isAdding ? '…' : '+ Добавить'}
-          </button>
-        </div>
-      )}
-
-      {/* Content */}
+      {/* Single table: header + add row + data rows all in one */}
       {loading ? (
         <div className="flex items-center justify-center py-10 text-sm text-slate-400">Загрузка…</div>
       ) : (
-        <>
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50/60">
-              <tr>
-                <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">{isWarehouseStage ? 'Склад' : 'Название тарифа'}</th>
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50/60">
+            <tr>
+              <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">{isWarehouseStage ? 'Склад' : 'Название тарифа'}</th>
+              <th className="w-28 px-4 py-2 text-center">
+                <div className="text-xs font-medium text-slate-500">Заказчику</div>
+                <div className="text-[10px] font-normal text-slate-400">{isWarehouseStage ? 'цена / за короб' : activeStage === 'packing' ? 'цена / за короб' : 'цена / за единицу'}</div>
+              </th>
+              {isWarehouseStage && (
                 <th className="w-28 px-4 py-2 text-center">
                   <div className="text-xs font-medium text-slate-500">Заказчику</div>
-                  <div className="text-[10px] font-normal text-slate-400">{isWarehouseStage ? 'цена / за короб' : activeStage === 'packing' ? 'цена / за короб' : 'цена / за единицу'}</div>
+                  <div className="text-[10px] font-normal text-slate-400">цена / за кг</div>
                 </th>
+              )}
+              <th className="w-28 px-4 py-2 text-center">
+                <div className="text-xs font-medium text-emerald-600">Исполнителю</div>
+                <div className="text-[10px] font-normal text-emerald-400">цена / за единицу</div>
+              </th>
+              <th className="w-28 px-4 py-2 text-center">
+                <div className="text-xs font-medium text-blue-600">Старшему</div>
+                <div className="text-[10px] font-normal text-blue-400">цена / за единицу</div>
+              </th>
+              <th className="w-24 px-4 py-2 text-center text-xs font-medium text-slate-500">Валюта</th>
+              {canManage && <th className="w-[120px] px-4 py-2" />}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {/* Add row */}
+            {canManage && (
+              <tr className="bg-slate-50/40">
+                <td className="px-4 py-2">
+                  {isWarehouseStage ? (
+                    <WarehouseSearchSelect
+                      value={addName}
+                      onChange={setAddName}
+                      warehouses={warehouses}
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Название тарифа"
+                      value={addName}
+                      onChange={(e) => setAddName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-400 placeholder:text-slate-400"
+                    />
+                  )}
+                </td>
+                <td className="px-4 py-2">
+                  <input
+                    type="number" min="0" step="any" placeholder="0"
+                    value={addPrice}
+                    onChange={(e) => setAddPrice(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                    title="Заказчику / за короб"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-sm outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                </td>
                 {isWarehouseStage && (
-                  <th className="w-28 px-4 py-2 text-center">
-                    <div className="text-xs font-medium text-slate-500">Заказчику</div>
-                    <div className="text-[10px] font-normal text-slate-400">цена / за кг</div>
-                  </th>
+                  <td className="px-4 py-2">
+                    <input
+                      type="number" min="0" step="any" placeholder="0"
+                      value={addPricePerKg}
+                      onChange={(e) => setAddPricePerKg(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                      title="Заказчику / за кг"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-sm outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
+                  </td>
                 )}
-                <th className="w-28 px-4 py-2 text-center">
-                  <div className="text-xs font-medium text-emerald-600">Исполнителю</div>
-                  <div className="text-[10px] font-normal text-emerald-400">цена / за единицу</div>
-                </th>
-                <th className="w-28 px-4 py-2 text-center">
-                  <div className="text-xs font-medium text-blue-600">Старшему</div>
-                  <div className="text-[10px] font-normal text-blue-400">цена / за единицу</div>
-                </th>
-                <th className="w-24 px-4 py-2 text-center text-xs font-medium text-slate-500">Валюта</th>
-                {canManage && <th className="w-20 px-4 py-2" />}
+                <td className="px-4 py-2">
+                  <input
+                    type="number" min="0" step="any" placeholder="0"
+                    value={addPriceWorker}
+                    onChange={(e) => setAddPriceWorker(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                    title="Исполнителю"
+                    className="w-full rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-center text-sm text-emerald-700 outline-none focus:border-emerald-400 placeholder:text-emerald-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                </td>
+                <td className="px-4 py-2">
+                  <input
+                    type="number" min="0" step="any" placeholder="0"
+                    value={addPriceSenior}
+                    onChange={(e) => setAddPriceSenior(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                    title="Старшему"
+                    className="w-full rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-center text-sm text-blue-700 outline-none focus:border-blue-400 placeholder:text-blue-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                </td>
+                <td className="px-4 py-2 text-center">
+                  {stageCurrencies[activeStage] ? (
+                    <span className="rounded-md bg-amber-100 px-2 py-1.5 text-xs font-medium text-amber-700">{stageCurrencies[activeStage]}</span>
+                  ) : (
+                    <select
+                      value={addCurrency}
+                      onChange={(e) => setAddCurrency(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-blue-400"
+                    >
+                      {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => void handleAdd()}
+                    disabled={isAdding || !addName.trim()}
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {isAdding ? '…' : '+ Добавить'}
+                  </button>
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {stageTariffs.length === 0 ? (
-                <tr>
-                  <td colSpan={canManage ? (isWarehouseStage ? 7 : 6) : (isWarehouseStage ? 6 : 5)} className="py-8 text-center text-sm text-slate-400">Нет тарифов в этом разделе</td>
-                </tr>
-              ) : (
+            )}
+            {/* Data rows */}
+            {stageTariffs.length === 0 ? (
+              <tr>
+                <td colSpan={canManage ? (isWarehouseStage ? 7 : 6) : (isWarehouseStage ? 6 : 5)} className="py-8 text-center text-sm text-slate-400">Нет тарифов в этом разделе</td>
+              </tr>
+            ) : (
                 stageTariffs.map((t) => {
                   const isEditing = editingId === t.id
                   const cellBase = canManage ? 'cursor-text' : ''
@@ -1693,7 +2063,6 @@ const WorkTariffsPanel = ({
               }
             </tbody>
           </table>
-        </>
       )}
 
       <DeleteConfirmModal
@@ -1745,15 +2114,15 @@ export const DirectoriesPage = ({
 }: DirectoriesPageProps) => {
   const [tariffCarrier, setTariffCarrier] = useState<Carrier | null>(null)
   const [editCarrier, setEditCarrier] = useState<Carrier | null>(null)
-  const [tab, setTab] = useState<'dirs' | 'work' | 'currencies'>(
+  const [tab, setTab] = useState<'dirs' | 'work' | 'consumables' | 'currencies'>(
     () => {
       const saved = localStorage.getItem('dirs_tab')
-      if (saved === 'dirs' || saved === 'work' || saved === 'currencies') return saved
+      if (saved === 'dirs' || saved === 'work' || saved === 'consumables' || saved === 'currencies') return saved
       return 'dirs'
     }
   )
 
-  const handleTabChange = (key: 'dirs' | 'work' | 'currencies') => {
+  const handleTabChange = (key: 'dirs' | 'work' | 'consumables' | 'currencies') => {
     localStorage.setItem('dirs_tab', key)
     setTab(key)
   }
@@ -1761,6 +2130,7 @@ export const DirectoriesPage = ({
   const tabs = [
     { key: 'dirs' as const, label: 'Перевозчики и склады' },
     { key: 'work' as const, label: 'Тарифы работ' },
+    { key: 'consumables' as const, label: 'Расходники' },
     { key: 'currencies' as const, label: 'Валюты' },
   ]
 
@@ -1813,6 +2183,10 @@ export const DirectoriesPage = ({
 
       {tab === 'work' && (
         <WorkTariffsPanel accountId={accountId} canManage={canManageTariffs} warehouses={warehouses} />
+      )}
+
+      {tab === 'consumables' && (
+        <ConsumablesPanel accountId={accountId} canManage={canManageTariffs} />
       )}
 
       {tab === 'currencies' && (

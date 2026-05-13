@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { AccountCurrency, Carrier, CarrierTariff, FulfillmentWorkTariff, WbUnloadTariff, Warehouse } from '../types'
+import type { AccountCurrency, Carrier, CarrierTariff, Consumable, FulfillmentWorkTariff, WbUnloadTariff, Warehouse } from '../types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => supabase as any
@@ -292,5 +292,56 @@ export const upsertWbUnloadTariff = async (
     { account_id: accountId, warehouse_id: warehouseId, price_per_box: pricePerBox },
     { onConflict: 'account_id,warehouse_id' },
   )
+  if (error) throw error
+}
+
+// ── Расходники ────────────────────────────────────────────────
+
+export const fetchConsumables = async (accountId: string): Promise<Consumable[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await db()
+    .from('consumables')
+    .select('*')
+    .eq('account_id', accountId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as Consumable[]
+}
+
+export const addConsumable = async (
+  accountId: string,
+  name: string,
+  price: number,
+  cost: number,
+  currency = 'RUB',
+): Promise<Consumable> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await db()
+    .from('consumables')
+    .insert({ account_id: accountId, name, price, cost, currency })
+    .select()
+    .single()
+  if (error) throw error
+  return data as Consumable
+}
+
+export const updateConsumable = async (
+  id: string,
+  patch: { name?: string; price?: number; cost?: number; currency?: string },
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await db()
+    .from('consumables')
+    .update(patch)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const deleteConsumable = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await db()
+    .from('consumables')
+    .delete()
+    .eq('id', id)
   if (error) throw error
 }

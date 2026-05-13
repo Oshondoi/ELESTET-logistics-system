@@ -1,6 +1,50 @@
 # Active Context
 
-## Current Focus (11.05.2026) — обновлено
+## Current Focus (13.05.2026) — обновлено
+
+### Фулфилмент — этап Упаковка (Packaging) (13.05.2026)
+
+Реализован полный этап **Упаковка** (`'packaging'`) между ОТК и Маркировкой.
+
+**Изменения в STAGE_ORDER:**
+```ts
+['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics', 'done']
+```
+`advanceStage` в `fulfillmentService.ts` включает `'packaging'` в order-массив и skip-map (`packaging: !batch.stage_packaging`).
+
+**Новый тип:**
+```ts
+interface FulfillmentPackagingLog extends FulfillmentOtkLog {
+  consumable_id: string | null
+}
+```
+
+**Новые сервисные функции** (после `deleteBatchConsumable` в `fulfillmentService.ts`):
+- `fetchPackagingLogs(batchId)`
+- `addPackagingLog(entry)` — включает `consumable_id`
+- `updatePackagingLog(id, patch)`
+- `deletePackagingLog(id)` — soft-delete
+- `uploadPackagingPhoto(accountId, batchId, file)`
+
+**UI этапа Упаковка** (`viewStage === 'packaging'`):
+- **Зип-пакеты**: переключатель «Все товары» / «Указать вручную» + инпут + кнопка «Сохранить»
+- **Работа**: журнал работ (аналог ОТК/Маркировки): исполнитель, тариф, расходник (dropdown), кол-во/брак, фото
+- Буфер (amber-карточки), кнопка «+ Добавить работу», Итого-бар
+- **Расходники**: отдельного блока НЕТ (удалён), расходник выбирается в модале «Добавить работу»
+
+**UI этапа Короба** (`viewStage === 'packing'`):
+- Добавлен блок **Зип-пакеты** сверху (такой же UI как на этапе Упаковка)
+
+**Dashboard stats** при `viewStage === 'packaging'`:
+- Принято / ОТК итого / Упаковка split-card [Упаковано / Браки / Итого] / Расхождение
+
+**SQL-патчи** (⚠️ применить в Supabase Dashboard):
+1. `supabase/patch_packaging_logs.sql` — создаёт таблицу `fulfillment_packaging_logs`
+2. `supabase/patch_packaging_logs_consumable.sql` — добавляет `consumable_id uuid references consumables(id) on delete set null`
+
+---
+
+## Previous Context (11.05.2026)
 
 ### Android-баг: обесцвечивание интерфейса (11.05.2026)
 **Проблема:** На планшете E60 (Android 12, Chrome 105 с флагом `--disable-composited-antialiasing`) `‑webkit‑font‑smoothing: antialiased` на `:root` вызывало обесцвечивание всего UI.

@@ -23,6 +23,7 @@ const DEFAULT_VALUES: StoreFormValues = {
   supplier_full: '',
   address: '',
   inn: '',
+  phone: '',
 }
 
 export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubmit }: StoreFormModalProps) => {
@@ -174,6 +175,12 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
             placeholder="Юридический или фактический адрес"
             value={values.address ?? ''}
             onChange={(e) => setValues((c) => ({ ...c, address: e.target.value }))}
+          />
+          <Input
+            label="Телефон"
+            placeholder="Например, +7 999 123-45-67"
+            value={values.phone ?? ''}
+            onChange={(e) => setValues((c) => ({ ...c, phone: e.target.value }))}
           />
         </div>
 

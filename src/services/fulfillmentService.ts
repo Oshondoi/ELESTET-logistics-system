@@ -10,6 +10,7 @@ import type {
   FulfillmentSupplyWithBoxes,
   FulfillmentBox,
   FulfillmentBoxItem,
+  BatchConsumable,
   Product,
 } from '../types'
 
@@ -28,7 +29,8 @@ export const fetchFulfillmentSettings = async (accountId: string): Promise<Fulfi
 
 export const upsertFulfillmentSettings = async (
   accountId: string,
-  settings: Partial<Pick<FulfillmentSettings, 'stage_otk' | 'stage_marking' | 'stage_packing' | 'stage_logistics'>>,
+  settings: Partial<Pick<FulfillmentSettings, 'stage_otk' | 'stage_packaging' | 'stage_marking' | 'stage_packing' | 'stage_logistics'>>,
+
 ): Promise<FulfillmentSettings> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
@@ -102,6 +104,7 @@ export const createBatch = async (
     name: string
     store_id?: string | null
     stage_otk: boolean
+    stage_packaging: boolean
     stage_marking: boolean
     stage_packing: boolean
     stage_logistics: boolean
@@ -134,6 +137,9 @@ export const updateBatch = async (
       | 'stage_packing'
       | 'stage_logistics'
       | 'otk_discrepancy'
+      | 'logistics_tariff_type'
+      | 'stage_packaging'
+      | 'packaging_qty'
     >
   >,
 ): Promise<FulfillmentBatch> => {
@@ -227,10 +233,11 @@ export const deleteItem = async (itemId: string): Promise<void> => {
 
 /** Переходит к следующему этапу, пропуская отключённые */
 export const advanceStage = async (batch: FulfillmentBatch): Promise<FulfillmentBatch> => {
-  const order: FulfillmentStage[] = ['reception', 'otk', 'marking', 'packing', 'logistics', 'done']
+  const order: FulfillmentStage[] = ['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics', 'done']
   const current = order.indexOf(batch.current_stage)
   const skip: Record<string, boolean> = {
     otk: !batch.stage_otk,
+    packaging: !batch.stage_packaging,
     marking: !batch.stage_marking,
     packing: !batch.stage_packing,
     logistics: !batch.stage_logistics,
@@ -697,7 +704,7 @@ export const deleteSupply = async (supplyId: string): Promise<void> => {
 
 export const updateSupply = async (
   supplyId: string,
-  updates: Partial<Pick<FulfillmentSupply, 'trip_id' | 'trip_line_id'>>,
+  updates: Partial<Pick<FulfillmentSupply, 'trip_id' | 'trip_line_id' | 'weight'>>,
 ): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await (supabase as any)
@@ -872,3 +879,117 @@ export const fetchMarkingDefectsByStore = async (
     created_at: l.created_at,
   }))
 }
+
+// ── Batch Consumables ─────────────────────────────────────────
+
+export const fetchBatchConsumables = async (batchId: string): Promise<BatchConsumable[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('batch_consumables')
+    .select('*, consumable:consumables(*)')
+    .eq('batch_id', batchId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as BatchConsumable[]
+}
+
+export const upsertBatchConsumable = async (
+  batchId: string,
+  consumableId: string,
+  qty: number,
+): Promise<BatchConsumable> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('batch_consumables')
+    .upsert({ batch_id: batchId, consumable_id: consumableId, qty }, { onConflict: 'batch_id,consumable_id' })
+    .select('*, consumable:consumables(*)')
+    .single()
+  if (error) throw error
+  return data as BatchConsumable
+}
+
+export const deleteBatchConsumable = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('batch_consumables')
+    .delete()
+    .eq('id', id)
+  if (error) throw error
+}
+
+// ══════════════════════════════════════════════════════════════
+// Packaging Logs — журнал работ этапа Упаковки
+// ══════════════════════════════════════════════════════════════
+
+export const fetchPackagingLogs = async (batchId: string): Promise<import('../types').FulfillmentPackagingLog[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_packaging_logs')
+    .select('*')
+    .eq('batch_id', batchId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as import('../types').FulfillmentPackagingLog[]
+}
+
+export const addPackagingLog = async (entry: {
+  batch_id: string
+  account_id: string
+  user_id: string
+  user_email: string
+  user_name?: string | null
+  performer_user_id?: string | null
+  performer_name: string
+  tariff: string
+  qty: number
+  qty_defect?: number
+  notes?: string
+  photo_urls?: string[]
+  consumable_id?: string | null
+}): Promise<import('../types').FulfillmentPackagingLog> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_packaging_logs')
+    .insert({ ...entry, photo_urls: entry.photo_urls ?? [] })
+    .select()
+    .single()
+  if (error) throw error
+  return data as import('../types').FulfillmentPackagingLog
+}
+
+export const updatePackagingLog = async (
+  id: string,
+  patch: { tariff?: string; qty?: number; qty_defect?: number; notes?: string; photo_urls?: string[] }
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_packaging_logs')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const deletePackagingLog = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_packaging_logs')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const uploadPackagingPhoto = async (
+  accountId: string,
+  batchId: string,
+  file: File,
+): Promise<string> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const ext = file.name.split('.').pop() ?? 'jpg'
+  const path = `packaging/${accountId}/${batchId}/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`
+  const { error } = await supabase.storage.from('otk-photos').upload(path, file, { upsert: false })
+  if (error) throw error
+  const { data } = supabase.storage.from('otk-photos').getPublicUrl(path)
+  return data.publicUrl
+}
+

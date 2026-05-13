@@ -3,6 +3,7 @@ import type { Store } from '../../types'
 import { supabase } from '../../lib/supabase'
 import { Card } from '../ui/Card'
 import { DeleteConfirmModal } from '../ui/DeleteConfirmModal'
+import { showToast } from '../ui/Toast'
 
 interface StoreListProps {
   stores: Store[]
@@ -75,6 +76,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
                 <th className="px-3 py-2.5">Поставщик</th>
                 <th className="px-3 py-2.5">Наим. для стикера</th>
                 <th className="px-3 py-2.5">Адрес</th>
+                <th className="px-3 py-2.5">Телефон</th>
                 <th className="px-3 py-2.5">Создан</th>
                 <th className="w-28 px-3 py-2.5"></th>
               </tr>
@@ -107,6 +109,20 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
                     </td>
                     <td className="max-w-[200px] truncate px-3 py-3.5 text-slate-500">
                       {store.address || <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-3 py-3.5">
+                      {store.phone ? (
+                        <button
+                          type="button"
+                          title="Копировать телефон"
+                          onClick={() => void navigator.clipboard.writeText(store.phone!).then(() => showToast('Телефон скопирован', 'success'))}
+                          className="font-mono text-xs text-slate-600 hover:text-blue-600 transition-colors"
+                        >
+                          {store.phone}
+                        </button>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-3.5 text-slate-600">
                       {new Date(store.created_at).toLocaleDateString('ru-RU')}

@@ -59,6 +59,7 @@ export const createStoreInSupabase = async (values: StoreFormValues, accountId: 
     supplier_full: values.supplier_full?.trim() || null,
     address: values.address?.trim() || null,
     inn: values.inn?.trim() || null,
+    phone: values.phone?.trim() || null,
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,6 +83,7 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
     ...(values.supplier_full !== undefined ? { supplier_full: values.supplier_full.trim() || null } : {}),
     address: values.address?.trim() || null,
     inn: values.inn?.trim() || null,
+    phone: values.phone?.trim() || null,
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

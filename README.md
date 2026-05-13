@@ -21,6 +21,7 @@ MVP веб-приложения для логистики поставок на 
 - Supabase Auth: регистрация (Имя + Email + Пароль обязательны), вход, выход
 - Company flow: создание, список, switcher, сохранение в localStorage, **архивное удаление** (только владелец + пароль, 15 дней в архиве → жёсткое удаление через pg_cron), редактирование названия
 - Деплой на Vercel: env переменные, email-подтверждение → Vercel-домен
+- Домен `elestet.net` зарегистрирован на **Namecheap**; DNS настраивается там (Advanced DNS → CNAME/A-запись на Vercel)
 - Левый сайдбар: зафиксирован по высоте (`h-screen sticky`), бренд, company switcher (edit + delete), nav, выход
 - Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / Роли
 - **Sidebar**: ID компании отображается как `ID: C-1` (с префиксом)
@@ -59,6 +60,24 @@ MVP веб-приложения для логистики поставок на 
 - Иконки-кнопки переключения: `text-slate-400 hover:text-slate-700` (видимые по умолчанию)
 - Состояние в localStorage: `warehouse_sort_mode`, `warehouse_order_{accountId}`
 
+### Фулфилмент — этап Упаковка (13.05.2026)
+
+Новый производственный этап **Упаковка** (`packaging`) между ОТК и Маркировкой.
+
+- **Зип-пакеты**: переключатель «Все товары» / «Указать вручную» + числовой инпут; сохраняется в `fulfillment_batches.packaging_zip_qty`
+- **Журнал работ**: полный паритет с ОТК — исполнитель, тариф (`stage=packaging`), расходник (dropdown), кол-во годных, брак, фото, мягкое удаление
+- **Расходники**: выбираются прямо в модале «Добавить работу» (отдельного блока Расходники нет)
+- **Буфер**: несохранённые записи отображаются amber-карточками; «Сохранить» или «Сохранить и продолжить»
+- **Тип**: `FulfillmentPackagingLog extends FulfillmentOtkLog { consumable_id: string | null }`
+- **Сервис**: `fetchPackagingLogs`, `addPackagingLog`, `updatePackagingLog`, `deletePackagingLog`, `uploadPackagingPhoto`
+- **advanceStage**: order-массив и skip-map обновлены (порядок: reception→otk→packaging→marking→packing→logistics→done)
+- **Формирование коробов (packing)**: добавлен блок «Зип-пакеты» сверху (показывает то, что сохранено на этапе Упаковка)
+- **Dashboard**: split-card «Упаковка» [Упаковано / Браки / Итого] в статистике партии
+
+⚠️ SQL-патчи применить в Supabase Dashboard:
+1. `supabase/patch_packaging_logs.sql`
+2. `supabase/patch_packaging_logs_consumable.sql`
+
 ### Справочники — Тарифы работ: логистика (11.05.2026)
 - Стейджи `logistics_rf` + `wb_unload`: поле «Склад» (кастомный `WarehouseSearchSelect`) вместо текстового поля
 - `WarehouseSearchSelect`: `position: fixed` (выходит за overflow-parent), поиск по подстроке, фокус при открытии
@@ -94,9 +113,10 @@ MVP веб-приложения для логистики поставок на 
 - **Многоэтапный процесс** (каждый этап можно включить/отключить при создании партии):
   1. **Приёмка** — добавление позиций по баркоду (ручной ввод или сканер), кол-во; авто-лукап названия/размера из БД товаров если у магазина есть API-ключ
   2. **ОТК** — журнал работ: исполнитель, тариф, кол-во годных + брак, фото. Подробная история изменений. Расхождение с приёмкой.
-  3. **Маркировка** — журнал работ: исполнитель, тариф, кол-во годных + брак, фото. Подробная история изменений (полный паритет с ОТК).
-  4. **Формирование коробов** — ввод кол-ва единиц + кол-ва коробов на каждую позицию
-  5. **Передача на логистику** — выбор рейса + поставки → авто-обновляет `box_qty` и `units_qty` в поставке
+  3. **Упаковка** — журнал работ: Зип-пакеты (кол-во), тариф + расходник + кол-во/брак/фото. Аналог ОТК. `fulfillment_packaging_logs`.
+  4. **Маркировка** — журнал работ: исполнитель, тариф, кол-во годных + брак, фото. Подробная история изменений (полный паритет с ОТК).
+  5. **Формирование коробов** — ввод кол-ва единиц + кол-ва коробов на каждую позицию; блок «Зип-пакеты» сверху
+  6. **Передача на логистику** — выбор рейса + поставки → авто-обновляет `box_qty` и `units_qty` в поставке
 - **Прогресс-бар** этапов внутри партии: зелёный = пройден, синий = текущий, серый = ожидает
 - **Редактирование партии** (EditBatchModal) — иконка карандаша в строке; изменение названия, магазина, этапов
 - **Создание партии** (CreateBatchModal):
@@ -127,8 +147,10 @@ MVP веб-приложения для логистики поставок на 
 - `supabase/patch_fulfillment.sql` — 4 таблицы: `fulfillment_settings`, `fulfillment_batches`, `fulfillment_items`, `fulfillment_stage_logs`
 - `supabase/patch_otk_logs.sql` — `fulfillment_otk_logs`, `fulfillment_otk_log_history`
 - `supabase/patch_marking_logs.sql` — `fulfillment_marking_logs`, `fulfillment_marking_log_history`
+- `supabase/patch_packaging_logs.sql` — `fulfillment_packaging_logs` (⚠️ применить)
+- `supabase/patch_packaging_logs_consumable.sql` — добавляет `consumable_id` к `fulfillment_packaging_logs` (⚠️ применить)
 - `src/services/fulfillmentService.ts` — CRUD батчей/позиций + история + soft-delete
-- `src/pages/FulfillmentPage.tsx` — полная страница (3300+ строк)
+- `src/pages/FulfillmentPage.tsx` — полная страница (3500+ строк)
 ### RBAC — ролевой контроль доступа
 - `useMyPermissions` хук: owner/admin → полные права (без запроса к БД); остальные → запрос в таблицу `roles` по `assigned_user_id + account_id`
 - Sidebar скрывает пункты меню по `permKey` из `RolePermissions`
@@ -416,6 +438,12 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
 
 ## Безопасность проекта («задача о безопасности проекта»)
+
+### Домен elestet.net
+- Регистратор: **Namecheap**
+- DNS настраивается в Namecheap → Advanced DNS
+- Нужные записи: CNAME `www` → `cname.vercel-dns.com` + A `@` → `76.76.21.21`
+- Если сайт упал с ERR_CONNECTION_REFUSED — первым делом проверить Namecheap Advanced DNS и статус домена в Vercel → Domains
 
 ### GitHub — публичный репо
 - Vercel бесплатный тариф требует публичного репо. Код виден всем — скачать может любой

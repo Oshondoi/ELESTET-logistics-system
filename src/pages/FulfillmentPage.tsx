@@ -9,10 +9,13 @@ import type {
   FulfillmentOtkLogHistory,
   FulfillmentMarkingLog,
   FulfillmentMarkingLogHistory,
+  FulfillmentPackagingLog,
   FulfillmentSupplyWithBoxes,
   FulfillmentSettings,
   FulfillmentStage,
   FulfillmentWorkTariff,
+  BatchConsumable,
+  Consumable,
   Store,
   TripLine,
   TripWithLines,
@@ -65,13 +68,21 @@ import {
   addBoxItem,
   deleteBoxItem,
   fetchStageCompletedAt,
+  fetchBatchConsumables,
+  upsertBatchConsumable,
+  deleteBatchConsumable,
+  fetchPackagingLogs,
+  addPackagingLog,
+  updatePackagingLog,
+  deletePackagingLog,
+  uploadPackagingPhoto,
 } from '../services/fulfillmentService'
 import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
 import {
   findProductByBarcode,
 } from '../services/fulfillmentService'
 import { createTrip, addTripLine, setTripLineFulfillmentBatch } from '../services/tripService'
-import { fetchWorkTariffs } from '../services/directoriesService'
+import { fetchWorkTariffs, fetchConsumables } from '../services/directoriesService'
 import { Card } from '../components/ui/Card'
 import { InvoicePhotoCell } from '../components/ui/InvoicePhotoCell'
 import { createStoreInSupabase } from '../services/storeService'
@@ -80,17 +91,19 @@ import { createStoreInSupabase } from '../services/storeService'
 const STAGE_LABELS: Record<FulfillmentStage, string> = {
   reception: 'Приёмка',
   otk: 'ОТК',
+  packaging: 'Упаковка',
   marking: 'Маркировка',
   packing: 'Короба',
   logistics: 'Логистика',
   done: 'Готово',
 }
 
-const STAGE_ORDER: FulfillmentStage[] = ['reception', 'otk', 'marking', 'packing', 'logistics', 'done']
+const STAGE_ORDER: FulfillmentStage[] = ['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics', 'done']
 
 const STAGE_LABELS_TO: Partial<Record<FulfillmentStage, string>> = {
   reception: 'Приёмке',
   otk: 'ОТК',
+  packaging: 'Упаковке',
   marking: 'Маркировке',
   packing: 'Коробам',
   logistics: 'Логистике',
@@ -141,6 +154,7 @@ const getEnabledStages = (batch: FulfillmentBatch): FulfillmentStage[] => {
   return STAGE_ORDER.filter((s) => {
     if (s === 'reception' || s === 'done') return true
     if (s === 'otk') return batch.stage_otk
+    if (s === 'packaging') return batch.stage_packaging
     if (s === 'marking') return batch.stage_marking
     if (s === 'packing') return batch.stage_packing
     if (s === 'logistics') return batch.stage_logistics
@@ -308,6 +322,13 @@ const BatchDetailModal = ({
   const [newSize, setNewSize] = useState('')
   const [isLooking, setIsLooking] = useState(false)
   const [isAddingSaving, setIsAddingSaving] = useState(false)
+  const [receptionCameraOpen, setReceptionCameraOpen] = useState(false)
+  const [receptionCameraError, setReceptionCameraError] = useState<string | null>(null)
+  const [receptionCameraRescanKey, setReceptionCameraRescanKey] = useState(0)
+  const [singleScanMode, setSingleScanMode] = useState(false)
+  const receptionVideoRef = useRef<HTMLVideoElement>(null)
+  const receptionStreamRef = useRef<MediaStream | null>(null)
+  const receptionDetectRef = useRef(false)
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   const otkFileInputRef = useRef<HTMLInputElement>(null)
   const markingFileInputRef = useRef<HTMLInputElement>(null)
@@ -411,9 +432,41 @@ const BatchDetailModal = ({
   const [workTariffs, setWorkTariffs] = useState<FulfillmentWorkTariff[]>([])
   const otkTariffsList = workTariffs.filter((t) => t.stage === 'otk')
   const markingTariffsList = workTariffs.filter((t) => t.stage === 'marking')
+  const packagingTariffsList = workTariffs.filter((t) => t.stage === 'packaging')
 
   // Логистика
 
+
+  // Упаковка (packaging stage)
+  const [batchConsumables, setBatchConsumables] = useState<BatchConsumable[]>([])
+  const [accountConsumables, setAccountConsumables] = useState<Consumable[]>([])
+  const [isLoadingConsumables, setIsLoadingConsumables] = useState(false)
+  const [packagingQtyMode, setPackagingQtyMode] = useState<'all' | 'custom'>(batch.packaging_qty == null ? 'all' : 'custom')
+  const [packagingQtyInput, setPackagingQtyInput] = useState(String(batch.packaging_qty ?? ''))
+  const [isSavingPackagingQty, setIsSavingPackagingQty] = useState(false)
+  const [consumableSaving, setConsumableSaving] = useState<Record<string, boolean>>({})
+
+  // Упаковка — журнал работ
+  const [packagingLogs, setPackagingLogs] = useState<FulfillmentPackagingLog[]>([])
+  const [isLoadingPackagingLogs, setIsLoadingPackagingLogs] = useState(false)
+  const [packagingWorkTariff, setPackagingWorkTariff] = useState<string>('')
+  const [packagingWorkQty, setPackagingWorkQty] = useState('')
+  const [packagingWorkDefect, setPackagingWorkDefect] = useState('')
+  const [packagingWorkNotes, setPackagingWorkNotes] = useState('')
+  const [packagingWorkPerformerId, setPackagingWorkPerformerId] = useState(userId)
+  const [packagingWorkPerformerName, setPackagingWorkPerformerName] = useState(userName || userEmail)
+  const [packagingPerformers, setPackagingPerformers] = useState<OtkPerformer[]>([])
+  const [isAddingPackagingLog, setIsAddingPackagingLog] = useState(false)
+  const [packagingWorkPhotoFiles, setPackagingWorkPhotoFiles] = useState<File[]>([])
+  const [packagingWorkConsumableId, setPackagingWorkConsumableId] = useState<string>('')
+  type PackagingBufferEntry = { tempId: string; performer_user_id: string | null; performer_name: string; tariff: string; qty: number; qty_defect: number; notes: string; photo_files: File[]; consumable_id: string | null }
+  const [packagingBuffer, setPackagingBuffer] = useState<PackagingBufferEntry[]>([])
+  const [packagingEdits, setPackagingEdits] = useState<Record<string, { tariff: string; qty: number; qty_defect: number; notes: string }>>({})
+  const [packagingDeletedIds, setPackagingDeletedIds] = useState<string[]>([])
+  const [packagingAddModalOpen, setPackagingAddModalOpen] = useState(false)
+  const [packagingEditingId, setPackagingEditingId] = useState<string | null>(null)
+  const [packagingDeleteConfirmId, setPackagingDeleteConfirmId] = useState<string | null>(null)
+  const packagingFileInputRef = useRef<HTMLInputElement>(null)
 
   // Формирование коробов
   const [supplies, setSupplies] = useState<FulfillmentSupplyWithBoxes[]>([])
@@ -616,6 +669,32 @@ const BatchDetailModal = ({
       .finally(() => setIsLoadingSupplies(false))
   }, [batch.id, viewStage])
 
+  // Загрузить расходники при открытии этапа packaging
+  useEffect(() => {
+    if (viewStage !== 'packaging') return
+    setIsLoadingConsumables(true)
+    Promise.all([fetchBatchConsumables(batch.id), fetchConsumables(batch.account_id)])
+      .then(([bc, ac]) => { setBatchConsumables(bc); setAccountConsumables(ac as Consumable[]) })
+      .catch(() => {})
+      .finally(() => setIsLoadingConsumables(false))
+    // Загрузить логи работ упаковки
+    setIsLoadingPackagingLogs(true)
+    fetchPackagingLogs(batch.id)
+      .then(setPackagingLogs)
+      .catch(() => setPackagingLogs([]))
+      .finally(() => setIsLoadingPackagingLogs(false))
+    if (canOtkAssign) {
+      fetchOtkPerformers(accountId)
+        .then((list) => {
+          setPackagingPerformers(list)
+          const me = list.find((p) => p.user_id === userId)
+          setPackagingWorkPerformerId(userId)
+          setPackagingWorkPerformerName(me?.full_name || userName || userEmail)
+        })
+        .catch(() => setPackagingPerformers([]))
+    }
+  }, [batch.id, batch.account_id, viewStage])
+
   // Камера — BarcodeDetector (Chrome Android) + ZXing fallback (все остальные)
   useEffect(() => {
     if (!markingCameraOpen) {
@@ -750,8 +829,14 @@ const BatchDetailModal = ({
       packingStreamRef.current = null
     }
   }, [packingCameraOpen, packingCameraRescanKey])
+
   const handleBarcodeChange = useCallback(async (barcode: string) => {
     setNewBarcode(barcode)
+    if (!barcode.trim()) {
+      setNewName('')
+      setNewSize('')
+      return
+    }
     if (barcode.length < 8 || !store?.api_key) return
     setIsLooking(true)
     try {
@@ -764,6 +849,128 @@ const BatchDetailModal = ({
       setIsLooking(false)
     }
   }, [accountId, batch.store_id, store?.api_key])
+
+  const handleReceptionCameraScan = async (barcode: string) => {
+    setNewBarcode(barcode)
+    setNewName('')
+    setNewSize('')
+    let resolvedName = ''
+    let resolvedSize = ''
+    if (barcode.length >= 8 && store?.api_key) {
+      setIsLooking(true)
+      try {
+        const found = await lookupProductByBarcode(accountId, batch.store_id, barcode)
+        if (found) {
+          resolvedName = found.name ?? ''
+          resolvedSize = found.size ?? ''
+          setNewName(resolvedName)
+          setNewSize(resolvedSize)
+        }
+      } finally {
+        setIsLooking(false)
+      }
+    }
+    if (singleScanMode) {
+      setNewQty('1')
+      setIsAddingSaving(true)
+      setError(null)
+      try {
+        const item = await addItem({
+          batch_id: batch.id,
+          barcode: barcode.trim(),
+          product_name: resolvedName || null,
+          size: resolvedSize || null,
+          article: null,
+          qty_received: 1,
+          qty_otk: null,
+          qty_marked: null,
+          qty_packed: null,
+          boxes: null,
+          notes: null,
+          sort_order: items.length,
+        })
+        const next = [...items, item]
+        setItems(next)
+        onItemsChanged(next)
+        void recalcOtkDiscrepancy(next, otkLogs)
+        setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize('')
+        // Переканывать следующий скан
+        receptionDetectRef.current = true
+        setReceptionCameraRescanKey((k) => k + 1)
+      } catch (err) {
+        setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
+      } finally {
+        setIsAddingSaving(false)
+      }
+    }
+  }
+
+  // Камера для этапа Приёмки (По баркоду)
+  useEffect(() => {
+    if (!receptionCameraOpen) {
+      receptionDetectRef.current = false
+      receptionStreamRef.current?.getTracks().forEach((t) => t.stop())
+      receptionStreamRef.current = null
+      return
+    }
+    setReceptionCameraError(null)
+    receptionDetectRef.current = true
+    let zxingControls: { stop: () => void } | null = null
+    let cancelled = false
+
+    const start = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return }
+        receptionStreamRef.current = stream
+        if (!receptionVideoRef.current) return
+
+        if ('BarcodeDetector' in window) {
+          receptionVideoRef.current.srcObject = stream
+          await receptionVideoRef.current.play()
+          const detector = new (window as unknown as { BarcodeDetector: new (opts: object) => { detect: (src: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> } }).BarcodeDetector({
+            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'itf'],
+          })
+          const scan = async () => {
+            if (!receptionDetectRef.current || !receptionVideoRef.current) return
+            try {
+              const results = await detector.detect(receptionVideoRef.current)
+              if (results.length > 0) {
+                receptionDetectRef.current = false
+                void handleReceptionCameraScan(results[0].rawValue)
+                return
+              }
+            } catch { /* кадр не готов */ }
+            if (receptionDetectRef.current) requestAnimationFrame(scan)
+          }
+          requestAnimationFrame(scan)
+        } else {
+          const { BrowserMultiFormatReader } = await import('@zxing/browser')
+          if (cancelled) return
+          const reader = new BrowserMultiFormatReader()
+          const controls = await reader.decodeFromStream(stream, receptionVideoRef.current, (result) => {
+            if (result && receptionDetectRef.current) {
+              receptionDetectRef.current = false
+              void handleReceptionCameraScan((result as unknown as { getText(): string }).getText())
+            }
+          })
+          if (cancelled) { controls.stop(); return }
+          zxingControls = controls
+        }
+      } catch {
+        if (!cancelled) setReceptionCameraError('Нет доступа к камере. Используйте USB/BT-сканер или ручной ввод.')
+      }
+    }
+
+    void start()
+    return () => {
+      cancelled = true
+      receptionDetectRef.current = false
+      zxingControls?.stop()
+      receptionStreamRef.current?.getTracks().forEach((t) => t.stop())
+      receptionStreamRef.current = null
+    }
+  }, [receptionCameraOpen, receptionCameraRescanKey])
 
   // Добавить позицию
   const handleAddItem = async () => {
@@ -1129,7 +1336,7 @@ const BatchDetailModal = ({
 
   // Изменить этапы партии (только будущие этапы)
   const handleToggleBatchStage = async (
-    stage: 'stage_otk' | 'stage_marking' | 'stage_packing' | 'stage_logistics',
+    stage: 'stage_otk' | 'stage_packaging' | 'stage_marking' | 'stage_packing' | 'stage_logistics',
     value: boolean,
   ) => {
     setIsSavingBatchStages(true)
@@ -1540,6 +1747,125 @@ const BatchDetailModal = ({
     }
   }
 
+  // ── Упаковка — добавление в буфер ─────────────────────────
+  const handleAddPackagingLog = () => {
+    const qty = Number(packagingWorkQty) || 0
+    const qtyDefect = Number(packagingWorkDefect) || 0
+    if (qty <= 0 && qtyDefect <= 0) return
+    const tariff = packagingWorkTariff || (packagingTariffsList[0]?.id ?? 'standard')
+    setPackagingBuffer((prev) => [...prev, {
+      tempId: `tmp_${Date.now()}_${Math.random()}`,
+      performer_user_id: packagingWorkPerformerId || null,
+      performer_name: packagingWorkPerformerName,
+      tariff,
+      qty,
+      qty_defect: qtyDefect,
+      notes: packagingWorkNotes,
+      photo_files: packagingWorkPhotoFiles,
+      consumable_id: packagingWorkConsumableId || null,
+    }])
+    setPackagingWorkQty('')
+    setPackagingWorkDefect('')
+    setPackagingWorkNotes('')
+    setPackagingWorkPhotoFiles([])
+    setPackagingWorkConsumableId('')
+    setPackagingAddModalOpen(false)
+    setIsDirty(true)
+  }
+
+  const handleDeletePackagingLog = (id: string) => {
+    setPackagingDeletedIds((prev) => [...prev, id])
+    setPackagingEdits((prev) => { const n = { ...prev }; delete n[id]; return n })
+    setIsDirty(true)
+  }
+
+  // ── Упаковка — сохранить всё ──────────────────────────────
+  const handleSavePackagingAll = async () => {
+    setIsSavingDraft(true)
+    setError(null)
+    try {
+      await Promise.all(packagingDeletedIds.map((id) => deletePackagingLog(id)))
+      await Promise.all(Object.entries(packagingEdits).map(([id, v]) => updatePackagingLog(id, v)))
+      const newLogs = await Promise.all(packagingBuffer.map(async (e) => {
+        const photoUrls = e.photo_files.length > 0
+          ? await Promise.all(e.photo_files.map((f) => uploadPackagingPhoto(userId || 'anon', batch.id, f)))
+          : []
+        return addPackagingLog({
+          batch_id: batch.id,
+          account_id: batch.account_id,
+          user_id: userId || '',
+          user_email: userEmail || '',
+          user_name: userName || null,
+          performer_user_id: e.performer_user_id,
+          performer_name: e.performer_name,
+          tariff: e.tariff,
+          qty: e.qty,
+          qty_defect: e.qty_defect,
+          notes: e.notes || undefined,
+          photo_urls: photoUrls,
+          consumable_id: e.consumable_id,
+        })
+      }))
+      setPackagingLogs((prev) => {
+        const filtered = prev.filter((l) => !packagingDeletedIds.includes(l.id))
+        const updated = filtered.map((l) => packagingEdits[l.id] ? { ...l, ...packagingEdits[l.id] } : l)
+        return [...updated, ...newLogs]
+      })
+      setPackagingBuffer([])
+      setPackagingEdits({})
+      setPackagingDeletedIds([])
+      setPackagingEditingId(null)
+      setIsDirty(false)
+    } catch (err) {
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
+    } finally {
+      setIsSavingDraft(false)
+    }
+  }
+
+  const handlePackagingAndAdvance = async () => {
+    setIsSavingStage(true)
+    setError(null)
+    try {
+      if (packagingBuffer.length > 0 || Object.keys(packagingEdits).length > 0 || packagingDeletedIds.length > 0) {
+        await Promise.all(packagingDeletedIds.map((id) => deletePackagingLog(id)))
+        await Promise.all(Object.entries(packagingEdits).map(([id, v]) => updatePackagingLog(id, v)))
+        await Promise.all(packagingBuffer.map(async (e) => {
+          const photoUrls = e.photo_files.length > 0
+            ? await Promise.all(e.photo_files.map((f) => uploadPackagingPhoto(userId || 'anon', batch.id, f)))
+            : []
+          return addPackagingLog({
+            batch_id: batch.id,
+            account_id: batch.account_id,
+            user_id: userId || '',
+            user_email: userEmail || '',
+            user_name: userName || null,
+            performer_user_id: e.performer_user_id,
+            performer_name: e.performer_name,
+            tariff: e.tariff,
+            qty: e.qty,
+            qty_defect: e.qty_defect,
+            notes: e.notes || undefined,
+            photo_urls: photoUrls,
+            consumable_id: e.consumable_id,
+          })
+        }))
+        setPackagingBuffer([])
+        setPackagingEdits({})
+        setPackagingDeletedIds([])
+      }
+      const updated = await advanceStage(batch)
+      const newBatch = { ...batch, ...updated }
+      setBatch(newBatch)
+      onBatchUpdated(updated)
+      setIsDirty(false)
+    } catch (err) {
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
+    } finally {
+      setIsSavingStage(false)
+    }
+  }
+
   const handleMarkingAndAdvance = async () => {
     setIsSavingStage(true)
     setError(null)
@@ -1788,7 +2114,7 @@ const BatchDetailModal = ({
         {/* Stage progress */}
         <div className="border-b border-slate-100 px-6 py-5">
           <div className="flex items-start" style={{ minHeight: 96 }}>
-            {(['reception', 'otk', 'marking', 'packing', 'logistics'] as FulfillmentStage[]).map((s, idx, arr) => {
+            {(['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics'] as FulfillmentStage[]).map((s, idx, arr) => {
               const stageIdx = STAGE_ORDER.indexOf(s)
               const currentStageIdx = STAGE_ORDER.indexOf(batch.current_stage)
               const isDone = currentStageIdx > stageIdx
@@ -1796,7 +2122,7 @@ const BatchDetailModal = ({
               const isPast = stageIdx <= currentStageIdx
               const isLast = idx === arr.length - 1
               // этап включён?
-              const keyMap: Record<string, keyof typeof batch> = { otk: 'stage_otk', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' }
+              const keyMap: Record<string, keyof typeof batch> = { otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' }
               const stageKey = keyMap[s]
               const isEnabled = s === 'reception' || !stageKey || batch[stageKey] as boolean
               const canToggle = canManage && batch.status === 'active' && !isPast && !!stageKey && !isSavingBatchStages
@@ -1805,7 +2131,7 @@ const BatchDetailModal = ({
                 if (isPast && canStageJump && isEnabled) {
                   setViewStage(s)
                 } else if (canToggle) {
-                  void handleToggleBatchStage(stageKey as 'stage_otk' | 'stage_marking' | 'stage_packing' | 'stage_logistics', !isEnabled)
+                  void handleToggleBatchStage(stageKey as 'stage_otk' | 'stage_packaging' | 'stage_marking' | 'stage_packing' | 'stage_logistics', !isEnabled)
                 }
               }
 
@@ -1856,7 +2182,7 @@ const BatchDetailModal = ({
                       </div>
                     </div>
                     {!isLast && (() => {
-                      const km: Record<string, keyof typeof batch> = { otk: 'stage_otk', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' }
+                      const km: Record<string, keyof typeof batch> = { otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' }
                       const getEnabled = (st: FulfillmentStage) => st === 'reception' || !km[st] || (batch[km[st]] as boolean)
                       const getColor = (st: FulfillmentStage) => {
                         const si = STAGE_ORDER.indexOf(st)
@@ -1948,6 +2274,14 @@ const BatchDetailModal = ({
               + (viewStage === 'marking' ? markingBuffer.reduce((s, e) => s + e.qty_defect, 0) : 0)
             const sMarking = sMarkGood + sMarkDefect
 
+            // Упаковка: по логам
+            const activePackagingLogs = packagingLogs.filter((l) => !packagingDeletedIds.includes(l.id))
+            const sPackagingGood = activePackagingLogs.reduce((s, l) => s + (packagingEdits[l.id]?.qty ?? l.qty), 0)
+              + (viewStage === 'packaging' ? packagingBuffer.reduce((s, e) => s + e.qty, 0) : 0)
+            const sPackagingDefect = activePackagingLogs.reduce((s, l) => s + (packagingEdits[l.id]?.qty_defect ?? l.qty_defect), 0)
+              + (viewStage === 'packaging' ? packagingBuffer.reduce((s, e) => s + e.qty_defect, 0) : 0)
+            const sPackaging = sPackagingGood + sPackagingDefect
+
             // Короба: единицы, коробов, баркодов (через stageDraft при текущем этапе)
             const sPackUnits = viewStage === 'packing'
               ? items.reduce((s, it) => s + (stageDraft[it.id]?.qty ?? it.qty_packed ?? it.qty_marked ?? it.qty_otk ?? it.qty_received), 0)
@@ -2005,10 +2339,19 @@ const BatchDetailModal = ({
                   {diffCard('Расхождение', sOtk - sReceived)}
                 </>)}
 
-                {viewStage === 'marking' && (<>
+                {viewStage === 'packaging' && (<>
                   {simpleCard('ОТК итого', sOtk, 'bg-blue-50', 'text-blue-700', 'text-blue-400')}
+                  {splitCard('Упаковка', [['Упаковано', sPackagingGood], ['Браки', sPackagingDefect], ['Итого', sPackaging]], 'bg-teal-50', 'text-teal-700', 'text-teal-400')}
+                  {diffCard('Расхождение', sPackaging - sOtk)}
+                </>)}
+
+                {viewStage === 'marking' && (<>
+                  {batch.stage_packaging
+                    ? simpleCard('Упаковка итого', sPackaging, 'bg-teal-50', 'text-teal-700', 'text-teal-400')
+                    : simpleCard('ОТК итого', sOtk, 'bg-blue-50', 'text-blue-700', 'text-blue-400')
+                  }
                   {splitCard('Маркировка', [['Годные', sMarkGood], ['Браки', sMarkDefect], ['Итого', sMarking]], 'bg-violet-50', 'text-violet-700', 'text-violet-400')}
-                  {diffCard('Расхождение', sMarking - sPrevForMarking)}
+                  {diffCard('Расхождение', sMarking - (batch.stage_packaging ? sPackaging : sOtk))}
                 </>)}
 
                 {viewStage === 'packing' && (<>
@@ -2052,45 +2395,104 @@ const BatchDetailModal = ({
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-3">
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Баркод *</span>
-                    <input ref={barcodeInputRef} type="text" value={newBarcode}
-                      onChange={(e) => void handleBarcodeChange(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void handleAddItem() }}
-                      placeholder="Сканируй или введи"
-                      className="w-44 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-                    />
+                    <div className="flex gap-1">
+                      <input ref={barcodeInputRef} type="text" value={newBarcode}
+                        onChange={(e) => void handleBarcodeChange(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') void handleAddItem() }}
+                        placeholder="Сканируй или введи"
+                        className="w-36 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <button
+                        type="button"
+                        title="Открыть камеру для сканирования"
+                        onClick={() => setReceptionCameraOpen((o) => !o)}
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${receptionCameraOpen ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-slate-200 bg-white text-slate-400 hover:text-blue-500 hover:border-blue-300'}`}
+                      >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                          <circle cx="12" cy="13" r="4"/>
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                       Наименование{isLooking ? ' ⟳' : ''}
                       {store?.api_key && <span className="ml-1 normal-case font-normal text-blue-400">авто</span>}
                     </span>
-                    <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)}
-                      placeholder="Авто или введи"
-                      className="w-48 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                    <input type="text" value={newName} readOnly
+                      placeholder="Авто"
+                      className="w-48 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600 outline-none cursor-default select-none"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Размер</span>
-                    <input type="text" value={newSize} onChange={(e) => setNewSize(e.target.value)}
-                      placeholder="L / XL / 42"
-                      className="w-24 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                    <input type="text" value={newSize} readOnly
+                      placeholder="—"
+                      className="w-24 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600 outline-none cursor-default select-none"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Кол-во *</span>
-                    <input type="text" inputMode="numeric" value={newQty} onChange={(e) => setNewQty(e.target.value)}
+                    <input type="text" inputMode="numeric" value={newQty}
+                      onChange={(e) => setNewQty(e.target.value)}
                       placeholder="0"
-                      className="w-20 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      disabled={singleScanMode}
+                      className="w-20 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                     />
                   </div>
                   <button type="button" onClick={() => void handleAddItem()}
-                    disabled={isAddingSaving || !newBarcode.trim() || Number(newQty) < 1}
+                    disabled={isAddingSaving || !newBarcode.trim() || Number(newQty) < 1 || singleScanMode}
                     className="flex h-9 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
                     Добавить
                   </button>
+                  {/* Ползунок одиночной приёмки */}
+                  <button
+                    type="button"
+                    onClick={() => setSingleScanMode((v) => !v)}
+                    className={`flex h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition ${singleScanMode ? 'border-emerald-400 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'}`}
+                    title="Одиночная приёмка — каждый скан автоматически добавляет 1 единицу"
+                  >
+                    <span className={`relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors ${singleScanMode ? 'bg-emerald-500' : 'bg-slate-200'}`}>
+                      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${singleScanMode ? 'translate-x-3' : 'translate-x-0'}`} />
+                    </span>
+                    Одиночная
+                  </button>
                 </div>
+              )}
+
+              {/* Камера приёмки */}
+              {canManage && addMode === 'barcode' && receptionCameraOpen && createPortal(
+                <div
+                  className="fixed inset-0 z-50 flex flex-col bg-black"
+                  onClick={() => setReceptionCameraOpen(false)}
+                >
+                  <div className="flex items-center justify-between px-4 pt-safe-top pt-4 pb-2" onClick={(e) => e.stopPropagation()}>
+                    <span className="text-sm font-medium text-white">Сканирование баркода</span>
+                    <button type="button" onClick={() => setReceptionCameraOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                    </button>
+                  </div>
+                  <div className="relative flex flex-1 items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                    <video ref={receptionVideoRef} className="h-full w-full object-cover" playsInline muted />
+                    {/* прицел */}
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                      <div className="h-48 w-72 rounded-2xl border-2 border-white/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]" />
+                    </div>
+                    {receptionCameraError && (
+                      <div className="absolute bottom-8 left-4 right-4 rounded-xl bg-red-900/80 px-4 py-3 text-sm text-white">{receptionCameraError}</div>
+                    )}
+                  </div>
+                  <div className="px-4 pb-8 pt-3" onClick={(e) => e.stopPropagation()}>
+                    <button type="button" onClick={() => setReceptionCameraRescanKey((k) => k + 1)}
+                      className="w-full rounded-2xl bg-white/10 py-3 text-sm font-medium text-white hover:bg-white/20">
+                      Сканировать снова
+                    </button>
+                  </div>
+                </div>,
+                document.body
               )}
 
               {/* Режим: Навалом */}
@@ -3256,14 +3658,367 @@ const BatchDetailModal = ({
             </div>
           )}
 
+          {/* УПАКОВКА */}
+          {viewStage === 'packaging' && (
+            <div className="space-y-4">
+              {/* Зип-пакеты */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-sm font-medium text-slate-700 mb-3">Зип-пакеты</div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  {/* Таб-переключатель */}
+                  <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPackagingQtyMode('all')
+                        setPackagingQtyInput('')
+                        if (canManage) {
+                          void updateBatch(batch.id, { packaging_qty: null }).then(onBatchUpdated)
+                        }
+                      }}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      Все товары {batch.total_qty != null ? `(${batch.total_qty} шт)` : ''}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPackagingQtyMode('custom')}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      Указать вручную
+                    </button>
+                  </div>
+                  {/* Поле ввода + кнопка сохранить */}
+                  <input
+                    type="number"
+                    min={1}
+                    value={packagingQtyInput}
+                    onChange={(e) => setPackagingQtyInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && packagingQtyMode === 'custom') {
+                        const qty = parseInt(packagingQtyInput, 10)
+                        if (!qty || qty < 1 || !canManage) return
+                        setIsSavingPackagingQty(true)
+                        void updateBatch(batch.id, { packaging_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingPackagingQty(false))
+                      }
+                    }}
+                    disabled={packagingQtyMode === 'all' || !canManage}
+                    placeholder="Кол-во"
+                    className="w-24 rounded-xl border border-slate-200 px-3 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                  />
+                  <button
+                    type="button"
+                    disabled={isSavingPackagingQty || !canManage || !packagingQtyInput || packagingQtyMode === 'all'}
+                    onClick={() => {
+                      const qty = parseInt(packagingQtyInput, 10)
+                      if (!qty || qty < 1) return
+                      setIsSavingPackagingQty(true)
+                      void updateBatch(batch.id, { packaging_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingPackagingQty(false))
+                    }}
+                    className="shrink-0 rounded-xl bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {isSavingPackagingQty ? '...' : 'Сохранить'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Работа — журнал работ Упаковки */}
+              {packagingAddModalOpen && createPortal(
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={(e) => { if (e.target === e.currentTarget) setPackagingAddModalOpen(false) }}>
+                  <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+                    <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                      <h3 className="text-base font-semibold text-slate-800">Добавить выполненную работу</h3>
+                      <button type="button" onClick={() => setPackagingAddModalOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                      </button>
+                    </div>
+                    <div className="space-y-3 p-5">
+                      {/* Исполнитель */}
+                      {canOtkAssign && packagingPerformers.length > 0 ? (
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Исполнитель</label>
+                          <select value={packagingWorkPerformerId} onChange={(e) => { const p = packagingPerformers.find((x) => x.user_id === e.target.value); setPackagingWorkPerformerId(e.target.value); setPackagingWorkPerformerName(p?.full_name || e.target.value) }}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            {packagingPerformers.map((p) => <option key={p.user_id} value={p.user_id}>{p.full_name || p.email}</option>)}
+                          </select>
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Исполнитель</label>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">{packagingWorkPerformerName || userEmail}</div>
+                        </div>
+                      )}
+                      {/* Тариф */}
+                      {packagingTariffsList.length > 0 && (
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Тариф</label>
+                          <select value={packagingWorkTariff || packagingTariffsList[0]?.id} onChange={(e) => setPackagingWorkTariff(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            {packagingTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                          </select>
+                        </div>
+                      )}
+                      {/* Расходники */}
+                      {accountConsumables.length > 0 && (
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Расходник</label>
+                          <select value={packagingWorkConsumableId} onChange={(e) => setPackagingWorkConsumableId(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">— не выбрано —</option>
+                            {accountConsumables.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </select>
+                        </div>
+                      )}
+                      {/* Годный / Брак */}
+                      <div className="flex gap-3">
+                        <div className="flex-1">
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Количество</label>
+                          <input type="number" min="0" placeholder="0" value={packagingWorkQty} onChange={(e) => setPackagingWorkQty(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleAddPackagingLog() }}
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                        <div className="flex-1">
+                          <label className="mb-1 block text-xs font-medium text-red-400">Брак</label>
+                          <input type="number" min="0" placeholder="0" value={packagingWorkDefect} onChange={(e) => setPackagingWorkDefect(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleAddPackagingLog() }}
+                            className="w-full rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 placeholder-red-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-red-400" />
+                        </div>
+                      </div>
+                      {/* Примечание */}
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-500">Примечание</label>
+                        <input type="text" placeholder="Необязательно" value={packagingWorkNotes} onChange={(e) => setPackagingWorkNotes(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      </div>
+                      {/* Фото */}
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-500">Фото</label>
+                        <input ref={packagingFileInputRef} type="file" accept="image/*" multiple className="hidden"
+                          onChange={(e) => { const files = Array.from(e.target.files ?? []); if (files.length) setPackagingWorkPhotoFiles((prev) => [...prev, ...files]); e.target.value = '' }} />
+                        <button type="button" onClick={() => packagingFileInputRef.current?.click()}
+                          className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${packagingWorkPhotoFiles.length > 0 ? 'border-blue-300 bg-blue-50 text-blue-600' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="h-4 w-4 shrink-0">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+                          </svg>
+                          {packagingWorkPhotoFiles.length > 0 ? `${packagingWorkPhotoFiles.length} фото прикреплено` : 'Прикрепить фото'}
+                        </button>
+                        {packagingWorkPhotoFiles.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {packagingWorkPhotoFiles.map((f, i) => (
+                              <div key={i} className="group relative">
+                                <img src={URL.createObjectURL(f)} alt={f.name} className="h-14 w-14 rounded-lg object-cover border border-slate-200" />
+                                <button type="button" onClick={() => setPackagingWorkPhotoFiles((prev) => prev.filter((_, j) => j !== i))}
+                                  className="absolute -right-1 -top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white text-xs group-hover:flex">×</button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-4">
+                      <button type="button" onClick={() => setPackagingAddModalOpen(false)}
+                        className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">
+                        Отмена
+                      </button>
+                      <button type="button" onClick={handleAddPackagingLog}
+                        disabled={isAddingPackagingLog || ((!packagingWorkQty || Number(packagingWorkQty) <= 0) && (!packagingWorkDefect || Number(packagingWorkDefect) <= 0))}
+                        className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                        {isAddingPackagingLog ? 'Сохранение…' : '+ Добавить'}
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+
+              {/* Журнал работ Упаковки */}
+              {isLoadingPackagingLogs ? (
+                <div className="py-6 text-center text-sm text-slate-400">Загрузка…</div>
+              ) : packagingLogs.length === 0 && packagingBuffer.length === 0 ? (
+                <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 py-10">
+                  <p className="text-sm text-slate-400">Записей работы нет — добавьте первую</p>
+                  {canManage && (
+                    <button type="button" onClick={() => setPackagingAddModalOpen(true)}
+                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                      + Добавить работу
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {/* Итого */}
+                  {(() => {
+                    const activeLogs = packagingLogs.filter((l) => !packagingDeletedIds.includes(l.id))
+                    const performers = new Set([
+                      ...activeLogs.map((l) => l.performer_user_id ?? l.user_id),
+                      ...packagingBuffer.map((e) => e.performer_user_id ?? ''),
+                    ]).size
+                    const tariffs = new Set([
+                      ...activeLogs.map((l) => packagingEdits[l.id]?.tariff ?? l.tariff),
+                      ...packagingBuffer.map((e) => e.tariff),
+                    ]).size
+                    const totalGood = activeLogs.reduce((s, l) => s + (packagingEdits[l.id]?.qty ?? l.qty), 0) + packagingBuffer.reduce((s, e) => s + e.qty, 0)
+                    const totalDefect = activeLogs.reduce((s, l) => s + (packagingEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + packagingBuffer.reduce((s, e) => s + e.qty_defect, 0)
+                    const stats = [
+                      { label: 'Исполнителей', value: performers },
+                      { label: 'Тарифов', value: tariffs },
+                      { label: 'Упаковано', value: totalGood },
+                      ...(totalDefect > 0 ? [{ label: 'Браков', value: totalDefect, color: 'text-red-600' }] : []),
+                    ]
+                    return (
+                      <div className="flex items-center gap-x-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5">
+                        <span className="font-semibold text-slate-600">Итого</span>
+                        <div className="flex flex-1 flex-wrap items-center gap-x-5 gap-y-1">
+                          {stats.map(({ label, value, color }) => (
+                            <span key={label} className="text-xs text-slate-500">
+                              {label}: <span className={`font-semibold ${color ?? 'text-slate-800'}`}>{value}</span>
+                            </span>
+                          ))}
+                        </div>
+                        {canManage && (
+                          <button type="button" onClick={() => setPackagingAddModalOpen(true)}
+                            className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
+                            + Добавить работу
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })()}
+
+                  {/* Карточки */}
+                  <div className="grid grid-cols-6 gap-2">
+                    {packagingLogs.filter((l) => !packagingDeletedIds.includes(l.id)).map((log) => {
+                      const edit = packagingEdits[log.id] ?? { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' }
+                      const logTime = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                      const logDate = new Date(log.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                      const isOwn = log.user_id === userId
+                      const displayTariff = packagingTariffsList.find((t) => t.id === edit.tariff)?.name ?? edit.tariff
+                      return (
+                        <div key={log.id} className={`flex flex-col gap-1.5 rounded-2xl border px-3 py-2.5 ${isOwn ? 'border-blue-100 bg-blue-50/20' : 'border-slate-200 bg-white'}`}>
+                          <div className="flex items-start justify-between gap-1">
+                            <div className="flex flex-col items-start leading-tight">
+                              <span className="text-[11px] font-semibold text-slate-700 tabular-nums">{logTime}</span>
+                              <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
+                            </div>
+                            {(isOwn || canManage) && (
+                              <button type="button"
+                                onClick={() => {
+                                  if (packagingDeleteConfirmId === log.id) { handleDeletePackagingLog(log.id); setPackagingDeleteConfirmId(null) }
+                                  else setPackagingDeleteConfirmId(log.id)
+                                }}
+                                className={`flex h-6 w-6 items-center justify-center rounded-lg transition-colors ${packagingDeleteConfirmId === log.id ? 'bg-red-500 text-white' : 'text-slate-300 hover:bg-red-50 hover:text-red-500'}`}
+                                title={packagingDeleteConfirmId === log.id ? 'Подтвердить удаление' : 'Удалить'}>
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                              </button>
+                            )}
+                          </div>
+                          <span className="truncate text-xs font-semibold text-slate-700 leading-tight">{log.performer_name}</span>
+                          <span className="w-fit rounded-full bg-slate-100 px-2 py-0.5 text-[10px] leading-tight text-slate-600">{displayTariff}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-400">Упак: <span className="font-bold text-slate-800">{edit.qty}</span></span>
+                            {edit.qty_defect > 0 && <span className="text-[10px] text-slate-400">Бр: <span className="font-bold text-red-600">{edit.qty_defect}</span></span>}
+                          </div>
+                          {log.consumable_id && (() => { const c = accountConsumables.find((x) => x.id === log.consumable_id); return c ? <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">{c.name}</span> : null })()}
+                          {edit.notes && <span className="truncate text-[10px] italic text-slate-400">{edit.notes}</span>}
+                        </div>
+                      )
+                    })}
+                    {packagingBuffer.map((e) => {
+                      const displayTariff = packagingTariffsList.find((t) => t.id === e.tariff)?.name ?? e.tariff
+                      return (
+                        <div key={e.tempId} className="flex flex-col gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/40 px-3 py-2.5">
+                          <div className="flex items-start justify-between gap-1">
+                            <span className="text-[11px] font-semibold text-amber-600">Не сохранено</span>
+                            <button type="button" onClick={() => setPackagingBuffer((prev) => prev.filter((x) => x.tempId !== e.tempId))}
+                              className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500">
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                            </button>
+                          </div>
+                          <span className="truncate text-xs font-semibold text-slate-700 leading-tight">{e.performer_name}</span>
+                          <span className="w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] leading-tight text-amber-700">{displayTariff}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-400">Упак: <span className="font-bold text-slate-800">{e.qty}</span></span>
+                            {e.qty_defect > 0 && <span className="text-[10px] text-slate-400">Бр: <span className="font-bold text-red-600">{e.qty_defect}</span></span>}
+                          </div>
+                          {e.consumable_id && (() => { const c = accountConsumables.find((x) => x.id === e.consumable_id); return c ? <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">{c.name}</span> : null })()}
+                          {e.notes && <span className="truncate text-[10px] italic text-slate-400">{e.notes}</span>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
+
           {/* ФОРМИРОВАНИЕ КОРОБОВ */}
           {viewStage === 'packing' && (
             <div className="space-y-4">
 
+              {/* Зип-пакеты */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-sm font-medium text-slate-700 mb-3">Зип-пакеты</div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPackagingQtyMode('all')
+                        setPackagingQtyInput('')
+                        if (canManage) {
+                          void updateBatch(batch.id, { packaging_qty: null }).then(onBatchUpdated)
+                        }
+                      }}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      Все товары {batch.total_qty != null ? `(${batch.total_qty} шт)` : ''}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPackagingQtyMode('custom')}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      Указать вручную
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    value={packagingQtyInput}
+                    onChange={(e) => setPackagingQtyInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && packagingQtyMode === 'custom') {
+                        const qty = parseInt(packagingQtyInput, 10)
+                        if (!qty || qty < 1 || !canManage) return
+                        setIsSavingPackagingQty(true)
+                        void updateBatch(batch.id, { packaging_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingPackagingQty(false))
+                      }
+                    }}
+                    disabled={packagingQtyMode === 'all' || !canManage}
+                    placeholder="Кол-во"
+                    className="w-24 rounded-xl border border-slate-200 px-3 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                  />
+                  <button
+                    type="button"
+                    disabled={isSavingPackagingQty || !canManage || !packagingQtyInput || packagingQtyMode === 'all'}
+                    onClick={() => {
+                      const qty = parseInt(packagingQtyInput, 10)
+                      if (!qty || qty < 1) return
+                      setIsSavingPackagingQty(true)
+                      void updateBatch(batch.id, { packaging_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingPackagingQty(false))
+                    }}
+                    className="shrink-0 rounded-xl bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {isSavingPackagingQty ? '...' : 'Сохранить'}
+                  </button>
+                </div>
+              </div>
+
               <>
                   {/* Тулбар: склад + кнопка добавить */}
                   <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2">
-                    {/* Пикер склада */}
                     {canManage && (
                       <div className="relative flex-1 min-w-0">
                         {isWarehouseDropdownOpen ? (
@@ -3971,6 +4726,7 @@ const BatchDetailModal = ({
                     if (viewStage === 'reception') await handleSaveReceptionDraft()
                     else if (viewStage === 'otk') await handleSaveOtkAll()
                     else if (viewStage === 'marking') await handleSaveMarkingAll()
+                    else if (viewStage === 'packaging') await handleSavePackagingAll()
                     else if (viewStage === 'packing') await handleSaveStageDraft()
                   })()}
                   disabled={isSavingDraft || !isDirty}
@@ -4006,7 +4762,7 @@ const BatchDetailModal = ({
                   </button>
                 )
               })()}
-              {(batch.current_stage === 'marking' || batch.current_stage === 'packing' || batch.current_stage === 'logistics') && (
+              {(batch.current_stage === 'packaging' || batch.current_stage === 'marking' || batch.current_stage === 'packing' || batch.current_stage === 'logistics') && (
                 <button type="button" onClick={() => setPendingAdvance(true)}
                   disabled={isSavingStage}
                   className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
@@ -4038,6 +4794,7 @@ const BatchDetailModal = ({
                   setPendingAdvance(false)
                   if (batch.current_stage === 'reception') void handleCompleteReception()
                   else if (batch.current_stage === 'otk') void handleAdvanceOtk()
+                  else if (batch.current_stage === 'packaging') void handlePackagingAndAdvance()
                   else if (batch.current_stage === 'marking') void handleMarkingAndAdvance()
                   else if (batch.current_stage === 'packing' || batch.current_stage === 'logistics') void handleSaveStageAndAdvance()
                 }}
@@ -4115,9 +4872,9 @@ const BatchDetailModal = ({
               </div>
               {/* Табы этапов */}
               <div className="flex shrink-0 gap-1 border-b border-slate-100 px-4 py-2">
-                {(['reception', 'otk', 'marking', 'packing', 'logistics'] as FulfillmentStage[]).map((key) => {
+                {(['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics'] as FulfillmentStage[]).map((key) => {
                   const isActive = otkHistoryStageTab === key
-                  const isEnabled = key === 'reception' || key === 'otk' || batch[({ otk: 'stage_otk', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' } as Record<string, keyof typeof batch>)[key] as keyof typeof batch] as boolean
+                  const isEnabled = key === 'reception' || key === 'otk' || key === 'packaging' || batch[({ otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' } as Record<string, keyof typeof batch>)[key] as keyof typeof batch] as boolean
                   if (!isEnabled) return (
                     <div key={key} className="flex shrink-0 items-center rounded-xl px-3 py-1.5 text-xs text-slate-300 cursor-not-allowed select-none">{stageLabels[key]}</div>
                   )
@@ -4923,6 +5680,7 @@ interface EditBatchModalProps {
     name: string
     store_id: string | null
     stage_otk: boolean
+    stage_packaging: boolean
     stage_marking: boolean
     stage_packing: boolean
     stage_logistics: boolean
@@ -4933,6 +5691,7 @@ const EditBatchModal = ({ batch, stores, onClose, onSave }: EditBatchModalProps)
   const [name, setName] = useState(batch.name)
   const [storeId, setStoreId] = useState(batch.store_id ?? '')
   const [stageOtk, setStageOtk] = useState(batch.stage_otk)
+  const [stagePackaging, setStagePackaging] = useState(batch.stage_packaging)
   const [stageMarking, setStageMarking] = useState(batch.stage_marking)
   const [stagePacking, setStagePacking] = useState(batch.stage_packing)
   const [stageLogistics, setStageLogistics] = useState(batch.stage_logistics)
@@ -4963,7 +5722,7 @@ const EditBatchModal = ({ batch, stores, onClose, onSave }: EditBatchModalProps)
     setIsSaving(true)
     setError(null)
     try {
-      await onSave({ name: name.trim(), store_id: storeId || null, stage_otk: stageOtk, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics })
+      await onSave({ name: name.trim(), store_id: storeId || null, stage_otk: stageOtk, stage_packaging: stagePackaging, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics })
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
       setIsSaving(false)
@@ -5018,6 +5777,7 @@ const EditBatchModal = ({ batch, stores, onClose, onSave }: EditBatchModalProps)
                 <span className="text-sm text-slate-700">Приёмка (всегда включена)</span>
               </div>
               <StageToggle label="ОТК" value={stageOtk} onChange={setStageOtk} />
+              <StageToggle label="Упаковка" value={stagePackaging} onChange={setStagePackaging} />
               <StageToggle label="Маркировка" value={stageMarking} onChange={setStageMarking} />
               <StageToggle label="Формирование коробов" value={stagePacking} onChange={setStagePacking} />
               <StageToggle label="Передача на логистику" value={stageLogistics} onChange={setStageLogistics} />
@@ -5152,6 +5912,7 @@ const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onSt
   }
 
   const [stageOtk, setStageOtk] = useState(settings?.stage_otk ?? false)
+  const [stagePackaging, setStagePackaging] = useState(settings?.stage_packaging ?? false)
   const [stageMarking, setStageMarking] = useState(settings?.stage_marking ?? false)
   const [stagePacking, setStagePacking] = useState(settings?.stage_packing ?? false)
   const [stageLogistics, setStageLogistics] = useState(settings?.stage_logistics ?? false)
@@ -5166,7 +5927,7 @@ const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onSt
     setError(null)
     const effectiveStoreId = storeIdOverride !== undefined ? storeIdOverride : storeId
     try {
-      await onSubmit({ name: name.trim(), store_id: effectiveStoreId || null, stage_otk: stageOtk, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics }, closeOnlyRef.current)
+      await onSubmit({ name: name.trim(), store_id: effectiveStoreId || null, stage_otk: stageOtk, stage_packaging: stagePackaging, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics }, closeOnlyRef.current)
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
       setIsSaving(false)
@@ -5235,6 +5996,7 @@ const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onSt
                 <span className="text-sm text-slate-700">Приёмка (всегда включена)</span>
               </div>
               <StageToggle label="ОТК" value={stageOtk} onChange={setStageOtk} />
+              <StageToggle label="Упаковка" value={stagePackaging} onChange={setStagePackaging} />
               <StageToggle label="Маркировка" value={stageMarking} onChange={setStageMarking} />
               <StageToggle label="Формирование коробов" value={stagePacking} onChange={setStagePacking} />
               <StageToggle label="Передача на логистику" value={stageLogistics} onChange={setStageLogistics} />
@@ -5394,6 +6156,7 @@ interface SettingsModalProps {
 
 const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
   const [stageOtk, setStageOtk] = useState(settings?.stage_otk ?? true)
+  const [stagePackaging, setStagePackaging] = useState(settings?.stage_packaging ?? true)
   const [stageMarking, setStageMarking] = useState(settings?.stage_marking ?? true)
   const [stagePacking, setStagePacking] = useState(settings?.stage_packing ?? true)
   const [stageLogistics, setStageLogistics] = useState(settings?.stage_logistics ?? true)
@@ -5401,7 +6164,7 @@ const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
 
   const handleSave = async () => {
     setIsSaving(true)
-    try { await onSave({ stage_otk: stageOtk, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics }) }
+    try { await onSave({ stage_otk: stageOtk, stage_packaging: stagePackaging, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics }) }
     finally { setIsSaving(false) }
   }
 
@@ -5428,6 +6191,7 @@ const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
             <span className="text-xs text-slate-400">всегда</span>
           </div>
           <Toggle label="ОТК" value={stageOtk} onChange={setStageOtk} />
+          <Toggle label="Упаковка" value={stagePackaging} onChange={setStagePackaging} />
           <Toggle label="Маркировка" value={stageMarking} onChange={setStageMarking} />
           <Toggle label="Формирование коробов" value={stagePacking} onChange={setStagePacking} />
           <Toggle label="Передача на логистику" value={stageLogistics} onChange={setStageLogistics} />

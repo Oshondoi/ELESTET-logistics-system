@@ -508,6 +508,7 @@ function App() {
       supplier_full: store.supplier_full ?? undefined,
       address: store.address ?? '',
       inn: (data.tin ?? store.inn ?? '').trim(),
+      phone: store.phone ?? '',
     })
   }
 
