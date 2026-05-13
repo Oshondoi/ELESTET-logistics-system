@@ -3678,7 +3678,7 @@ const BatchDetailModal = ({
                       }}
                       className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
-                      Все товары {batch.total_qty != null ? `(${batch.total_qty} шт)` : ''}
+                      {(() => { const t = batch.items.reduce((s, i) => s + i.qty_received, 0); return `Все товары${t > 0 ? ` (${t} шт)` : ''}` })()}
                     </button>
                     <button
                       type="button"
@@ -3973,7 +3973,7 @@ const BatchDetailModal = ({
                       }}
                       className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
-                      Все товары {batch.total_qty != null ? `(${batch.total_qty} шт)` : ''}
+                      {(() => { const t = batch.items.reduce((s, i) => s + i.qty_received, 0); return `Все товары${t > 0 ? ` (${t} шт)` : ''}` })()}
                     </button>
                     <button
                       type="button"
@@ -4095,6 +4095,7 @@ const BatchDetailModal = ({
                             warehouse_name: wh.name,
                             trip_id: null,
                             trip_line_id: null,
+                            weight: null,
                             created_by: userId || null,
                             created_at: now,
                             boxes: [],
@@ -4856,7 +4857,7 @@ const BatchDetailModal = ({
         const initialValues = createdEntry?.new_values ?? null
 
         // Данные для не-ОТК этапов
-        const stageLabels: Record<FulfillmentStage, string> = { reception: 'Приёмка', otk: 'ОТК', marking: 'Маркировка', packing: 'Короба', logistics: 'Логистика', done: 'Завершено' }
+        const stageLabels: Record<FulfillmentStage, string> = { reception: 'Приёмка', otk: 'ОТК', packaging: 'Упаковка', marking: 'Маркировка', packing: 'Короба', logistics: 'Логистика', done: 'Завершено' }
         const stageQtyKey: Partial<Record<FulfillmentStage, keyof FulfillmentItem>> = { reception: 'qty_received', marking: 'qty_marked', packing: 'qty_packed' }
         const stageQtyLabel: Partial<Record<FulfillmentStage, string>> = { reception: 'Принято', marking: 'Промаркировано', packing: 'Упаковано' }
 
@@ -5847,6 +5848,7 @@ interface CreateBatchModalProps {
     name: string
     store_id: string | null
     stage_otk: boolean
+    stage_packaging: boolean
     stage_marking: boolean
     stage_packing: boolean
     stage_logistics: boolean
