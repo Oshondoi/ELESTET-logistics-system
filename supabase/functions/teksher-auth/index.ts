@@ -302,7 +302,26 @@ Deno.serve(async (req: Request) => {
       const resp = await fetch(`${TEKSHER_BASE}/marking_codes/filter?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!resp.ok) throw new Error(`Teksher codes error: ${resp.status}`)
+      // 404 / 204 = нет кодов с таким фильтром — возвращаем пустой список
+      if (resp.status === 404 || resp.status === 204) {
+        return jsonOk({ items: [], totalElements: 0, totalPages: 0 })
+      }
+      if (!resp.ok) {
+        // Пробуем без productGroupCode (некоторые статусы могут быть в другой группе)
+        const params2 = new URLSearchParams({ page: String(page), size: String(size) })
+        if (status) params2.set('status', status)
+        const resp2 = await fetch(`${TEKSHER_BASE}/marking_codes/filter?${params2}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!resp2.ok) return jsonOk({ items: [], totalElements: 0, totalPages: 0 })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data2 = await resp2.json() as any
+        return jsonOk({
+          items: data2.content ?? data2.items ?? [],
+          totalElements: data2.page?.totalElements ?? data2.totalElements ?? 0,
+          totalPages: data2.page?.totalPages ?? data2.totalPages ?? 1,
+        })
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = await resp.json() as any
       return jsonOk({
