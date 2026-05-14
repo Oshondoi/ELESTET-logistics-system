@@ -25,6 +25,33 @@ interface TeksherProduct {
   [key: string]: unknown
 }
 
+interface TeksherCode {
+  id: number | string
+  code?: string
+  barcode?: string
+  gtin?: string
+  status?: string
+  issueDate?: string
+  createdDate?: string
+  emissionDate?: string
+  serialNumber?: string
+  [key: string]: unknown
+}
+
+interface TeksherOperation {
+  id: number | string
+  operationType?: string
+  type?: string
+  status?: string
+  codesCount?: number
+  quantity?: number
+  gtin?: string
+  createdDate?: string
+  date?: string
+  productGroupCode?: string
+  [key: string]: unknown
+}
+
 interface WBProductInfo {
   nm_id: number
   vendor_code: string | null
@@ -67,6 +94,35 @@ const TEKSHER_STATUS_RU: Record<string, string> = {
 function teksherStatusRu(status: string | undefined): string {
   if (!status) return '—'
   return TEKSHER_STATUS_RU[status] ?? status
+}
+
+function codeStatusBadge(status: string | undefined): { label: string; cls: string } {
+  const map: Record<string, { label: string; cls: string }> = {
+    ISSUED:      { label: 'Выдан',        cls: 'bg-blue-50 text-blue-700' },
+    APPLIED:     { label: 'Нанесён',      cls: 'bg-amber-50 text-amber-700' },
+    SOLD:        { label: 'Продан',       cls: 'bg-emerald-50 text-emerald-700' },
+    WRITTEN_OFF: { label: 'Списан',       cls: 'bg-slate-100 text-slate-500' },
+    WITHDRAWN:   { label: 'Отозван',      cls: 'bg-red-50 text-red-700' },
+  }
+  const s = status ?? ''
+  return map[s] ?? { label: s || '—', cls: 'bg-slate-100 text-slate-500' }
+}
+
+function opTypeBadge(type: string | undefined): { label: string; cls: string } {
+  const map: Record<string, { label: string; cls: string }> = {
+    EMISSION: { label: 'Эмиссия',      cls: 'bg-violet-50 text-violet-700' },
+    MARKING:  { label: 'Нанесение',    cls: 'bg-blue-50 text-blue-700' },
+    SHIPMENT: { label: 'Отгрузка',     cls: 'bg-orange-50 text-orange-700' },
+    WRITE_OFF:{ label: 'Списание',     cls: 'bg-slate-100 text-slate-500' },
+    RECEIPT:  { label: 'Поступление',  cls: 'bg-emerald-50 text-emerald-700' },
+  }
+  const t = type ?? ''
+  return map[t] ?? { label: t || '—', cls: 'bg-slate-100 text-slate-500' }
+}
+
+function formatTeksherDate(d: string | undefined) {
+  if (!d) return '—'
+  return new Date(d).toLocaleDateString('ru', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 function formatSyncTime(iso: string) {
@@ -122,6 +178,23 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, isAdmin }: Kiz
   // ── WB-данные для обогащения таблицы Teksher (ключ = vendor_code)
   const [wbByVendorCode, setWbByVendorCode] = useState<Map<string, WBProductInfo>>(new Map())
   const [wbLoading, setWbLoading] = useState(false)
+
+  // ── КИЗ-коды
+  const [codesItems, setCodesItems] = useState<TeksherCode[]>([])
+  const [codesLoading, setCodesLoading] = useState(false)
+  const [codesError, setCodesError] = useState<string | null>(null)
+  const [codesPage, setCodesPage] = useState(0)
+  const [codesTotalPages, setCodesTotalPages] = useState(1)
+  const [codesTotalElements, setCodesTotalElements] = useState(0)
+  const [codesStatus, setCodesStatus] = useState<'' | 'ISSUED' | 'APPLIED' | 'SOLD'>('ISSUED')
+
+  // ── Операции
+  const [opsItems, setOpsItems] = useState<TeksherOperation[]>([])
+  const [opsLoading, setOpsLoading] = useState(false)
+  const [opsError, setOpsError] = useState<string | null>(null)
+  const [opsPage, setOpsPage] = useState(0)
+  const [opsTotalPages, setOpsTotalPages] = useState(1)
+  const [opsTotalElements, setOpsTotalElements] = useState(0)
 
   const activeStore = stores.find((s) => s.id === selectedStoreId) ?? stores[0] ?? null
 
@@ -187,6 +260,42 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, isAdmin }: Kiz
         setWbLoading(false)
       })
   }, [subTab, activeStore?.id])
+
+  // ── Загрузка КИЗ-кодов
+  useEffect(() => {
+    if (subTab !== 'codes' || !activeStore || !supabase) return
+    setCodesLoading(true)
+    setCodesError(null)
+    supabase.functions
+      .invoke('teksher-auth', { body: { store_id: activeStore.id, action: 'codes', page: codesPage, size: 30, status: codesStatus } })
+      .then(({ data, error }) => {
+        if (error) { setCodesError(error.message); return }
+        if (data?.connected === false) { setCodesError('Teksher не подключён'); return }
+        setCodesItems(data?.items ?? [])
+        setCodesTotalPages(data?.totalPages ?? 1)
+        setCodesTotalElements(data?.totalElements ?? 0)
+      })
+      .catch((e: unknown) => setCodesError((e as Error).message))
+      .finally(() => setCodesLoading(false))
+  }, [subTab, activeStore?.id, codesPage, codesStatus])
+
+  // ── Загрузка операций
+  useEffect(() => {
+    if (subTab !== 'operations' || !activeStore || !supabase) return
+    setOpsLoading(true)
+    setOpsError(null)
+    supabase.functions
+      .invoke('teksher-auth', { body: { store_id: activeStore.id, action: 'operations', page: opsPage, size: 20 } })
+      .then(({ data, error }) => {
+        if (error) { setOpsError(error.message); return }
+        if (data?.connected === false) { setOpsError('Teksher не подключён'); return }
+        setOpsItems(data?.items ?? [])
+        setOpsTotalPages(data?.totalPages ?? 1)
+        setOpsTotalElements(data?.totalElements ?? 0)
+      })
+      .catch((e: unknown) => setOpsError((e as Error).message))
+      .finally(() => setOpsLoading(false))
+  }, [subTab, activeStore?.id, opsPage])
 
   // ── Автозагрузка статистики при смене магазина
   useEffect(() => {
@@ -786,7 +895,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, isAdmin }: Kiz
                   <th className="w-10 px-2 py-3" />
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 whitespace-nowrap">GTIN</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 whitespace-nowrap">Арт. WB</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 whitespace-nowrap">Арт. продавца</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Название GTIN</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Бренд</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Цвет</th>
@@ -803,7 +911,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, isAdmin }: Kiz
                         <td className="px-2 py-3"><div className="h-8 w-8 animate-pulse rounded-md bg-slate-100" /></td>
                         <td className="px-4 py-3"><div className="h-4 w-36 animate-pulse rounded bg-slate-100" /></td>
                         <td className="px-4 py-3"><div className="h-4 w-20 animate-pulse rounded bg-slate-100" /></td>
-                        <td className="px-4 py-3"><div className="h-4 w-28 animate-pulse rounded bg-slate-100" /></td>
                         <td className="px-4 py-3"><div className="h-4 w-48 animate-pulse rounded bg-slate-100" /></td>
                         <td className="px-4 py-3"><div className="h-4 w-20 animate-pulse rounded bg-slate-100" /></td>
                         <td className="px-4 py-3"><div className="h-4 w-20 animate-pulse rounded bg-slate-100" /></td>
@@ -816,7 +923,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, isAdmin }: Kiz
                   : productItems.length === 0
                     ? (
                       <tr>
-                        <td colSpan={11} className="px-4 py-10 text-center text-sm text-slate-400">
+                        <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-400">
                           {productsSearch ? 'Ничего не найдено' : 'Нет товаров'}
                         </td>
                       </tr>
@@ -850,8 +957,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, isAdmin }: Kiz
                                 <span className="text-slate-300">—</span>
                               )}
                             </td>
-                            {/* Арт. продавца */}
-                            <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">{wb?.vendor_code ?? <span className="text-slate-300">—</span>}</td>
                             {/* Название GTIN — из Teksher fullName */}
                             <td className="px-4 py-3 text-slate-800 max-w-xs">
                               <span className="line-clamp-2">{p.fullName ?? p.name ?? <span className="text-slate-300">—</span>}</span>
@@ -912,31 +1017,191 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, isAdmin }: Kiz
         </div>
       )}
 
-      {/* ── Таб: КИЗ-коды (заглушка) */}
+      {/* ── Таб: КИЗ-коды */}
       {subTab === 'codes' && (
-        <div className="flex flex-col items-center gap-3 py-16 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
-            <svg viewBox="0 0 24 24" className="h-6 w-6 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
-              <path d="M14 14h3v3M17 14v7M14 17h3"/>
-            </svg>
+        <div className="flex flex-col gap-4">
+          {/* Фильтр по статусу */}
+          <div className="flex flex-wrap items-center gap-3">
+            {(['', 'ISSUED', 'APPLIED', 'SOLD'] as const).map((s) => {
+              const labels: Record<string, string> = { '': 'Все', ISSUED: 'Выданные', APPLIED: 'Нанесённые', SOLD: 'Проданные' }
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => { setCodesStatus(s); setCodesPage(0) }}
+                  className={cn(
+                    'rounded-lg border px-3 py-1.5 text-sm font-medium transition',
+                    codesStatus === s
+                      ? 'border-blue-300 bg-blue-50 text-blue-700'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+                  )}
+                >
+                  {labels[s]}
+                </button>
+              )
+            })}
+            {!codesLoading && codesTotalElements > 0 && (
+              <span className="ml-auto text-sm text-slate-400">Всего: {codesTotalElements.toLocaleString('ru')}</span>
+            )}
           </div>
-          <p className="text-sm font-medium text-slate-700">КИЗ-коды — в разработке</p>
-          <p className="max-w-sm text-xs text-slate-400">Здесь будет список кодов маркировки (ISSUED / APPLIED) с привязкой к партиям фулфилмента и возможностью печати DataMatrix-стикеров.</p>
+
+          {codesError && (
+            <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+              {codesError}
+            </div>
+          )}
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">#</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Код</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 whitespace-nowrap">GTIN</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Статус</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Дата</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {codesLoading
+                  ? Array.from({ length: 8 }).map((_, i) => (
+                      <tr key={i}>
+                        <td className="px-4 py-3"><div className="h-4 w-8 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-52 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-36 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-16 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-24 animate-pulse rounded bg-slate-100" /></td>
+                      </tr>
+                    ))
+                  : codesItems.length === 0
+                    ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-400">Нет кодов</td>
+                      </tr>
+                    )
+                    : codesItems.map((c, i) => {
+                        const rawCode = String(c.code ?? c.barcode ?? c.id ?? '')
+                        const { label, cls } = codeStatusBadge(c.status as string | undefined)
+                        const date = (c.issueDate ?? c.createdDate ?? c.emissionDate) as string | undefined
+                        return (
+                          <tr key={c.id} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 text-xs text-slate-400">{codesPage * 30 + i + 1}</td>
+                            <td className="px-4 py-3 max-w-xs">
+                              <span className="block truncate font-mono text-xs text-slate-700" title={rawCode}>{rawCode || '—'}</span>
+                            </td>
+                            <td className="px-4 py-3 font-mono text-xs text-slate-500 whitespace-nowrap">{c.gtin ?? '—'}</td>
+                            <td className="px-4 py-3">
+                              <span className={cn('inline-block rounded-md px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', cls)}>{label}</span>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">{formatTeksherDate(date)}</td>
+                          </tr>
+                        )
+                      })
+                }
+              </tbody>
+            </table>
+          </div>
+
+          {codesTotalPages > 1 && (
+            <div className="flex items-center justify-center gap-2">
+              <button type="button" disabled={codesPage === 0} onClick={() => setCodesPage((p) => p - 1)}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">
+                ← Назад
+              </button>
+              <span className="text-sm text-slate-500">{codesPage + 1} / {codesTotalPages}</span>
+              <button type="button" disabled={codesPage >= codesTotalPages - 1} onClick={() => setCodesPage((p) => p + 1)}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">
+                Вперёд →
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* ── Таб: Операции (заглушка) */}
+      {/* ── Таб: Операции */}
       {subTab === 'operations' && (
-        <div className="flex flex-col items-center gap-3 py-16 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
-            <svg viewBox="0 0 24 24" className="h-6 w-6 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <path d="M14 2v6h6M8 13h8M8 17h5"/>
-            </svg>
+        <div className="flex flex-col gap-4">
+          {!opsLoading && opsTotalElements > 0 && (
+            <div className="text-sm text-slate-400">Всего операций: {opsTotalElements.toLocaleString('ru')}</div>
+          )}
+
+          {opsError && (
+            <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+              {opsError}
+            </div>
+          )}
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">#</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Тип операции</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 whitespace-nowrap">GTIN</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 whitespace-nowrap">Кол-во кодов</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Статус</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Дата</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {opsLoading
+                  ? Array.from({ length: 8 }).map((_, i) => (
+                      <tr key={i}>
+                        <td className="px-4 py-3"><div className="h-4 w-8 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-24 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-36 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-16 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-16 animate-pulse rounded bg-slate-100" /></td>
+                        <td className="px-4 py-3"><div className="h-4 w-24 animate-pulse rounded bg-slate-100" /></td>
+                      </tr>
+                    ))
+                  : opsItems.length === 0
+                    ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">Нет операций</td>
+                      </tr>
+                    )
+                    : opsItems.map((op, i) => {
+                        const opType = (op.operationType ?? op.type) as string | undefined
+                        const { label: typeLabel, cls: typeCls } = opTypeBadge(opType)
+                        const { label: stLabel, cls: stCls } = codeStatusBadge(op.status as string | undefined)
+                        const count = (op.codesCount ?? op.quantity) as number | undefined
+                        const date = (op.createdDate ?? op.date) as string | undefined
+                        return (
+                          <tr key={op.id} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 text-xs text-slate-400">{opsPage * 20 + i + 1}</td>
+                            <td className="px-4 py-3">
+                              <span className={cn('inline-block rounded-md px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', typeCls)}>{typeLabel}</span>
+                            </td>
+                            <td className="px-4 py-3 font-mono text-xs text-slate-500 whitespace-nowrap">{op.gtin ?? '—'}</td>
+                            <td className="px-4 py-3 text-sm text-slate-700">{count != null ? count.toLocaleString('ru') : '—'}</td>
+                            <td className="px-4 py-3">
+                              <span className={cn('inline-block rounded-md px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', stCls)}>{stLabel}</span>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">{formatTeksherDate(date)}</td>
+                          </tr>
+                        )
+                      })
+                }
+              </tbody>
+            </table>
           </div>
-          <p className="text-sm font-medium text-slate-700">Операции — в разработке</p>
-          <p className="max-w-sm text-xs text-slate-400">Журнал операций из Teksher: нанесение кодов, трансграничные перемещения, продажи.</p>
+
+          {opsTotalPages > 1 && (
+            <div className="flex items-center justify-center gap-2">
+              <button type="button" disabled={opsPage === 0} onClick={() => setOpsPage((p) => p - 1)}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">
+                ← Назад
+              </button>
+              <span className="text-sm text-slate-500">{opsPage + 1} / {opsTotalPages}</span>
+              <button type="button" disabled={opsPage >= opsTotalPages - 1} onClick={() => setOpsPage((p) => p + 1)}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">
+                Вперёд →
+              </button>
+            </div>
+          )}
         </div>
       )}
 

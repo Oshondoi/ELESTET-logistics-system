@@ -283,6 +283,69 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── action: codes — список КИЗ-кодов с пагинацией и фильтром по статусу ──────
+  if (action === 'codes') {
+    const { data: store } = await serviceClient
+      .from('stores')
+      .select('teksher_login, teksher_password')
+      .eq('id', store_id)
+      .single()
+
+    if (!store?.teksher_login || !store?.teksher_password) return jsonOk({ connected: false })
+
+    const { page = 0, size = 30, status = '', productGroupCode = 'LP RF' } = body as { page?: number; size?: number; status?: string; productGroupCode?: string }
+
+    try {
+      const token = await teksherLogin(store.teksher_login as string, store.teksher_password as string)
+      const params = new URLSearchParams({ page: String(page), size: String(size), productGroupCode })
+      if (status) params.set('status', status)
+      const resp = await fetch(`${TEKSHER_BASE}/marking_codes/filter?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) throw new Error(`Teksher codes error: ${resp.status}`)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data = await resp.json() as any
+      return jsonOk({
+        items: data.content ?? data.items ?? [],
+        totalElements: data.page?.totalElements ?? data.totalElements ?? 0,
+        totalPages: data.page?.totalPages ?? data.totalPages ?? 1,
+      })
+    } catch (e) {
+      return jsonError((e as Error).message)
+    }
+  }
+
+  // ── action: operations — журнал операций ─────────────────────────────────────
+  if (action === 'operations') {
+    const { data: store } = await serviceClient
+      .from('stores')
+      .select('teksher_login, teksher_password')
+      .eq('id', store_id)
+      .single()
+
+    if (!store?.teksher_login || !store?.teksher_password) return jsonOk({ connected: false })
+
+    const { page = 0, size = 20 } = body as { page?: number; size?: number }
+
+    try {
+      const token = await teksherLogin(store.teksher_login as string, store.teksher_password as string)
+      const params = new URLSearchParams({ page: String(page), size: String(size) })
+      const resp = await fetch(`${TEKSHER_BASE}/operations?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) throw new Error(`Teksher operations error: ${resp.status}`)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data = await resp.json() as any
+      return jsonOk({
+        items: data.content ?? data.items ?? (Array.isArray(data) ? data : []),
+        totalElements: data.page?.totalElements ?? data.totalElements ?? 0,
+        totalPages: data.page?.totalPages ?? data.totalPages ?? 1,
+      })
+    } catch (e) {
+      return jsonError((e as Error).message)
+    }
+  }
+
   // ── action: disconnect — удалить credentials и кеш ───────────────────────────
   if (action === 'disconnect') {
     await serviceClient
