@@ -184,8 +184,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, isAdmin }: Kiz
           if (p.vendor_code) map.set(p.vendor_code as string, p as WBProductInfo)
         }
         setWbByVendorCode(map)
+        setWbLoading(false)
       })
-      .finally(() => setWbLoading(false))
   }, [subTab, activeStore?.id])
 
   // ── Автозагрузка статистики при смене магазина
