@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { fetchLastSync, fetchProducts, triggerSync } from '../services/productService'
 import { fetchMarkingDefectsByStore } from '../services/fulfillmentService'
 import type { MarkingDefectRow } from '../services/fulfillmentService'
@@ -74,7 +75,6 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [expandAll, setExpandAll] = useState(() => localStorage.getItem('elestet-products-expand-all') === 'true')
   const [anyExpanded, setAnyExpanded] = useState(false)
-  const [photoPreview, setPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
   const storeDropdownRef = useRef<HTMLDivElement | null>(null)
 
   // Браки
@@ -557,35 +557,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                         {(() => {
                           const photos = product.photos as Array<{ c246x328?: string; big?: string }> | null
                           const url = photos?.[0]?.c246x328 ?? photos?.[0]?.big ?? null
-                          return url ? (
-                            <img
-                              src={url}
-                              alt=""
-                              className="h-9 w-9 cursor-zoom-in rounded-lg object-cover"
-                              onMouseEnter={(e) => {
-                                const rect = (e.currentTarget as HTMLImageElement).getBoundingClientRect()
-                                const popW = 288
-                                const popH = 384
-                                const gap = 12
-                                // Горизонталь: предпочитаем справа, если не влезает — слева
-                                const x = rect.right + gap + popW > window.innerWidth
-                                  ? rect.left - gap - popW
-                                  : rect.right + gap
-                                // Вертикаль: выровнять по верху миниатюры, но не выходить за низ
-                                const y = Math.min(rect.top, window.innerHeight - popH - gap)
-                                setPhotoPreview({ url, x, y })
-                              }}
-                              onMouseLeave={() => setPhotoPreview(null)}
-                            />
-                          ) : (
-                            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100">
-                              <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                <rect x="3" y="3" width="18" height="18" rx="3" />
-                                <circle cx="8.5" cy="8.5" r="1.5" />
-                                <path d="m21 15-5-5L5 21" />
-                              </svg>
-                            </div>
-                          )
+                          return <PhotoThumb url={url} />
                         })()}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-400">
@@ -659,14 +631,6 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
         )}
       </Card>
       {/* Превью фото при наведении */}
-      {photoPreview && (
-        <div
-          className="pointer-events-none fixed z-50 overflow-hidden rounded-2xl shadow-2xl ring-1 ring-slate-200"
-          style={{ left: photoPreview.x, top: photoPreview.y }}
-        >
-          <img src={photoPreview.url} alt="" className="h-96 w-72 object-cover" />
-        </div>
-      )}
       </> }
       </> }
     </div>

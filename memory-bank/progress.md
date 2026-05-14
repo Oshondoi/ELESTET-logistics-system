@@ -3,6 +3,86 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 14.05.2026 — Teksher исследование + КИЗ страница
+
+### Исследование Pedant.kg + Teksher (label.teksher.kg)
+- Изучена полная архитектура системы маркировки КР
+- Найден рабочий кабинет: `label.teksher.kg` (не `teksher.kg`)
+- Перехвачены все REST API endpoints через Playwright intercept
+- Расшифрован формат КИЗ кода: GS1 DataMatrix `AI(01)GTIN14 AI(21)SerialNumber`
+- Статусы кодов: ISSUED → APPLIED → SOLD
+- Аутентификация: JWT Bearer в cookie `access_token`
+- Pedant = платный UI поверх label.teksher.kg, своего API нет
+
+### КИЗ страница (KizPage.tsx)
+- Добавлена страница `src/pages/KizPage.tsx` между Стикерами и Отзывами
+- Раздел работает как дашборд маркировки: статистика, список операций, коды
+- Три вкладки: Операции / Коды маркировки / Товары
+- Дизайн в стиле ELESTET (Tailwind, без лишних зависимостей)
+- Добавлены в PageKey, PAGE_ROUTES, pagePermKey, pageTitles, Sidebar, App.tsx render
+
+### WB энричмент через vendor_code (14.05.2026)
+- **Проблема**: GTIN→EAN13 матчинг не работал — разные форматы у WB и Teksher
+- **Решение**: `vendorCodeFromFullName(fullName)` — обрезает размерный суффикс `, р.M` из fullName Teksher → получает `vendor_code` → матчит с WB товарами
+- Функция: `fullName.replace(/,\s*р\..*$/i, '').trim()`
+- `wbByVendorCode: Map<string, WBProductInfo>` — ключ `vendor_code`
+- **Цвет из fullName**: list API Teksher возвращает `attributes: null`, цвет парсится regex: `/цвет\s+(.+?)(?:,\s*р\.|$)/i`
+
+### KizPage — колонки из Teksher + WB (14.05.2026)
+**Таблица 11 колонок с правильными источниками:**
+| Колонка | Источник |
+|---------|----------|
+| Фото | WB `photos[0].c246x328` |
+| GTIN | Teksher `p.gtin` |
+| Арт.WB | WB `nm_id` (ссылка) |
+| Арт.продавца | WB `vendor_code` |
+| Название GTIN | Teksher `p.fullName` |
+| Бренд | WB `brand` |
+| Цвет | Teksher `teksherColor(p)` (regex из fullName) |
+| Страна | Teksher `p.manufacturedCountry.name` |
+| Производитель | Teksher `p.manufacturerFullName` |
+| Предмет | WB `category` |
+| Статус | Teksher `teksherStatusRu(p.status)` |
+
+### KizPage — русские статусы и localStorage (14.05.2026)
+- `TEKSHER_STATUS_RU` map: PUBLISHED → Опубликован, ACTIVE → Активен, DRAFT → Черновик, ARCHIVED → Архивирован, WITHDRAWN → Отозван, BLOCKED → Заблокирован, CLOSED → Закрыт
+- `subTab` сохраняется в localStorage (`elestet-kiz-subtab`) при каждом переключении
+
+### PhotoThumb — шаред компонент (14.05.2026)
+- `src/components/ui/PhotoThumb.tsx` — универсальный компонент миниатюры товара с hover-превью
+- Props: `url: string | null | undefined`, `className?: string` (default `'h-9 w-9 rounded-lg'`)
+- Превью через `createPortal(document.body)`, auto-позиционирование (право/лево по краю экрана)
+- `POP_W=288`, `POP_H=384`, `GAP=12`
+- `ProductsPage.tsx` перешёл на `<PhotoThumb url={url} />` — убран inline portal код
+
+### Auth страница — улучшения (14.05.2026)
+- **Eye-кнопка** на поле Пароль (оба режима: вход и регистрация) — показывает/скрывает пароль
+- **Eye-кнопка** на поле «Подтвердите пароль» (только регистрация)
+- **Поле «Подтвердите пароль»** — появляется только в режиме регистрации
+- **Валидация**: перед отправкой проверяет `password !== confirmPassword` → ошибка
+- **Стабильные позиции полей**: «Имя» и «Подтвердите пароль» — `invisible pointer-events-none` в режиме входа (не `hidden`), поля Email/Пароль не смещаются
+- **Равная высота карточки**: `minHeight: 600px` на карточке, `flex-1` на форме, `mt-auto` на кнопке
+
+### KizPage — Инфо модалка (14.05.2026)
+- **Кнопка «Инфо»** добавлена рядом с «Подробно» (у строки «КАК ЭТО РАБОТАЕТ?»)
+- Видна **только владельцу** (`isAdmin === true` → email === 'sydykovsam@gmail.com')
+- **3 таба** внутри модалки: Статусы / Формат GS1 / Ссылки
+- **Перенесено** 3 блока с главной страницы KizPage в модалку:
+  - Статусы кода (ISSUED → APPLIED → SOLD)
+  - Формат GS1 DataMatrix (разбивка кода с пояснениями)
+  - Ссылки на кабинет (Кабинет Teksher / API: ISSUED коды / API: Товары GTIN)
+- Главная страница KizPage теперь чище — без этих блоков
+- Модалка: `!w-[60vw] !max-w-none min-h-[65vh]`
+- Состояние: `infoModalOpen` + `infoTab: 'statuses' | 'format' | 'links'`
+
+### isAdmin — проброс в KizPage (14.05.2026)
+- `KizPageProps`: добавлен `isAdmin?: boolean`
+- `StickersPageProps`: добавлен `isAdmin?: boolean`; передаётся в `<KizPage isAdmin={isAdmin} />`
+- `App.tsx`: добавлен `isAdmin={isAdmin}` в `<StickersPage ...>`
+- Цепочка: `App.tsx (isAdmin) → StickersPage (isAdmin) → KizPage (isAdmin)`
+
+
+
 ## What Works
 
 - Project scaffolding is complete

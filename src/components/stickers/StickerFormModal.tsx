@@ -166,12 +166,15 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
         />
 
         <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Дата производства"
-            placeholder="01.01.26"
-            value={values.production_date}
-            onChange={(e) => set('production_date', e.target.value)}
-          />
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Дата производства</label>
+            <input
+              type="date"
+              value={values.production_date}
+              onChange={(e) => set('production_date', e.target.value)}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
           <Input
             label="Страна"
             placeholder="Кыргызстан"

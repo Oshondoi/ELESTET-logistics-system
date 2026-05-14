@@ -100,7 +100,7 @@ const items = [
   },
   {
     key: 'stickers',
-    label: 'Стикеры',
+    label: 'Стикеры и КИЗы',
     permKey: 'stickers_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -213,7 +213,7 @@ export const Sidebar = ({
   }, [isCompanyOpen])
 
   return (
-    <aside className="flex h-full w-[234px] shrink-0 flex-col border-r border-slate-200 bg-white/95">
+    <aside className="flex h-full w-[200px] shrink-0 flex-col border-r border-slate-200 bg-white/95">
       <div className="border-b border-slate-200 px-5 py-4">
         <button type="button" className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-xs font-bold text-white">
@@ -227,9 +227,9 @@ export const Sidebar = ({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4">
-        <div className="mb-5 rounded-[24px] bg-[#F7F8FC] py-[14px]">
-          <div className="mb-2 px-[16px] text-[10px] font-semibold uppercase tracking-[0.18em] text-[#98A5CC]">
+      <div className="flex-1 overflow-y-auto px-2 py-4">
+        <div className="mb-3 border-b border-slate-200 pb-3 -mx-2 px-2">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#98A5CC]">
             Моя компания
           </div>
           <div ref={companyRef} className="relative">
@@ -243,13 +243,13 @@ export const Sidebar = ({
                 }
               }}
               className={cn(
-                'flex w-full items-center justify-between rounded-[16px] px-[14px] py-[11px] text-left transition-colors duration-150',
-                isCompanyOpen ? 'bg-[#EEF2FB]' : 'bg-transparent hover:bg-[#EEF2FB]',
+                'flex w-full items-center justify-between rounded-lg px-1 py-1.5 text-left transition-colors duration-150',
+                isCompanyOpen ? 'bg-slate-100' : 'bg-transparent hover:bg-slate-100',
               )}
             >
-              <span>
-                <span className="block text-[15px] font-bold text-slate-900">{companyName}</span>
-                <span className="mt-0.5 block text-[11px] text-[#61729E]">{companyIdLabel}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-bold text-slate-900">{companyName}</span>
+                <span className="mt-0.5 block text-[10px] text-[#61729E]">{companyIdLabel}</span>
               </span>
               {hasActiveAccount ? (
                 <svg
@@ -459,9 +459,9 @@ export const Sidebar = ({
           <button
             type="button"
             onClick={onOpenAddCompany}
-            className="mt-[4px] inline-flex origin-left scale-[0.85] cursor-pointer items-center px-[16px] text-[10px] font-medium tracking-[0.01em] text-[#6C84E8] transition hover:text-[#5B74DD]"
+            className="mt-1 inline-flex cursor-pointer items-center text-[11px] font-medium text-[#6C84E8] transition hover:text-[#5B74DD]"
           >
-            <span className="whitespace-nowrap">Добавить компанию</span>
+            <span>Добавить компанию</span>
           </button>
         </div>
 
@@ -471,7 +471,7 @@ export const Sidebar = ({
               type="button"
               key={item.key}
               className={cn(
-                'flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium transition',
+                'flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left font-medium transition',
                 activePage === item.key
                   ? 'bg-blue-600 text-white shadow-sm'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
@@ -480,13 +480,13 @@ export const Sidebar = ({
             >
               <span
                 className={cn(
-                  'flex h-6.5 w-6.5 items-center justify-center rounded-md',
+                  'flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-md',
                   activePage === item.key ? 'bg-white/15' : 'bg-slate-100 text-slate-500',
                 )}
               >
                 {item.icon}
               </span>
-              <span className="font-medium tracking-normal">{item.label}</span>
+              <span className="text-[15px] font-medium tracking-normal">{item.label}</span>
             </button>
           ))}
 
@@ -500,14 +500,14 @@ export const Sidebar = ({
           href="https://t.me/+4e0mYW-2Bjw3NTYy"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+          className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
         >
-          <span className="flex h-6.5 w-6.5 items-center justify-center rounded-md bg-sky-100 text-sky-500">
+          <span className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-md bg-sky-100 text-sky-500">
             <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="currentColor">
               <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2Zm4.93 7.13-1.68 7.93c-.12.56-.46.7-.93.43l-2.57-1.89-1.24 1.19c-.14.14-.25.25-.51.25l.18-2.6 4.72-4.26c.2-.18-.05-.28-.32-.1L7.77 14.6 5.23 13.8c-.56-.18-.57-.56.12-.83l9.67-3.73c.46-.17.86.11.71.83-.01.02 0 .02-.1.06Z" />
             </svg>
           </span>
-          <span>Telegram-канал</span>
+          <span className="text-[15px]">Telegram-канал</span>
         </a>
       </div>
     </aside>

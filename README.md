@@ -28,6 +28,52 @@ MVP веб-приложения для логистики поставок на 
 
 ### Android-совместимость (11.05.2026)
 - `src/styles.css`: `@media (pointer: coarse) { :root { -webkit-font-smoothing: auto; -moz-osx-font-smoothing: auto } }`
+
+## Teksher — система маркировки КР (ИСА ЦРПТ)
+
+### Два URL — не путать
+| URL | Что это |
+|-----|---------|
+| `teksher.kg` | Маркетинговый/корпоративный сайт. Другая авторизация. НЕ рабочий кабинет. |
+| `label.teksher.kg` | **Рабочий кабинет ИСА ЦРПТ КР.** Здесь API, операции, коды КИЗ. |
+
+`pedant.kg` — сторонний SaaS-сервис (4000 сом/мес), красивый UI поверх `label.teksher.kg`. Своего API нет.
+
+### REST API label.teksher.kg
+```
+База: https://label.teksher.kg/facade/api/v1/
+Аутентификация: JWT Bearer в cookie access_token (Keycloak realm mzkm_prod_realm)
+Заголовок: Authorization: Bearer {access_token}
+```
+
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| POST | `/facade/api/v1/sign-in` | Логин (form: login + password), возвращает cookie |
+| GET | `/facade/api/v1/users/getCurrentUser` | Профиль пользователя + participantId |
+| GET | `/facade/api/v1/products?page=0&size=10` | Список товаров (GTIN, ТН ВЭД, статус) |
+| GET | `/facade/api/v1/operations/filter?size=15&page=0&startDate=...&endDate=...` | Операции |
+| GET | `/facade/api/v1/marking_codes/filter?size=N&page=0&productGroupCode=LP+RF` | КИЗ коды |
+| GET | `/facade/product_groups_marking` | Товарные группы |
+| GET | `/facade/api/v1/countries` | Справочник стран |
+
+### Формат КИЗ кода (GS1 DataMatrix)
+```
+0104703804901035215Ik+Or/ZCNWnK
+│├─────────────────┤├─┤├──────┤
+│  GTIN-14 (14 цифр)  │   серийный номер (13 символов)
+│  047 = Кыргызстан   AI 21 = серийный номер
+AI 01 = GTIN
+```
+
+**Статусы:** `ISSUED` → нанесение → `APPLIED` → продажа → `SOLD`
+
+### Полный цикл маркировки
+1. Регистрация карточки товара → Teksher присваивает **GTIN-14**
+2. Заказ эмиссии КМ → Teksher генерирует N кодов (платно, списывает с баланса)
+3. Печать DataMatrix стикеров → наклеить на каждую единицу
+4. Регистрация Нанесения (`MARKING`) → `ISSUED` → `APPLIED`
+5. Трансграничная отгрузка (`SHIPMENT`) → при отправке партии в РФ
+6. Продажа в РФ → Честный Знак РФ: `APPLIED` → `SOLD`
 - Исправляет полное обесцвечивание UI на планшетах с кастомными сборками Chrome и флагом `--disable-composited-antialiasing`
 
 ### Браки — авто-загрузка из БД (11.05.2026)
@@ -60,7 +106,66 @@ MVP веб-приложения для логистики поставок на 
 - Иконки-кнопки переключения: `text-slate-400 hover:text-slate-700` (видимые по умолчанию)
 - Состояние в localStorage: `warehouse_sort_mode`, `warehouse_order_{accountId}`
 
+### PhotoThumb — шаред компонент (14.05.2026)
+- `src/components/ui/PhotoThumb.tsx` — универсальная миниатюра товара с hover-превью
+- Props: `url: string | null | undefined`, `className?: string` (по умолчанию `'h-9 w-9 rounded-lg'`)
+- Превью 288×384px через `createPortal(document.body)`, auto-позиционирование (зеркалится у края)
+- `ProductsPage.tsx` использует `<PhotoThumb url={url} />` (убран inline portal код)
+
+### Auth страница — улучшения (14.05.2026)
+- **Eye-кнопка**: показывает/скрывает пароль; на «Пароле» (оба режима) и «Подтвердите пароль» (только регистрация)
+- **Поле «Подтвердите пароль»**: `invisible pointer-events-none` при входе → поля Email/Пароль не смещаются
+- **Валидация**: перед отправкой проверяет `password !== confirmPassword`
+- **Равная высота** в обоих режимах: `minHeight:600px` карточка + `flex-1` форма + `mt-auto` кнопка
+
+### KizPage — страница маркировки (14.05.2026)
+Дашборд системы маркировки КИЗ (Teksher) внутри вкладки «КИЗы» страницы Стикеры.
+
+#### Подвкладки
+- **Главная** — статистика (Баланс КИЗ / Товаров GTIN / Операций), сводка
+- **Товары (GTIN)** — таблица товаров Teksher с WB-энричментом (фото, артикул WB, бренд и т.д.)
+- **КИЗ-коды** — коды маркировки с фильтрацией
+- **Операции** — журнал операций (EMISSION / MARKING / SHIPMENT)
+
+#### Таблица товаров — 11 колонок, источники данных
+| Колонка | Источник |
+|---------|----------|
+| Фото | WB `photos[0].c246x328` |
+| GTIN | Teksher `p.gtin` |
+| Арт.WB | WB `nm_id` (ссылка) |
+| Арт.продавца | WB `vendor_code` |
+| Название GTIN | Teksher `p.fullName` |
+| Бренд | WB `brand` |
+| Цвет | Teksher: regex из fullName `/цвет\s+(.+?)(?:,\s*р\.|$)/i` |
+| Страна | Teksher `p.manufacturedCountry.name` |
+| Производитель | Teksher `p.manufacturerFullName` |
+| Предмет | WB `category` |
+| Статус | Teksher статус → рус. (PUBLISHED→Опубликован и т.д.) |
+
+#### WB энричмент
+- Ключ матчинга: `vendorCodeFromFullName(p.fullName)` → обрезает `, р.M` → получает vendor_code
+- `wbByVendorCode: Map<string, WBProductInfo>` — матч WB товаров по vendor_code
+- ⚠️ Teksher list API возвращает `attributes: null` — цвет только из парсинга fullName
+
+#### Подключение Teksher
+- Кнопка «Подключить Teksher» → модалка с логином/паролем
+- Статус «Teksher подключён» / «Teksher не подключён» в тулбаре
+- «Синхронизировать» — обновляет список товаров и коды
+
+#### Кнопка «Инфо» (owner-only, 14.05.2026)
+- Видна только владельцу (`isAdmin = email === 'sydykovsam@gmail.com'`)
+- Расположена рядом с «Подробно» у строки «КАК ЭТО РАБОТАЕТ?»
+- Открывает 3-табную модалку `!w-[60vw] min-h-[65vh]`:
+  - **Статусы** — ISSUED / APPLIED / SOLD с описаниями
+  - **Формат GS1** — разбивка DataMatrix кода с AI-маркерами
+  - **Ссылки** — Кабинет Teksher / API ISSUED коды / API Товары GTIN
+- `isAdmin` пробрасывается: `App.tsx → StickersPage → KizPage`
+
+#### LocalStorage
+- `elestet-kiz-subtab` — последняя активная подвкладка
+
 ### Фулфилмент — этап Упаковка (13.05.2026)
+
 
 Новый производственный этап **Упаковка** (`packaging`) между ОТК и Маркировкой.
 

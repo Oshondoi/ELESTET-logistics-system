@@ -6666,7 +6666,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
                     </td>
                     <td className="px-4 py-3">
                       {(() => {
-                        const miniLabels: Record<string, string> = { reception: 'Приём', otk: 'ОТК', marking: 'Марк.', packing: 'Короба', logistics: 'Лог.' }
+                        const miniLabels: Record<string, string> = { reception: 'Приём', otk: 'ОТК', packaging: 'Упак.', marking: 'Марк.', packing: 'Короба', logistics: 'Лог.' }
                         const stageQty: Record<string, number | undefined> = {
                           reception: b.qty_received_sum,
                           otk: b.qty_otk_sum,

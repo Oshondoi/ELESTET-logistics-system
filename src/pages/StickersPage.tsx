@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { StickerFormValues, StickerTemplate, StickerBundle, StickerBundleItem, Store, Product } from '../types'
+import { KizPage } from './KizPage'
 import { StickerFormModal } from '../components/stickers/StickerFormModal'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
 import { Button } from '../components/ui/Button'
@@ -54,9 +55,10 @@ interface StickersPageProps {
   canManage?: boolean
   canDelete?: boolean
   canImport?: boolean
+  isAdmin?: boolean
 }
 
-export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true }: StickersPageProps) => {
+export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true, isAdmin }: StickersPageProps) => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingSticker, setEditingSticker] = useState<StickerTemplate | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<StickerTemplate | null>(null)
@@ -209,6 +211,15 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       if (s) toPrint.push({ ...s, copies: item.copies, production_date: globalProductionDate || s.production_date })
     }
     if (toPrint.length > 0) previewStickerPdf(toPrint)
+  }
+
+  const [mainTab, setMainTab] = useState<'stickers' | 'stickers2'>(() => {
+    const saved = localStorage.getItem('stickers_main_tab')
+    return saved === 'stickers2' ? 'stickers2' : 'stickers'
+  })
+  const handleMainTab = (tab: 'stickers' | 'stickers2') => {
+    setMainTab(tab)
+    localStorage.setItem('stickers_main_tab', tab)
   }
 
   const [activeTab, setActiveTab] = useState<'stickers' | 'bundles' | 'import'>(() => {
@@ -475,7 +486,34 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   })
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
+      {/* ── Главные табы страницы */}
+      <div className="flex gap-6 border-b border-slate-200">
+        <button
+          type="button"
+          onClick={() => handleMainTab('stickers')}
+          className={`pb-3 text-sm font-semibold transition-colors ${
+            mainTab === 'stickers' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-400 hover:text-slate-700'
+          }`}
+        >
+          Стикеры
+        </button>
+        <button
+          type="button"
+          onClick={() => handleMainTab('stickers2')}
+          className={`pb-3 text-sm font-semibold transition-colors ${
+            mainTab === 'stickers2' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-400 hover:text-slate-700'
+          }`}
+        >
+          КИЗы
+        </button>
+      </div>
+
+      {mainTab === 'stickers2' && (
+        <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} />
+      )}
+
+      {mainTab === 'stickers' && <div className="space-y-4">
       {/* ── Pre-print модал: проверка незаполненных полей ── */}
       {prePrintModal && (() => {
         const missing = getMissingFields(prePrintModal.stickers)
@@ -1550,6 +1588,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
           <img src={importPhotoPreview.url} alt="" className="h-96 w-72 object-cover" />
         </div>
       )}
+      </div>}
     </div>
   )
 }

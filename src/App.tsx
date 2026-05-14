@@ -120,7 +120,7 @@ const pageTitles: Record<PageKey, string> = {
   stores: 'Магазины',
   directories: 'Справочники',
   products: 'Товары',
-  stickers: 'Стикеры',
+  stickers: 'Стикеры и КИЗы',
   reviews: 'Отзывы',
   invoices: 'Счета',
   roles: 'Роли',
@@ -663,6 +663,7 @@ function App() {
                   canManage={permissions.stickers_manage}
                   canDelete={isOwnerOrAdmin || permissions.stickers_delete}
                   canImport={isOwnerOrAdmin || permissions.stickers_manage || permissions.stickers_import}
+                  isAdmin={isAdmin}
                 />
               ) : effectivePage === 'reviews' ? (
                 <ReviewsPage

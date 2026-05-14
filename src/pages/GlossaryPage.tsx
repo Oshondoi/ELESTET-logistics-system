@@ -171,6 +171,155 @@ export const GlossaryPage = () => {
       description: 'Тип упаковки поставки WB: 1 = короба (QR), 2 = паллеты. Берётся из GET /api/v1/supplies/{id} поля boxTypeID + isBoxOnPallet при синке стикеров. Хранится в trip_lines.wb_cargo_type. Влияет на отображение иконок в ячейке стикеров.',
     },
     {
+      name: 'Что такое КИЗ',
+      category: 'Teksher / КИЗ маркировка',
+      description: `КИЗ (Контрольный Идентификационный Знак) — это уникальный цифровой код маркировки товара. Похож на QR-код, но стандарт Data Matrix.
+
+Простыми словами:
+  Каждая единица товара (каждая футболка, каждые джинсы) получает свой личный код.
+  Код печатается на стикер и наклеивается на товар.
+  При пересечении границы и при продаже код сканируется — государство отслеживает путь товара.
+
+Зачем нужен:
+  По законодательству КР и ТС — легальная продажа в РФ без КИЗ невозможна.
+  Честный Знак РФ сканирует код при продаже и фиксирует факт продажи.`,
+    },
+    {
+      name: 'label.teksher.kg — рабочая система',
+      category: 'Teksher / КИЗ маркировка',
+      description: `Государственная система маркировки КР. ИСА ЦРПТ (Информационная система администрирования).
+
+URL: https://label.teksher.kg  ← ЭТО рабочий кабинет
+НЕ teksher.kg — это маркетинговый сайт, войти туда не удалось.
+НЕ pedant.kg — это сторонний платный сервис (4000 сом/мес) с красивым UI поверх label.teksher.kg.
+
+Аккаунт (Ашимов Кадырали Курсанбаевич):
+  Логин:   user93645
+  Пароль:  Abumen2026.kg!!!
+  Email:   zamirbekkyzy2021@icloud.com
+  ИНН:     22101199601390
+  participantId: 9ac0c6be52c143d39d1e0d0965ac24a8
+  Тип:     УОТ (участник оборота товаров)
+
+Данные кабинета:
+  Товаров: 407, Операций: 1496
+  Баланс: 30 шт. КИЗ / 20.48 сом
+  Товарный знак: ABU MEN, ТН ВЭД: 6203120000`,
+    },
+    {
+      name: 'REST API Teksher — все endpoints',
+      category: 'Teksher / КИЗ маркировка',
+      description: `База URL: https://label.teksher.kg/facade/
+Аутентификация: JWT Bearer в HTTP-cookie access_token
+Заголовок: Authorization: Bearer {access_token}
+
+POST /facade/api/v1/sign-in
+  Body (form): login + password
+  Ответ: устанавливает cookie access_token (JWT, алгоритм RS256, realm mzkm_prod_realm)
+
+GET /facade/api/v1/users/getCurrentUser
+  → { id, login, fullName, email, participant: { inn, participantId, typeName, ... } }
+
+GET /facade/api/v1/products?page=0&size=10
+  → { content: [{ id, fullName, gtin, tnved, trademark, manufacturerFullName,
+                   manufacturerInn, gcp, gln, status, statusDate }], page: {...} }
+
+GET /facade/api/v1/operations/filter?size=15&page=0&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+  → { content: [{ operationType, createdAt, endAt, kmsCount, status,
+                   operationId (UUID), productGroupMarkingDto, participantDto }] }
+
+GET /facade/api/v1/marking_codes/filter?size=N&page=0&productGroupCode=LP+RF
+  Дополнительные фильтры: &gtin=...&status=ISSUED&operationId=...
+  → { content: [{ id, gtin, code, serialNumber, status, productGroupMarking,
+                   markingCodeLevel, parent, createdAt, country }] }
+
+GET /facade/product_groups_marking
+  → { content: [{ id, code:"1", alias:"lp", name:"Предметы одежды и одежды..." }] }
+
+GET /facade/api/v1/countries
+  → список стран
+
+Типы операций: EMISSION (заказ кодов), MARKING (нанесение), SHIPMENT (трансграничная)`,
+    },
+    {
+      name: 'Формат КИЗ кода — расшифровка GS1',
+      category: 'Teksher / КИЗ маркировка',
+      description: `Стандарт: GS1 DataMatrix. Пример реального кода из кабинета:
+  0104703804901035215Ik+Or/ZCNWnK
+
+Расшифровка:
+  01  — AI (Application Identifier), означает "дальше идёт GTIN"
+  04703804901035  — GTIN-14 (14 цифр)
+    047  = префикс КР в системе GS1
+    03804901035  = товарный код внутри
+  21  — AI, означает "дальше идёт серийный номер"
+  5Ik+Or/ZCNWnK  — серийный номер (13 символов, a-zA-Z0-9 + спецсимволы)
+
+Ещё примеры GTIN:
+  04703804901035 — ABU MEN джинсы (один артикул+размер)
+  04703804904821 — другой SKU (свой GTIN у каждого размера/цвета)
+
+GCP (Global Company Prefix): 470380490
+GLN (Global Location Number): 4703804900007
+
+Каждая карточка товара в Teksher = один GTIN. Каждая единица = один серийный номер.`,
+    },
+    {
+      name: 'Статусы КИЗ кода',
+      category: 'Teksher / КИЗ маркировка',
+      description: `ISSUED  → код заказан и готов. Можно печатать стикер. Нанесение ещё не подтверждено.
+APPLIED → нанесение зарегистрировано (операция MARKING выполнена). Товар промаркирован.
+SOLD    → продан конечному покупателю. Фиксирует Честный Знак РФ при сканировании на кассе.
+
+Переходы: ISSUED → APPLIED (наша операция MARKING) → SOLD (РФ сканирует при продаже).
+
+При заказе стикеров из ELESTET нужно брать коды со статусом ISSUED.`,
+    },
+    {
+      name: 'Полный цикл маркировки — 6 шагов',
+      category: 'Teksher / КИЗ маркировка',
+      description: `Шаг 1. Регистрация карточки товара (один раз на артикул/размер)
+  → Teksher присваивает GTIN-14 каждому SKU.
+  → Заполняем: название, ТН ВЭД, товарный знак, страна, производитель.
+
+Шаг 2. Заказ эмиссии КМ (операция EMISSION)
+  → Указываем GTIN + количество нужных кодов.
+  → Teksher генерирует N кодов, списывает деньги с баланса.
+  → Коды появляются в кабинете со статусом ISSUED.
+
+Шаг 3. Печать стикеров с DataMatrix кодом
+  → Каждый КИЗ распечатывается на стикер 4×4 см (термопринтер).
+  → Клеится на каждую единицу товара (на упаковку или на ярлык).
+
+Шаг 4. Регистрация Нанесения (операция MARKING)
+  → Подтверждаем в Teksher: "эти коды наклеены на товар".
+  → Статус: ISSUED → APPLIED.
+
+Шаг 5. Трансграничная отгрузка (операция SHIPMENT / Трансгран)
+  → При отправке партии в Россию: регистрируем отгрузку.
+  → Указываем коды, страну назначения, перевозчика.
+
+Шаг 6. Продажа в России
+  → Продавец сканирует код на кассе.
+  → Честный Знак РФ фиксирует: APPLIED → SOLD. Всё, цепочка завершена.`,
+    },
+    {
+      name: 'Pedant.kg — что это',
+      category: 'Teksher / КИЗ маркировка',
+      description: `Pedant.kg — коммерческий SaaS-сервис (НЕ государственный).
+
+Что делает: предоставляет красивый UI поверх label.teksher.kg с автоматизацией.
+Стоимость: 4 000 сом/мес за интеграцию Teksher.
+Нет своего API: /ru/api → 404. Только веб-интерфейс.
+
+Наши два аккаунта в Pedant:
+  1. ОсОО АЭРОН (sydykovsam@gmail.com) — 55 товаров, 120 операций, баланс 732 шт. / 498.15 сом
+  2. Ашимов Кадырали (user93645) — 407 товаров, 1496 операций, баланс 30 шт. / 20.48 сом
+
+Вывод: Pedant делает то же что мы можем делать напрямую через label.teksher.kg/facade/api/v1/.
+При интеграции в ELESTET — работаем напрямую с Teksher, Pedant не нужен.`,
+    },
+    {
       name: 'Безопасность проекта',
       category: 'Инфраструктура',
       description: `Ключевые вопросы безопасности ELESTET. Скажи «задача о безопасности проекта» — и ИИ сразу поймёт контекст.

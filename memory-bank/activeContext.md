@@ -1,5 +1,93 @@
 # Active Context
 
+## Current Focus (14.05.2026) — KizPage доработки + Auth + PhotoThumb
+
+### Сделано за сессию (итого):
+
+#### 1. WB энричмент через vendor_code
+- `vendorCodeFromFullName(fullName)` — обрезает `, р.M` суффикс → vendor_code для матчинга с WB
+- `wbByVendorCode: Map<string, WBProductInfo>` — ключ `vendor_code`
+- Цвет: парсится из Teksher `fullName` regex `/цвет\s+(.+?)(?:,\s*р\.|$)/i` (list API возвращает `attributes:null`)
+
+#### 2. KizPage — правильные колонки из Teksher + WB
+11 колонок: Фото (WB) | GTIN (Teksher) | Арт.WB | Арт.продавца (WB) | Название GTIN (Teksher fullName) | Бренд (WB) | Цвет (Teksher regex) | Страна (Teksher manufacturedCountry.name) | Производитель (Teksher manufacturerFullName) | Предмет (WB category) | Статус (Teksher → рус.)
+
+Русские статусы (`TEKSHER_STATUS_RU`): PUBLISHED→Опубликован, ACTIVE→Активен, DRAFT→Черновик, ARCHIVED→Архивирован, WITHDRAWN→Отозван, BLOCKED→Заблокирован, CLOSED→Закрыт
+
+`subTab` сохраняется в localStorage (`elestet-kiz-subtab`)
+
+#### 3. PhotoThumb — шаред компонент
+- `src/components/ui/PhotoThumb.tsx` — миниатюра товара с hover-превью 288×384px через portal
+- Props: `url`, `className` (def `'h-9 w-9 rounded-lg'`)
+- `ProductsPage.tsx` использует `<PhotoThumb url={url} />`
+
+#### 4. Auth страница — улучшения
+- Eye-кнопка на Пароле (оба режима) и Подтвердите пароль (только регистрация)
+- Поле «Подтвердите пароль» — `invisible pointer-events-none` при входе (не `hidden`) — поля не смещаются
+- Валидация: `password !== confirmPassword` → ошибка перед submit
+- Равная высота: `minHeight:600px` карточка + `flex-1` форма + `mt-auto` кнопка
+
+#### 5. KizPage — Инфо модалка (owner-only) + 3 таба ← СВЕЖЕЕ
+- **Кнопка «Инфо»** рядом с «Подробно» (у строки «КАК ЭТО РАБОТАЕТ?»)
+- Видна только при `isAdmin === true` (sydykovsam@gmail.com)
+- 3 таба: **Статусы** | **Формат GS1** | **Ссылки**
+- 3 блока перенесены из главной страницы KizPage в модалку (главная стала чище)
+- Модалка: `!w-[60vw] !max-w-none min-h-[65vh]`
+- State: `infoModalOpen: boolean`, `infoTab: 'statuses' | 'format' | 'links'`
+- isAdmin цепочка: `App.tsx → StickersPage (isAdmin prop) → KizPage (isAdmin prop)`
+
+---
+
+## Teksher — система маркировки КР (ИСА ЦРПТ)
+
+
+#### Данные компании Ашимов Кадырали
+- ИНН: 22101199601390, participantId: 9ac0c6be52c143d39d1e0d0965ac24a8
+- Товаров: 407, Операций: 1496
+- Баланс КИЗ: 30 шт. / 20.48 сом (одежда, группа LP RF — Россия)
+- Товарный знак: ABU MEN, код ТН ВЭД: 6203120000
+- GTIN формат: 047038049XXXXX (GCP: 470380490, GLN: 4703804900007)
+
+#### Pedant.kg — что это
+- URL: `pedant.kg` — платный UI поверх Teksher
+- Два аккаунта (компании): ОсОО АЭРОН + Ашимов Кадырали
+- Интеграция Teksher стоит: 4 000 сом/мес
+- Нет своего API (был `/ru/api` → 404)
+- Операции делаются через Pedant → он вызывает label.teksher.kg/facade/...
+- Баланс АЭРОН: 732 шт. / 498.15 сом
+
+#### Полный цикл маркировки
+```
+1. Регистрация карточки товара (один раз)
+   → Teksher присваивает GTIN-14 каждому (артикул + цвет + размер)
+
+2. Заказ на эмиссию КМ (POST операция EMISSION)
+   → Teksher генерирует N КИЗ кодов, списывает деньги
+   → коды в статусе ISSUED
+
+3. Печать стикеров с DataMatrix кодом
+   → распечатать каждый код → наклеить на единицу товара
+
+4. Регистрация Нанесения (POST операция MARKING)
+   → Teksher переводит коды ISSUED → APPLIED
+
+5. Регистрация трансграничной отгрузки (Трансгран)
+   → при отправке партии в Россию
+
+6. Продажа в РФ — сканирование при продаже
+   → Честный Знак РФ: APPLIED → SOLD
+```
+
+#### Для интеграции ELESTET (этап Маркировка в фулфилменте)
+```
+1. GET /facade/api/v1/products?... → найти GTIN по артикулу
+2. GET /facade/api/v1/marking_codes/filter?gtin=...&status=ISSUED → получить доступные КИЗ
+3. Распечатать стикеры (наш модуль стикеров уже умеет DataMatrix)
+4. POST операция MARKING → подтвердить нанесение в Teksher
+```
+
+---
+
 ## Current Focus (13.05.2026) — обновлено
 
 ### Фулфилмент — этап Упаковка (Packaging) (13.05.2026)
