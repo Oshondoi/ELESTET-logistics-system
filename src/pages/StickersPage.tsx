@@ -216,7 +216,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
 
   const [mainTab, setMainTab] = useState<'stickers' | 'stickers2' | 'stickers3'>(() => {
     const saved = localStorage.getItem('stickers_main_tab')
-    if (saved === 'stickers2' || saved === 'stickers3') return saved
+    if (saved === 'stickers2') return saved
+    if (saved === 'stickers3') return isAdmin ? saved : 'stickers'
     return 'stickers'
   })
   const handleMainTab = (tab: 'stickers' | 'stickers2' | 'stickers3') => {
@@ -509,6 +510,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
         >
           КИЗы
         </button>
+        {isAdmin && (
         <button
           type="button"
           onClick={() => handleMainTab('stickers3')}
@@ -518,13 +520,14 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
         >
           Гайд
         </button>
+        )}
       </div>
 
       {mainTab === 'stickers2' && (
         <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} />
       )}
 
-      {mainTab === 'stickers3' && <KizGuidePage />}
+      {isAdmin && mainTab === 'stickers3' && <KizGuidePage />}
 
       {mainTab === 'stickers' && <div className="space-y-4">
       {/* ── Pre-print модал: проверка незаполненных полей ── */}

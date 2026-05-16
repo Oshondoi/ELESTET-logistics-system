@@ -165,6 +165,11 @@ npx supabase functions deploy teksher-auth --no-verify-jwt
 - Подключён в `index.html`: `<link rel="icon" type="image/svg+xml" href="/favicon.svg" />`
 - SVG масштабируется идеально на Retina без пикселизации
 
+### Таб «Гайд» — только для admin (16.05.2026)
+- Таб и страница `KizGuidePage` видны только при `isAdmin` (`email === 'sydykovsam@gmail.com'`)
+- `StickersPage.tsx`: кнопка и контент обёрнуты в `{isAdmin && ...}`
+- Если не-admin имеет `stickers3` в localStorage — при загрузке перебрасывает на `stickers`
+
 
 Дашборд системы маркировки КИЗ (Teksher) внутри вкладки «КИЗы» страницы Стикеры.
 

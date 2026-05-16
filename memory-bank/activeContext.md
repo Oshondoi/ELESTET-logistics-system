@@ -1,6 +1,6 @@
 # Active Context
 
-## Current Focus (16.05.2026) — KizPage: Teksher QR пополнение + UI + Гайд + Favicon
+## Current Focus (16.05.2026) — KizPage: Teksher QR пополнение + UI + Гайд + Favicon + Гайд скрыт для не-admin
 
 ### Сделано за сессию 16.05.2026:
 
@@ -51,6 +51,17 @@
 - Создан `public/favicon.svg` — тёмный квадрат rx=28 + белая буква E
 - Подключён в `index.html`: `<link rel="icon" type="image/svg+xml" href="/favicon.svg" />`
 - Старый `src/favicon.svg.png` удалён
+
+#### 11. Таб «Гайд» — скрыт для всех кроме admin (16.05.2026)
+- `isAdmin = session?.user?.email === 'sydykovsam@gmail.com'` (уже был в App.tsx, передаётся в StickersPage)
+- Кнопка таба и `<KizGuidePage />` рендерятся только при `isAdmin`
+- При загрузке: если в localStorage был сохранён `stickers3` — перекидывает на `stickers` для не-admin
+- Файл: `src/pages/StickersPage.tsx`
+
+#### 12. Удалены временные дебаг-файлы
+- `res2.txt`, `response.txt` — остатки curl-тестов
+- `find_auth.mjs` — скрипт поиска auth endpoint
+- `teksher_src.js` — JS bundle Teksher (663 КБ), скачанный для анализа
 
 ---
 
