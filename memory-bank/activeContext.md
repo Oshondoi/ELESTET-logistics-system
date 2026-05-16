@@ -1,6 +1,75 @@
 # Active Context
 
-## Current Focus (14.05.2026) — KizPage доработки + Auth + PhotoThumb
+## Current Focus (16.05.2026) — KizPage: Teksher QR пополнение + UI + Гайд + Favicon
+
+### Сделано за сессию 16.05.2026:
+
+#### 1. KizPage.tsx — воссоздан с нуля (файл был удалён)
+- Полностью восстановлен `src/pages/KizPage.tsx` (~1240 строк)
+- Все 4 подвкладки: Главная / Товары (GTIN) / КИЗ-коды / Операции
+- Подключение/отключение Teksher, статистика, таблицы данных
+
+#### 2. Edge Function `teksher-auth` — деплой и фиксы
+- Деплой: `npx supabase functions deploy teksher-auth --no-verify-jwt` (без `$env:SUPABASE_ACCESS_TOKEN`)
+- Фикс 405: URL `/facade/oauth/login` (не `/oauth/login`)
+- Фикс 400: поле `username` (не `login`)
+
+#### 3. Auth страница — eye-toggle + Store dropdown
+- Кнопка показа/скрытия пароля
+- Дропдаун магазинов: подключённые первыми + зелёные/красные точки
+
+#### 4. Баланс — точность до копейки
+- `toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })`
+
+#### 5. Карточка «Пополнить баланс» в stats row
+- 4-я карточка в grid рядом с остальными
+- Кнопка «+ Пополнить» открывает модалку
+
+#### 6. Модалка пополнения (max-w-2xl, 2-колонки)
+- Левая: QR код
+- Правая: калькулятор (сом → КИЗ), предупреждения
+
+#### 7. QR пополнение — ПОЛНОСТЬЮ ИСПРАВЛЕНО ✅
+- **Обнаружение:** Teksher JS bundle — `generateQr` это `mutation` (POST), не GET
+- **Правильный endpoint:** `POST /api/v1/qrcode?productGroupAlias=lp`
+- **Параметр найден из тела ошибки 500:** "Required request parameter 'productGroupAlias'"
+- **Ответ:** `{ data: "https://megapay.kg/get#...", qrTransactionId: "...", status: "SUCCESS" }`
+- **Рендеринг:** установлен `qrcode.react` v4.2.0, используется `<QRCodeSVG value={qrString} />`
+- QR генерируется локально в браузере, без внешних сервисов, работает офлайн
+- Edge function обновлена: POST + `productGroupAlias` param + парсинг `data` поля
+- `productGroup` возвращается из `stats` action, хранится в `TeksherStats.productGroup`
+
+#### 8. Гайд (KizGuidePage.tsx) — обновлён
+- Этап 1: добавлена инфо о QR пополнении прямо из ELESTET
+- Этап 10: добавлен endpoint `/api/v1/qrcode?productGroupAlias=lp`, описание MegaPay
+
+#### 9. Карточка участника — без truncate
+- `break-words` / `break-all` вместо `truncate`
+- Grid: `sm:grid-cols-[1fr_1fr_max-content_1fr]` — 3-я карточка по ширине содержимого
+
+#### 10. Favicon
+- Создан `public/favicon.svg` — тёмный квадрат rx=28 + белая буква E
+- Подключён в `index.html`: `<link rel="icon" type="image/svg+xml" href="/favicon.svg" />`
+- Старый `src/favicon.svg.png` удалён
+
+---
+
+## Teksher Edge Function — ключевые детали
+- Файл: `supabase/functions/teksher-auth/index.ts`
+- Проект: `jzucxqakvgzpgtvagsnq`
+- Base: `https://label.teksher.kg/facade`, API: `/api/v1`
+- Auth: `POST /facade/oauth/login` с `{ username, password }` → `data.access_token`
+- **QR:** `POST /api/v1/qrcode?productGroupAlias={productGroup}` → `{ data: "<qr-string>", status: "SUCCESS" }`
+- `productGroup` берётся из billing balance endpoint (`entries[0].productGroup`)
+- Actions: `connect`, `disconnect`, `stats`, `products`, `codes`, `operations`, `operation_ready`, `emit`, `utilise`, `create_product`, `publish_product`, `participant_info`, `topup_qr`
+
+## Teksher — тестовые credentials
+- user: `user15634` / `Alymbek1991@!!!`, participantId=438752596, productGroup="lp"
+- Реальный аккаунт: ABU MEN (Ашимов Кадырали Курсанбаевич), participantId=194177927
+
+---
+
+## Предыдущий фокус (14.05.2026) — KizPage доработки + Auth + PhotoThumb
 
 ### Сделано за сессию (итого):
 

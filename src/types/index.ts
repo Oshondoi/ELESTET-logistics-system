@@ -227,6 +227,7 @@ export interface Store {
   inn?: string | null
   phone?: string | null
   ai_prompt?: string | null
+  teksher_login?: string | null
   created_at: string
 }
 

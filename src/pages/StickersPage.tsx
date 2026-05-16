@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { StickerFormValues, StickerTemplate, StickerBundle, StickerBundleItem, Store, Product } from '../types'
 import { KizPage } from './KizPage'
+import { KizGuidePage } from './KizGuidePage'
 import { StickerFormModal } from '../components/stickers/StickerFormModal'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
 import { Button } from '../components/ui/Button'
@@ -213,11 +214,12 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
     if (toPrint.length > 0) previewStickerPdf(toPrint)
   }
 
-  const [mainTab, setMainTab] = useState<'stickers' | 'stickers2'>(() => {
+  const [mainTab, setMainTab] = useState<'stickers' | 'stickers2' | 'stickers3'>(() => {
     const saved = localStorage.getItem('stickers_main_tab')
-    return saved === 'stickers2' ? 'stickers2' : 'stickers'
+    if (saved === 'stickers2' || saved === 'stickers3') return saved
+    return 'stickers'
   })
-  const handleMainTab = (tab: 'stickers' | 'stickers2') => {
+  const handleMainTab = (tab: 'stickers' | 'stickers2' | 'stickers3') => {
     setMainTab(tab)
     localStorage.setItem('stickers_main_tab', tab)
   }
@@ -507,11 +509,22 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
         >
           КИЗы
         </button>
+        <button
+          type="button"
+          onClick={() => handleMainTab('stickers3')}
+          className={`pb-3 text-sm font-semibold transition-colors ${
+            mainTab === 'stickers3' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-400 hover:text-slate-700'
+          }`}
+        >
+          Гайд
+        </button>
       </div>
 
       {mainTab === 'stickers2' && (
         <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} />
       )}
+
+      {mainTab === 'stickers3' && <KizGuidePage />}
 
       {mainTab === 'stickers' && <div className="space-y-4">
       {/* ── Pre-print модал: проверка незаполненных полей ── */}

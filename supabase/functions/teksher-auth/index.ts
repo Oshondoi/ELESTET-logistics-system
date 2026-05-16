@@ -1,389 +1,323 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+﻿import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
 
-const TEKSHER_BASE = 'https://label.teksher.kg/facade/api/v1'
+const FACADE = 'https://label.teksher.kg/facade'
+const BASE = `${FACADE}/api/v1`
+const ORDER_BASE = `${FACADE}/order/api/v1`
+const TRANSGRAN_BASE = `${FACADE}/transgran/api/v1`
 
-const corsHeaders = {
+const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
-
-function jsonOk(body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  })
+function ok(body: unknown) {
+  return new Response(JSON.stringify(body), { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } })
+}
+function err(msg: string, status = 400) {
+  return new Response(JSON.stringify({ error: msg }), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
 }
 
-function jsonError(message: string, status = 400) {
-  return new Response(JSON.stringify({ error: message }), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  })
-}
-
-// ── Получить JWT токен от Teksher ─────────────────────────────────────────────
-async function teksherLogin(login: string, password: string): Promise<string> {
-  const resp = await fetch(`${TEKSHER_BASE.replace('/api/v1', '')}/oauth/login`, {
+// ── Auth Teksher ──────────────────────────────────────────────────────────────
+async function tkLogin(login: string, password: string): Promise<string> {
+  const r = await fetch(`${FACADE}/oauth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: login, password }),
   })
-  if (!resp.ok) {
-    const text = await resp.text()
-    throw new Error(`Teksher auth failed (${resp.status}): ${text}`)
+  if (!r.ok) {
+    const t = await r.text()
+    throw new Error(`Ошибка входа в Teksher (${r.status}): ${t}`)
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data = await resp.json() as any
-  // Teksher возвращает { status: 'SUCCESS', data: { access_token: '...' } }
-  const token = data?.data?.access_token ?? data.token ?? data.accessToken ?? data.access_token
+  const d = await r.json() as Record<string, unknown>
+  const token = (d?.data as Record<string, unknown>)?.access_token ?? d.access_token
   if (!token) throw new Error('Teksher не вернул токен')
   return token as string
 }
 
-// ── Получить профиль участника (participantId, имя) ──────────────────────────
-async function teksherProfile(token: string): Promise<{ participantId: string; participantName: string }> {
-  // GET /facade/api/v1/users/getCurrentUser → { id, fullName, participant: { id } }
-  const resp = await fetch(`${TEKSHER_BASE}/users/getCurrentUser`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!resp.ok) throw new Error(`Teksher profile error: ${resp.status}`)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data = await resp.json() as any
-  return {
-    participantId: String(data?.participant?.id ?? data.id ?? ''),
-    participantName: (data.fullName ?? data.name ?? '') as string,
-  }
+async function getCreds(svc: ReturnType<typeof createClient>, store_id: string) {
+  const { data } = await svc.from('stores').select('teksher_login, teksher_password').eq('id', store_id).single()
+  return data as { teksher_login: string | null; teksher_password: string | null } | null
 }
 
-// ── Получить баланс кодов ─────────────────────────────────────────────────────
-async function teksherBalance(token: string): Promise<{ balance: number; balanceMoney: number }> {
-  // balance (KM codes) — сумма по product_groups/balance ("Объединённый счёт" или первый элемент)
-  // balanceMoney — монетарный баланс из billing/balance
-  const [pgResp, billingResp] = await Promise.all([
-    fetch(`${TEKSHER_BASE}/product_groups/balance`, { headers: { Authorization: `Bearer ${token}` } }),
-    fetch(`${TEKSHER_BASE}/participants/billing/balance`, { headers: { Authorization: `Bearer ${token}` } }),
-  ])
-
-  let balance = 0
-  if (pgResp.ok) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pgData = await pgResp.json() as any
-    const contracts: any[] = pgData?.contracts ?? []
-    // Предпочитаем Объединённый счёт, если нет — сумма всех
-    const combined = contracts.find((c: any) => c.name?.includes('Объедин') || c.name?.includes('Объедин'))
-    balance = combined ? combined.balance : contracts.reduce((s: number, c: any) => s + (c.balance ?? 0), 0)
-  }
-
-  let balanceMoney = 0
-  if (billingResp.ok) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const billingData = await billingResp.json() as any
-    const entries: any[] = Array.isArray(billingData) ? billingData : [billingData]
-    balanceMoney = entries.reduce((s: number, e: any) => s + (e.saldo ?? e.enable ?? 0), 0)
-  }
-
-  return { balance, balanceMoney }
-}
-
-// ── Количество товаров (GTIN) ─────────────────────────────────────────────────
-async function teksherProductCount(token: string): Promise<number> {
-  // Spring Data pageable: { page: { totalElements: N } }
-  const resp = await fetch(`${TEKSHER_BASE}/products?page=0&size=1`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!resp.ok) return 0
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data = await resp.json() as any
-  return (data.page?.totalElements ?? data.totalElements ?? data.total ?? 0) as number
-}
-
-// ── Количество операций ───────────────────────────────────────────────────────
-async function teksherOperationCount(token: string): Promise<number> {
-  // Spring Data pageable: { page: { totalElements: N } }
-  const resp = await fetch(`${TEKSHER_BASE}/marking_codes/filter?page=0&size=1`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!resp.ok) return 0
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data = await resp.json() as any
-  return (data.page?.totalElements ?? data.totalElements ?? data.total ?? 0) as number
-}
-
-// ── Получить свежие данные с Teksher и сохранить в БД ────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchAndSaveStats(serviceClient: any, login: string, password: string, store_id: string) {
-  const token = await teksherLogin(login, password)
-  const [profile, bal, products, operations] = await Promise.all([
-    teksherProfile(token),
-    teksherBalance(token),
-    teksherProductCount(token),
-    teksherOperationCount(token),
-  ])
-  const syncedAt = new Date().toISOString()
-  await serviceClient
-    .from('stores')
-    .update({
-      teksher_participant_name: profile.participantName,
-      teksher_balance: bal.balance,
-      teksher_balance_money: bal.balanceMoney,
-      teksher_products: products,
-      teksher_operations: operations,
-      teksher_synced_at: syncedAt,
-    })
-    .eq('id', store_id)
-  return { connected: true as const, participantId: profile.participantId, participantName: profile.participantName, balance: bal.balance, balanceMoney: bal.balanceMoney, products, operations, syncedAt }
-}
-
-// ── Main handler ──────────────────────────────────────────────────────────────
+// ── Handler ───────────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
-  const authHeader = req.headers.get('Authorization')
-  if (!authHeader) return jsonError('Не авторизован', 401)
+  const authHdr = req.headers.get('Authorization')
+  if (!authHdr) return err('Не авторизован', 401)
 
-  const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
-  })
-
+  const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global: { headers: { Authorization: authHdr } } })
   const { data: { user }, error: authErr } = await userClient.auth.getUser()
-  if (authErr || !user) return jsonError('Не авторизован', 401)
+  if (authErr || !user) return err('Не авторизован', 401)
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const body = await req.json() as any
-  const { store_id, action = 'connect' } = body as { store_id?: string; action?: string }
+  let body: Record<string, unknown>
+  try { body = await req.json() } catch { return err('Неверный JSON') }
 
-  if (!store_id) return jsonError('store_id обязателен')
+  const action = body.action as string
+  const store_id = body.store_id as string
+  if (!store_id) return err('store_id обязателен')
 
-  const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-  const { data: memberCheck } = await userClient
-    .from('stores')
-    .select('id')
-    .eq('id', store_id)
-    .single()
+  // Проверяем доступ к магазину
+  const { data: storeAccess } = await userClient.from('stores').select('id').eq('id', store_id).single()
+  if (!storeAccess) return err('Магазин не найден или нет доступа', 403)
 
-  if (!memberCheck) return jsonError('Магазин не найден или нет доступа', 403)
-
-  // ── action: connect — сохранить логин+пароль, получить и закешировать данные ─
+  // ── action: connect ─────────────────────────────────────────────────────────
   if (action === 'connect') {
-    const { login, password } = body as { login?: string; password?: string }
-    if (!login || !password) return jsonError('login и password обязательны')
+    const login = body.login as string
+    const password = body.password as string
+    if (!login || !password) return err('login и password обязательны')
 
-    // Сначала сохраняем credentials (password только в БД, никогда не возвращается клиенту)
-    await serviceClient
-      .from('stores')
-      .update({ teksher_login: login, teksher_password: password })
-      .eq('id', store_id)
+    let token: string
+    try { token = await tkLogin(login, password) }
+    catch (e) { return err((e as Error).message) }
 
-    let stats: Awaited<ReturnType<typeof fetchAndSaveStats>>
-    try {
-      stats = await fetchAndSaveStats(serviceClient, login, password, store_id)
-    } catch (e) {
-      return jsonError((e as Error).message)
-    }
+    // Получаем профиль участника
+    const profileR = await fetch(`${BASE}/users/getCurrentUser`, { headers: { Authorization: `Bearer ${token}` } })
+    const profile = profileR.ok ? await profileR.json() as Record<string, unknown> : {}
+    const participantId = String((profile as Record<string, Record<string, unknown>>)?.participant?.id ?? profile.id ?? '')
+    const participantName = (profile.fullName ?? profile.name ?? '') as string
 
-    // Сохраняем participant_id отдельно (он из profile, не из stats)
-    await serviceClient
-      .from('stores')
-      .update({ teksher_participant_id: stats.participantId })
-      .eq('id', store_id)
+    // Сохраняем credentials (только их — данные не кешируем)
+    await svc.from('stores').update({ teksher_login: login, teksher_password: password, teksher_participant_id: participantId, teksher_participant_name: participantName }).eq('id', store_id)
 
-    return jsonOk(stats)
+    return ok({ connected: true, participantId, participantName })
   }
 
-  // ── action: stats — читаем из БД (мгновенно, без вызова Teksher) ─────────────
+  // ── action: disconnect ──────────────────────────────────────────────────────
+  if (action === 'disconnect') {
+    await svc.from('stores').update({ teksher_login: null, teksher_password: null, teksher_participant_id: null, teksher_participant_name: null }).eq('id', store_id)
+    return ok({ disconnected: true })
+  }
+
+  // Для всех остальных actions — нужны credentials
+  const creds = await getCreds(svc, store_id)
+  if (!creds?.teksher_login || !creds?.teksher_password) return ok({ connected: false })
+
+  let token: string
+  try { token = await tkLogin(creds.teksher_login, creds.teksher_password) }
+  catch (e) { return err((e as Error).message) }
+
+  // ── action: stats ───────────────────────────────────────────────────────────
   if (action === 'stats') {
-    const { data: store, error: storeErr } = await serviceClient
-      .from('stores')
-      .select('teksher_login, teksher_participant_id, teksher_participant_name, teksher_balance, teksher_balance_money, teksher_products, teksher_operations, teksher_synced_at')
-      .eq('id', store_id)
-      .single()
+    const { data: store } = await svc.from('stores').select('teksher_participant_id, teksher_participant_name').eq('id', store_id).single()
 
-    // Если колонки ещё не созданы (SQL патч не применён) — пробуем минимальный select
-    if (storeErr) {
-      const { data: storeMin } = await serviceClient
-        .from('stores')
-        .select('teksher_login, teksher_participant_id')
-        .eq('id', store_id)
-        .single()
-      if (!storeMin) return jsonError('Магазин не найден')
-      if (!storeMin.teksher_login) return jsonOk({ connected: false })
-      // Колонки кеша ещё не созданы — сообщаем что нужна синхронизация
-      return jsonOk({ connected: true, participantId: storeMin.teksher_participant_id ?? '', participantName: '', balance: 0, balanceMoney: 0, products: 0, operations: 0, syncedAt: null, needsSync: true })
+    const [pgR, billR] = await Promise.all([
+      fetch(`${BASE}/product_groups/balance`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${BASE}/participants/billing/balance`, { headers: { Authorization: `Bearer ${token}` } }),
+    ])
+    let balance = 0
+    if (pgR.ok) {
+      const pg = await pgR.json() as Record<string, unknown>
+      const contracts = (pg?.contracts as Record<string, unknown>[]) ?? []
+      const combined = contracts.find((c) => String(c.name ?? '').includes('Объедин'))
+      balance = combined ? Number(combined.balance) : contracts.reduce((s, c) => s + Number(c.balance ?? 0), 0)
     }
+    let balanceMoney = 0
+    let course = 0
+    let productGroup = 'lp'
+    if (billR.ok) {
+      const bill = await billR.json() as unknown
+      const entries: Record<string, unknown>[] = Array.isArray(bill) ? bill : [bill as Record<string, unknown>]
+      balanceMoney = entries.reduce((s, e) => s + Number((e as Record<string, unknown>).saldo ?? (e as Record<string, unknown>).enable ?? 0), 0)
+      const firstEntry = (entries[0] ?? {}) as Record<string, unknown>
+      course = Number(firstEntry.course ?? 0)
+      productGroup = String(firstEntry.productGroup ?? '')
+    }
+    return ok({ connected: true, participantName: (store as Record<string, unknown>)?.teksher_participant_name ?? '', participantId: (store as Record<string, unknown>)?.teksher_participant_id ?? '', balance, balanceMoney, course, productGroup })
+  }
 
-    if (!store) return jsonError('Магазин не найден')
-    if (!store.teksher_login) return jsonOk({ connected: false })
-
-    return jsonOk({
-      connected: true,
-      participantId: store.teksher_participant_id ?? '',
-      participantName: store.teksher_participant_name ?? '',
-      balance: store.teksher_balance ?? 0,
-      balanceMoney: store.teksher_balance_money ?? 0,
-      products: store.teksher_products ?? 0,
-      operations: store.teksher_operations ?? 0,
-      syncedAt: store.teksher_synced_at ?? null,
+  // ── action: products ────────────────────────────────────────────────────────
+  if (action === 'products') {
+    const page = Number(body.page ?? 0)
+    const size = Number(body.size ?? 20)
+    const search = (body.search as string) ?? ''
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    if (search) params.set('name', search)
+    const r = await fetch(`${BASE}/products?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) return err(`Teksher: ${r.status}`)
+    const d = await r.json() as Record<string, unknown>
+    return ok({
+      items: d.content ?? d.items ?? [],
+      total: (d.page as Record<string, unknown>)?.totalElements ?? d.totalElements ?? 0,
+      page: (d.page as Record<string, unknown>)?.number ?? page,
     })
   }
 
-  // ── action: sync — свежие данные с Teksher + сохранить в БД ─────────────────
-  if (action === 'sync') {
-    const { data: store, error: storeErr } = await serviceClient
-      .from('stores')
-      .select('teksher_login, teksher_password, teksher_participant_id')
-      .eq('id', store_id)
-      .single()
-
-    if (storeErr || !store) return jsonError('Магазин не найден')
-    if (!store.teksher_login || !store.teksher_password) return jsonOk({ connected: false })
-
-    try {
-      const stats = await fetchAndSaveStats(serviceClient, store.teksher_login as string, store.teksher_password as string, store_id)
-      return jsonOk({ ...stats, participantId: store.teksher_participant_id ?? stats.participantId })
-    } catch (e) {
-      return jsonError(`Ошибка синхронизации: ${(e as Error).message}`)
-    }
-  }
-
-  // ── action: products — список товаров (GTIN) с пагинацией ───────────────────
-  if (action === 'products') {
-    const { data: store } = await serviceClient
-      .from('stores')
-      .select('teksher_login, teksher_password')
-      .eq('id', store_id)
-      .single()
-
-    if (!store?.teksher_login || !store?.teksher_password) return jsonOk({ connected: false })
-
-    const { page = 0, size = 20, search = '' } = body as { page?: number; size?: number; search?: string }
-
-    try {
-      const token = await teksherLogin(store.teksher_login as string, store.teksher_password as string)
-      const params = new URLSearchParams({ page: String(page), size: String(size) })
-      if (search) params.set('name', search)
-      const resp = await fetch(`${TEKSHER_BASE}/products?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!resp.ok) throw new Error(`Teksher products error: ${resp.status}`)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data = await resp.json() as any
-      return jsonOk({
-        items: data.content ?? data.items ?? [],
-        totalElements: data.page?.totalElements ?? data.totalElements ?? 0,
-        totalPages: data.page?.totalPages ?? data.totalPages ?? 1,
-        pageNumber: data.page?.number ?? page,
-      })
-    } catch (e) {
-      return jsonError((e as Error).message)
-    }
-  }
-
-  // ── action: codes — список КИЗ-кодов с пагинацией и фильтром по статусу ──────
+  // ── action: codes ───────────────────────────────────────────────────────────
   if (action === 'codes') {
-    const { data: store } = await serviceClient
-      .from('stores')
-      .select('teksher_login, teksher_password')
-      .eq('id', store_id)
-      .single()
-
-    if (!store?.teksher_login || !store?.teksher_password) return jsonOk({ connected: false })
-
-    const { page = 0, size = 30, status = '', productGroupCode = 'LP RF' } = body as { page?: number; size?: number; status?: string; productGroupCode?: string }
-
-    try {
-      const token = await teksherLogin(store.teksher_login as string, store.teksher_password as string)
-      const params = new URLSearchParams({ page: String(page), size: String(size), productGroupCode })
-      if (status) params.set('status', status)
-      const resp = await fetch(`${TEKSHER_BASE}/marking_codes/filter?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      // 404 / 204 = нет кодов с таким фильтром — возвращаем пустой список
-      if (resp.status === 404 || resp.status === 204) {
-        return jsonOk({ items: [], totalElements: 0, totalPages: 0 })
-      }
-      if (!resp.ok) {
-        // Пробуем без productGroupCode (некоторые статусы могут быть в другой группе)
-        const params2 = new URLSearchParams({ page: String(page), size: String(size) })
-        if (status) params2.set('status', status)
-        const resp2 = await fetch(`${TEKSHER_BASE}/marking_codes/filter?${params2}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        if (!resp2.ok) return jsonOk({ items: [], totalElements: 0, totalPages: 0 })
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data2 = await resp2.json() as any
-        return jsonOk({
-          items: data2.content ?? data2.items ?? [],
-          totalElements: data2.page?.totalElements ?? data2.totalElements ?? 0,
-          totalPages: data2.page?.totalPages ?? data2.totalPages ?? 1,
-        })
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data = await resp.json() as any
-      return jsonOk({
-        items: data.content ?? data.items ?? [],
-        totalElements: data.page?.totalElements ?? data.totalElements ?? 0,
-        totalPages: data.page?.totalPages ?? data.totalPages ?? 1,
-      })
-    } catch (e) {
-      return jsonError((e as Error).message)
+    const page = Number(body.page ?? 0)
+    const size = Number(body.size ?? 30)
+    const status = (body.status as string) ?? ''
+    const params = new URLSearchParams({ page: String(page), size: String(size), productGroupCode: 'LP RF' })
+    if (status) params.set('status', status)
+    let r = await fetch(`${BASE}/marking_codes/filter?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) {
+      const p2 = new URLSearchParams({ page: String(page), size: String(size) })
+      if (status) p2.set('status', status)
+      r = await fetch(`${BASE}/marking_codes/filter?${p2}`, { headers: { Authorization: `Bearer ${token}` } })
     }
+    if (r.status === 404 || r.status === 204) return ok({ items: [], total: 0 })
+    if (!r.ok) return ok({ items: [], total: 0 })
+    const d = await r.json() as Record<string, unknown>
+    return ok({
+      items: d.content ?? d.items ?? [],
+      total: (d.page as Record<string, unknown>)?.totalElements ?? d.totalElements ?? 0,
+    })
   }
 
-  // ── action: operations — журнал операций ─────────────────────────────────────
+  // ── action: operations ──────────────────────────────────────────────────────
   if (action === 'operations') {
-    const { data: store } = await serviceClient
-      .from('stores')
-      .select('teksher_login, teksher_password')
-      .eq('id', store_id)
-      .single()
+    const page = Number(body.page ?? 0)
+    const size = Number(body.size ?? 20)
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    const r = await fetch(`${BASE}/operations/filter?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) return ok({ items: [], total: 0 })
+    const d = await r.json() as Record<string, unknown>
+    const rawItems = (d.content ?? d.items ?? []) as Record<string, unknown>[]
+    return ok({
+      items: rawItems.map((op) => ({ ...op, id: op.operationId ?? op.id, gtin: (op.product as Record<string, unknown>)?.gtin ?? op.gtin })),
+      total: (d.page as Record<string, unknown>)?.totalElements ?? d.totalElements ?? 0,
+    })
+  }
 
-    if (!store?.teksher_login || !store?.teksher_password) return jsonOk({ connected: false })
+  // ── action: operation_ready ─────────────────────────────────────────────────
+  if (action === 'operation_ready') {
+    const orderId = body.orderId as string
+    if (!orderId) return err('orderId обязателен')
+    const r = await fetch(`${ORDER_BASE}/operations/${orderId}/ready`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) return ok({ ready: false })
+    const d = await r.json() as Record<string, unknown>
+    return ok({ ready: Boolean(d.ready) })
+  }
 
-    const { page = 0, size = 20 } = body as { page?: number; size?: number }
+  // ── action: emit ────────────────────────────────────────────────────────────
+  if (action === 'emit') {
+    const gtin = body.gtin as string
+    const quantity = Number(body.quantity)
+    if (!gtin) return err('gtin обязателен')
+    if (!quantity || quantity < 1 || quantity > 10000) return err('quantity: 1–10000')
+    const r = await fetch(`${ORDER_BASE}/operations/multi`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        extension: 'lp',
+        countryId: 199,
+        items: [{ gtin, markingCodesAmount: quantity, dataSupplier: 'AUTO', template: 'SHORT' }],
+      }),
+    })
+    const d = await r.json() as Record<string, unknown>
+    if (!r.ok) return err((d?.message as string) ?? `Ошибка эмиссии: ${r.status}`)
+    const operationIds = Object.keys((d?.data as Record<string, unknown>) ?? {})
+    return ok({ success: true, operationId: operationIds[0] ?? null })
+  }
 
-    try {
-      const token = await teksherLogin(store.teksher_login as string, store.teksher_password as string)
-      const params = new URLSearchParams({ page: String(page), size: String(size) })
-      const resp = await fetch(`${TEKSHER_BASE}/operations?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!resp.ok) throw new Error(`Teksher operations error: ${resp.status}`)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data = await resp.json() as any
-      return jsonOk({
-        items: data.content ?? data.items ?? (Array.isArray(data) ? data : []),
-        totalElements: data.page?.totalElements ?? data.totalElements ?? 0,
-        totalPages: data.page?.totalPages ?? data.totalPages ?? 1,
-      })
-    } catch (e) {
-      return jsonError((e as Error).message)
+  // ── action: utilise ─────────────────────────────────────────────────────────
+  if (action === 'utilise') {
+    const orderId = body.orderId as string
+    if (!orderId) return err('orderId обязателен')
+    const readyR = await fetch(`${ORDER_BASE}/operations/${orderId}/ready`, { headers: { Authorization: `Bearer ${token}` } })
+    if (readyR.ok) {
+      const rd = await readyR.json() as Record<string, unknown>
+      if (!rd.ready) return err('Коды ещё не готовы. Попробуйте позже.')
     }
+    const r = await fetch(`${ORDER_BASE}/operations/utilisation`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ extension: 'lp', dataSupplier: 'AUTO', orderId }),
+    })
+    const d = await r.json() as Record<string, unknown>
+    if (!r.ok) return err((d?.message as string) ?? `Ошибка нанесения: ${r.status}`)
+    return ok({ success: true })
   }
 
-  // ── action: disconnect — удалить credentials и кеш ───────────────────────────
-  if (action === 'disconnect') {
-    await serviceClient
-      .from('stores')
-      .update({
-        teksher_login: null,
-        teksher_password: null,
-        teksher_participant_id: null,
-        teksher_participant_name: null,
-        teksher_balance: null,
-        teksher_balance_money: null,
-        teksher_products: null,
-        teksher_operations: null,
-        teksher_synced_at: null,
-      })
-      .eq('id', store_id)
+  // ── action: create_product ──────────────────────────────────────────────────
+  if (action === 'create_product') {
+    const { gtin, fullName, trademark, tnved } = body as Record<string, string>
+    if (!gtin || !fullName) return err('gtin и fullName обязательны')
+    const { data: storeRec } = await svc.from('stores').select('teksher_participant_id').eq('id', store_id).single()
+    const participantId = (storeRec as Record<string, unknown>)?.teksher_participant_id as string | null
 
-    return jsonOk({ disconnected: true })
+    const profileR = await fetch(`${BASE}/users/getCurrentUser`, { headers: { Authorization: `Bearer ${token}` } })
+    const profile = profileR.ok ? await profileR.json() as Record<string, unknown> : {}
+    const gcp = gtin.slice(0, 9)
+
+    const payload: Record<string, unknown> = {
+      gtin, gcp, fullName,
+      trademark: trademark || undefined,
+      tnved: tnved || undefined,
+      attributes: [{ attributeTypeCode: 'name', value: fullName }],
+    }
+    if (participantId) payload.participantId = participantId
+    if ((profile as Record<string, Record<string, unknown>>)?.participant?.id) payload.participantId = (profile as Record<string, Record<string, unknown>>).participant.id
+
+    const r = await fetch(`${BASE}/products/create`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const d = await r.json() as Record<string, unknown>
+    if (!r.ok) return err((d?.message as string) ?? `Ошибка создания: ${r.status}`)
+    return ok({ success: true, product: d })
   }
 
-  return jsonError(`Неизвестный action: ${action}`)
+  // ── action: publish_product ─────────────────────────────────────────────────
+  if (action === 'publish_product') {
+    const productId = body.productId as string
+    if (!productId) return err('productId обязателен')
+    const r = await fetch(`${BASE}/products/${productId}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'PUBLISHED' }),
+    })
+    if (!r.ok) {
+      const d = await r.json() as Record<string, unknown>
+      return err((d?.message as string) ?? `Ошибка публикации: ${r.status}`)
+    }
+    return ok({ success: true })
+  }
+
+  // ── action: participant_info ────────────────────────────────────────────────
+  if (action === 'participant_info') {
+    const { data: storeRec } = await svc.from('stores').select('teksher_participant_id').eq('id', store_id).single()
+    const participantId = (storeRec as Record<string, unknown>)?.teksher_participant_id as string | null
+    if (!participantId) return err('participantId не найден. Переподключите Teksher.')
+    const r = await fetch(`${BASE}/participants/${participantId}/identifiers`, { headers: { Authorization: `Bearer ${token}` } })
+    const d = r.ok ? await r.json() as unknown[] : []
+    const first = (d[0] as Record<string, unknown>) ?? {}
+    return ok({ gcp: first.gcp ?? '', gln: first.gln ?? '', participantId })
+  }
+
+  // ── action: topup_qr ────────────────────────────────────────────────────────
+  if (action === 'topup_qr') {
+    const productGroupAlias = (body.productGroupAlias as string) ?? 'lp'
+    const r = await fetch(`${BASE}/qrcode?productGroupAlias=${encodeURIComponent(productGroupAlias)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    if (!r.ok) return ok({ qrError: `QR код недоступен (${r.status})` })
+    const ct = r.headers.get('content-type') ?? ''
+    if (ct.includes('image') || ct.includes('octet-stream')) {
+      const buf = await r.arrayBuffer()
+      const bytes = new Uint8Array(buf)
+      let binary = ''
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i])
+      const mime = ct.split(';')[0] || 'image/png'
+      return ok({ qrDataUrl: `data:${mime};base64,${btoa(binary)}` })
+    }
+    try {
+      const d = await r.json() as Record<string, unknown>
+      // Teksher returns { data: "<qr-string>", status: "SUCCESS", qrTransactionId: "..." }
+      const qrString = d.data ?? d.url ?? d.qrUrl ?? d.qrCode ?? d.image
+      if (qrString) return ok({ qrString: String(qrString), qrTransactionId: d.qrTransactionId ?? null })
+    } catch { /* ignore */ }
+    return ok({ qrError: 'Неизвестный формат QR кода' })
+  }
+
+  return err(`Неизвестный action: ${action}`)
 })

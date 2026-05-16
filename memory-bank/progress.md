@@ -3,6 +3,35 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 16.05.2026 — Teksher QR пополнение + UI + Favicon
+
+### KizPage.tsx — воссоздан (файл был удалён)
+- Полностью восстановлен с нуля, все 4 вкладки работают
+- Edge Function `teksher-auth` задеплоена: `npx supabase functions deploy teksher-auth --no-verify-jwt`
+
+### QR пополнение баланса — ЗАВЕРШЕНО ✅
+- Обнаружен правильный endpoint через JS bundle Teksher: `generateQr` = `mutation` (POST)
+- Тело 500-ошибки раскрыло параметр: `productGroupAlias` (Required!)
+- **Endpoint:** `POST /api/v1/qrcode?productGroupAlias=lp`
+- **Ответ:** `{ data: "https://megapay.kg/get#...", status: "SUCCESS" }`
+- Установлен `qrcode.react@4.2.0`, QR рендерится через `<QRCodeSVG>` локально в браузере
+- `productGroup` теперь возвращается из `stats` action и передаётся в `topup_qr`
+- Edge function задеплоена с исправлениями
+
+### UI улучшения
+- Карточка участника: `sm:grid-cols-[1fr_1fr_max-content_1fr]` — не обрезает имя
+- `break-words` / `break-all` вместо `truncate`
+
+### Гайд (KizGuidePage) — обновлён
+- Этап 1 + Этап 10: упоминание QR пополнения из ELESTET (MegaPay)
+- API endpoint `/api/v1/qrcode?productGroupAlias=lp` добавлен в секцию API
+
+### Favicon
+- `public/favicon.svg` — SVG логотип E на тёмном фоне (rx=28)
+- `index.html`: `<link rel="icon" type="image/svg+xml" href="/favicon.svg" />`
+
+---
+
 ## Что сделано за сессию 14.05.2026 — Teksher исследование + КИЗ страница
 
 ### Исследование Pedant.kg + Teksher (label.teksher.kg)

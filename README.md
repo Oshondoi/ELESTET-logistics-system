@@ -118,7 +118,54 @@ AI 01 = GTIN
 - **Валидация**: перед отправкой проверяет `password !== confirmPassword`
 - **Равная высота** в обоих режимах: `minHeight:600px` карточка + `flex-1` форма + `mt-auto` кнопка
 
-### KizPage — страница маркировки (14.05.2026)
+### KizPage — QR пополнение баланса (16.05.2026)
+
+#### Как работает
+- Кнопка «+ Пополнить» в карточке stats → модалка `max-w-2xl` (2 колонки: QR слева, калькулятор справа)
+- Edge Function action `topup_qr` → `POST /api/v1/qrcode?productGroupAlias={productGroup}`
+- Ответ Teksher: `{ data: "https://megapay.kg/get#...", qrTransactionId: "...", status: "SUCCESS" }`
+- QR рендерится через `qrcode.react@4.2.0` (`<QRCodeSVG>`) — локально в браузере, без внешних сервисов
+
+#### Ключевые детали endpoint
+- Метод: **POST** (не GET!)
+- Параметр: `productGroupAlias` (Required — иначе 500)
+- `productGroup` берётся из billing balance response (`entries[0].productGroup`) и возвращается в `stats` action
+- Хранится в `TeksherStats.productGroup?: string`
+
+#### Edge Function actions (полный список)
+| Action | Описание |
+|--------|----------|
+| `connect` | Логин + сохранение credentials |
+| `disconnect` | Очистка credentials |
+| `stats` | Баланс кодов + денежный + course + productGroup |
+| `products` | Список товаров (GTIN) |
+| `codes` | КИЗ-коды |
+| `operations` | Операции |
+| `operation_ready` | Проверка готовности операции |
+| `emit` | Заказ эмиссии кодов |
+| `utilise` | Нанесение кодов |
+| `create_product` | Создание товара |
+| `publish_product` | Публикация товара |
+| `participant_info` | GCP / GLN участника |
+| `topup_qr` | QR для пополнения баланса (MegaPay) |
+
+#### Deploy команда
+```bash
+npx supabase functions deploy teksher-auth --no-verify-jwt
+```
+⚠️ Без `$env:SUPABASE_ACCESS_TOKEN` — не нужен при залогиненном CLI
+
+### KizPage — UI (16.05.2026)
+- **Stats grid**: `sm:grid-cols-[1fr_1fr_max-content_1fr]` — 3-я карточка (участник) растягивается по содержимому
+- **Имя участника**: `break-words` / `break-all` — без обрезки
+- **Вкладка «Гайд»**: переименована из «КИЗы 2»
+
+### Favicon (16.05.2026)
+- `public/favicon.svg` — SVG: тёмный (#0d1527) квадрат с rx=28 + белая буква E
+- Подключён в `index.html`: `<link rel="icon" type="image/svg+xml" href="/favicon.svg" />`
+- SVG масштабируется идеально на Retina без пикселизации
+
+
 Дашборд системы маркировки КИЗ (Teksher) внутри вкладки «КИЗы» страницы Стикеры.
 
 #### Подвкладки
@@ -530,7 +577,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Стикеры 2в1** | ✅ Готово | Отдельная колонка combined_sticker_urls, фиолетовая группа кнопок |
 | **Колонка "Даты"** | ✅ Готово | 2 подстолбца: Приём/Отправлен/Прибыл + Отгружен/Запланирован/Приём ВБ; MpDateButton; WB API supplyDate+factDate |
 | **Фулфилмент** | ✅ Готово | 5 этапов (Приёмка→ОТК→Маркировка→Коробá→Логистика), авто-лукап баркода, привязка к рейсу, RBAC |
-| **Дневник ELESTET** | ✅ Готово | Личный дневник (только owner): таймлайн, запись дня, ИИ-разбор, AI-настройки с вкладками цен |
+| **KizPage — Teksher интеграция** | ✅ Готово | KizPage: подключение, статистика, товары, коды, операции, эмиссия, нанесение |
+| **KizPage — QR пополнение** | ✅ Готово | POST /qrcode?productGroupAlias, qrcode.react, MegaPay QR в модалке |
+| **Favicon** | ✅ Готово | public/favicon.svg — SVG логотип E, подключён в index.html |
 | **Topbar UX** | ✅ Готово | Кнопки Дневник/Словарь/Админ всегда видны; «Домой» слева от них на full-page страницах; сайдбар скрыт на admin/glossary/diary |
 | **Company auto-create** | ✅ Готово | При `accounts.length === 0` — авто-создаётся «Основная компания»; `autoCreatingCompanyRef` предотвращает дубли при race condition |
 | **Company delete guard** | ✅ Готово | Нельзя удалить последнюю компанию; кнопка `disabled`+`opacity-40`; при удалении активной — переключение на другую ДО удаления (нет null-флэша) |
