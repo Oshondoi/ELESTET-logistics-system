@@ -1,67 +1,35 @@
 # Active Context
 
-## Current Focus (16.05.2026) — KizPage: Teksher QR пополнение + UI + Гайд + Favicon + Гайд скрыт для не-admin
+## Current Focus (17.05.2026) — Страна производства + Форма создания товара + 401 фикс
 
-### Сделано за сессию 16.05.2026:
+### Сделано за сессию 17.05.2026:
 
-#### 1. KizPage.tsx — воссоздан с нуля (файл был удалён)
-- Полностью восстановлен `src/pages/KizPage.tsx` (~1240 строк)
-- Все 4 подвкладки: Главная / Товары (GTIN) / КИЗ-коды / Операции
-- Подключение/отключение Teksher, статистика, таблицы данных
+#### 1. Баг — manufacturedCountryId не отправлялся в Teksher API
+- Поле страны производства не попадало в payload `create_product` action
+- Фикс: добавлен `manufacturedCountryId: countryId || undefined` в payload в edge function
+- Edge function задеплоена (новая версия)
 
-#### 2. Edge Function `teksher-auth` — деплой и фиксы
-- Деплой: `npx supabase functions deploy teksher-auth --no-verify-jwt` (без `$env:SUPABASE_ACCESS_TOKEN`)
-- Фикс 405: URL `/facade/oauth/login` (не `/oauth/login`)
-- Фикс 400: поле `username` (не `login`)
+#### 2. Countries таблица + кэш
+- `supabase/patch_countries.sql`: создана таблица `countries(teksher_id integer PK, name text, code text, synced_at timestamptz)`
+- SQL применён в production
+- action `countries`: DB-first (Supabase) → fallback на Teksher API + upsert
+- action `refresh_countries`: принудительный sync с Teksher API + upsert в countries
+- Кнопка «Обновить ТН ВЭД» теперь дополнительно вызывает `refresh_countries`
 
-#### 3. Auth страница — eye-toggle + Store dropdown
-- Кнопка показа/скрытия пароля
-- Дропдаун магазинов: подключённые первыми + зелёные/красные точки
+#### 3. KizPage.tsx — форма создания товара
+- Состояния: `cpCountry`, `cpCountryId`, `cpTeksherTnvedId`, `countries: CountryItem[]`
+- SearchableSelect для поля «Страна производства»
+- Динамические атрибуты по ТН ВЭД: Вид товара, Размер+тип, Цвет, Состав, Целевой пол, Модель/артикул, Номер регламента
+- GCP/GLN автоматически из `/participants/{id}/identifiers`
+- Ошибки от Teksher API пробрасываются как есть в UI
 
-#### 4. Баланс — точность до копейки
-- `toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })`
+#### 4. 401 Unauthorized — фикс
+- `invoke()` в `KizPage.tsx`: явный `await supabase.auth.getSession()` перед каждым вызовом
+- Свежий `access_token` → `Authorization: Bearer {token}` header → edge function получает валидный JWT
+- Все 401 ошибки при загрузке страницы устранены
 
-#### 5. Карточка «Пополнить баланс» в stats row
-- 4-я карточка в grid рядом с остальными
-- Кнопка «+ Пополнить» открывает модалку
-
-#### 6. Модалка пополнения (max-w-2xl, 2-колонки)
-- Левая: QR код
-- Правая: калькулятор (сом → КИЗ), предупреждения
-
-#### 7. QR пополнение — ПОЛНОСТЬЮ ИСПРАВЛЕНО ✅
-- **Обнаружение:** Teksher JS bundle — `generateQr` это `mutation` (POST), не GET
-- **Правильный endpoint:** `POST /api/v1/qrcode?productGroupAlias=lp`
-- **Параметр найден из тела ошибки 500:** "Required request parameter 'productGroupAlias'"
-- **Ответ:** `{ data: "https://megapay.kg/get#...", qrTransactionId: "...", status: "SUCCESS" }`
-- **Рендеринг:** установлен `qrcode.react` v4.2.0, используется `<QRCodeSVG value={qrString} />`
-- QR генерируется локально в браузере, без внешних сервисов, работает офлайн
-- Edge function обновлена: POST + `productGroupAlias` param + парсинг `data` поля
-- `productGroup` возвращается из `stats` action, хранится в `TeksherStats.productGroup`
-
-#### 8. Гайд (KizGuidePage.tsx) — обновлён
-- Этап 1: добавлена инфо о QR пополнении прямо из ELESTET
-- Этап 10: добавлен endpoint `/api/v1/qrcode?productGroupAlias=lp`, описание MegaPay
-
-#### 9. Карточка участника — без truncate
-- `break-words` / `break-all` вместо `truncate`
-- Grid: `sm:grid-cols-[1fr_1fr_max-content_1fr]` — 3-я карточка по ширине содержимого
-
-#### 10. Favicon
-- Создан `public/favicon.svg` — тёмный квадрат rx=28 + белая буква E
-- Подключён в `index.html`: `<link rel="icon" type="image/svg+xml" href="/favicon.svg" />`
-- Старый `src/favicon.svg.png` удалён
-
-#### 11. Таб «Гайд» — скрыт для всех кроме admin (16.05.2026)
-- `isAdmin = session?.user?.email === 'sydykovsam@gmail.com'` (уже был в App.tsx, передаётся в StickersPage)
-- Кнопка таба и `<KizGuidePage />` рендерятся только при `isAdmin`
-- При загрузке: если в localStorage был сохранён `stickers3` — перекидывает на `stickers` для не-admin
-- Файл: `src/pages/StickersPage.tsx`
-
-#### 12. Удалены временные дебаг-файлы
-- `res2.txt`, `response.txt` — остатки curl-тестов
-- `find_auth.mjs` — скрипт поиска auth endpoint
-- `teksher_src.js` — JS bundle Teksher (663 КБ), скачанный для анализа
+#### 5. Гайд — обновлён
+- Этап 3: расширен список деталей и API для регистрации товара
 
 ---
 
@@ -72,11 +40,12 @@
 - Auth: `POST /facade/oauth/login` с `{ username, password }` → `data.access_token`
 - **QR:** `POST /api/v1/qrcode?productGroupAlias={productGroup}` → `{ data: "<qr-string>", status: "SUCCESS" }`
 - `productGroup` берётся из billing balance endpoint (`entries[0].productGroup`)
-- Actions: `connect`, `disconnect`, `stats`, `products`, `codes`, `operations`, `operation_ready`, `emit`, `utilise`, `create_product`, `publish_product`, `participant_info`, `topup_qr`
+- Actions: `connect`, `disconnect`, `stats`, `products`, `codes`, `operations`, `operation_ready`, `emit`, `utilise`, `create_product`, `publish_product`, `participant_info`, `topup_qr`, `countries`, `refresh_countries`
 
 ## Teksher — тестовые credentials
 - user: `user15634` / `Alymbek1991@!!!`, participantId=438752596, productGroup="lp"
 - Реальный аккаунт: ABU MEN (Ашимов Кадырали Курсанбаевич), participantId=194177927
+- Store "Move on": подключён, teksher_login установлен, ID участника: 438752596
 
 ---
 

@@ -3,6 +3,34 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 17.05.2026 — Teksher Countries кэш + Регистрация товара + 401 фикс
+
+### Страна производства — bugfix + кэш в Supabase
+- **Баг:** `manufacturedCountryId` никогда не попадал в API-запрос — поле называлось иначе и/или отсутствовало в payload
+- **Фикс:** в edge function `create_product` добавлен `manufacturedCountryId: countryId || undefined` в payload
+- **countries таблица:** `supabase/patch_countries.sql` — создана таблица `countries(teksher_id PK, name, code, synced_at)` для кэша стран
+- **action `countries`:** DB-first (читает из таблицы), fallback на Teksher API + upsert в БД
+- **action `refresh_countries`:** всегда тянет с Teksher API + upsert (принудительное обновление)
+- **Кнопка «Обновить ТН ВЭД»** теперь также запускает `refresh_countries` — страны синхронизируются вместе с ТН ВЭД
+- `KizPage.tsx`: `cpCountry` / `cpCountryId` state + SearchableSelect для выбора страны в форме создания товара
+
+### Регистрация нового товара (GTIN) — полная форма
+- **Форма «Регистрация нового товара»** полностью реализована в `KizPage.tsx`
+- Поля: GTIN, Полное наименование, Артикул МП (опц.), Производитель (ИНН + наименование), Страна производства, Товарный знак, Код ТН ВЭД
+- Атрибуты: подгружаются динамически после выбора ТН ВЭД кода. Для лёгкой пром-ти:  Вид товара, Размер (значение + тип), Цвет, Состав, Целевой пол, Модель/артикул, Номер регламента
+- GCP/GLN автоматически берутся из Teksher `/participants/{id}/identifiers`
+- Ошибка «Карточка товара с GTIN уже существует» — приходит от Teksher API, отображается в UI
+
+### 401 Unauthorized — фикс invoke()
+- **Корень проблемы:** `supabase.functions.invoke()` отправлял устаревший/expired токен — edge function получала невалидный JWT → 401
+- **Фикс:** перед каждым вызовом edge function — `await supabase.auth.getSession()` (авто-обновляет access_token через refresh_token), токен явно передаётся в заголовке `Authorization: Bearer {token}`
+- Файл: `src/pages/KizPage.tsx`, функция `invoke()`
+
+### Гайд — обновлён (17.05.2026)
+- Этап 3 «Регистрация товара»: добавлены детали полной формы, атрибуты, страна производства, API стран, предупреждение о дублирующемся GTIN
+
+---
+
 ## Что сделано за сессию 16.05.2026 — Teksher QR пополнение + UI + Favicon
 
 ### KizPage.tsx — воссоздан (файл был удалён)

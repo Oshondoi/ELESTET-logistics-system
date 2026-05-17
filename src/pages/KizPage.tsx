@@ -1,4 +1,5 @@
-﻿import { useState, useEffect, useCallback, useRef } from 'react'
+﻿import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
 import type { Store } from '../types'
@@ -48,6 +49,50 @@ interface TeksherOperation {
   gtin?: string
   createdAt?: string
   createdDate?: string
+}
+
+interface TnvedItem {
+  id?: string | number
+  fullCode?: string
+  code?: string
+  subPositionName?: string
+  positionName?: string
+  position?: string
+  groupName?: string
+  productGroup?: string
+  subgroupId?: number | null
+  teksherTnvedId?: number | null
+  [key: string]: unknown
+}
+
+interface AttrTemplate {
+  // Актуальная структура API Teksher
+  dataType?: number
+  position?: number
+  isRequired?: boolean
+  multiplication?: boolean
+  attributeType?: {
+    code?: string
+    name?: string
+    values?: Array<string | { id?: number; value?: string; code?: string; name?: string }>
+    unitCodes?: string[]
+  }
+  // Старая структура (запасной вариант)
+  attributeTypeCode?: string; code?: string; typeCode?: string
+  name?: string; attributeTypeName?: string; required?: boolean
+  allowedValues?: Array<string | { value?: string; name?: string }>
+  values?: Array<string | { value?: string; name?: string }>
+  dictionaryValues?: Array<string | { value?: string; name?: string }>
+}
+
+
+interface CountryItem {
+  id?: string | number
+  name?: string
+  nameRu?: string
+  code?: string
+  numericCode?: string | number
+  [key: string]: unknown
 }
 
 interface KizPageProps {
@@ -146,7 +191,13 @@ const EmptyState = ({ text, sub }: { text: string; sub?: string }) => (
 
 async function invoke(body: Record<string, unknown>): Promise<{ data: Record<string, unknown> | null; error: string | null }> {
   if (!supabase) return { data: null, error: 'Supabase не инициализирован' }
-  const { data, error } = await supabase.functions.invoke('teksher-auth', { body })
+  // Принудительно обновляем сессию перед вызовом edge function
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) return { data: null, error: 'Сессия истекла. Войдите снова.' }
+  const { data, error } = await supabase.functions.invoke('teksher-auth', {
+    body,
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  })
   if (error) {
     try {
       const ctx = (error as { context?: Response }).context
@@ -160,6 +211,86 @@ async function invoke(body: Record<string, unknown>): Promise<{ data: Record<str
   const d = data as Record<string, unknown>
   if (d?.error) return { data: null, error: d.error as string }
   return { data: d, error: null }
+}
+
+// ── Searchable Select ───────────────────────────────────────────────────────────
+function SearchableSelect({ value, options, placeholder = '— Выберите —', onChange, className }: {
+  value: string; options: string[]; placeholder?: string; onChange: (v: string) => void; className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+  const dropRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [dropPos, setDropPos] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null)
+
+  useEffect(() => { if (open) { setSearch(''); inputRef.current?.focus() } }, [open])
+
+  useLayoutEffect(() => {
+    if (!open || !ref.current) return
+    const rect = ref.current.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom
+    const above = spaceBelow < 220 && rect.top > 220
+    setDropPos({
+      top: above ? undefined : rect.bottom + 4,
+      bottom: above ? window.innerHeight - rect.top + 4 : undefined,
+      left: rect.left,
+      width: rect.width,
+    })
+  }, [open])
+
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node) && !dropRef.current?.contains(e.target as Node)) {
+        setOpen(false); setSearch('')
+      }
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e: Event) => {
+      if (dropRef.current?.contains(e.target as Node)) return
+      setOpen(false); setSearch('')
+    }
+    window.addEventListener('scroll', close, true)
+    return () => window.removeEventListener('scroll', close, true)
+  }, [open])
+
+  const filtered = search ? options.filter(o => o.toLowerCase().includes(search.toLowerCase())) : options
+
+  const dropdown = open && dropPos ? (
+    <div ref={dropRef} style={{ position: 'fixed', top: dropPos.top, bottom: dropPos.bottom, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
+      className="rounded-lg border border-slate-200 bg-white shadow-lg max-h-52 overflow-y-auto">
+      {filtered.length === 0
+        ? <div className="px-3 py-2 text-sm text-slate-400">Ничего не найдено</div>
+        : filtered.map(opt => (
+          <button key={opt} type="button" onClick={() => { onChange(opt); setOpen(false); setSearch('') }}
+            className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 hover:text-blue-700 ${opt === value ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}>
+            {opt}
+          </button>
+        ))
+      }
+    </div>
+  ) : null
+
+  return (
+    <div ref={ref} className={`relative ${className ?? ''}`}>
+      {open ? (
+        <input ref={inputRef} type="text" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Поиск..." className="w-full rounded-lg border border-blue-500 px-3 py-2 text-sm outline-none ring-1 ring-blue-500" />
+      ) : (
+        <button type="button" onClick={() => setOpen(true)}
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-left flex items-center justify-between bg-white hover:border-slate-300 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <span className={value ? 'text-slate-900' : 'text-slate-400'}>{value || placeholder}</span>
+          <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400 shrink-0 ml-2" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      )}
+      {createPortal(dropdown, document.body)}
+    </div>
+  )
 }
 
 // ── Основной компонент ────────────────────────────────────────────────────────
@@ -181,6 +312,9 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   const [connectForm, setConnectForm] = useState({ login: '', password: '' })
   const [connectLoading, setConnectLoading] = useState(false)
   const [connectError, setConnectError] = useState<string | null>(null)
+
+  // ТН ВЭД sync
+  const [tnvedSyncing, setTnvedSyncing] = useState(false)
 
   // Products
   const [products, setProducts] = useState<TeksherProduct[]>([])
@@ -217,13 +351,40 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   const [cpLoading, setCpLoading] = useState(false)
   const [cpError, setCpError] = useState<string | null>(null)
 
-  // Participant info
-  const [participantInfo, setParticipantInfo] = useState<{ gcp: string; gln: string; participantId: string } | null>(null)
+  // Create product - extended form
+  const [cpTab, setCpTab] = useState(0)
+  const [cpTnvedName, setCpTnvedName] = useState('')
+  const [cpTnvedPos, setCpTnvedPos] = useState('')
+  const [cpTnvedPosName, setCpTnvedPosName] = useState('')
+  const [cpHasMfr, setCpHasMfr] = useState(true)
+  const [cpCountry, setCpCountry] = useState('КЫРГЫЗСТАН')
+  const [cpCountryId, setCpCountryId] = useState<number | null>(null)
+  const [cpMfrINN, setCpMfrINN] = useState('')
+  const [cpMfrName, setCpMfrName] = useState('')
+  const [cpAttrValues, setCpAttrValues] = useState<Record<string, string | string[]>>({})
+  const [cpAttrUnits, setCpAttrUnits] = useState<Record<string, string | string[]>>({})
+  const [cpTeksherTnvedId, setCpTeksherTnvedId] = useState<number | null>(null)
+  const [cpMpArticle, setCpMpArticle] = useState('')
+  // Атрибуты (динамические — загружаются при выборе ТН ВЭД)
+  const [cpAttrTemplates, setCpAttrTemplates] = useState<AttrTemplate[]>([])
+  const [cpAttrLoading, setCpAttrLoading] = useState(false)
+  // ТН ВЭД selector
+  const [tnvedModal, setTnvedModal] = useState(false)
+  const [tnvedSearch, setTnvedSearch] = useState('')
+  const [tnvedList, setTnvedList] = useState<TnvedItem[]>([])
+  const [tnvedLoading, setTnvedLoading] = useState(false)
+  const [tnvedDropOpen, setTnvedDropOpen] = useState(false)
+  const tnvedDropRef = useRef<HTMLDivElement>(null)
+  const tnvedLockedCode = useRef<string | null>(null) // код выбран из списка — не запускать поиск
+  // Countries ref
+  const [countries, setCountries] = useState<CountryItem[]>([])
+  const [participantInfo, setParticipantInfo] = useState<{ gcp: string; gln: string; participantId: string; inn: string; companyName: string } | null>(null)
   const [participantLoading, setParticipantLoading] = useState(false)
 
   // Topup modal
   const [topupModal, setTopupModal] = useState(false)
   const [topupAmount, setTopupAmount] = useState('')
+  const [topupQty, setTopupQty] = useState('')
   const [topupQrData, setTopupQrData] = useState<string | null>(null)
   const [topupQrLoading, setTopupQrLoading] = useState(false)
   const [topupQrError, setTopupQrError] = useState<string | null>(null)
@@ -244,9 +405,21 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   // Store dropdown
   const [storeDropOpen, setStoreDropOpen] = useState(false)
   const storeDropRef = useRef<HTMLDivElement>(null)
+
+  // Блокировка скролла фона при открытой модалке
+  useEffect(() => {
+    if (createProductModal) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = ''
+    }
+    return () => { document.body.style.overflow = '' }
+  }, [createProductModal])
+
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (!storeDropRef.current?.contains(e.target as Node)) setStoreDropOpen(false)
+      if (!tnvedDropRef.current?.contains(e.target as Node)) setTnvedDropOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -373,6 +546,27 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
     showAction('ok', 'Данные обновлены')
   }
 
+  // ── Обновить базу ТН ВЭД ─────────────────────────────────────────────────
+  const handleTnvedSync = async () => {
+    setTnvedSyncing(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('tnved-sync')
+      if (error) { showAction('err', `ТН ВЭД: ${error.message}`); return }
+      const d = data as { success?: boolean; synced?: number; error?: string } | null
+      if (d?.error) { showAction('err', `ТН ВЭД: ${d.error}`); return }
+      // Также обновляем справочник стран
+      if (activeStore?.id) {
+        const { data: cd } = await invoke({ store_id: activeStore.id, action: 'refresh_countries' })
+        if (cd?.items) setCountries(cd.items as CountryItem[])
+      }
+      showAction('ok', `Справочники обновлены: ТН ВЭД ${(d?.synced ?? 0).toLocaleString('ru')} кодов`)
+    } catch (e) {
+      showAction('err', `Ошибка: ${(e as Error).message}`)
+    } finally {
+      setTnvedSyncing(false)
+    }
+  }
+
   // ── Опубликовать товар ───────────────────────────────────────────────────
   const handlePublishProduct = async (productId: string | number) => {
     if (!activeStore?.id) return
@@ -411,18 +605,41 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
     if (!activeStore?.id) return
     setCpLoading(true)
     setCpError(null)
+    // Собираем атрибуты из динамических полей
+    const attributes: Array<{ attributeTypeCode: string; value: string; unitCode?: string }> = []
+    for (const [code, val] of Object.entries(cpAttrValues)) {
+      const unitVal = cpAttrUnits[code]
+      if (Array.isArray(val)) {
+        val.forEach((v, i) => {
+          if (v) {
+            const u = Array.isArray(unitVal) ? unitVal[i] : unitVal
+            attributes.push({ attributeTypeCode: code, value: v, ...(u ? { unitCode: u } : {}) })
+          }
+        })
+      } else {
+        if (val) {
+          const u = typeof unitVal === 'string' ? unitVal : undefined
+          attributes.push({ attributeTypeCode: code, value: val, ...(u ? { unitCode: u } : {}) })
+        }
+      }
+    }
     const { error } = await invoke({
       store_id: activeStore.id,
       action: 'create_product',
       gtin: cpGtin,
       fullName: cpName,
       trademark: cpTrademark,
-      tnved: cpTnved,
+      tnvedId: cpTeksherTnvedId,
+      producerINN: cpHasMfr ? cpMfrINN : undefined,
+      producerName: cpHasMfr ? cpMfrName : undefined,
+      countryId: cpCountryId ?? undefined,
+      attributes,
     })
     setCpLoading(false)
     if (error) { setCpError(error); return }
     setCreateProductModal(false)
-    setCpGtin(''); setCpName(''); setCpTrademark(''); setCpTnved('')
+    setCpGtin(''); setCpName(''); setCpTrademark(''); setCpTnved(''); setCpMpArticle('')
+    setCpAttrValues({}); setCpAttrUnits({}); setCpAttrTemplates([]); setCpTeksherTnvedId(null); setCpCountryId(null)
     showAction('ok', 'Товар создан (статус DRAFT)')
     void loadProducts(0, productsSearch)
   }
@@ -434,8 +651,74 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
     const { data, error } = await invoke({ store_id: activeStore.id, action: 'participant_info' })
     setParticipantLoading(false)
     if (error) { showAction('err', error); return }
-    setParticipantInfo(data as { gcp: string; gln: string; participantId: string })
+    setParticipantInfo(data as { gcp: string; gln: string; participantId: string; inn: string; companyName: string })
   }
+
+  // ── Загрузка списка ТН ВЭД ──────────────────────────────────────────────
+  const loadTnvedList = useCallback(async (search: string) => {
+    if (!activeStore?.id) return
+    setTnvedLoading(true)
+    const { data } = await invoke({ store_id: activeStore.id, action: 'tnved_list', search, page: 0, size: 50 })
+    setTnvedLoading(false)
+    setTnvedList((data?.items ?? []) as TnvedItem[])
+  }, [activeStore?.id])
+
+  // ── Загрузка шаблонов атрибутов по коду ТН ВЭД ──────────────────────────
+  const loadAttributeTemplates = useCallback(async (tnvedCode: string, subgroupId?: number | null) => {
+    if (!activeStore?.id || !tnvedCode) return
+    setCpAttrLoading(true)
+    const payload: Record<string, unknown> = { store_id: activeStore.id, action: 'attribute_templates', tnvedCode }
+    if (subgroupId) payload.subgroupId = subgroupId
+    const { data } = await invoke(payload)
+    setCpAttrLoading(false)
+    const raw = data?.attributes ?? []
+    const list: AttrTemplate[] = Array.isArray(raw) ? raw as AttrTemplate[] : []
+    console.log('[attr_templates] source:', data?.source, 'subgroupId:', data?.subgroupId, 'count:', list.length)
+    if (list.length > 0) {
+      console.log('[attr_templates] ВСЕ АТРИБУТЫ:', list.map((t) => `"${t.attributeType?.name ?? t.name ?? t.attributeTypeCode ?? '?'}" values:${(t.attributeType?.values ?? []).length}`).join(' | '))
+    }
+    setCpAttrValues({})
+    setCpAttrUnits({})
+    setCpAttrTemplates(list)
+  }, [activeStore?.id])
+
+  // ── Загрузка стран ──────────────────────────────────────────────────────
+  const loadCountries = useCallback(async () => {
+    if (!activeStore?.id || countries.length > 0) return
+    const { data } = await invoke({ store_id: activeStore.id, action: 'countries' })
+    if (data?.items) {
+      const items = data.items as CountryItem[]
+      setCountries(items)
+      // Инициализируем ID для дефолтного значения
+      const found = items.find(c => (c.name ?? c.nameRu ?? String(c.code ?? '')) === 'КЫРГЫЗСТАН')
+      if (found?.id != null) setCpCountryId(Number(found.id))
+    }
+  }, [activeStore?.id, countries.length])
+
+  // ── Debounce-поиск ТН ВЭД при вводе (модал) ──────────────────────────────
+  useEffect(() => {
+    if (!tnvedModal) return
+    const timer = setTimeout(() => { void loadTnvedList(tnvedSearch) }, 500)
+    return () => clearTimeout(timer)
+  }, [tnvedSearch, tnvedModal, loadTnvedList])
+
+  // ── Inline autocomplete при вводе в поле формы ──────────────────────────
+  useEffect(() => {
+    if (tnvedModal) return
+    // Если значение поля совпадает с выбранным из списка — не искать снова
+    if (cpTnved === tnvedLockedCode.current) { setTnvedDropOpen(false); return }
+    if (cpTnved.length < 1) { setTnvedDropOpen(false); return }
+    const timer = setTimeout(() => { void loadTnvedList(cpTnved).then(() => setTnvedDropOpen(true)) }, 400)
+    return () => clearTimeout(timer)
+  }, [cpTnved, tnvedModal, loadTnvedList])
+
+  // ── Автозаполнение полей производителя после загрузки данных ───────────────
+  useEffect(() => {
+    if (cpHasMfr && participantInfo) {
+      setCpMfrINN(participantInfo.inn ?? '')
+      setCpMfrName(participantInfo.companyName ?? '')
+    }
+  }, [participantInfo, cpHasMfr])
 
   const isConnected = stats !== null
 
@@ -490,15 +773,27 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
         )}
 
         {isConnected && (
-          <button
-            type="button"
-            onClick={() => void handleSync()}
-            disabled={statsLoading}
-            className="ml-auto flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
-          >
-            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${statsLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
-            Обновить
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleTnvedSync()}
+              disabled={tnvedSyncing}
+              title="Обновить базу кодов ТН ВЭД из Teksher"
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${tnvedSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+              {tnvedSyncing ? 'Загрузка ТН ВЭД…' : 'Обновить ТН ВЭД'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSync()}
+              disabled={statsLoading}
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${statsLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+              Обновить
+            </button>
+          </div>
         )}
       </div>
 
@@ -523,9 +818,9 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
         ))}
       </div>
 
-      {/* Toast */}
+      {/* Toast — fixed overlay, top-right, не двигает контент */}
       {actionResult && (
-        <div className={`mx-4 mt-3 shrink-0 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium ${
+        <div className={`fixed top-4 right-4 z-[9999] flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium shadow-lg pointer-events-none select-none ${
           actionResult.type === 'ok'
             ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
             : 'border-red-200 bg-red-50 text-red-800'
@@ -679,7 +974,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                     </div>
                     <button
                       type="button"
-                      onClick={() => { setTopupModal(true); setTopupAmount(''); void loadTopupQr() }}
+                      onClick={() => { setTopupModal(true); setTopupAmount(''); setTopupQty(''); void loadTopupQr() }}
                       className="mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors"
                     >
                       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
@@ -751,7 +1046,18 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setCreateProductModal(true); setCpError(null) }}
+                      onClick={() => {
+                        setCreateProductModal(true)
+                        setCpError(null)
+                        setCpTab(0)
+                        // Инициализируем ID страны если список уже загружен
+                        const defCountry = 'КЫРГЫЗСТАН'
+                        setCpCountry(defCountry)
+                        const found = countries.find(c => String(c.name ?? c.code ?? '') === defCountry)
+                        if (found?.id != null) setCpCountryId(Number(found.id))
+                        if (!participantInfo) void loadParticipantInfo()
+                        void loadCountries()
+                      }}
                       className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors"
                     >
                       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
@@ -1072,75 +1378,378 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
         </div>
       )}
 
-      {/* ══ МОДАЛ: Создать товар (GTIN) ════════════════════════════════════════ */}
+      {/* ══ МОДАЛ: Регистрация нового товара ══════════════════════════════════ */}
       {createProductModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setCreateProductModal(false)}>
-          <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-semibold text-slate-800">Новый товар (GTIN)</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Создастся со статусом DRAFT → Опубликуйте для заказа КИЗов</p>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setCreateProductModal(false)}>
+          <div className="w-[min(96vw,1440px)] rounded-2xl bg-white shadow-2xl flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 shrink-0">
+              <h3 className="text-base font-semibold text-slate-800">Регистрация нового товара</h3>
               <button type="button" onClick={() => setCreateProductModal(false)} className="text-slate-400 hover:text-slate-600">
                 <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
               </button>
             </div>
-            <form onSubmit={(e) => void handleCreateProduct(e)} className="space-y-3">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">GTIN <span className="text-red-500">*</span></label>
-                <input
-                  type="text"
-                  value={cpGtin}
-                  onChange={(e) => setCpGtin(e.target.value)}
-                  placeholder="4600000000000"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  required
-                />
-                <p className="mt-0.5 text-[11px] text-slate-400">13 цифр. Начинается с вашего GCP.</p>
+            <form onSubmit={(e) => void handleCreateProduct(e)} className="flex flex-col flex-1 min-h-0">
+              {/* ── Двухколоночный layout ── */}
+              <div className="grid grid-cols-[2fr_3fr] divide-x divide-slate-100 flex-1 min-h-0 overflow-hidden">
+                {/* ══ Левая колонка ══ */}
+                <div className="overflow-y-auto p-6 space-y-6">
+                  {/* ИДЕНТИФИКАТОРЫ */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-blue-500">Идентификаторы</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-500">GCP</label>
+                        <input type="text" value={participantInfo?.gcp ?? ''} readOnly placeholder={participantLoading ? 'Загрузка...' : '—'} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 cursor-not-allowed" />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-500">GLN</label>
+                        <input type="text" value={participantInfo?.gln ?? ''} readOnly placeholder="—" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 cursor-not-allowed" />
+                      </div>
+                    </div>
+                  </div>
+                  {/* ОПИСАНИЕ ТОВАРА */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-blue-500">Описание товара</span>
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-500">GTIN <span className="text-red-500">*</span></label>
+                        <input type="text" value={cpGtin} onChange={(e) => setCpGtin(e.target.value)} placeholder="04706020291553" className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" required />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-500">Полное наименование товара <span className="text-red-500">*</span></label>
+                        <input type="text" value={cpName} onChange={(e) => setCpName(e.target.value)} placeholder="Пиджак женский" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" required />
+                      </div>
+                    </div>
+                  </div>
+                  {/* АРТИКУЛ МАРКЕТПЛЕЙСА */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-blue-500">Артикул маркетплейса</span>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-500">Артикул МП</label>
+                      <input type="text" value={cpMpArticle} onChange={(e) => setCpMpArticle(e.target.value)} placeholder="ART-001" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                      <p className="mt-1 text-[11px] text-slate-400">Необязательно. Используется для привязки к карточке товара.</p>
+                    </div>
+                  </div>
+                  {/* ПРОИЗВОДИТЕЛЬ И СТРАНА */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-blue-500">Производитель и страна</span>
+                    </div>
+                    <div className="space-y-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={cpHasMfr} onChange={(e) => {
+                          const checked = e.target.checked
+                          setCpHasMfr(checked)
+                          if (checked && participantInfo) {
+                            setCpMfrINN(participantInfo.inn ?? '')
+                            setCpMfrName(participantInfo.companyName ?? '')
+                          } else if (!checked) {
+                            setCpMfrINN('')
+                            setCpMfrName('')
+                          }
+                        }} className="h-4 w-4 rounded border-slate-300 accent-blue-600" />
+                        <span className="text-sm text-slate-600">Данные производителя</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">Наименование производителя</label>
+                          <input type="text" value={cpMfrName} readOnly={cpHasMfr} onChange={(e) => { if (!cpHasMfr) setCpMfrName(e.target.value) }} placeholder='ОсОО "Например"' className={`w-full rounded-lg border px-3 py-2 text-sm ${cpHasMfr ? 'border-slate-200 bg-slate-50 text-slate-600 cursor-not-allowed' : 'border-slate-200 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500'}`} />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">ИНН производителя</label>
+                          <input type="text" value={cpMfrINN} readOnly={cpHasMfr} onChange={(e) => { if (!cpHasMfr) setCpMfrINN(e.target.value) }} placeholder="01234567891234" className={`w-full rounded-lg border px-3 py-2 text-sm ${cpHasMfr ? 'border-slate-200 bg-slate-50 text-slate-600 cursor-not-allowed' : 'border-slate-200 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500'}`} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">Страна производства <span className="text-red-500">*</span></label>
+                          <SearchableSelect
+                            value={cpCountry}
+                            options={countries.map(c => String(c.name ?? c.code ?? ''))}
+                            placeholder={countries.length === 0 ? 'Загрузка…' : '— Страна —'}
+                            onChange={(name) => {
+                              setCpCountry(name)
+                              const found = countries.find(c => String(c.name ?? c.code ?? '') === name)
+                              setCpCountryId(found?.id != null ? Number(found.id) : null)
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">Товарный знак</label>
+                          <input type="text" value={cpTrademark} onChange={(e) => setCpTrademark(e.target.value)} placeholder="Ваш бренд" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ══ Правая колонка ══ */}
+                <div className="overflow-y-auto p-6 space-y-6">
+                  {/* ТН ВЭД */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-blue-500">ТН ВЭД</span>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="relative" ref={tnvedDropRef}>
+                        <label className="mb-1 block text-xs text-slate-500">Код ТН ВЭД <span className="text-red-500">*</span></label>
+                        <div className="flex gap-2">
+                          <input type="text" value={cpTnved} onChange={(e) => { setCpTnved(e.target.value); if (e.target.value.length < 3) { setTnvedDropOpen(false) } }} placeholder="Введите код или название (мин. 3 символа)…" className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                          <button type="button" onClick={() => { setTnvedModal(true); setTnvedSearch(''); void loadTnvedList('') }} className="flex items-center justify-center rounded-lg border border-slate-200 px-3 py-2 text-slate-400 hover:text-blue-600 hover:border-blue-300 transition-colors">
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                          </button>
+                        </div>
+                        {tnvedDropOpen && tnvedList.length > 0 && (
+                          <div className="absolute left-0 right-0 top-full z-[70] mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                            {tnvedLoading && <div className="px-3 py-2 text-xs text-slate-400">Поиск…</div>}
+                            {tnvedList.map((item, i) => {
+                              const code = String(item.fullCode ?? item.code ?? '')
+                              const name = String(item.subPositionName ?? item.name ?? '')
+                              const pos  = String(item.position ?? '')
+                              const posName = String(item.positionName ?? '')
+                              return (
+                                <div key={i} onClick={() => { tnvedLockedCode.current = code; setCpTnved(code); setCpTnvedName(name); setCpTnvedPos(pos); setCpTnvedPosName(posName); setCpTeksherTnvedId(item.teksherTnvedId ?? null); setTnvedDropOpen(false); void loadAttributeTemplates(code, item.subgroupId ?? undefined) }}
+                                  className="cursor-pointer border-b border-slate-50 px-3 py-2 hover:bg-blue-50 last:border-0">
+                                  <div className="text-xs font-bold text-slate-800">{code}</div>
+                                  <div className="truncate text-xs text-slate-500">{name}</div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">Позиция ТН ВЭД</label>
+                          <input type="text" value={cpTnvedPos} readOnly placeholder="—" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 cursor-not-allowed" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-500">Наименование ТН ВЭД</label>
+                          <input type="text" value={cpTnvedName} readOnly placeholder="—" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 cursor-not-allowed" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-500">Наименование товарной позиции по ТН ВЭД</label>
+                        <input type="text" value={cpTnvedPosName} readOnly placeholder="—" className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 cursor-not-allowed" />
+                      </div>
+                    </div>
+                  </div>
+                  {/* ХАРАКТЕРИСТИКИ — динамически из шаблонов по ТН ВЭД */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-blue-500">Характеристики (атрибуты)</span>
+                      {cpAttrLoading && <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-200 border-t-blue-500" />}
+                    </div>
+                    {!cpTnved ? (
+                      <p className="text-xs text-slate-400 italic">Сначала укажите код ТН ВЭД</p>
+                    ) : cpAttrLoading ? (
+                      <p className="text-xs text-slate-400">Загрузка атрибутов…</p>
+                    ) : cpAttrTemplates.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">Атрибуты не найдены для данного ТН ВЭД</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {cpAttrTemplates
+                          .filter((t) => t.attributeType?.code !== '13933' && t.attributeType?.code !== '2630' && t.attributeType?.code !== '2478')
+                          .sort((a, b) => (a.position ?? 99) - (b.position ?? 99))
+                          .map((tpl) => {
+                            const at = tpl.attributeType
+                            if (!at?.code || !at?.name) return null
+                            const code = at.code
+                            const label = at.name
+                            const isRequired = tpl.isRequired === true
+                            const isMulti = tpl.multiplication === true
+                            const vals = (at.values ?? [])
+                              .map((v) => (typeof v === 'string' ? v : String(v.value ?? v.name ?? v.code ?? '')))
+                              .filter(Boolean)
+                            const unitCodes = (at.unitCodes ?? []).map(u => String(u)).filter(Boolean)
+                            if (isMulti) {
+                              const arr = (cpAttrValues[code] as string[] | undefined) ?? ['']
+                              const unitArr = unitCodes.length > 0 ? ((cpAttrUnits[code] as string[] | undefined) ?? arr.map(() => '')) : []
+                              return (
+                                <div key={code}>
+                                  <label className="mb-1 block text-xs text-slate-500">
+                                    {label}{isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                                  </label>
+                                  <div className="space-y-1">
+                                    {arr.map((v, idx) => (
+                                      <div key={idx} className="flex gap-1">
+                                        {vals.length > 0 ? (
+                                          <SearchableSelect value={v} options={vals} className="flex-1"
+                                            onChange={(opt) => {
+                                              const n = [...arr]; n[idx] = opt
+                                              setCpAttrValues((prev) => ({ ...prev, [code]: n }))
+                                            }} />
+                                        ) : (
+                                          <input type="text" value={v}
+                                            onChange={(e) => {
+                                              const n = [...arr]; n[idx] = e.target.value
+                                              setCpAttrValues((prev) => ({ ...prev, [code]: n }))
+                                            }}
+                                            className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                          />
+                                        )}
+                                        {unitCodes.length > 0 && (
+                                          <SearchableSelect
+                                            value={unitArr[idx] ?? ''}
+                                            options={unitCodes}
+                                            placeholder="Тип"
+                                            className="w-28"
+                                            onChange={(u) => {
+                                              const nu = [...unitArr]; nu[idx] = u
+                                              setCpAttrUnits((prev) => ({ ...prev, [code]: nu }))
+                                            }}
+                                          />
+                                        )}
+                                        {arr.length > 1 && (
+                                          <button type="button"
+                                            onClick={() => {
+                                              setCpAttrValues((prev) => ({ ...prev, [code]: arr.filter((_, i) => i !== idx) }))
+                                              if (unitCodes.length > 0) setCpAttrUnits((prev) => ({ ...prev, [code]: unitArr.filter((_, i) => i !== idx) }))
+                                            }}
+                                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-300">
+                                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                                          </button>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <button type="button"
+                                    onClick={() => {
+                                      setCpAttrValues((prev) => ({ ...prev, [code]: [...arr, ''] }))
+                                      if (unitCodes.length > 0) setCpAttrUnits((prev) => ({ ...prev, [code]: [...unitArr, ''] }))
+                                    }}
+                                    className="mt-1 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700">
+                                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                                    Добавить
+                                  </button>
+                                </div>
+                              )
+                            }
+                            const singleVal = (cpAttrValues[code] as string | undefined) ?? ''
+                            const singleUnit = (cpAttrUnits[code] as string | undefined) ?? ''
+                            if (vals.length > 0) {
+                              return (
+                                <div key={code}>
+                                  <label className="mb-1 block text-xs text-slate-500">
+                                    {label}{isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                                  </label>
+                                  <div className={unitCodes.length > 0 ? 'flex gap-1' : ''}>
+                                    <SearchableSelect value={singleVal} options={vals} className={unitCodes.length > 0 ? 'flex-1' : undefined}
+                                      onChange={(v) => setCpAttrValues((prev) => ({ ...prev, [code]: v }))} />
+                                    {unitCodes.length > 0 && (
+                                      <SearchableSelect value={singleUnit} options={unitCodes} placeholder="Тип" className="w-28"
+                                        onChange={(u) => setCpAttrUnits((prev) => ({ ...prev, [code]: u }))} />
+                                    )}
+                                  </div>
+                                </div>
+                              )
+                            }
+                            return (
+                              <div key={code}>
+                                <label className="mb-1 block text-xs text-slate-500">
+                                  {label}{isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                                </label>
+                                <div className={unitCodes.length > 0 ? 'flex gap-1' : ''}>
+                                  <input type="text" value={singleVal}
+                                    onChange={(e) => setCpAttrValues((prev) => ({ ...prev, [code]: e.target.value }))}
+                                    className={`rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 ${unitCodes.length > 0 ? 'flex-1' : 'w-full'}`}
+                                  />
+                                  {unitCodes.length > 0 && (
+                                    <SearchableSelect value={singleUnit} options={unitCodes} placeholder="Тип" className="w-28"
+                                      onChange={(u) => setCpAttrUnits((prev) => ({ ...prev, [code]: u }))} />
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">Полное название <span className="text-red-500">*</span></label>
-                <input
-                  type="text"
-                  value={cpName}
-                  onChange={(e) => setCpName(e.target.value)}
-                  placeholder="Куртка мужская, цвет синий, р.M"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  required
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">Торговая марка</label>
-                <input
-                  type="text"
-                  value={cpTrademark}
-                  onChange={(e) => setCpTrademark(e.target.value)}
-                  placeholder="Бренд"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">ТН ВЭД</label>
-                <input
-                  type="text"
-                  value={cpTnved}
-                  onChange={(e) => setCpTnved(e.target.value)}
-                  placeholder="Код ТН ВЭД"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
-              {cpError && (
-                <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">{cpError}</p>
-              )}
-              <div className="flex gap-2 pt-1">
-                <button type="button" onClick={() => setCreateProductModal(false)} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
-                  Отмена
-                </button>
-                <button type="submit" disabled={cpLoading} className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
-                  {cpLoading ? 'Создаём…' : 'Создать'}
-                </button>
+              {/* Footer */}
+              <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-between">
+                <div>
+                  {cpError && <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">{cpError}</p>}
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setCreateProductModal(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Отмена</button>
+                  <button type="submit" disabled={cpLoading} className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+                    {cpLoading
+                      ? <><div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />Сохраняем…</>
+                      : <><svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Создать товар</>}
+                  </button>
+                </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ══ МОДАЛ: Выбор ТН ВЭД ════════════════════════════════════════════════ */}
+      {tnvedModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setTnvedModal(false)}>
+          <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl flex flex-col max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 shrink-0">
+              <h3 className="text-base font-semibold text-slate-800">Выбор кода ТН ВЭД</h3>
+              <button type="button" onClick={() => setTnvedModal(false)} className="text-slate-400 hover:text-slate-600">
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div className="px-6 py-3 border-b border-slate-100 shrink-0">
+              <div className="relative">
+                <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input type="text" value={tnvedSearch} onChange={(e) => setTnvedSearch(e.target.value)} placeholder="Поиск по коду или названию…" className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" autoFocus />
+              </div>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {tnvedLoading ? (
+                <div className="flex items-center justify-center py-12"><div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-blue-600" /></div>
+              ) : tnvedList.length === 0 ? (
+                <div className="py-12 text-center text-sm text-slate-400">{tnvedSearch ? 'Ничего не найдено' : 'Введите запрос для поиска или подождите загрузки'}</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-white border-b border-slate-100">
+                    <tr>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500 w-32">Полный код ТН</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-blue-600">Название товара (по субпозиции ТН ВЭД)</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500 w-28">Позиция ТН ВЭД</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500 w-44">Товарная группа</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tnvedList.map((item, i) => {
+                      const code = String(item.fullCode ?? item.code ?? '')
+                      const subName = String(item.subPositionName ?? item.name ?? '')
+                      const position = String(item.position ?? '')
+                      const posName = String(item.positionName ?? '')
+                      const group = String(item.groupName ?? item.productGroup ?? '')
+                      return (
+                        <tr key={i} onClick={() => { setCpTnved(code); setCpTnvedName(subName); setCpTnvedPos(position); setCpTnvedPosName(posName); setCpTeksherTnvedId(item.teksherTnvedId ?? null); setTnvedModal(false); void loadAttributeTemplates(code, item.subgroupId ?? undefined) }} className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer transition-colors">
+                          <td className="px-4 py-3 font-mono text-xs text-slate-700">{code}</td>
+                          <td className="px-4 py-3 text-xs text-slate-700">{subName}</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{position}</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{group}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1198,7 +1807,15 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                       <input
                         type="number"
                         value={topupAmount}
-                        onChange={(e) => setTopupAmount(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          setTopupAmount(val)
+                          if (val && stats?.course) {
+                            setTopupQty(String(Math.floor(Number(val) * stats.course)))
+                          } else {
+                            setTopupQty('')
+                          }
+                        }}
                         placeholder="0"
                         min="0"
                         max="150000"
@@ -1208,11 +1825,22 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                     <div className="pb-2 text-slate-400 font-bold text-xl">=</div>
                     <div className="flex-1">
                       <label className="mb-1 block text-xs text-slate-500">Количество (шт.)</label>
-                      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800 min-h-[42px]">
-                        {topupAmount && stats?.course
-                          ? Math.floor(Number(topupAmount) * stats.course).toLocaleString('ru-RU')
-                          : <span className="text-slate-300">—</span>}
-                      </div>
+                      <input
+                        type="number"
+                        value={topupQty}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          setTopupQty(val)
+                          if (val && stats?.course) {
+                            setTopupAmount(String(Math.round((Number(val) / stats.course) * 100) / 100))
+                          } else {
+                            setTopupAmount('')
+                          }
+                        }}
+                        placeholder="0"
+                        min="0"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
                     </div>
                   </div>
                   {stats?.course ? (

@@ -66,3 +66,12 @@
 - Trips schema: `supabase/trips.sql` + `supabase/patch_trip_functions.sql`
 - carriers/warehouses: `supabase/carriers_warehouses.sql` (таблицы применены, фронт не подключён)
 - RPC: `create_trip`, `add_trip_line` — работают, протестированы
+- **countries**: `supabase/patch_countries.sql` — кэш стран Teksher `(teksher_id PK, name, code, synced_at)`
+- **tnved_codes**: ТН ВЭД справочник — `(code, teksher_id, sub_position_name, position, position_name, subgroup_id, ...)`
+
+## Edge Functions
+- `supabase/functions/teksher-auth/index.ts` — все взаимодействия с Teksher API
+- Деплой: `npx supabase functions deploy teksher-auth --no-verify-jwt`
+- Actions: `connect`, `disconnect`, `stats`, `products`, `codes`, `operations`, `operation_ready`, `emit`, `utilise`, `create_product`, `publish_product`, `participant_info`, `topup_qr`, `countries`, `refresh_countries`, `tnved_list`, `tnved_sync`
+- Auth в edge function: `supabase.auth.getUser()` через заголовок `Authorization: Bearer {token}`
+- **ВАЖНО:** вызывающая сторона (KizPage.tsx `invoke()`) обязана обновить сессию через `supabase.auth.getSession()` перед каждым вызовом и явно передать свежий `access_token`

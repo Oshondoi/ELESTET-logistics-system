@@ -37,9 +37,33 @@ async function tkLogin(login: string, password: string): Promise<string> {
   return token as string
 }
 
-async function getCreds(svc: ReturnType<typeof createClient>, store_id: string) {
-  const { data } = await svc.from('stores').select('teksher_login, teksher_password').eq('id', store_id).single()
-  return data as { teksher_login: string | null; teksher_password: string | null } | null
+// Возвращает JWT токен: сначала проверяет кеш в stores, потом логинится если надо.
+async function getToken(svc: ReturnType<typeof createClient>, store_id: string): Promise<string> {
+  const { data } = await svc
+    .from('stores')
+    .select('teksher_login, teksher_password, teksher_token, teksher_token_exp')
+    .eq('id', store_id)
+    .single()
+  const row = data as {
+    teksher_login: string | null
+    teksher_password: string | null
+    teksher_token: string | null
+    teksher_token_exp: string | null
+  } | null
+
+  if (!row?.teksher_login || !row?.teksher_password) throw new Error('connected:false')
+
+  // Если токен ещё действителен — возвращаем сразу
+  if (row.teksher_token && row.teksher_token_exp) {
+    const exp = new Date(row.teksher_token_exp).getTime()
+    if (exp > Date.now() + 60_000) return row.teksher_token  // запас буфер 1 минута
+  }
+
+  // Логинимся и кешируем новый токен
+  const token = await tkLogin(row.teksher_login, row.teksher_password)
+  const exp = new Date(Date.now() + 25 * 60 * 1000).toISOString()  // кеш на 25 минут
+  await svc.from('stores').update({ teksher_token: token, teksher_token_exp: exp }).eq('id', store_id)
+  return token
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -82,25 +106,27 @@ Deno.serve(async (req: Request) => {
     const participantId = String((profile as Record<string, Record<string, unknown>>)?.participant?.id ?? profile.id ?? '')
     const participantName = (profile.fullName ?? profile.name ?? '') as string
 
-    // Сохраняем credentials (только их — данные не кешируем)
-    await svc.from('stores').update({ teksher_login: login, teksher_password: password, teksher_participant_id: participantId, teksher_participant_name: participantName }).eq('id', store_id)
+    // Сохраняем credentials + кешируем токен
+    const tokenExp = new Date(Date.now() + 25 * 60 * 1000).toISOString()
+    await svc.from('stores').update({ teksher_login: login, teksher_password: password, teksher_participant_id: participantId, teksher_participant_name: participantName, teksher_token: token, teksher_token_exp: tokenExp }).eq('id', store_id)
 
     return ok({ connected: true, participantId, participantName })
   }
 
   // ── action: disconnect ──────────────────────────────────────────────────────
   if (action === 'disconnect') {
-    await svc.from('stores').update({ teksher_login: null, teksher_password: null, teksher_participant_id: null, teksher_participant_name: null }).eq('id', store_id)
+    await svc.from('stores').update({ teksher_login: null, teksher_password: null, teksher_participant_id: null, teksher_participant_name: null, teksher_token: null, teksher_token_exp: null }).eq('id', store_id)
     return ok({ disconnected: true })
   }
 
-  // Для всех остальных actions — нужны credentials
-  const creds = await getCreds(svc, store_id)
-  if (!creds?.teksher_login || !creds?.teksher_password) return ok({ connected: false })
-
+  // Для всех остальных actions — получаем токен (из кеша или свежий)
   let token: string
-  try { token = await tkLogin(creds.teksher_login, creds.teksher_password) }
-  catch (e) { return err((e as Error).message) }
+  try { token = await getToken(svc, store_id) }
+  catch (e) {
+    const msg = (e as Error).message
+    if (msg === 'connected:false') return ok({ connected: false })
+    return err(msg)
+  }
 
   // ── action: stats ───────────────────────────────────────────────────────────
   if (action === 'stats') {
@@ -237,23 +263,44 @@ Deno.serve(async (req: Request) => {
 
   // ── action: create_product ──────────────────────────────────────────────────
   if (action === 'create_product') {
-    const { gtin, fullName, trademark, tnved } = body as Record<string, string>
+    const {
+      gtin, fullName, trademark,
+      producerINN, producerName,
+    } = body as Record<string, string>
+    const countryId = body.countryId != null ? Number(body.countryId) : undefined
+    const tnvedId = body.tnvedId != null ? Number(body.tnvedId) : undefined
+    const attributes = (body.attributes as Array<{ attributeTypeCode: string; value: string }>) ?? []
+
     if (!gtin || !fullName) return err('gtin и fullName обязательны')
     const { data: storeRec } = await svc.from('stores').select('teksher_participant_id').eq('id', store_id).single()
     const participantId = (storeRec as Record<string, unknown>)?.teksher_participant_id as string | null
 
-    const profileR = await fetch(`${BASE}/users/getCurrentUser`, { headers: { Authorization: `Bearer ${token}` } })
-    const profile = profileR.ok ? await profileR.json() as Record<string, unknown> : {}
-    const gcp = gtin.slice(0, 9)
+    // Получаем GCP/GLN из данных участника
+    let gcp = gtin.slice(1, 10)
+    let gln: string | undefined
+    if (participantId) {
+      const rIds = await fetch(`${BASE}/participants/${participantId}/identifiers`, { headers: { Authorization: `Bearer ${token}` } })
+      if (rIds.ok) {
+        const ids = await rIds.json() as unknown[]
+        const first = (ids[0] as Record<string, unknown>) ?? {}
+        if (first.gcp) gcp = String(first.gcp)
+        if (first.gln) gln = String(first.gln)
+      }
+    }
 
     const payload: Record<string, unknown> = {
-      gtin, gcp, fullName,
+      gtin,
+      gcp,
+      gln,
+      fullName,
       trademark: trademark || undefined,
-      tnved: tnved || undefined,
-      attributes: [{ attributeTypeCode: 'name', value: fullName }],
+      tnved: tnvedId,
+      manufacturerInn: producerINN || undefined,
+      manufacturerFullName: producerName || undefined,
+      manufacturedCountryId: countryId || undefined,
+      attributes,
     }
     if (participantId) payload.participantId = participantId
-    if ((profile as Record<string, Record<string, unknown>>)?.participant?.id) payload.participantId = (profile as Record<string, Record<string, unknown>>).participant.id
 
     const r = await fetch(`${BASE}/products/create`, {
       method: 'POST',
@@ -263,6 +310,96 @@ Deno.serve(async (req: Request) => {
     const d = await r.json() as Record<string, unknown>
     if (!r.ok) return err((d?.message as string) ?? `Ошибка создания: ${r.status}`)
     return ok({ success: true, product: d })
+  }
+
+  // ── action: tnved_list ──────────────────────────────────────────────────────
+  if (action === 'tnved_list') {
+    const search = (body.search as string) ?? ''
+    const page = Number(body.page ?? 0)
+    const size = Number(body.size ?? 50)
+
+    // Сначала пробуем локальную БД (быстро, без лишнего API-вызова)
+    const { count } = await svc.from('tnved_codes').select('*', { count: 'exact', head: true })
+    if (count && count > 0) {
+      let query = svc.from('tnved_codes').select('code,sub_position_name,position,position_name,group_name,subgroup_id,subgroup_name,teksher_id')
+      if (search) {
+        if (/^\d/.test(search)) query = query.ilike('code', `${search}%`)
+        else query = query.ilike('sub_position_name', `%${search}%`)
+      }
+      const { data: rows } = await query.range(page * size, page * size + size - 1)
+      if (rows && rows.length > 0) {
+        return ok({
+          items: rows.map((r) => ({
+            fullCode: r.code, subPositionName: r.sub_position_name,
+            position: r.position, positionName: r.position_name, groupName: r.group_name,
+            subgroupId: r.subgroup_id ?? null,
+            subgroupName: r.subgroup_name ?? null,
+            teksherTnvedId: r.teksher_id ?? null,
+          })),
+          total: count,
+        })
+      }
+    }
+
+    // Fallback: Teksher API (если БД ещё не заполнена)
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    if (search) {
+      if (/^\d/.test(search)) params.set('fullCode', search)
+      else params.set('name', search)
+    }
+    const r = await fetch(`${BASE}/tnveds?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) return ok({ items: [], total: 0 })
+    const d = await r.json() as Record<string, unknown>
+    const raw = (d.content ?? d.items ?? (Array.isArray(d) ? d : [])) as Record<string, unknown>[]
+    const total = (d.page as Record<string, unknown>)?.totalElements ?? d.totalElements ?? 0
+    const items = raw.map(item => ({
+      id:              item.id,
+      fullCode:        item.code ?? item.fullCode,
+      subPositionName: item.name ?? item.subPositionName,
+      position:        item.rootCode ?? item.position,
+      positionName:    item.rootName ?? item.positionName,
+      groupName:       (item.productSubgroup as Record<string,unknown>)?.name ?? item.groupName,
+      subgroupId:      (item.productSubgroup as Record<string,unknown>)?.id ?? null,
+    }))
+    return ok({ items, total })
+  }
+
+  // ── action: countries ───────────────────────────────────────────────────────
+  if (action === 'countries') {
+    // DB-first: если кэш есть — возвращаем сразу
+    const { data: cached, count } = await svc.from('countries').select('teksher_id,name,code', { count: 'exact' })
+    if (count && count > 0 && cached) {
+      return ok({ items: (cached as Array<Record<string, unknown>>).map(r => ({ id: r.teksher_id, name: r.name, code: r.code })) })
+    }
+    // Fallback: Teksher API + upsert в DB
+    const r = await fetch(`${BASE}/countries`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) return ok({ items: [] })
+    const d = await r.json() as unknown
+    const raw = (Array.isArray(d) ? d : (d as Record<string, unknown>).content ?? (d as Record<string, unknown>).items ?? []) as Record<string, unknown>[]
+    const rows = raw.filter(c => c.id && c.name).map(c => ({
+      teksher_id: Number(c.id),
+      name: String(c.name ?? ''),
+      code: c.code ? String(c.code) : null,
+      synced_at: new Date().toISOString(),
+    }))
+    if (rows.length > 0) void svc.from('countries').upsert(rows, { onConflict: 'teksher_id' })
+    return ok({ items: raw.map(c => ({ id: c.id, name: c.name, code: c.code })) })
+  }
+
+  // ── action: refresh_countries ───────────────────────────────────────────────
+  if (action === 'refresh_countries') {
+    const r = await fetch(`${BASE}/countries`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!r.ok) return err(`Ошибка загрузки стран: ${r.status}`)
+    const d = await r.json() as unknown
+    const raw = (Array.isArray(d) ? d : (d as Record<string, unknown>).content ?? (d as Record<string, unknown>).items ?? []) as Record<string, unknown>[]
+    const rows = raw.filter(c => c.id && c.name).map(c => ({
+      teksher_id: Number(c.id),
+      name: String(c.name ?? ''),
+      code: c.code ? String(c.code) : null,
+      synced_at: new Date().toISOString(),
+    }))
+    if (rows.length > 0) await svc.from('countries').upsert(rows, { onConflict: 'teksher_id' })
+    return ok({ items: raw.map(c => ({ id: c.id, name: c.name, code: c.code })), synced: rows.length })
   }
 
   // ── action: publish_product ─────────────────────────────────────────────────
@@ -286,10 +423,16 @@ Deno.serve(async (req: Request) => {
     const { data: storeRec } = await svc.from('stores').select('teksher_participant_id').eq('id', store_id).single()
     const participantId = (storeRec as Record<string, unknown>)?.teksher_participant_id as string | null
     if (!participantId) return err('participantId не найден. Переподключите Teksher.')
-    const r = await fetch(`${BASE}/participants/${participantId}/identifiers`, { headers: { Authorization: `Bearer ${token}` } })
-    const d = r.ok ? await r.json() as unknown[] : []
-    const first = (d[0] as Record<string, unknown>) ?? {}
-    return ok({ gcp: first.gcp ?? '', gln: first.gln ?? '', participantId })
+    const [rIds, rProfile] = await Promise.all([
+      fetch(`${BASE}/participants/${participantId}/identifiers`, { headers: { Authorization: `Bearer ${token}` } }),
+      fetch(`${BASE}/participants/${participantId}`, { headers: { Authorization: `Bearer ${token}` } }),
+    ])
+    const ids = rIds.ok ? await rIds.json() as unknown[] : []
+    const first = (ids[0] as Record<string, unknown>) ?? {}
+    const profile = rProfile.ok ? await rProfile.json() as Record<string, unknown> : {}
+    const inn = profile.inn ?? profile.taxId ?? profile.taxCode ?? ''
+    const companyName = profile.fullName ?? profile.name ?? profile.companyName ?? profile.legalName ?? ''
+    return ok({ gcp: first.gcp ?? '', gln: first.gln ?? '', participantId, inn, companyName })
   }
 
   // ── action: topup_qr ────────────────────────────────────────────────────────
@@ -317,6 +460,57 @@ Deno.serve(async (req: Request) => {
       if (qrString) return ok({ qrString: String(qrString), qrTransactionId: d.qrTransactionId ?? null })
     } catch { /* ignore */ }
     return ok({ qrError: 'Неизвестный формат QR кода' })
+  }
+
+  // ── action: attribute_templates ────────────────────────────────────────────
+  if (action === 'attribute_templates') {
+    let subgroupId = body.subgroupId != null ? Number(body.subgroupId) : null
+
+    // Если subgroupId не передан, ищем по tnvedCode в БД
+    if (!subgroupId && body.tnvedCode) {
+      const tnvedCode = body.tnvedCode as string
+      const { data: tnvedRow } = await svc
+        .from('tnved_codes')
+        .select('subgroup_id')
+        .eq('code', tnvedCode)
+        .maybeSingle()
+      subgroupId = (tnvedRow as Record<string, unknown> | null)?.subgroup_id != null
+        ? Number((tnvedRow as Record<string, unknown>).subgroup_id)
+        : null
+    }
+
+    if (!subgroupId) return ok({ attributes: [], subgroupId: null, source: 'no_subgroup' })
+
+    // Проверяем кэш в БД
+    const { data: cached } = await svc
+      .from('attribute_templates')
+      .select('templates')
+      .eq('subgroup_id', subgroupId)
+      .maybeSingle()
+    if (cached && (cached as Record<string, unknown>).templates) {
+      const tpls = (cached as Record<string, unknown>).templates
+      const arr = Array.isArray(tpls) ? tpls : []
+      if (arr.length > 0) {
+        return ok({ attributes: arr, subgroupId, source: 'db' })
+      }
+    }
+
+    // Fallback: запрашиваем у Teksher API (если БД пуста или не заполнена)
+    const templatesR = await fetch(`${BASE}/products/attribute_templates?subgroupId=${subgroupId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!templatesR.ok) return ok({ attributes: [], subgroupId, source: 'api_error' })
+    const raw = await templatesR.json() as unknown
+    const templates = Array.isArray(raw) ? raw : []
+
+    // Сохраняем в БД для следующих вызовов
+    void svc.from('attribute_templates').upsert({
+      subgroup_id: subgroupId,
+      templates,
+      synced_at: new Date().toISOString(),
+    }, { onConflict: 'subgroup_id' })
+
+    return ok({ attributes: templates, subgroupId, source: 'api', rawType: typeof raw, isArray: Array.isArray(raw) })
   }
 
   return err(`Неизвестный action: ${action}`)

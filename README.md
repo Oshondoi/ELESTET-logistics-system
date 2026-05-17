@@ -54,7 +54,23 @@ MVP веб-приложения для логистики поставок на 
 | GET | `/facade/api/v1/operations/filter?size=15&page=0&startDate=...&endDate=...` | Операции |
 | GET | `/facade/api/v1/marking_codes/filter?size=N&page=0&productGroupCode=LP+RF` | КИЗ коды |
 | GET | `/facade/product_groups_marking` | Товарные группы |
-| GET | `/facade/api/v1/countries` | Справочник стран |
+| GET | `/facade/api/v1/countries` | Справочник стран производства (кэшируется в таблице `countries`) |
+
+### Регистрация товара (GTIN) — форма в ELESTET (17.05.2026)
+
+Вкладка **Товары (GTIN)** → **Новый товар**. Обязательные поля:
+- GTIN-13, Полное наименование, Код ТН ВЭД, Страна производства
+- Атрибуты (после выбора ТН ВЭД): Вид товара, Размер + тип, Цвет, Состав, Целевой пол, Модель/артикул, Номер регламента
+
+Страны и ТН ВЭД коды кэшируются в Supabase (`countries`, `tnved_codes`). Синхронизация — кнопка **«Обновить ТН ВЭД»**.
+
+### 401 Unauthorized — решение (17.05.2026)
+Перед каждым вызовом edge function обновлять сессию:
+```ts
+const { data: { session } } = await supabase.auth.getSession()
+// session.access_token — всегда свежий
+// headers: { Authorization: `Bearer ${session.access_token}` }
+```
 
 ### Формат КИЗ кода (GS1 DataMatrix)
 ```

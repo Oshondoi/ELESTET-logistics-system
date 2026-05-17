@@ -376,6 +376,19 @@ TripTable получает:
 
 ФАЙЛЫ: src/pages/ShipmentsPage.tsx, src/components/trips/TripTable.tsx`,
     },
+    {
+      name: 'Anchored dropdown (привязанный список)',
+      category: 'UI паттерны',
+      description: `Кастомный SearchableSelect в KizPage.tsx. Список открывается через createPortal в document.body с position:fixed — не расширяет родителя и не обрезается overflow модалки.
+
+Как работает:
+  1. useLayoutEffect при open → getBoundingClientRect() триггера → вычисляет top/bottom+left+width
+  2. Если места снизу < 220px и сверху > 220px → список открывается вверх (bottom=...), иначе вниз (top=...)
+  3. При любом scroll (capture phase) — список закрывается
+  4. Клик вне компонента (mousedown) — закрывается
+
+Файл: src/pages/KizPage.tsx, компонент SearchableSelect (~строка 210)`,
+    },
   ]
 
   const categories = [...new Set(items.map((i) => i.category))]
