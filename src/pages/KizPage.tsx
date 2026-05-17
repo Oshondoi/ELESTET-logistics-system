@@ -550,6 +550,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   const handleTnvedSync = async () => {
     setTnvedSyncing(true)
     try {
+      if (!supabase) { showAction('err', 'Supabase не инициализирован'); setTnvedSyncing(false); return }
       const { data, error } = await supabase.functions.invoke('tnved-sync')
       if (error) { showAction('err', `ТН ВЭД: ${error.message}`); return }
       const d = data as { success?: boolean; synced?: number; error?: string } | null
