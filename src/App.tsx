@@ -245,6 +245,7 @@ function App() {
     removeStore,
     restoreStore,
     addTrip,
+    appendTrip,
     addTripLine,
     addInvoicePhoto,
     replaceInvoicePhoto,
@@ -269,8 +270,10 @@ function App() {
     changeTripLinePaymentStatus,
     editTrip,
     editTripLine,
+    bulkMoveLinesToTrip,
     updateTripCustomFields,
     updateLineCustomFields,
+    refreshTrips,
     addCarrier,
     removeCarrier,
     renameCarrier,
@@ -323,6 +326,11 @@ function App() {
     if (key !== null && !permissions[key]) return 'home'
     return activePage
   })()
+
+  // Перезагружать trips каждый раз при открытии страницы Логистики
+  useEffect(() => {
+    if (effectivePage === 'shipments') void refreshTrips()
+  }, [effectivePage])
 
   const storesWithApiKey = useMemo(() => stores.filter((s) => s.api_key), [stores])
 
@@ -561,6 +569,7 @@ function App() {
                   warehouses={warehouses}
                   onEditTripLine={editTripLine}
                   onAddTripLine={addTripLine}
+                  onTripCreated={appendTrip}
                   onStoreCreated={appendStore}
                   canManage={isOwnerOrAdmin || permissions.fulfillment_manage}
                   canOtkAssign={isOwnerOrAdmin || permissions.fulfillment_otk_assign}
@@ -613,6 +622,7 @@ function App() {
                   userId={session?.user?.id ?? ''}
                   onUpdateTripCustomFields={updateTripCustomFields}
                   onUpdateLineCustomFields={updateLineCustomFields}
+                  onBulkMoveLinesToTrip={bulkMoveLinesToTrip}
                 />
               ) : effectivePage === 'stores' ? (
                 <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} canManage={permissions.stores_manage} canDelete={isOwnerOrAdmin || permissions.stores_delete} canSync={permissions.stores_manage || isOwnerOrAdmin || permissions.stores_sync} />

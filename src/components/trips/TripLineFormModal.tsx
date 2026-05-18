@@ -14,9 +14,11 @@ interface TripLineFormModalProps {
   onSubmit: (values: TripLineFormValues) => Promise<void>
   initialValues?: TripLineFormValues
   warehouseNames?: string[]
-  /** Если передан — показывает селект «Рейс» первым полем (режим создания без привязки к рейсу) */
+  /** Если передан — показывает селект «Рейс» первым полем */
   trips?: TripWithLines[]
   onSubmitWithTrip?: (tripId: string, values: TripLineFormValues) => Promise<void>
+  /** Текущий рейс поставки (для режима редактирования) */
+  initialTripId?: string
   /** ID партии фулфилмента — если задан, ключевые поля заблокированы (управляются фулфилментом) */
   fulfillmentBatchId?: string | null
 }
@@ -38,19 +40,19 @@ const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues
   comment: '',
 })
 
-export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames, trips, onSubmitWithTrip, fulfillmentBatchId }: TripLineFormModalProps) => {
+export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames, trips, onSubmitWithTrip, fulfillmentBatchId, initialTripId }: TripLineFormModalProps) => {
   const isEdit = Boolean(initialValues)
   const isFulfillment = Boolean(fulfillmentBatchId)
   const warehouses = warehouseNames ?? []
   const [values, setValues] = useState<TripLineFormValues>(() => initialValues ?? makeDefaults(stores, warehouses))
-  const [selectedTripId, setSelectedTripId] = useState<string>(() => trips?.[0]?.id ?? '')
+  const [selectedTripId, setSelectedTripId] = useState<string>(() => initialTripId ?? trips?.[0]?.id ?? '')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
       setValues(initialValues ?? makeDefaults(stores, warehouses))
-      setSelectedTripId(trips?.[0]?.id ?? '')
+      setSelectedTripId(initialTripId ?? trips?.[0]?.id ?? '')
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialValues, stores])
@@ -126,6 +128,8 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
             }))}
           />
         )}
+        {/* В режиме редактирования без trips-пропа — показываем поле рейса если initialTripId задан */}
+        {!trips && initialTripId === undefined && null}
         <div className="grid min-w-0 gap-4 md:grid-cols-2">
           <Select
             label="Магазин"

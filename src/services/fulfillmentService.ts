@@ -52,13 +52,15 @@ const attachQtySums = (row: any): FulfillmentBatch => {
   const items: RawItem[] = row.fulfillment_items ?? []
   const otkLogs: RawLog[] = row.fulfillment_otk_logs ?? []
   const markingLogs: RawLog[] = row.fulfillment_marking_logs ?? []
+  const packagingLogs: RawLog[] = row.fulfillment_packaging_logs ?? []
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { fulfillment_items: _, fulfillment_otk_logs: __, fulfillment_marking_logs: ___, ...batch } = row
+  const { fulfillment_items: _, fulfillment_otk_logs: __, fulfillment_marking_logs: ___, fulfillment_packaging_logs: ____, ...batch } = row
   return {
     ...batch,
     qty_received_sum: sumQty(items, (i) => i.qty_received),
     qty_otk_sum: sumLog(otkLogs),
     qty_marked_sum: sumLog(markingLogs),
+    qty_packaging_sum: sumLog(packagingLogs),
     qty_packed_sum: sumQty(items, (i) => i.qty_packed),
   }
 }
@@ -67,7 +69,7 @@ export const fetchBatches = async (accountId: string): Promise<FulfillmentBatch[
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
-    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at)')
+    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at), fulfillment_packaging_logs(qty, qty_defect, deleted_at)')
     .eq('account_id', accountId)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
@@ -79,7 +81,7 @@ export const fetchArchivedBatches = async (accountId: string): Promise<Fulfillme
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
-    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at)')
+    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at), fulfillment_packaging_logs(qty, qty_defect, deleted_at)')
     .eq('account_id', accountId)
     .not('deleted_at', 'is', null)
     .order('deleted_at', { ascending: false })
@@ -140,6 +142,7 @@ export const updateBatch = async (
       | 'logistics_tariff_type'
       | 'stage_packaging'
       | 'packaging_qty'
+      | 'boxes_qty'
     >
   >,
 ): Promise<FulfillmentBatch> => {
@@ -947,6 +950,7 @@ export const addPackagingLog = async (entry: {
   notes?: string
   photo_urls?: string[]
   consumable_id?: string | null
+  zip_bags_qty?: number | null
 }): Promise<import('../types').FulfillmentPackagingLog> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
@@ -991,5 +995,51 @@ export const uploadPackagingPhoto = async (
   if (error) throw error
   const { data } = supabase.storage.from('otk-photos').getPublicUrl(path)
   return data.publicUrl
+}
+
+// ══════════════════════════════════════════════════════════════
+// Packing Logs — журнал расходников (короба) этапа Короба
+// ══════════════════════════════════════════════════════════════
+
+export const fetchPackingLogs = async (batchId: string): Promise<import('../types').FulfillmentPackingLog[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_packing_logs')
+    .select('*')
+    .eq('batch_id', batchId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as import('../types').FulfillmentPackingLog[]
+}
+
+export const addPackingLog = async (entry: {
+  batch_id: string
+  account_id: string
+  user_id: string
+  user_email: string
+  user_name?: string | null
+  performer_user_id?: string | null
+  performer_name: string
+  boxes_used: number
+  notes?: string | null
+}): Promise<import('../types').FulfillmentPackingLog> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_packing_logs')
+    .insert(entry)
+    .select()
+    .single()
+  if (error) throw error
+  return data as import('../types').FulfillmentPackingLog
+}
+
+export const deletePackingLog = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any)
+    .from('fulfillment_packing_logs')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw error
 }
 

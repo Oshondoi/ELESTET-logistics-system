@@ -621,6 +621,7 @@ export interface FulfillmentBatch {
   stage_otk: boolean
   stage_packaging: boolean
   packaging_qty: number | null
+  boxes_qty: number | null
   stage_marking: boolean
   stage_packing: boolean
   stage_logistics: boolean
@@ -637,6 +638,7 @@ export interface FulfillmentBatch {
   qty_received_sum?: number
   qty_otk_sum?: number
   qty_marked_sum?: number
+  qty_packaging_sum?: number
   qty_packed_sum?: number
 }
 
@@ -646,6 +648,7 @@ export interface FulfillmentItem {
   barcode: string
   product_name: string | null
   size: string | null
+  color: string | null
   article: string | null
   qty_received: number
   qty_otk: number | null
@@ -696,6 +699,23 @@ export interface FulfillmentMarkingLog extends FulfillmentOtkLog {
 // Аналог OtkLog для этапа Упаковки (без barcode/item_id)
 export interface FulfillmentPackagingLog extends FulfillmentOtkLog {
   consumable_id: string | null
+  zip_bags_qty?: number | null
+}
+
+export interface FulfillmentPackingLog {
+  id: string
+  batch_id: string
+  account_id: string
+  user_id: string
+  user_email: string
+  user_name: string | null
+  performer_user_id: string | null
+  performer_name: string
+  boxes_used: number
+  notes: string | null
+  created_at: string
+  updated_at: string | null
+  deleted_at: string | null
 }
 
 export interface FulfillmentOtkLogHistory {

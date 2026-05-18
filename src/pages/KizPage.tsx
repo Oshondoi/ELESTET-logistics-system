@@ -1381,8 +1381,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
 
       {/* ══ МОДАЛ: Регистрация нового товара ══════════════════════════════════ */}
       {createProductModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setCreateProductModal(false)}>
-          <div className="w-[min(96vw,1440px)] rounded-2xl bg-white shadow-2xl flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex flex-col bg-white">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 shrink-0">
               <h3 className="text-base font-semibold text-slate-800">Регистрация нового товара</h3>
@@ -1696,7 +1695,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                 </div>
               </div>
             </form>
-          </div>
         </div>
       )}
 

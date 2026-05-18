@@ -356,6 +356,48 @@ npx supabase functions deploy teksher-auth --no-verify-jwt
 - **Модалка создания поставки**: поля «Прибыл» и «Отгружено» скрыты (показываются только при редактировании)
 - **Блокировка ФФ-поставок**: поставки из Фулфилмента помечаются `fulfillment_batch_id`; в модалке редактирования заблокированы поля Магазин/Склад/Коробов/Единиц/Дата приёма + синий информационный баннер; ⚠️ требует `patch_trip_line_fulfillment_batch_id.sql` + `patch_trip_line_backfill_fulfillment_batch_id.sql`
 
+### Stale Global Cache — устаревший глобальный кеш (19.05.2026)
+
+**Проблема:** `useAppData` загружает данные (рейсы, магазины и т.д.) **один раз** при старте. Когда данные меняются в БД из другой вкладки или модалки — текущая страница ничего не знает и показывает старое. Обновляется только по F5.
+
+**Симптом:** Страница Логистики не видит изменения сделанные через модалку Фулфилмента (этап Логистика) без ручного обновления браузера.
+
+**Решение — три уровня защиты:**
+
+1. **Refresh при навигации** — `refreshX()` вызывается каждый раз когда пользователь открывает страницу:
+```ts
+// App.tsx
+useEffect(() => {
+  if (effectivePage === 'shipments') void refreshTrips()
+}, [effectivePage])
+```
+
+2. **Supabase Realtime** — подписка на изменения таблицы (мгновенная реакция, требует включения Realtime на таблице в Supabase Dashboard):
+```ts
+supabase.channel(`trip_lines_changes_${accountId}`)
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'trip_lines', filter: `account_id=eq.${accountId}` },
+    () => fetchTrips(accountId, storesRef.current).then(setTrips)
+  ).subscribe()
+```
+
+3. **`visibilitychange`** — перезагрузка при переключении обратно на вкладку.
+
+**Правило:** Для любой страницы где данные могут меняться из другого контекста — добавить вызов `refreshX()` при навигации на неё.
+
+### Связь Фулфилмент (этап Логистика) → страница Логистика (КРИТИЧНО, 19.05.2026)
+Этап **«Логистика»** в FulfillmentPage передаёт поставки напрямую в страницу Логистики (таблица `trip_lines`):
+
+- Каждая `fulfillment_supply` → один `trip_line` в нужном рейсе
+- Привязка: `supply.trip_id` + `supply.trip_line_id`
+- UI-стейт: `tripSlots` (какие рейсы) + `supplySlotMap` (какая поставка в каком слоте)
+
+**Два пути сохранения:**
+1. **Завершить этап** → создаёт `trip_line` для каждой supply (только если `batch.current_stage === 'logistics'`)
+2. **Кнопка «Сохранить»** → синхронизирует данные в любой момент, в т.ч. **после завершения этапа**:
+   - Есть `trip_line_id` + рейс изменился → `updateTripLineTripId()` (перемещает строку в другой рейс)
+   - Нет `trip_line_id` → создаёт `trip_line` через `addTripLine()`
+   - `supplySlotMap[id] === 'none'` → пропускается (поставка не назначена)
+
 ### Фото накладных
 - Колонка `invoice_photo_urls text[]` в `trip_lines`
 - Хранилище: bucket `trip-invoices` (публичный) с RLS-политиками

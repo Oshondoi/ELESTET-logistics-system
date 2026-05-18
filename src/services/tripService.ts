@@ -44,8 +44,15 @@ export const fetchTrips = async (accountId: string, stores: Store[]): Promise<Tr
       .filter((line) => line.trip_id === trip.id)
       .map((line) => buildTripLineWithStore(line as TripLine, stores)),
   })).sort((a, b) => {
-    const numA = parseInt(a.trip_number?.replace(/\D/g, '') ?? '0', 10)
-    const numB = parseInt(b.trip_number?.replace(/\D/g, '') ?? '0', 10)
+    // Черновики (без trip_number) — наверх, по дате создания (новые первые)
+    if (!a.trip_number && !b.trip_number) {
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    }
+    if (!a.trip_number) return -1
+    if (!b.trip_number) return 1
+    // Обычные рейсы — по номеру убывающе
+    const numA = parseInt(a.trip_number.replace(/\D/g, '') || '0', 10)
+    const numB = parseInt(b.trip_number.replace(/\D/g, '') || '0', 10)
     return numB - numA
   })
 }
@@ -99,6 +106,17 @@ export const deleteTripLine = async (accountId: string, lineId: string): Promise
   const { error } = await supabase
     .from('trip_lines')
     .delete()
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+
+  if (error) throw error
+}
+
+export const updateTripLineTripId = async (accountId: string, lineId: string, newTripId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    .update({ trip_id: newTripId } as any)
     .eq('id', lineId)
     .eq('account_id', accountId)
 

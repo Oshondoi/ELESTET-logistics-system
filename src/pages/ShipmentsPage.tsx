@@ -5,6 +5,8 @@ import { TripLineFormModal } from '../components/trips/TripLineFormModal'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
+import { Modal } from '../components/ui/Modal'
+import { Select } from '../components/ui/Select'
 import type { Store, TripFormValues, TripLineFormValues, TripStatus, ShipmentStatus, PaymentStatus, TripWithLines, TripLineWithStore } from '../types'
 import {
   ColumnConfig,
@@ -42,7 +44,7 @@ interface ShipmentsPageProps {
   onChangeTripLineStatus: (tripId: string, lineId: string, status: ShipmentStatus) => Promise<void>
   onChangeTripLinePaymentStatus: (tripId: string, lineId: string, paymentStatus: PaymentStatus) => Promise<void>
   onEditTrip: (tripId: string, values: TripFormValues) => Promise<void>
-  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues) => Promise<void>
+  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues, newTripId?: string) => Promise<void>
   onAddTripLine: (tripId: string, values: TripLineFormValues) => Promise<unknown>
   onAddInvoicePhoto: (tripId: string, lineId: string, file: File) => Promise<void>
   onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
@@ -67,6 +69,7 @@ interface ShipmentsPageProps {
   isOwnerOrAdmin?: boolean
   accountId?: string
   userId?: string
+  onBulkMoveLinesToTrip?: (lineIds: string[], newTripId: string) => Promise<void>
 }
 
 export const ShipmentsPage = ({
@@ -108,6 +111,7 @@ export const ShipmentsPage = ({
   isOwnerOrAdmin = false,
   accountId,
   userId,
+  onBulkMoveLinesToTrip,
 }: ShipmentsPageProps) => {
   const lsKey = (k: string) => userId ? `${k}-${userId}` : k
   const [expandAllTrips, setExpandAllTrips] = useState(() => localStorage.getItem(lsKey('elestet-expand-all')) === 'true')
@@ -153,6 +157,10 @@ export const ShipmentsPage = ({
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null)
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+  const [bulkEditLinesOpen, setBulkEditLinesOpen] = useState(false)
+  const [bulkMoveTargetTripId, setBulkMoveTargetTripId] = useState<string>('')
+  const [isBulkMoving, setIsBulkMoving] = useState(false)
+  const [bulkMoveError, setBulkMoveError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
   const filteredTrips = useMemo(() => {
@@ -300,6 +308,32 @@ export const ShipmentsPage = ({
 
     setBulkDeleteError(null)
     setBulkDeleteOpen(false)
+  }
+
+  const handleBulkEdit = () => {
+    if (selectedLineCount > 0) {
+      // Массовая смена рейса для поставок
+      setBulkMoveTargetTripId(trips[0]?.id ?? '')
+      setBulkMoveError(null)
+      setBulkEditLinesOpen(true)
+    }
+    // Редактирование рейсов (если выбраны только рейсы) — в дальнейшем
+  }
+
+  const handleConfirmBulkMoveLines = async () => {
+    if (!bulkMoveTargetTripId || !onBulkMoveLinesToTrip) return
+    setIsBulkMoving(true)
+    setBulkMoveError(null)
+    try {
+      await onBulkMoveLinesToTrip(effectiveSelectedLineIds, bulkMoveTargetTripId)
+      setSelectedLineIds(new Set())
+      setBulkEditLinesOpen(false)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setBulkMoveError(`Не удалось сменить рейс: ${message}`)
+    } finally {
+      setIsBulkMoving(false)
+    }
   }
 
   const handleConfirmBulkDelete = async () => {
@@ -566,6 +600,7 @@ export const ShipmentsPage = ({
           onToggleTripLinesSelection={toggleTripLinesSelection}
           hasBulkSelection={hasBulkSelection}
           onBulkDelete={() => { setBulkDeleteError(null); setBulkDeleteOpen(true) }}
+          onBulkEdit={handleBulkEdit}
           onAddTripLine={onAddTripLine}
           onAddInvoicePhoto={onAddInvoicePhoto}
           onReplaceInvoicePhoto={onReplaceInvoicePhoto}
@@ -602,6 +637,37 @@ export const ShipmentsPage = ({
         onClose={handleCloseBulkDelete}
         onConfirm={() => void handleConfirmBulkDelete()}
       />
+
+      <Modal
+        open={bulkEditLinesOpen}
+        title="Сменить рейс для поставок"
+        description={`Будет изменён рейс для ${selectedLineCount} ${pluralize(selectedLineCount, 'поставки', 'поставок', 'поставок')}.`}        onClose={() => !isBulkMoving && setBulkEditLinesOpen(false)}
+      >
+        <div className="space-y-4">
+          {bulkMoveError ? (
+            <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-600">
+              {bulkMoveError}
+            </div>
+          ) : null}
+          <Select
+            label="Перенести в рейс"
+            value={bulkMoveTargetTripId}
+            onChange={(e) => setBulkMoveTargetTripId(e.target.value)}
+            options={trips.map((t) => ({
+              label: t.trip_number ? `Рейс ${t.trip_number}` : `Черновик-${t.draft_number}`,
+              value: t.id,
+            }))}
+          />
+          <div className="flex justify-center gap-3">
+            <Button type="button" variant="secondary" onClick={() => setBulkEditLinesOpen(false)} disabled={isBulkMoving}>
+              Отмена
+            </Button>
+            <Button type="button" onClick={() => void handleConfirmBulkMoveLines()} disabled={!bulkMoveTargetTripId || isBulkMoving}>
+              {isBulkMoving ? 'Сохраняем...' : 'Сменить рейс'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <ColumnSettingsModal
         open={columnSettingsOpen}

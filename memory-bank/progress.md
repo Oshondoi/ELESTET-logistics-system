@@ -3,6 +3,49 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 19.05.2026 — Фулфилмент Логистика: фикс стейта + авто-refresh рейсов
+
+### rebuildSlotsFromSupplies — корректная инициализация модалки Логистики
+- **Проблема:** при открытии этапа Логистика все поставки попадали в слот-0 (рейс `batch.trip_id`) — ignoring реальных `supply.trip_id`
+- **Фикс:** новая `useCallback rebuildSlotsFromSupplies(loaded)` в `FulfillmentPage.tsx`:
+  - собирает уникальные `trip_id` из загруженных поставок
+  - строит `tripSlots` с правильными `tripLabel` (из `trips` стора)
+  - строит `supplySlotMap` — каждая поставка в свой слот по `trip_id`
+  - Если `trip_id` нет → дефолтный `slot-0`
+- Вызывается в `useEffect` по `[batch.id, viewStage]` когда `viewStage === 'logistics'`
+
+### Post-save refresh — устаревший стейт после сохранения
+- **Проблема:** после «Сохранить» (в завершённой партии) модалка не обновлялась — показывала pre-save данные
+- **Фикс:** после завершения sync-цикла `trip_lines` — `fetchSupplies(batch.id)` + `rebuildSlotsFromSupplies(refreshed)` — перестраивает полное визуальное состояние из БД
+
+### Trip picker — скрытие занятых рейсов
+- **Было:** рейс используемый другим слотом помечался `disabled` + badge «Занят»
+- **Стало:** такие рейсы полностью фильтруются (`otherUsedTripIds` Set → `filter(t => !otherUsedTripIds.has(t.id))`)
+- Убраны `isUsedByOther`, `disabled`, и соответствующие классы
+
+### Белая страница — dangling JSX reference
+- **Причина:** фильтр убрал `isUsedByOther` переменную, но JSX `{isUsedByOther && ...}` остался → runtime error → краш
+- **Фикс:** удалён JSX-фрагмент `{isUsedByOther && <span>...</span>}`
+- **Паттерн для памяти:** после удаления переменной — всегда grep по файлу на её имя перед сохранением
+
+### Trip picker — фиксированная высота 520px
+- **Проблема:** модалка прыгала по высоте при поиске / разном кол-ве рейсов
+- **Фикс:** обёртка модалки: `style={{ height: '520px' }} flex flex-col` + список `flex-1 overflow-y-auto min-h-0`
+
+### Авто-refresh рейсов на странице Логистики (Stale Global Cache)
+- **Проблема:** `useAppData` загружает `trips` один раз при старте. Порт 5173 и порт 5174 — независимые инстансы. Изменения в рейсах из Фулфилмент-модалки невидимы на Логистике без F5.
+- **useAppData.ts:**
+  - `storesRef` — ref для актуального состояния stores без пересоздания каналов
+  - `refreshTrips: useCallback` — `fetchTrips(accountId, storesRef.current).then(setTrips)`
+  - Supabase Realtime: подписка `trip_lines_changes_{accountId}` на `postgres_changes` → вызывает `refreshTrips`
+  - `visibilitychange`: при возврате на вкладку → вызывает `fetchTrips` заново
+  - `refreshTrips` добавлена в return объект хука
+- **App.tsx:**
+  - `refreshTrips` добавлена в destructure из `useAppData`
+  - `useEffect([effectivePage])`: при `effectivePage === 'shipments'` → `void refreshTrips()`
+
+---
+
 ## Что сделано за сессию 17.05.2026 — Teksher Countries кэш + Регистрация товара + 401 фикс
 
 ### Страна производства — bugfix + кэш в Supabase

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { isSupabaseConfigured } from '../lib/supabase'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isSupabaseConfigured, supabase } from '../lib/supabase'
 import {
   listShipments,
   fetchShipmentsFromSupabase,
@@ -44,6 +44,7 @@ import {
   saveMarketplaceDate as saveMarketplaceDateInSupabase,
   getWbSupplyMarketplaceDate as getWbSupplyMarketplaceDateInSupabase,
   getWbSupplyPackageCodes as getWbSupplyPackageCodesInSupabase,
+  updateTripLineTripId as updateTripLineTripIdInSupabase,
 } from '../services/tripService'
 import { fetchSupplyByTripLineId } from '../services/fulfillmentService'
 import { downloadGoodsTemplate, downloadBoxesTemplate } from '../lib/wbExcelExport'
@@ -207,6 +208,34 @@ export const useAppData = (accountId: string | null) => {
     void hydrateFromSupabase()
   }, [hydrateFromSupabase])
 
+  // Держим актуальный stores в ref чтобы не пересоздавать подписку при смене stores
+  const storesRef = useRef(stores)
+  useEffect(() => { storesRef.current = stores }, [stores])
+
+  // Realtime: перезагружать trips при любом изменении trip_lines (например из модалки фулфилмент)
+  useEffect(() => {
+    if (!isSupabaseConfigured || !accountId || !supabase) return
+    const channel = supabase!
+      .channel(`trip_lines_changes_${accountId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trip_lines', filter: `account_id=eq.${accountId}` },
+        () => { fetchTrips(accountId, storesRef.current).then(setTrips).catch(() => {}) }
+      )
+      .subscribe()
+    return () => { supabase!.removeChannel(channel) }
+  }, [accountId])
+
+  // Fallback: перезагружать trips при переключении на вкладку (если realtime не настроен)
+  useEffect(() => {
+    if (!isSupabaseConfigured || !accountId) return
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchTrips(accountId, storesRef.current).then(setTrips).catch(() => {})
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [accountId])
+
   const addStore = async (values: StoreFormValues) => {
     if (!isSupabaseConfigured || !accountId) {
       throw new Error('Supabase не настроен')
@@ -283,6 +312,10 @@ export const useAppData = (accountId: string | null) => {
     return trip
   }
 
+  const appendTrip = (trip: TripWithLines) => {
+    setTrips((current) => [trip, ...current])
+  }
+
   const addTripLine = async (tripId: string, values: TripLineFormValues) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const line = await addTripLineInSupabase(accountId, tripId, values)
@@ -324,6 +357,12 @@ export const useAppData = (accountId: string | null) => {
       .then(setArchivedTripLines)
       .catch(() => {})
   }
+
+  const refreshTrips = useCallback(async () => {
+    if (!isSupabaseConfigured || !accountId) return
+    const updated = await fetchTrips(accountId, storesRef.current)
+    setTrips(updated)
+  }, [accountId])
 
   const restoreArchivedTripLine = async (lineId: string) => {
     if (!isSupabaseConfigured || !accountId) {
@@ -416,22 +455,68 @@ export const useAppData = (accountId: string | null) => {
     )
   }
 
-  const editTripLine = async (tripId: string, lineId: string, values: TripLineFormValues) => {
+  const editTripLine = async (tripId: string, lineId: string, values: TripLineFormValues, newTripId?: string) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const updatedLine = await updateTripLineInSupabase(accountId, lineId, values) as TripLine
     const store = accountStores.find((s) => s.id === updatedLine.store_id)
-    setTrips((current) =>
-      current.map((trip) =>
-        trip.id === tripId
-          ? {
-              ...trip,
-              lines: trip.lines.map((line) =>
-                line.id === lineId ? { ...updatedLine, store } : line,
-              ),
-            }
-          : trip,
-      ),
-    )
+    if (newTripId && newTripId !== tripId) {
+      // Переносим поставку в другой рейс
+      await updateTripLineTripIdInSupabase(accountId, lineId, newTripId)
+      setTrips((current) =>
+        current.map((trip) => {
+          if (trip.id === tripId) return { ...trip, lines: trip.lines.filter((l) => l.id !== lineId) }
+          if (trip.id === newTripId) return { ...trip, lines: [...trip.lines, { ...updatedLine, store }] }
+          return trip
+        }),
+      )
+    } else {
+      setTrips((current) =>
+        current.map((trip) =>
+          trip.id === tripId
+            ? {
+                ...trip,
+                lines: trip.lines.map((line) =>
+                  line.id === lineId ? { ...updatedLine, store } : line,
+                ),
+              }
+            : trip,
+        ),
+      )
+    }
+  }
+
+  const bulkMoveLinesToTrip = async (lineIds: string[], newTripId: string) => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    // Собираем строки для переноса
+    const movedSet = new Set(lineIds)
+    const linesToMove: Array<{ lineId: string; oldTripId: string }> = []
+    for (const trip of trips) {
+      for (const line of trip.lines) {
+        if (movedSet.has(line.id) && trip.id !== newTripId) {
+          linesToMove.push({ lineId: line.id, oldTripId: trip.id })
+        }
+      }
+    }
+    if (linesToMove.length === 0) return
+    // БД: меняем trip_id для каждой строки
+    await Promise.all(linesToMove.map(({ lineId }) =>
+      updateTripLineTripIdInSupabase(accountId, lineId, newTripId),
+    ))
+    // State: переносим строки между рейсами
+    const movedLineIds = new Set(linesToMove.map((m) => m.lineId))
+    setTrips((current) => {
+      const movedLines = current.flatMap((t) => t.lines).filter((l) => movedLineIds.has(l.id))
+      return current.map((trip) => {
+        if (trip.id === newTripId) {
+          const existingIds = new Set(trip.lines.map((l) => l.id))
+          return { ...trip, lines: [...trip.lines, ...movedLines.filter((l) => !existingIds.has(l.id))] }
+        }
+        if (trip.lines.some((l) => movedLineIds.has(l.id))) {
+          return { ...trip, lines: trip.lines.filter((l) => !movedLineIds.has(l.id)) }
+        }
+        return trip
+      })
+    })
   }
 
   const updateTripCustomFields = async (tripId: string, fields: Record<string, unknown>) => {
@@ -821,6 +906,7 @@ export const useAppData = (accountId: string | null) => {
     restoreStore,
     addShipment,
     addTrip,
+    appendTrip,
     addTripLine,
     removeTrip,
     removeTripLine,
@@ -830,8 +916,10 @@ export const useAppData = (accountId: string | null) => {
     changeTripLinePaymentStatus,
     editTrip,
     editTripLine,
+    bulkMoveLinesToTrip,
     updateTripCustomFields,
     updateLineCustomFields,
+    refreshTrips,
     addCarrier,
     removeCarrier,
     renameCarrier,

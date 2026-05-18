@@ -81,7 +81,7 @@ import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulf
 import {
   findProductByBarcode,
 } from '../services/fulfillmentService'
-import { createTrip, addTripLine, setTripLineFulfillmentBatch } from '../services/tripService'
+import { createTrip, addTripLine, setTripLineFulfillmentBatch, updateTripLineTripId } from '../services/tripService'
 import { fetchWorkTariffs, fetchConsumables } from '../services/directoriesService'
 import { Card } from '../components/ui/Card'
 import { InvoicePhotoCell } from '../components/ui/InvoicePhotoCell'
@@ -129,8 +129,9 @@ interface FulfillmentPageProps {
   stores: Store[]
   trips: TripWithLines[]
   warehouses: Warehouse[]
-  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues) => Promise<void>
+  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues, newTripId?: string) => Promise<void>
   onAddTripLine?: (tripId: string, values: TripLineFormValues) => Promise<TripLine>
+  onTripCreated?: (trip: TripWithLines) => void
   onStoreCreated?: (store: Store) => void
   canManage?: boolean
   canOtkAssign?: boolean
@@ -275,8 +276,9 @@ interface DetailModalProps {
   onClose: () => void
   onBatchUpdated: (b: FulfillmentBatch) => void
   onItemsChanged: (items: FulfillmentItem[]) => void
-  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues) => Promise<void>
+  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues, newTripId?: string) => Promise<void>
   onAddTripLine?: (tripId: string, values: TripLineFormValues) => Promise<TripLine>
+  onTripCreated?: (trip: TripWithLines) => void
   zIndex?: number
 }
 
@@ -300,6 +302,7 @@ const BatchDetailModal = ({
   onItemsChanged,
   onEditTripLine,
   onAddTripLine,
+  onTripCreated,
   zIndex = 50,
 }: DetailModalProps) => {
   const [batch, setBatch] = useState<FulfillmentBatchWithItems>(initialBatch)
@@ -320,6 +323,7 @@ const BatchDetailModal = ({
   const [newQty, setNewQty] = useState('')
   const [newName, setNewName] = useState('')
   const [newSize, setNewSize] = useState('')
+  const [newColor, setNewColor] = useState('')
   const [isLooking, setIsLooking] = useState(false)
   const [isAddingSaving, setIsAddingSaving] = useState(false)
   const [receptionCameraOpen, setReceptionCameraOpen] = useState(false)
@@ -441,9 +445,9 @@ const BatchDetailModal = ({
   const [batchConsumables, setBatchConsumables] = useState<BatchConsumable[]>([])
   const [accountConsumables, setAccountConsumables] = useState<Consumable[]>([])
   const [isLoadingConsumables, setIsLoadingConsumables] = useState(false)
-  const [packagingQtyMode, setPackagingQtyMode] = useState<'all' | 'custom'>(batch.packaging_qty == null ? 'all' : 'custom')
-  const [packagingQtyInput, setPackagingQtyInput] = useState(String(batch.packaging_qty ?? ''))
-  const [isSavingPackagingQty, setIsSavingPackagingQty] = useState(false)
+  const [boxesQtyMode, setBoxesQtyMode] = useState<'all' | 'custom'>('custom')
+  const [boxesQtyInput, setBoxesQtyInput] = useState(String(batch.boxes_qty ?? 0))
+  const [isSavingBoxesQty, setIsSavingBoxesQty] = useState(false)
   const [consumableSaving, setConsumableSaving] = useState<Record<string, boolean>>({})
 
   // Упаковка — журнал работ
@@ -453,13 +457,15 @@ const BatchDetailModal = ({
   const [packagingWorkQty, setPackagingWorkQty] = useState('')
   const [packagingWorkDefect, setPackagingWorkDefect] = useState('')
   const [packagingWorkNotes, setPackagingWorkNotes] = useState('')
+  const [packagingWorkZipBags, setPackagingWorkZipBags] = useState('')
+  const [packagingWorkZipBagsAll, setPackagingWorkZipBagsAll] = useState(false)
   const [packagingWorkPerformerId, setPackagingWorkPerformerId] = useState(userId)
   const [packagingWorkPerformerName, setPackagingWorkPerformerName] = useState(userName || userEmail)
   const [packagingPerformers, setPackagingPerformers] = useState<OtkPerformer[]>([])
   const [isAddingPackagingLog, setIsAddingPackagingLog] = useState(false)
   const [packagingWorkPhotoFiles, setPackagingWorkPhotoFiles] = useState<File[]>([])
   const [packagingWorkConsumableId, setPackagingWorkConsumableId] = useState<string>('')
-  type PackagingBufferEntry = { tempId: string; performer_user_id: string | null; performer_name: string; tariff: string; qty: number; qty_defect: number; notes: string; photo_files: File[]; consumable_id: string | null }
+  type PackagingBufferEntry = { tempId: string; performer_user_id: string | null; performer_name: string; tariff: string; qty: number; qty_defect: number; notes: string; photo_files: File[]; consumable_id: string | null; zip_bags_qty: number | null }
   const [packagingBuffer, setPackagingBuffer] = useState<PackagingBufferEntry[]>([])
   const [packagingEdits, setPackagingEdits] = useState<Record<string, { tariff: string; qty: number; qty_defect: number; notes: string }>>({})
   const [packagingDeletedIds, setPackagingDeletedIds] = useState<string[]>([])
@@ -473,16 +479,21 @@ const BatchDetailModal = ({
   const [isLoadingSupplies, setIsLoadingSupplies] = useState(false)
   const [selectedWarehouseId, setSelectedWarehouseId] = useState('')
   const [isWarehouseDropdownOpen, setIsWarehouseDropdownOpen] = useState(false)
-  const [packingSelectedTripId, setPackingSelectedTripId] = useState(batch.trip_id ?? '')
-  const [packingSelectedTripLabel, setPackingSelectedTripLabel] = useState(() => {
+  // Логистика: слоты рейсов
+  interface TripSlot { slotId: string; tripId: string; tripLabel: string }
+  const [tripSlots, setTripSlots] = useState<TripSlot[]>([{ slotId: 'slot-0', tripId: batch.trip_id ?? '', tripLabel: (() => {
     if (!batch.trip_id) return ''
-    const found = [...trips].find((t) => t.id === batch.trip_id)
+    const found = trips.find((t) => t.id === batch.trip_id)
     if (!found) return 'Рейс (сохранён)'
     return `${found.trip_number ?? `Рейс #${found.draft_number}`}${found.carrier ? ` · ${found.carrier}` : ''}${found.departure_date ? ` · ${new Date(found.departure_date).toLocaleDateString('ru-RU')}` : ''}`
-  })
+  })() }])
+  const [supplySlotMap, setSupplySlotMap] = useState<Record<string, string>>({})  // supplyId → slotId
   const [isTripPickerOpen, setIsTripPickerOpen] = useState(false)
+  const [tripPickerSlotId, setTripPickerSlotId] = useState<string>('slot-0')
   const [showAllTrips, setShowAllTrips] = useState(false)
+  const [tripSearch, setTripSearch] = useState('')
   const [isCreatingDraftTrip, setIsCreatingDraftTrip] = useState(false)
+  const [editingSlotId, setEditingSlotId] = useState<string | null>(!batch.trip_id ? 'slot-0' : null)
   const [localDraftTrips, setLocalDraftTrips] = useState<TripWithLines[]>([])
   const [warehouseSearch, setWarehouseSearch] = useState('')
   const [isCreatingSupply, setIsCreatingSupply] = useState(false)
@@ -659,12 +670,54 @@ const BatchDetailModal = ({
   // Актуальные позиции для камерного лукапа (без stale closure)
   useEffect(() => { markingItemsRef.current = items }, [items])
 
-  // Загрузить поставки при открытии этапа packing
+  // Перестроить tripSlots и supplySlotMap из реальных данных поставок (supply.trip_id)
+  const rebuildSlotsFromSupplies = useCallback((loaded: FulfillmentSupplyWithBoxes[]) => {
+    const uniqueTripIds = [...new Set(
+      loaded.map((s) => s.trip_id).filter((id): id is string => Boolean(id))
+    )]
+    if (uniqueTripIds.length > 0) {
+      const newSlots: TripSlot[] = uniqueTripIds.map((tid, i) => {
+        const found = trips.find((t) => t.id === tid)
+        const label = found
+          ? `${found.trip_number ?? `Рейс #${found.draft_number}`}${found.carrier ? ` · ${found.carrier}` : ''}${found.departure_date ? ` · ${new Date(found.departure_date).toLocaleDateString('ru-RU')}` : ''}`
+          : 'Рейс (сохранён)'
+        return { slotId: `slot-${i}`, tripId: tid, tripLabel: label }
+      })
+      setTripSlots(newSlots)
+      const newMap: Record<string, string> = {}
+      loaded.forEach((s) => {
+        const slot = s.trip_id ? newSlots.find((sl) => sl.tripId === s.trip_id) : null
+        newMap[s.id] = slot ? slot.slotId : (newSlots[0]?.slotId ?? 'slot-0')
+      })
+      setSupplySlotMap(newMap)
+    } else {
+      // Поставки ещё не привязаны к рейсам — оставляем текущие слоты
+      setSupplySlotMap((prev) => {
+        const next = { ...prev }
+        loaded.forEach((s) => { if (!next[s.id]) next[s.id] = 'slot-0' })
+        return next
+      })
+    }
+  }, [trips])
+
+  // Загрузить поставки при открытии этапа packing или logistics
   useEffect(() => {
-    if (viewStage !== 'packing') return
+    if (viewStage !== 'packing' && viewStage !== 'logistics') return
     setIsLoadingSupplies(true)
     fetchSupplies(batch.id)
-      .then(setSupplies)
+      .then((loaded) => {
+        setSupplies(loaded)
+        if (viewStage === 'logistics') {
+          // Перестраиваем слоты из реальных данных — чтобы завершённые партии отображались корректно
+          rebuildSlotsFromSupplies(loaded)
+        } else {
+          setSupplySlotMap((prev) => {
+            const next = { ...prev }
+            loaded.forEach((s) => { if (!next[s.id]) next[s.id] = 'slot-0' })
+            return next
+          })
+        }
+      })
       .catch(() => setSupplies([]))
       .finally(() => setIsLoadingSupplies(false))
   }, [batch.id, viewStage])
@@ -844,6 +897,7 @@ const BatchDetailModal = ({
       if (found) {
         setNewName(found.name ?? '')
         setNewSize(found.size ?? '')
+        setNewColor(found.color ?? '')
       }
     } finally {
       setIsLooking(false)
@@ -856,6 +910,7 @@ const BatchDetailModal = ({
     setNewSize('')
     let resolvedName = ''
     let resolvedSize = ''
+    let resolvedColor = ''
     if (barcode.length >= 8 && store?.api_key) {
       setIsLooking(true)
       try {
@@ -863,8 +918,10 @@ const BatchDetailModal = ({
         if (found) {
           resolvedName = found.name ?? ''
           resolvedSize = found.size ?? ''
+          resolvedColor = found.color ?? ''
           setNewName(resolvedName)
           setNewSize(resolvedSize)
+          setNewColor(resolvedColor)
         }
       } finally {
         setIsLooking(false)
@@ -880,6 +937,7 @@ const BatchDetailModal = ({
           barcode: barcode.trim(),
           product_name: resolvedName || null,
           size: resolvedSize || null,
+          color: resolvedColor || null,
           article: null,
           qty_received: 1,
           qty_otk: null,
@@ -893,7 +951,7 @@ const BatchDetailModal = ({
         setItems(next)
         onItemsChanged(next)
         void recalcOtkDiscrepancy(next, otkLogs)
-        setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize('')
+        setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize(''); setNewColor('')
         // Переканывать следующий скан
         receptionDetectRef.current = true
         setReceptionCameraRescanKey((k) => k + 1)
@@ -920,43 +978,54 @@ const BatchDetailModal = ({
 
     const start = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+        })
         if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return }
         receptionStreamRef.current = stream
+        // Попытка включить continuous autofocus (поддерживается не всеми браузерами/устройствами)
+        const track = stream.getVideoTracks()[0]
+        if (track) {
+          try {
+            await track.applyConstraints({ advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet] })
+          } catch { /* браузер не поддерживает — ок */ }
+        }
         if (!receptionVideoRef.current) return
 
-        if ('BarcodeDetector' in window) {
-          receptionVideoRef.current.srcObject = stream
-          await receptionVideoRef.current.play()
-          const detector = new (window as unknown as { BarcodeDetector: new (opts: object) => { detect: (src: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> } }).BarcodeDetector({
-            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'itf'],
-          })
-          const scan = async () => {
-            if (!receptionDetectRef.current || !receptionVideoRef.current) return
+        // Ручной canvas-скан с TRY_HARDER — надёжнее decodeFromStream для вебкамеры ноутбука
+        receptionVideoRef.current.srcObject = stream
+        await receptionVideoRef.current.play()
+        if (cancelled) return
+        const { BrowserMultiFormatReader } = await import('@zxing/browser')
+        const zxingLib = await import('@zxing/library')
+        if (cancelled) return
+        const hints = new Map<unknown, unknown>([[zxingLib.DecodeHintType.TRY_HARDER, true]])
+        const reader = new BrowserMultiFormatReader(hints as Parameters<typeof BrowserMultiFormatReader>[0])
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d')!
+        let scanTimer: ReturnType<typeof setTimeout> | null = null
+        const scan = () => {
+          if (!receptionDetectRef.current || !receptionVideoRef.current) return
+          const video = receptionVideoRef.current
+          if (video.readyState >= 2 && video.videoWidth > 0) {
+            canvas.width = video.videoWidth
+            canvas.height = video.videoHeight
+            ctx.drawImage(video, 0, 0)
             try {
-              const results = await detector.detect(receptionVideoRef.current)
-              if (results.length > 0) {
-                receptionDetectRef.current = false
-                void handleReceptionCameraScan(results[0].rawValue)
-                return
-              }
-            } catch { /* кадр не готов */ }
-            if (receptionDetectRef.current) requestAnimationFrame(scan)
-          }
-          requestAnimationFrame(scan)
-        } else {
-          const { BrowserMultiFormatReader } = await import('@zxing/browser')
-          if (cancelled) return
-          const reader = new BrowserMultiFormatReader()
-          const controls = await reader.decodeFromStream(stream, receptionVideoRef.current, (result) => {
-            if (result && receptionDetectRef.current) {
+              const result = (reader as unknown as { decodeFromCanvas(c: HTMLCanvasElement): { getText(): string } }).decodeFromCanvas(canvas)
               receptionDetectRef.current = false
-              void handleReceptionCameraScan((result as unknown as { getText(): string }).getText())
-            }
-          })
-          if (cancelled) { controls.stop(); return }
-          zxingControls = controls
+              void handleReceptionCameraScan(result.getText())
+              return
+            } catch { /* кадр без штрихкода */ }
+          }
+          if (receptionDetectRef.current) scanTimer = setTimeout(scan, 200)
         }
+        scan()
+        zxingControls = { stop: () => { if (scanTimer !== null) clearTimeout(scanTimer) } }
       } catch {
         if (!cancelled) setReceptionCameraError('Нет доступа к камере. Используйте USB/BT-сканер или ручной ввод.')
       }
@@ -983,6 +1052,7 @@ const BatchDetailModal = ({
         barcode: newBarcode.trim(),
         product_name: newName.trim() || null,
         size: newSize.trim() || null,
+        color: newColor.trim() || null,
         article: null,
         qty_received: Number(newQty),
         qty_otk: null,
@@ -996,7 +1066,7 @@ const BatchDetailModal = ({
       setItems(next)
       onItemsChanged(next)
       void recalcOtkDiscrepancy(next, otkLogs)
-      setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize('')
+      setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize(''); setNewColor('')
       barcodeInputRef.current?.focus()
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
@@ -1029,6 +1099,7 @@ const BatchDetailModal = ({
         barcode: '',
         product_name: bulkNote.trim() || 'Общая партия',
         size: null,
+        color: null,
         article: null,
         qty_received: Number(bulkQty),
         qty_otk: null,
@@ -1061,6 +1132,7 @@ const BatchDetailModal = ({
         barcode: '',
         product_name: subjectName.trim(),
         size: null,
+        color: null,
         article: null,
         qty_received: Number(subjectQty),
         qty_otk: null,
@@ -1094,6 +1166,7 @@ const BatchDetailModal = ({
         barcode: '',
         product_name: 'Готовые короба',
         size: null,
+        color: null,
         article: null,
         qty_received: qty,
         qty_otk: null,
@@ -1235,7 +1308,8 @@ const BatchDetailModal = ({
         await persistLocalSupplies()
 
         // После завершения партии — автоматически привязать новые поставки к рейсу
-        if (batch.status === 'done' && packingSelectedTripId && batch.store_id) {
+        const _autoTripId = tripSlots[0]?.tripId ?? ''
+        if (batch.status === 'done' && _autoTripId && batch.store_id) {
           const freshSupplies = await fetchSupplies(batch.id)
           const receptionCompletedAt = await fetchStageCompletedAt(batch.id, 'reception')
           const receptionDateStr = receptionCompletedAt
@@ -1264,9 +1338,9 @@ const BatchDetailModal = ({
               comment: '',
             }
             const tripLine = onAddTripLine
-              ? await onAddTripLine(packingSelectedTripId, tripLineValues)
-              : await addTripLine(batch.account_id, packingSelectedTripId, tripLineValues)
-            await updateSupply(supply.id, { trip_id: packingSelectedTripId, trip_line_id: tripLine.id })
+              ? await onAddTripLine(_autoTripId, tripLineValues)
+              : await addTripLine(batch.account_id, _autoTripId, tripLineValues)
+            await updateSupply(supply.id, { trip_id: _autoTripId, trip_line_id: tripLine.id })
             // Пометить поставку как созданную из фулфилмента — блокирует ручное редактирование
             try { await setTripLineFulfillmentBatch(tripLine.id, batch.id) } catch {}
           }
@@ -1313,6 +1387,7 @@ const BatchDetailModal = ({
         barcode,
         product_name: product.name ?? product.vendor_code ?? 'Товар',
         size,
+        color: null,
         article: product.vendor_code ?? null,
         qty_received: qty,
         qty_otk: null,
@@ -1361,7 +1436,8 @@ const BatchDetailModal = ({
       if (batch.current_stage === 'packing') await persistLocalSupplies()
 
       // При завершении логистики — создаём trip_lines из поставок фулфилмента
-      if (batch.current_stage === 'logistics' && packingSelectedTripId && batch.store_id) {
+      const hasAnyTripSlot = tripSlots.some((s) => s.tripId)
+      if (batch.current_stage === 'logistics' && hasAnyTripSlot && batch.store_id) {
         // Убедиться что локальные поставки сохранены
         const hasLocal = supplies.some((s) => s._local)
         if (hasLocal) await persistLocalSupplies()
@@ -1374,6 +1450,9 @@ const BatchDetailModal = ({
         const freshSupplies = await fetchSupplies(batch.id)
         // Создать trip_line для каждой поставки без trip_line_id
         for (const supply of freshSupplies.filter((s) => !s.trip_line_id)) {
+          // В per-supply режиме используем рейс конкретной поставки
+          const tripIdForSupply = tripSlots.find((s) => s.slotId === (supplySlotMap[supply.id] ?? tripSlots[0]?.slotId))?.tripId ?? ''
+          if (!tripIdForSupply) continue
           const boxQty = supply.boxes.length
           const unitsQty = supply.boxes.reduce(
             (sum, box) => sum + box.items.reduce((s, item) => s + item.qty, 0),
@@ -1397,15 +1476,15 @@ const BatchDetailModal = ({
           }
           // Используем onAddTripLine из useAppData чтобы обновить React-стейт Логистики
           const tripLine = onAddTripLine
-            ? await onAddTripLine(packingSelectedTripId, tripLineValues)
-            : await addTripLine(batch.account_id, packingSelectedTripId, tripLineValues)
-          await updateSupply(supply.id, { trip_id: packingSelectedTripId, trip_line_id: tripLine.id })
+            ? await onAddTripLine(tripIdForSupply, tripLineValues)
+            : await addTripLine(batch.account_id, tripIdForSupply, tripLineValues)
+          await updateSupply(supply.id, { trip_id: tripIdForSupply, trip_line_id: tripLine.id })
           // Пометить поставку как созданную из фулфилмента — блокирует ручное редактирование
           try { await setTripLineFulfillmentBatch(tripLine.id, batch.id) } catch {}
         }
         // Сохранить trip_id в батч (требует применённого patch_fulfillment_trip_id.sql)
         try {
-          await updateBatch(batch.id, { trip_id: packingSelectedTripId })
+          await updateBatch(batch.id, { trip_id: tripSlots[0]?.tripId ?? '' })
         } catch {
           // Колонка может ещё не существовать — некритично
         }
@@ -1603,6 +1682,8 @@ const BatchDetailModal = ({
     const qtyDefect = Number(markingDefect) || 0
     if (!markingBarcode.trim()) return
     if (qty <= 0 && qtyDefect <= 0) return
+    const hasBarcodeItems = items.some((it) => it.barcode && it.barcode.trim() !== '')
+    if (hasBarcodeItems && !markingItemId) return
     setMarkingBuffer((prev) => [...prev, {
       tempId: crypto.randomUUID(),
       performer_user_id: markingPerformerId || null,
@@ -1763,10 +1844,15 @@ const BatchDetailModal = ({
       notes: packagingWorkNotes,
       photo_files: packagingWorkPhotoFiles,
       consumable_id: packagingWorkConsumableId || null,
+      zip_bags_qty: packagingWorkZipBagsAll
+        ? (qty > 0 ? qty : null)
+        : (Number(packagingWorkZipBags) > 0 ? Number(packagingWorkZipBags) : null),
     }])
     setPackagingWorkQty('')
     setPackagingWorkDefect('')
     setPackagingWorkNotes('')
+    setPackagingWorkZipBags('')
+    setPackagingWorkZipBagsAll(false)
     setPackagingWorkPhotoFiles([])
     setPackagingWorkConsumableId('')
     setPackagingAddModalOpen(false)
@@ -1804,6 +1890,7 @@ const BatchDetailModal = ({
           notes: e.notes || undefined,
           photo_urls: photoUrls,
           consumable_id: e.consumable_id,
+          zip_bags_qty: e.zip_bags_qty,
         })
       }))
       setPackagingLogs((prev) => {
@@ -1848,6 +1935,7 @@ const BatchDetailModal = ({
             notes: e.notes || undefined,
             photo_urls: photoUrls,
             consumable_id: e.consumable_id,
+            zip_bags_qty: e.zip_bags_qty,
           })
         }))
         setPackagingBuffer([])
@@ -2479,7 +2567,7 @@ const BatchDetailModal = ({
                     <video ref={receptionVideoRef} className="h-full w-full object-cover" playsInline muted />
                     {/* прицел */}
                     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                      <div className="h-48 w-72 rounded-2xl border-2 border-white/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]" />
+                      <div className="h-40 w-[85%] max-w-xl rounded-2xl border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" />
                     </div>
                     {receptionCameraError && (
                       <div className="absolute bottom-8 left-4 right-4 rounded-xl bg-red-900/80 px-4 py-3 text-sm text-white">{receptionCameraError}</div>
@@ -2662,7 +2750,9 @@ const BatchDetailModal = ({
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       <tr>
+                        <th className="px-4 py-2.5 text-left">Баркод</th>
                         <th className="px-4 py-2.5 text-left">Наименование</th>
+                        <th className="px-4 py-2.5 text-left">Цвет</th>
                         <th className="px-4 py-2.5 text-left">Размер</th>
                         <th className="px-3 py-2.5 text-center">Принято</th>
                         {items.some((i) => i.boxes) && <th className="px-3 py-2.5 text-center">Коробов</th>}
@@ -2672,7 +2762,9 @@ const BatchDetailModal = ({
                     <tbody className="divide-y divide-slate-100">
                       {items.map((it) => (
                         <tr key={it.id} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{it.barcode || <span className="text-slate-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-slate-700">{it.product_name ?? <span className="text-slate-300">—</span>}</td>
+                          <td className="px-4 py-2.5 text-slate-500">{it.color ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-slate-500">{it.size ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-3 py-2.5 text-center">
                             {canManage ? (
@@ -2703,7 +2795,7 @@ const BatchDetailModal = ({
                     </tbody>
                     <tfoot className="border-t border-slate-200 bg-slate-50 font-semibold">
                       <tr>
-                        <td colSpan={3} className="px-4 py-2.5 text-sm text-slate-500">
+                        <td colSpan={5} className="px-4 py-2.5 text-sm text-slate-500">
                           <span>Итого</span>
                           {receptionCompletedDate && (
                             <span className="ml-3 text-xs font-normal text-slate-400">
@@ -3156,17 +3248,31 @@ const BatchDetailModal = ({
                             </button>
                           </div>
                           {markingBarcode.trim() && (
-                            markingItemName ? (
-                              <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-emerald-50 border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-700">
-                                <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" /></svg>
-                                {markingItemName}
-                              </span>
-                            ) : (
-                              <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 text-xs font-medium text-amber-700">
-                                <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" /></svg>
-                                Не найден в партии
-                              </span>
-                            )
+                            (() => {
+                              const hasBarcodeItems = items.some((it) => it.barcode && it.barcode.trim() !== '')
+                              if (markingItemName) {
+                                return (
+                                  <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-emerald-50 border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-700">
+                                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" /></svg>
+                                    {markingItemName}
+                                  </span>
+                                )
+                              }
+                              if (hasBarcodeItems) {
+                                return (
+                                  <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-red-50 border border-red-200 px-2 py-1 text-xs font-medium text-red-700">
+                                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clipRule="evenodd" /></svg>
+                                    Такой баркод не найден в данной партии
+                                  </span>
+                                )
+                              }
+                              return (
+                                <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 text-xs font-medium text-amber-700">
+                                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" /></svg>
+                                  Не найден в партии
+                                </span>
+                              )
+                            })()
                           )}
                         </div>
                         {/* Исполнитель */}
@@ -3245,7 +3351,7 @@ const BatchDetailModal = ({
                           Отмена
                         </button>
                         <button type="button" onClick={handleAddMarkingLog}
-                          disabled={isAddingMarking || !markingBarcode.trim() || ((!markingQty || Number(markingQty) <= 0) && (!markingDefect || Number(markingDefect) <= 0))}
+                          disabled={isAddingMarking || !markingBarcode.trim() || ((!markingQty || Number(markingQty) <= 0) && (!markingDefect || Number(markingDefect) <= 0)) || (items.some((it) => it.barcode && it.barcode.trim() !== '') && markingBarcode.trim() !== '' && !markingItemId)}
                           className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                           {isAddingMarking ? 'Сохранение…' : '+ Добавить'}
                         </button>
@@ -3556,7 +3662,7 @@ const BatchDetailModal = ({
           {isTripPickerOpen && (
             <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" onClick={() => setIsTripPickerOpen(false)}>
               <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-              <div className="relative w-full max-w-md rounded-3xl bg-white shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+              <div className="relative w-full max-w-xl rounded-3xl bg-white shadow-2xl overflow-hidden flex flex-col" style={{ height: '520px' }} onClick={(e) => e.stopPropagation()}>
                 {/* Шапка */}
                 <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
                   <p className="font-semibold text-slate-800">Выбор рейса</p>
@@ -3570,53 +3676,83 @@ const BatchDetailModal = ({
                       </div>
                       Все рейсы
                     </label>
-                    <button onClick={() => setIsTripPickerOpen(false)} className="h-7 w-7 flex items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">✕</button>
+                    <button onClick={() => { setIsTripPickerOpen(false); setTripSearch('') }} className="h-7 w-7 flex items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">✕</button>
+                  </div>
+                </div>
+
+                {/* Поиск */}
+                <div className="px-4 pt-3 pb-1">
+                  <div className="relative">
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 pointer-events-none"><path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.452 4.391l3.328 3.329a.75.75 0 1 1-1.06 1.06l-3.329-3.328A7 7 0 0 1 2 9Z" clipRule="evenodd" /></svg>
+                    <input
+                      autoFocus
+                      type="text"
+                      placeholder="Поиск по номеру, перевозчику, дате…"
+                      value={tripSearch}
+                      onChange={(e) => setTripSearch(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
                   </div>
                 </div>
 
                 {/* Список рейсов */}
-                <div className="max-h-72 overflow-y-auto">
-                  {trips.length === 0 && localDraftTrips.length === 0 ? (
-                    <p className="py-8 text-center text-sm text-slate-400">Рейсов нет</p>
-                  ) : (
-                    <div className="py-2">
-                      {[
-                        ...(showAllTrips ? trips : trips.filter((t) => t.status === 'Формируется')),
-                        ...localDraftTrips.filter((ld) => !trips.some((t) => t.id === ld.id)),
-                      ].map((t) => {
-                        const label = `${t.trip_number ?? `Рейс #${t.draft_number}`}${t.carrier ? ` · ${t.carrier}` : ''}${t.departure_date ? ` · ${new Date(t.departure_date).toLocaleDateString('ru-RU')}` : ''}`
-                        const isSelected = packingSelectedTripId === t.id
-                        return (
-                          <button
-                            key={t.id}
-                            type="button"
-                            onClick={async () => {
-                              setPackingSelectedTripId(t.id)
-                              setPackingSelectedTripLabel(label)
-                              setIsTripPickerOpen(false)
-                              try {
-                                const updated = await updateBatch(batch.id, { trip_id: t.id })
-                                setBatch((prev) => ({ ...prev, trip_id: t.id }))
-                                onBatchUpdated({ ...updated, trip_id: t.id })
-                              } catch (e) { console.error('[trip save]', e) }
-                            }}
-                            className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-blue-50 ${isSelected ? 'bg-blue-50' : ''}`}
-                          >
-                            <div className={`h-4 w-4 flex-shrink-0 rounded-full border-2 ${isSelected ? 'border-blue-500 bg-blue-500' : 'border-slate-300'}`} />
-                            <div>
-                              <p className={`text-sm font-medium ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>{t.trip_number ?? `Рейс #${t.draft_number}`}</p>
-                              {(t.carrier || t.departure_date) && (
-                                <p className="text-xs text-slate-400">{[t.carrier, t.departure_date ? new Date(t.departure_date).toLocaleDateString('ru-RU') : null].filter(Boolean).join(' · ')}</p>
-                              )}
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  {(() => {
+                    const baseList = [
+                      ...(showAllTrips ? trips : trips.filter((t) => t.status === 'Формируется')),
+                      ...localDraftTrips.filter((ld) => !trips.some((t) => t.id === ld.id)),
+                    ]
+                    const q = tripSearch.trim().toLowerCase()
+                    const filtered = q
+                      ? baseList.filter((t) => {
+                          const num = (t.trip_number ?? `Черновик-${t.draft_number}`).toLowerCase()
+                          const draftLabel = t.draft_number ? `рейс #${t.draft_number}` : ''
+                          const carrier = (t.carrier ?? '').toLowerCase()
+                          const date = t.departure_date ? new Date(t.departure_date).toLocaleDateString('ru-RU') : ''
+                          return num.includes(q) || draftLabel.includes(q) || carrier.includes(q) || date.includes(q)
+                        })
+                      : baseList
+                    if (filtered.length === 0) {
+                      return <p className="py-8 text-center text-sm text-slate-400">{q ? 'Ничего не найдено' : 'Рейсов нет'}</p>
+                    }
+                    return (
+                      <div className="py-2">
+                        {(() => {
+                          const otherUsedTripIds = new Set(
+                            tripSlots
+                              .filter((s) => s.slotId !== tripPickerSlotId && s.tripId)
+                              .map((s) => s.tripId)
+                          )
+                          return filtered.filter((t) => !otherUsedTripIds.has(t.id)).map((t) => {
+                            const label = `${t.trip_number ?? `Рейс #${t.draft_number}`}${t.carrier ? ` · ${t.carrier}` : ''}${t.departure_date ? ` · ${new Date(t.departure_date).toLocaleDateString('ru-RU')}` : ''}`
+                            const isSelected = tripSlots.find((s) => s.slotId === tripPickerSlotId)?.tripId === t.id
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => {
+                                  setTripSlots((prev) => prev.map((slot) => slot.slotId === tripPickerSlotId ? { ...slot, tripId: t.id, tripLabel: label } : slot))
+                                  setIsTripPickerOpen(false)
+                                  setTripSearch('')
+                                  setIsDirty(true)
+                                }}
+                                className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-blue-50 ${isSelected ? 'bg-blue-50' : ''}`}
+                              >
+                                <div className={`h-4 w-4 flex-shrink-0 rounded-full border-2 ${isSelected ? 'border-blue-500 bg-blue-500' : 'border-slate-300'}`} />
+                                <div>
+                                  <p className={`text-sm font-medium ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>{t.trip_number ?? `Рейс #${t.draft_number}`}</p>
+                                  {(t.carrier || t.departure_date) && (
+                                    <p className="text-xs text-slate-400">{[t.carrier, t.departure_date ? new Date(t.departure_date).toLocaleDateString('ru-RU') : null].filter(Boolean).join(' · ')}</p>
+                                  )}
+                                </div>
+                              </button>
+                            )
+                          })
+                        })()}
+                      </div>
+                    )
+                  })()}
                 </div>
-
-                {/* Создать черновик рейса */}
                 <div className="border-t border-slate-100 px-5 py-4">
                   <button
                     type="button"
@@ -3628,14 +3764,10 @@ const BatchDetailModal = ({
                         const label = `Рейс #${newTrip.draft_number} (черновик)`
                         const newTripWithLines: TripWithLines = { ...newTrip, lines: [] }
                         setLocalDraftTrips((prev) => [...prev, newTripWithLines])
-                        setPackingSelectedTripId(newTrip.id)
-                        setPackingSelectedTripLabel(label)
+                        onTripCreated?.(newTripWithLines)
+                        setTripSlots((prev) => prev.map((slot) => slot.slotId === tripPickerSlotId ? { ...slot, tripId: newTrip.id, tripLabel: label } : slot))
                         setIsTripPickerOpen(false)
-                        try {
-                          const updated = await updateBatch(batch.id, { trip_id: newTrip.id })
-                          setBatch((prev) => ({ ...prev, trip_id: newTrip.id }))
-                          onBatchUpdated({ ...updated, trip_id: newTrip.id })
-                        } catch (e) { console.error('[trip save]', e) }
+                        setIsDirty(true)
                       } catch (e: unknown) {
                         // silent — ошибка покажется при создании поставки
                       } finally {
@@ -3661,68 +3793,6 @@ const BatchDetailModal = ({
           {/* УПАКОВКА */}
           {viewStage === 'packaging' && (
             <div className="space-y-4">
-              {/* Зип-пакеты */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-sm font-medium text-slate-700 mb-3">Зип-пакеты</div>
-                <div className="flex items-center gap-3 flex-wrap">
-                  {/* Таб-переключатель */}
-                  <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPackagingQtyMode('all')
-                        setPackagingQtyInput('')
-                        if (canManage) {
-                          void updateBatch(batch.id, { packaging_qty: null }).then(onBatchUpdated)
-                        }
-                      }}
-                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                    >
-                      {(() => { const t = batch.items.reduce((s, i) => s + i.qty_received, 0); return `Все товары${t > 0 ? ` (${t} шт)` : ''}` })()}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPackagingQtyMode('custom')}
-                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                    >
-                      Указать вручную
-                    </button>
-                  </div>
-                  {/* Поле ввода + кнопка сохранить */}
-                  <input
-                    type="number"
-                    min={1}
-                    value={packagingQtyInput}
-                    onChange={(e) => setPackagingQtyInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && packagingQtyMode === 'custom') {
-                        const qty = parseInt(packagingQtyInput, 10)
-                        if (!qty || qty < 1 || !canManage) return
-                        setIsSavingPackagingQty(true)
-                        void updateBatch(batch.id, { packaging_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingPackagingQty(false))
-                      }
-                    }}
-                    disabled={packagingQtyMode === 'all' || !canManage}
-                    placeholder="Кол-во"
-                    className="w-24 rounded-xl border border-slate-200 px-3 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
-                  />
-                  <button
-                    type="button"
-                    disabled={isSavingPackagingQty || !canManage || !packagingQtyInput || packagingQtyMode === 'all'}
-                    onClick={() => {
-                      const qty = parseInt(packagingQtyInput, 10)
-                      if (!qty || qty < 1) return
-                      setIsSavingPackagingQty(true)
-                      void updateBatch(batch.id, { packaging_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingPackagingQty(false))
-                    }}
-                    className="shrink-0 rounded-xl bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                  >
-                    {isSavingPackagingQty ? '...' : 'Сохранить'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Работа — журнал работ Упаковки */}
               {packagingAddModalOpen && createPortal(
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={(e) => { if (e.target === e.currentTarget) setPackagingAddModalOpen(false) }}>
                   <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
@@ -3783,6 +3853,23 @@ const BatchDetailModal = ({
                             onKeyDown={(e) => { if (e.key === 'Enter') handleAddPackagingLog() }}
                             className="w-full rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 placeholder-red-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-red-400" />
                         </div>
+                      </div>
+                      {/* Зип-пакеты */}
+                      <div className="flex items-end gap-3">
+                        <div className="flex-1">
+                          <label className="mb-1 block text-xs font-medium text-slate-500">Зип-пакеты (шт.)</label>
+                          <input type="number" min="0" placeholder="0"
+                            value={packagingWorkZipBagsAll ? (Number(packagingWorkQty) > 0 ? packagingWorkQty : '0') : packagingWorkZipBags}
+                            onChange={(e) => { if (!packagingWorkZipBagsAll) setPackagingWorkZipBags(e.target.value) }}
+                            disabled={packagingWorkZipBagsAll}
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400" />
+                        </div>
+                        <label className="mb-2 flex shrink-0 cursor-pointer items-center gap-1.5">
+                          <input type="checkbox" checked={packagingWorkZipBagsAll}
+                            onChange={(e) => setPackagingWorkZipBagsAll(e.target.checked)}
+                            className="h-5 w-5 cursor-pointer accent-blue-600" />
+                          <span className="whitespace-nowrap text-sm text-slate-600">Все товары</span>
+                        </label>
                       </div>
                       {/* Примечание */}
                       <div>
@@ -3889,38 +3976,112 @@ const BatchDetailModal = ({
                   {/* Карточки */}
                   <div className="grid grid-cols-6 gap-2">
                     {packagingLogs.filter((l) => !packagingDeletedIds.includes(l.id)).map((log) => {
+                      const isEditing = packagingEditingId === log.id
                       const edit = packagingEdits[log.id] ?? { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' }
                       const logTime = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
                       const logDate = new Date(log.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
                       const isOwn = log.user_id === userId
+                      const hasEdit = !!packagingEdits[log.id] && (
+                        packagingEdits[log.id].tariff !== log.tariff ||
+                        packagingEdits[log.id].qty !== log.qty ||
+                        packagingEdits[log.id].qty_defect !== log.qty_defect ||
+                        packagingEdits[log.id].notes !== (log.notes ?? '')
+                      )
                       const displayTariff = packagingTariffsList.find((t) => t.id === edit.tariff)?.name ?? edit.tariff
                       return (
-                        <div key={log.id} className={`flex flex-col gap-1.5 rounded-2xl border px-3 py-2.5 ${isOwn ? 'border-blue-100 bg-blue-50/20' : 'border-slate-200 bg-white'}`}>
-                          <div className="flex items-start justify-between gap-1">
-                            <div className="flex flex-col items-start leading-tight">
-                              <span className="text-[11px] font-semibold text-slate-700 tabular-nums">{logTime}</span>
-                              <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
+                        <div key={log.id} className="relative">
+                          {/* Плейсхолдер */}
+                          <div className={`flex flex-col gap-1.5 rounded-2xl border px-3 py-2.5 ${isEditing ? 'invisible' : hasEdit ? 'border-amber-200 bg-amber-50/40' : isOwn ? 'border-blue-100 bg-blue-50/20' : 'border-slate-200 bg-white'}`}>
+                            <div className="flex items-start justify-between gap-1">
+                              <div className="flex flex-col items-start leading-tight">
+                                <span className="text-[11px] font-semibold text-slate-700 tabular-nums">{logTime}</span>
+                                <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
+                              </div>
+                              {(isOwn || canManage) && (
+                                <div className="flex items-center gap-0.5">
+                                  <button type="button" onClick={() => {
+                                    if (packagingEditingId && packagingEditingId !== log.id) {
+                                      const prev = packagingEdits[packagingEditingId]
+                                      const prevLog = packagingLogs.find((l) => l.id === packagingEditingId)
+                                      if (prev && prevLog && prev.tariff === prevLog.tariff && prev.qty === prevLog.qty && prev.qty_defect === prevLog.qty_defect && prev.notes === (prevLog.notes ?? '')) {
+                                        setPackagingEdits((p) => { const n = { ...p }; delete n[packagingEditingId]; return n })
+                                      }
+                                    }
+                                    setPackagingEdits((p) => ({ ...p, [log.id]: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' } }))
+                                    setPackagingEditingId(log.id)
+                                  }}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
+                                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                  </button>
+                                  <button type="button"
+                                    onClick={() => {
+                                      if (packagingDeleteConfirmId === log.id) { handleDeletePackagingLog(log.id); setPackagingDeleteConfirmId(null) }
+                                      else setPackagingDeleteConfirmId(log.id)
+                                    }}
+                                    className={`flex h-6 w-6 items-center justify-center rounded-lg transition-colors ${packagingDeleteConfirmId === log.id ? 'bg-red-500 text-white' : 'text-slate-300 hover:bg-red-50 hover:text-red-500'}`}
+                                    title={packagingDeleteConfirmId === log.id ? 'Подтвердить удаление' : 'Удалить'}>
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                            {(isOwn || canManage) && (
-                              <button type="button"
-                                onClick={() => {
-                                  if (packagingDeleteConfirmId === log.id) { handleDeletePackagingLog(log.id); setPackagingDeleteConfirmId(null) }
-                                  else setPackagingDeleteConfirmId(log.id)
-                                }}
-                                className={`flex h-6 w-6 items-center justify-center rounded-lg transition-colors ${packagingDeleteConfirmId === log.id ? 'bg-red-500 text-white' : 'text-slate-300 hover:bg-red-50 hover:text-red-500'}`}
-                                title={packagingDeleteConfirmId === log.id ? 'Подтвердить удаление' : 'Удалить'}>
-                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                              </button>
+                            <span className="truncate text-xs font-semibold text-slate-700 leading-tight">{log.performer_name}</span>
+                            <span className="w-fit rounded-full bg-slate-100 px-2 py-0.5 text-[10px] leading-tight text-slate-600">{displayTariff}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-slate-400">Упак: <span className="font-bold text-slate-800">{edit.qty}</span></span>
+                              {edit.qty_defect > 0 && <span className="text-[10px] text-slate-400">Бр: <span className="font-bold text-red-600">{edit.qty_defect}</span></span>}
+                            </div>
+                            {(log.zip_bags_qty ?? 0) > 0 && (
+                              <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">Зип: {log.zip_bags_qty} шт.</span>
                             )}
+                            {log.consumable_id && (() => { const c = accountConsumables.find((x) => x.id === log.consumable_id); return c ? <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">{c.name}</span> : null })()}
+                            {edit.notes && <span className="truncate text-[10px] italic text-slate-400">{edit.notes}</span>}
                           </div>
-                          <span className="truncate text-xs font-semibold text-slate-700 leading-tight">{log.performer_name}</span>
-                          <span className="w-fit rounded-full bg-slate-100 px-2 py-0.5 text-[10px] leading-tight text-slate-600">{displayTariff}</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-slate-400">Упак: <span className="font-bold text-slate-800">{edit.qty}</span></span>
-                            {edit.qty_defect > 0 && <span className="text-[10px] text-slate-400">Бр: <span className="font-bold text-red-600">{edit.qty_defect}</span></span>}
-                          </div>
-                          {log.consumable_id && (() => { const c = accountConsumables.find((x) => x.id === log.consumable_id); return c ? <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">{c.name}</span> : null })()}
-                          {edit.notes && <span className="truncate text-[10px] italic text-slate-400">{edit.notes}</span>}
+                          {/* Редактируемая карточка */}
+                          {isEditing && (
+                            <div className="absolute left-0 top-0 z-30 w-64 rounded-2xl border border-blue-200 bg-white px-3 py-2.5 shadow-xl">
+                              <div className="flex items-start justify-between gap-1">
+                                <div className="flex flex-col items-start leading-tight">
+                                  <span className="text-[11px] font-semibold text-blue-600 tabular-nums">{logTime}</span>
+                                  <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
+                                </div>
+                                <div className="flex items-center gap-0.5">
+                                  <button type="button" onClick={() => { setIsDirty(true); setPackagingEditingId(null) }}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50" title="Применить">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                                  </button>
+                                  <button type="button" onClick={() => { setPackagingEdits((p) => { const n = { ...p }; delete n[log.id]; return n }); setPackagingEditingId(null) }}
+                                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100" title="Отмена">
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                  </button>
+                                </div>
+                              </div>
+                              <span className="mt-1 block truncate text-xs font-semibold text-slate-700 leading-tight">{log.performer_name}</span>
+                              {packagingTariffsList.length > 0 && (
+                                <select value={edit.tariff} onChange={(e) => setPackagingEdits((p) => ({ ...p, [log.id]: { ...edit, tariff: e.target.value } }))}
+                                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                  {packagingTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                </select>
+                              )}
+                              <div className="mt-1.5 flex gap-1.5">
+                                <div className="flex-1">
+                                  <div className="mb-0.5 text-[9px] font-medium text-slate-400">Упак</div>
+                                  <input type="number" min="0" autoFocus value={edit.qty}
+                                    onChange={(e) => setPackagingEdits((p) => ({ ...p, [log.id]: { ...edit, qty: Number(e.target.value) || 0 } }))}
+                                    className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                                </div>
+                                <div className="flex-1">
+                                  <div className="mb-0.5 text-[9px] font-medium text-red-400">Брак</div>
+                                  <input type="number" min="0" value={edit.qty_defect}
+                                    onChange={(e) => setPackagingEdits((p) => ({ ...p, [log.id]: { ...edit, qty_defect: Number(e.target.value) || 0 } }))}
+                                    className="w-full rounded-lg border border-red-200 px-2 py-1 text-xs text-red-700 placeholder-red-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-1 focus:ring-red-400" />
+                                </div>
+                              </div>
+                              <input type="text" placeholder="Примечание" value={edit.notes}
+                                onChange={(e) => setPackagingEdits((p) => ({ ...p, [log.id]: { ...edit, notes: e.target.value } }))}
+                                className="mt-1.5 w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            </div>
+                          )}
                         </div>
                       )
                     })}
@@ -3941,6 +4102,9 @@ const BatchDetailModal = ({
                             <span className="text-[10px] text-slate-400">Упак: <span className="font-bold text-slate-800">{e.qty}</span></span>
                             {e.qty_defect > 0 && <span className="text-[10px] text-slate-400">Бр: <span className="font-bold text-red-600">{e.qty_defect}</span></span>}
                           </div>
+                          {(e.zip_bags_qty ?? 0) > 0 && (
+                            <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">Зип: {e.zip_bags_qty} шт.</span>
+                          )}
                           {e.consumable_id && (() => { const c = accountConsumables.find((x) => x.id === e.consumable_id); return c ? <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">{c.name}</span> : null })()}
                           {e.notes && <span className="truncate text-[10px] italic text-slate-400">{e.notes}</span>}
                         </div>
@@ -3957,62 +4121,67 @@ const BatchDetailModal = ({
           {viewStage === 'packing' && (
             <div className="space-y-4">
 
-              {/* Зип-пакеты */}
+              {/* Коробки */}
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-sm font-medium text-slate-700 mb-3">Зип-пакеты</div>
+                <div className="text-sm font-medium text-slate-700 mb-3">Коробки</div>
                 <div className="flex items-center gap-3 flex-wrap">
                   <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-1">
                     <button
                       type="button"
                       onClick={() => {
-                        setPackagingQtyMode('all')
-                        setPackagingQtyInput('')
+                        const totalBoxes = supplies.reduce((s, sup) => s + sup.boxes.length, 0)
+                        setBoxesQtyMode('all')
+                        setBoxesQtyInput(String(totalBoxes))
                         if (canManage) {
-                          void updateBatch(batch.id, { packaging_qty: null }).then(onBatchUpdated)
+                          void updateBatch(batch.id, { boxes_qty: totalBoxes }).then(onBatchUpdated)
                         }
                       }}
-                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${boxesQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
-                      {(() => { const t = batch.items.reduce((s, i) => s + i.qty_received, 0); return `Все товары${t > 0 ? ` (${t} шт)` : ''}` })()}
+                      {(() => { const t = supplies.reduce((s, sup) => s + sup.boxes.length, 0); return `Все коробки${t > 0 ? ` (${t})` : ''}` })()}
                     </button>
                     <button
                       type="button"
-                      onClick={() => setPackagingQtyMode('custom')}
-                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${packagingQtyMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                      onClick={() => { setBoxesQtyMode('custom'); setBoxesQtyInput('0') }}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${boxesQtyMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                       Указать вручную
                     </button>
                   </div>
                   <input
                     type="number"
-                    min={1}
-                    value={packagingQtyInput}
-                    onChange={(e) => setPackagingQtyInput(e.target.value)}
+                    min={0}
+                    value={boxesQtyInput}
+                    onChange={(e) => setBoxesQtyInput(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' && packagingQtyMode === 'custom') {
-                        const qty = parseInt(packagingQtyInput, 10)
-                        if (!qty || qty < 1 || !canManage) return
-                        setIsSavingPackagingQty(true)
-                        void updateBatch(batch.id, { packaging_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingPackagingQty(false))
+                      if (e.key === 'Enter' && boxesQtyMode === 'custom') {
+                        const qty = Math.max(0, parseInt(boxesQtyInput, 10) || 0)
+                        if (!canManage) return
+                        setIsSavingBoxesQty(true)
+                        void updateBatch(batch.id, { boxes_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingBoxesQty(false))
                       }
                     }}
-                    disabled={packagingQtyMode === 'all' || !canManage}
-                    placeholder="Кол-во"
+                    disabled={boxesQtyMode === 'all' || !canManage}
+                    placeholder="0"
                     className="w-24 rounded-xl border border-slate-200 px-3 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                   />
                   <button
                     type="button"
-                    disabled={isSavingPackagingQty || !canManage || !packagingQtyInput || packagingQtyMode === 'all'}
+                    disabled={isSavingBoxesQty || !canManage || boxesQtyMode === 'all'}
                     onClick={() => {
-                      const qty = parseInt(packagingQtyInput, 10)
-                      if (!qty || qty < 1) return
-                      setIsSavingPackagingQty(true)
-                      void updateBatch(batch.id, { packaging_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingPackagingQty(false))
+                      const qty = Math.max(0, parseInt(boxesQtyInput, 10) || 0)
+                      setIsSavingBoxesQty(true)
+                      void updateBatch(batch.id, { boxes_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingBoxesQty(false))
                     }}
-                    className="shrink-0 rounded-xl bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                    className="shrink-0 rounded-xl bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                   >
-                    {isSavingPackagingQty ? '...' : 'Сохранить'}
+                    {isSavingBoxesQty ? '...' : 'Сохранить'}
                   </button>
+                  {batch.boxes_qty != null && (
+                    <span className="text-sm text-slate-400">
+                      Сохранено: <span className="font-medium text-slate-700">{batch.boxes_qty}</span> шт.
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -4118,27 +4287,33 @@ const BatchDetailModal = ({
                       Поставок ещё нет. Создайте первую поставку выше.
                     </div>
                   ) : (
-                    <div className="grid grid-cols-6 gap-2 auto-rows-[80px]">
+                    <div className="grid grid-cols-6 gap-2">
                       {supplies.map((supply) => {
                         const totalBoxes = supply.boxes.length
                         const totalItems = supply.boxes.reduce((s, b) => s + b.items.reduce((ss, i) => ss + i.qty, 0), 0)
                         const closedBoxes = supply.boxes.filter((b) => b.status === 'closed').length
                         const isActiveStage = batch.current_stage === 'packing'
                         const canDeleteCard = canManage && (isActiveStage || canSupplyDeleteLocked)
+                        const linkedLine = supply.trip_line_id
+                          ? trips.flatMap((t) => t.lines).find((l) => l.id === supply.trip_line_id)
+                          : null
                         return (
-                          <div key={supply.id} className="relative h-full">
+                          <div key={supply.id} className="relative">
                             <button
                               type="button"
                               onClick={() => setActiveSupplyId(supply.id)}
-                              className="relative flex h-full w-full flex-col items-start gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                              className="relative flex w-full flex-col items-start gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
                             >
                               {supply._local && (
                                 <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-amber-400" title="не сохранено" />
                               )}
-                              <p className="text-xs font-semibold text-slate-800 leading-tight line-clamp-2 w-full pr-6">{supply.warehouse_name}</p>
+                              <p className="truncate text-xs font-bold text-blue-600 leading-tight w-full pr-6">{supply.warehouse_name ?? <span className="text-slate-400 font-normal italic">склад не указан</span>}</p>
                               <p className="text-xs text-slate-400">{totalBoxes} кор. · {totalItems} ед.</p>
                               {totalBoxes > 0 && (
                                 <p className="text-xs text-slate-400">{closedBoxes}/{totalBoxes} закрыто</p>
+                              )}
+                              {linkedLine && (
+                                <p className="text-xs font-medium text-emerald-600">П-{linkedLine.shipment_number}</p>
                               )}
                             </button>
                             {canDeleteCard && (
@@ -4653,45 +4828,147 @@ const BatchDetailModal = ({
           {/* ПЕРЕДАЧА НА ЛОГИСТИКУ */}
           {viewStage === 'logistics' && (
             <div className="space-y-4">
-              {!packingSelectedTripId ? (
-                <div className="flex flex-col items-center justify-center py-10 space-y-5">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-500">
-                    <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
-                    </svg>
+              {/* Переключатель режима — только если поставок > 1 */}
+              {/* ── Грид карточек рейсов ── */}
+              <div className="flex flex-wrap gap-3 items-start">
+                {tripSlots.map((slot) => {
+                  const isEditing = editingSlotId === slot.slotId
+                  return (
+                  <div key={slot.slotId} className={`w-56 flex-shrink-0 rounded-2xl border bg-white shadow-sm overflow-hidden flex flex-col transition-all ${isEditing ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'}`}>
+                    {/* Шапка карточки рейса */}
+                    <div className={`px-3 pt-3 pb-3 ${isEditing ? 'bg-blue-50 border-b border-blue-100' : 'border-b border-slate-100'}`}>
+                      {/* Строка: иконка грузовика + название рейса + крестик удаления */}
+                      <div className="flex items-start gap-1.5 mb-1.5">
+                        <svg className="h-4 w-4 flex-shrink-0 text-slate-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
+                        </svg>
+                        <span className={`flex-1 text-sm font-bold leading-tight ${slot.tripId ? 'text-slate-900' : 'text-slate-400 italic'}`}>
+                          {slot.tripId ? slot.tripLabel : 'Рейс не выбран'}
+                        </span>
+                        {tripSlots.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const removed = slot.slotId
+                              setTripSlots((prev) => prev.filter((s) => s.slotId !== removed))
+                              setSupplySlotMap((prev) => {
+                                const next = { ...prev }
+                                Object.keys(next).forEach((sid) => { if (next[sid] === removed) next[sid] = 'slot-0' })
+                                return next
+                              })
+                              if (editingSlotId === removed) setEditingSlotId(null)
+                              setIsDirty(true)
+                            }}
+                            className="h-5 w-5 flex-shrink-0 flex items-center justify-center rounded-full text-slate-300 hover:bg-red-50 hover:text-red-400 transition-colors"
+                          >
+                            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                          </button>
+                        )}
+                      </div>
+                      {/* Строка: Сменить рейс + Галочка/Карандаш */}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => { setTripPickerSlotId(slot.slotId); setIsTripPickerOpen(true) }}
+                          className="flex-1 rounded-lg border border-slate-200 bg-white py-1.5 text-xs font-medium text-slate-600 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600 transition-colors"
+                        >
+                          {slot.tripId ? 'Сменить рейс' : 'Выбрать рейс'}
+                        </button>
+                        {/* Галочка (подтвердить) / Карандаш (редактировать) */}
+                        {(() => {
+                          const slotHasSupply = supplies.some((s) => (supplySlotMap[s.id] ?? tripSlots[0]?.slotId ?? 'slot-0') === slot.slotId)
+                          const canConfirm = slotHasSupply
+                          return (
+                            <button
+                              type="button"
+                              disabled={isEditing && !canConfirm}
+                              title={isEditing ? (canConfirm ? 'Подтвердить' : 'Добавьте хотя бы 1 поставку') : 'Редактировать поставки'}
+                              onClick={() => { if (!isEditing || canConfirm) setEditingSlotId(isEditing ? null : slot.slotId) }}
+                              className={`h-7 w-7 flex-shrink-0 flex items-center justify-center rounded-lg border transition-colors ${
+                                isEditing
+                                  ? canConfirm
+                                    ? 'border-emerald-400 bg-emerald-500 text-white hover:bg-emerald-600 cursor-pointer'
+                                    : 'border-slate-200 bg-slate-100 text-slate-300 cursor-not-allowed'
+                                  : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                              }`}
+                            >
+                              {isEditing ? (
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/>
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                </svg>
+                              )}
+                            </button>
+                          )
+                        })()}
+                      </div>
+                    </div>
+                    {/* Поставки внутри карточки */}
+                    <div className="px-3 pb-3 pt-2 flex flex-col gap-2 flex-1">
+                      {isLoadingSupplies ? (
+                        <div className="text-xs text-slate-400 py-2">Загрузка…</div>
+                      ) : supplies.length === 0 ? (
+                        <div className="text-xs text-slate-400 italic py-2">Поставок нет</div>
+                      ) : supplies.map((supply) => {
+                        const assignedSlotId = supplySlotMap[supply.id] ?? tripSlots[0]?.slotId ?? 'slot-0'
+                        const isHere = assignedSlotId !== 'none' && assignedSlotId === slot.slotId
+                        const otherSlot = !isHere && assignedSlotId !== 'none' ? tripSlots.find((s) => s.slotId === assignedSlotId) : null
+                        const units = supply.boxes.reduce((s, b) => s + b.items.reduce((ss, i) => ss + i.qty, 0), 0)
+                        return (
+                          <div
+                            key={supply.id}
+                            onClick={() => {
+                              if (!isEditing) return
+                              setSupplySlotMap((prev) => ({ ...prev, [supply.id]: isHere ? 'none' : slot.slotId }))
+                              setIsDirty(true)
+                            }}
+                            className={`w-full rounded-xl border text-left px-2.5 py-2 transition-colors ${
+                              isHere
+                                ? 'border-blue-200 bg-blue-50'
+                                : 'border-slate-200 bg-white opacity-50'
+                            } ${
+                              isEditing ? 'cursor-pointer hover:opacity-100 hover:border-blue-300' : 'cursor-default'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <div className={`h-3.5 w-3.5 flex-shrink-0 rounded border-2 flex items-center justify-center ${isHere ? 'border-blue-500 bg-blue-500' : 'border-slate-300 bg-white'}`}>
+                                {isHere && <svg viewBox="0 0 12 12" className="h-2 w-2 text-white" fill="none" stroke="currentColor" strokeWidth="3"><path d="M2 6l3 3 5-5"/></svg>}
+                              </div>
+                              <span className={`text-xs font-semibold truncate leading-tight ${isHere ? 'text-slate-800' : 'text-slate-500'}`}>{supply.warehouse_name ?? '—'}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-400 pl-5">{supply.boxes.length} кор. · {units} ед.</div>
+                            {otherSlot && (
+                              <div className="text-[10px] text-amber-500 pl-5 mt-0.5 truncate">{otherSlot.tripLabel || 'Другой рейс'}</div>
+                            )}
+                          </div>
+                        )
+                      })}
+
+                    </div>
                   </div>
-                  <div className="text-center">
-                    <p className="font-semibold text-slate-800">Выберите рейс</p>
-                    <p className="text-sm text-slate-400 mt-1">Привяжите партию к рейсу для передачи в логистику</p>
-                  </div>
+                )})}
+
+                {/* Кнопка + Рейс (только если поставок > 1) */}
+                {supplies.length > 1 && (
                   <button
                     type="button"
-                    onClick={() => setIsTripPickerOpen(true)}
-                    className="rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                    onClick={() => {
+                      const newSlotId = `slot-${Date.now()}`
+                      setTripSlots((prev) => [...prev, { slotId: newSlotId, tripId: '', tripLabel: '' }])
+                      setEditingSlotId(newSlotId)
+                      setIsDirty(true)
+                    }}
+                    className="w-56 flex-shrink-0 h-32 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 text-sm font-medium text-slate-400 hover:border-blue-300 hover:text-blue-500 transition-colors"
                   >
-                    Выбрать рейс
+                    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14"/></svg>
+                    + Рейс
                   </button>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-8 space-y-4">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-500">
-                    <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
-                    </svg>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Рейс выбран</p>
-                    <p className="mt-1 text-lg font-semibold text-slate-800">{packingSelectedTripLabel}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsTripPickerOpen(true)}
-                    className="rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
-                  >
-                    Сменить рейс
-                  </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           )}
 
@@ -4729,9 +5006,74 @@ const BatchDetailModal = ({
                     else if (viewStage === 'marking') await handleSaveMarkingAll()
                     else if (viewStage === 'packaging') await handleSavePackagingAll()
                     else if (viewStage === 'packing') await handleSaveStageDraft()
+                    else if (viewStage === 'logistics') {
+                      setIsSavingDraft(true)
+                      try {
+                        // Сохранить trip_id батча (первый слот) — всегда
+                        const firstTripId = tripSlots[0]?.tripId ?? ''
+                        if (firstTripId) {
+                          const updated = await updateBatch(batch.id, { trip_id: firstTripId })
+                          setBatch((prev) => ({ ...prev, trip_id: firstTripId }))
+                          onBatchUpdated({ ...updated, trip_id: firstTripId })
+                        }
+                        // Если этап уже завершён — синхронизировать поставки со страницей Логистики
+                        if (batch.current_stage !== 'logistics' && batch.store_id) {
+                          const freshSupplies = await fetchSupplies(batch.id)
+                          const receptionDateStr = receptionCompletedDate
+                            ? new Date(receptionCompletedDate).toISOString().slice(0, 10)
+                            : ''
+                          for (const supply of freshSupplies) {
+                            const assignedRaw = supplySlotMap[supply.id]
+                            if (assignedRaw === 'none') continue
+                            const slotId = assignedRaw ?? tripSlots[0]?.slotId ?? 'slot-0'
+                            const tripId = tripSlots.find((s) => s.slotId === slotId)?.tripId ?? ''
+                            if (!tripId) continue
+                            if (supply.trip_line_id) {
+                              if (supply.trip_id !== tripId) {
+                                await updateTripLineTripId(batch.account_id, supply.trip_line_id, tripId)
+                                await updateSupply(supply.id, { trip_id: tripId })
+                              }
+                            } else {
+                              const boxQty = supply.boxes.length
+                              const unitsQty = supply.boxes.reduce((sum, box) => sum + box.items.reduce((s2, item) => s2 + item.qty, 0), 0)
+                              const tripLineValues: TripLineFormValues = {
+                                store_id: batch.store_id,
+                                destination_warehouse: supply.warehouse_name,
+                                box_qty: boxQty,
+                                units_qty: unitsQty,
+                                units_total: unitsQty,
+                                arrived_box_qty: 0,
+                                weight: 0,
+                                planned_marketplace_delivery_date: '',
+                                arrival_date: '',
+                                reception_date: receptionDateStr,
+                                shipped_date: '',
+                                status: 'Ожидает отправки',
+                                payment_status: 'Не оплачено',
+                                comment: '',
+                              }
+                              const tripLine = onAddTripLine
+                                ? await onAddTripLine(tripId, tripLineValues)
+                                : await addTripLine(batch.account_id, tripId, tripLineValues)
+                              await updateSupply(supply.id, { trip_id: tripId, trip_line_id: tripLine.id })
+                              try { await setTripLineFulfillmentBatch(tripLine.id, batch.id) } catch {}
+                            }
+                          }
+                          // Перезагрузить и перестроить визуальное состояние из БД
+                          const refreshed = await fetchSupplies(batch.id)
+                          setSupplies(refreshed)
+                          rebuildSlotsFromSupplies(refreshed)
+                        }
+                        setIsDirty(false)
+                      } catch (err) {
+                        setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка при сохранении')
+                      } finally {
+                        setIsSavingDraft(false)
+                      }
+                    }
                   })()}
                   disabled={isSavingDraft || !isDirty}
-                  className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40 transition-opacity">
+                  className="flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-40 transition-opacity">
                   <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                   {isSavingDraft ? 'Сохранение…' : 'Сохранить'}
                 </button>
@@ -6215,7 +6557,7 @@ const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
 // ══════════════════════════════════════════════════════════════
 // FulfillmentPage
 // ══════════════════════════════════════════════════════════════
-export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, warehouses, onEditTripLine, onAddTripLine, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
+export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, warehouses, onEditTripLine, onAddTripLine, onTripCreated, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
   const navigate = useNavigate()
   const [batches, setBatches] = useState<FulfillmentBatch[]>([])
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null)
@@ -6403,6 +6745,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
           onBatchUpdated={handleBatchUpdated} onItemsChanged={handleItemsChanged}
           onEditTripLine={onEditTripLine}
           onAddTripLine={onAddTripLine}
+          onTripCreated={onTripCreated}
           zIndex={detailFromArchive ? 60 : 50}
         />
       )}
@@ -6670,6 +7013,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
                         const stageQty: Record<string, number | undefined> = {
                           reception: b.qty_received_sum,
                           otk: b.qty_otk_sum,
+                          packaging: b.qty_packaging_sum,
                           marking: b.qty_marked_sum,
                           packing: b.qty_packed_sum,
                           logistics: b.qty_packed_sum,

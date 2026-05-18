@@ -348,7 +348,7 @@ interface TripTableProps {
   onChangeTripLineStatus: (tripId: string, lineId: string, status: ShipmentStatus) => Promise<void>
   onChangeTripLinePaymentStatus: (tripId: string, lineId: string, paymentStatus: PaymentStatus) => Promise<void>
   onEditTrip: (tripId: string, values: TripFormValues) => Promise<void>
-  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues) => Promise<void>
+  onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues, newTripId?: string) => Promise<void>
   selectedTripIds: Set<string>
   selectedLineIds: Set<string>
   onToggleTripSelection: (tripId: string, checked: boolean) => void
@@ -357,6 +357,7 @@ interface TripTableProps {
   onToggleTripLinesSelection: (tripId: string, checked: boolean) => void
   hasBulkSelection?: boolean
   onBulkDelete?: () => void
+  onBulkEdit?: () => void
   onAddTripLine: (tripId: string, values: TripLineFormValues) => Promise<unknown>
   onAddInvoicePhoto: (tripId: string, lineId: string, file: File) => Promise<void>
   onReplaceInvoicePhoto: (tripId: string, lineId: string, index: number, file: File) => Promise<void>
@@ -574,6 +575,7 @@ export const TripTable = ({
   onToggleTripLinesSelection,
   hasBulkSelection = false,
   onBulkDelete,
+  onBulkEdit,
   onAddTripLine,
   onAddInvoicePhoto,
   onReplaceInvoicePhoto,
@@ -882,6 +884,7 @@ export const TripTable = ({
                       <button
                         type="button"
                         disabled={!hasBulkSelection}
+                        onClick={onBulkEdit}
                         aria-label="Редактировать выбранные"
                         title="Редактировать выбранные"
                         className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500 disabled:pointer-events-none disabled:opacity-30"
@@ -1036,9 +1039,14 @@ export const TripTable = ({
                           <button
                             type="button"
                             aria-label={trip.trip_number ? `Редактировать рейс ${trip.trip_number}` : `Редактировать черновик-${trip.draft_number}`}
-                            title={trip.trip_number ? `Редактировать рейс ${trip.trip_number}` : `Редактировать черновик-${trip.draft_number}`}
-                            className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500"
-                            onClick={(event) => { event.stopPropagation(); setEditingTrip(trip) }}
+                            title={selectedLineIds.size > 0 ? 'Снимите галочки с поставок чтобы редактировать рейс' : trip.trip_number ? `Редактировать рейс ${trip.trip_number}` : `Редактировать черновик-${trip.draft_number}`}
+                            className={`flex h-8 w-8 items-center justify-center rounded-xl transition ${
+                              selectedLineIds.size === 0
+                                ? 'text-slate-300 hover:bg-blue-50 hover:text-blue-500'
+                                : 'cursor-not-allowed text-slate-200'
+                            }`}
+                            disabled={selectedLineIds.size > 0}
+                            onClick={(event) => { if (selectedLineIds.size === 0) { event.stopPropagation(); setEditingTrip(trip) } }}
                           >
                             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
                               <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
@@ -1527,6 +1535,8 @@ export const TripTable = ({
         warehouseNames={warehouseNames}
         onClose={() => setEditingTripLine(null)}
         fulfillmentBatchId={editingTripLine?.line.fulfillment_batch_id}
+        trips={trips}
+        initialTripId={editingTripLine?.tripId}
         initialValues={editingTripLine ? {
           store_id: editingTripLine.line.store_id,
           destination_warehouse: editingTripLine.line.destination_warehouse,
@@ -1546,6 +1556,12 @@ export const TripTable = ({
         onSubmit={async (values) => {
           if (!editingTripLine) return
           await onEditTripLine(editingTripLine.tripId, editingTripLine.line.id, values)
+          setEditingTripLine(null)
+        }}
+        onSubmitWithTrip={async (newTripId, values) => {
+          if (!editingTripLine) return
+          const oldTripId = editingTripLine.tripId
+          await onEditTripLine(oldTripId, editingTripLine.line.id, values, newTripId !== oldTripId ? newTripId : undefined)
           setEditingTripLine(null)
         }}
       />
