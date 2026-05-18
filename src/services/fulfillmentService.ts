@@ -284,7 +284,7 @@ export const lookupProductByBarcode = async (
   accountId: string,
   storeId: string | null,
   barcode: string,
-): Promise<{ name: string | null; article: string | null; size: string | null } | null> => {
+): Promise<{ name: string | null; article: string | null; size: string | null; color: string | null } | null> => {
   if (!supabase || !storeId) return null
   const { data, error } = await supabase
     .from('products')
@@ -306,7 +306,7 @@ export const lookupProductByBarcode = async (
       }
     }
   }
-  return { name: product.name ?? product.vendor_code ?? null, article: String(product.nm_id), size }
+  return { name: product.name ?? product.vendor_code ?? null, article: String(product.nm_id), size, color: product.color ?? null }
 }
 
 // ── Catalog product search ────────────────────────────────────

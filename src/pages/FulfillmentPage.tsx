@@ -1004,7 +1004,7 @@ const BatchDetailModal = ({
         const zxingLib = await import('@zxing/library')
         if (cancelled) return
         const hints = new Map<unknown, unknown>([[zxingLib.DecodeHintType.TRY_HARDER, true]])
-        const reader = new BrowserMultiFormatReader(hints as Parameters<typeof BrowserMultiFormatReader>[0])
+        const reader = new BrowserMultiFormatReader(hints as any)
         const canvas = document.createElement('canvas')
         const ctx = canvas.getContext('2d')!
         let scanTimer: ReturnType<typeof setTimeout> | null = null
