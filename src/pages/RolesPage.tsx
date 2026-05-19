@@ -223,6 +223,7 @@ export const RolesPage = ({
   const [disconnectTarget, setDisconnectTarget] = useState<string | null>(null)
   const [disconnectPassword, setDisconnectPassword] = useState('')
   const [disconnectPasswordVisible, setDisconnectPasswordVisible] = useState(false)
+  const [disconnectPasswordReady, setDisconnectPasswordReady] = useState(false)
   const [disconnectError, setDisconnectError] = useState<string | null>(null)
   const [disconnectLoading, setDisconnectLoading] = useState(false)
 
@@ -798,7 +799,7 @@ export const RolesPage = ({
                                     </div>
                                     <button
                                       type="button"
-                                      onClick={() => { setDisconnectTarget(p.connection_id); setDisconnectPassword(''); setDisconnectError(null) }}
+                                      onClick={() => { setDisconnectTarget(p.connection_id); setDisconnectPassword(''); setDisconnectError(null); setDisconnectPasswordReady(false) }}
                                       className="shrink-0 rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition-colors"
                                     >
                                       Отключиться
@@ -983,11 +984,12 @@ export const RolesPage = ({
             <div className="relative mt-4">
               <input
                 type={disconnectPasswordVisible ? 'text' : 'password'}
+                readOnly={!disconnectPasswordReady}
+                onFocus={() => setDisconnectPasswordReady(true)}
                 value={disconnectPassword}
                 onChange={(e) => { setDisconnectPassword(e.target.value); setDisconnectError(null) }}
                 onKeyDown={(e) => { if (e.key === 'Enter') void handleDisconnectConfirm() }}
                 placeholder="Ваш пароль"
-                autoFocus
                 autoComplete="new-password"
                 data-lpignore="true"
                 data-1p-ignore
