@@ -510,11 +510,6 @@ export const RolesPage = ({
                     <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
                   </svg>
                   Партнёры
-                  {pendingPartnerCount > 0 && (
-                    <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-violet-500 px-1 text-[10px] font-bold text-white">
-                      {pendingPartnerCount}
-                    </span>
-                  )}
                 </button>
                 <button
                   type="button"
@@ -532,9 +527,9 @@ export const RolesPage = ({
                     <line x1="10" y1="14" x2="14" y2="14"/>
                   </svg>
                   Мои услуги
-                  {pendingIncomingCount > 0 && (
+                  {(pendingIncomingCount + pendingPartnerCount) > 0 && (
                     <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white">
-                      {pendingIncomingCount}
+                      {pendingIncomingCount + pendingPartnerCount}
                     </span>
                   )}
                 </button>
@@ -547,56 +542,14 @@ export const RolesPage = ({
                   {/* ── ПАРТНЁРЫ ─────────────────────────────── */}
                   {outsourceTab === 'partners' && (
                     <div>
-                      {/* Входящие запросы на партнёрство */}
-                      {filteredPartners.filter((p) => p.status === 'pending' && !p.is_requester).length > 0 && (
-                        <div>
-                          <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                            Входящие запросы
-                          </p>
-                          {filteredPartners
-                            .filter((p) => p.status === 'pending' && !p.is_requester)
-                            .map((p) => (
-                              <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 font-mono text-xs font-bold text-violet-600">
-                                    C-{p.partner_short_id}
-                                  </div>
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-semibold text-slate-800 truncate">{p.partner_name}</p>
-                                    <p className="text-xs text-slate-400">Хочет добавить вас как партнёра</p>
-                                  </div>
-                                </div>
-                                <div className="flex shrink-0 items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleRespondPartner(p.connection_id, true)}
-                                    disabled={respondingId === p.connection_id}
-                                    className="rounded-xl bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 disabled:opacity-50"
-                                  >
-                                    Принять
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleRespondPartner(p.connection_id, false)}
-                                    disabled={respondingId === p.connection_id}
-                                    className="rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-50"
-                                  >
-                                    Отклонить
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                        </div>
-                      )}
-
-                      {/* Принятые партнёры */}
-                      {filteredPartners.filter((p) => p.status === 'accepted').length > 0 && (
+                      {/* Принятые партнёры (ты пригласил) */}
+                      {filteredPartners.filter((p) => p.status === 'accepted' && p.is_requester).length > 0 && (
                         <div>
                           <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
                             Подключены
                           </p>
                           {filteredPartners
-                            .filter((p) => p.status === 'accepted')
+                            .filter((p) => p.status === 'accepted' && p.is_requester)
                             .map((p) => (
                               <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
                                 <div className="flex items-center gap-3 min-w-0">
@@ -621,7 +574,7 @@ export const RolesPage = ({
                         </div>
                       )}
 
-                      {/* Исходящие запросы */}
+                      {/* Отправленные запросы (ожидают ответа) */}
                       {filteredPartners.filter((p) => p.status === 'pending' && p.is_requester).length > 0 && (
                         <div>
                           <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -653,14 +606,14 @@ export const RolesPage = ({
                         </div>
                       )}
 
-                      {/* Отклонённые */}
-                      {filteredPartners.filter((p) => p.status === 'declined').length > 0 && (
+                      {/* Отклонённые (только исходящие) */}
+                      {filteredPartners.filter((p) => p.status === 'declined' && p.is_requester).length > 0 && (
                         <div>
                           <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
                             Отклонены
                           </p>
                           {filteredPartners
-                            .filter((p) => p.status === 'declined')
+                            .filter((p) => p.status === 'declined' && p.is_requester)
                             .map((p) => (
                               <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0 opacity-50">
                                 <div className="flex items-center gap-3 min-w-0">
@@ -688,7 +641,7 @@ export const RolesPage = ({
                       )}
 
                       {/* Пустое состояние */}
-                      {filteredPartners.length === 0 && (
+                      {filteredPartners.filter((p) => p.is_requester).length === 0 && (
                         <div className="flex flex-col items-center gap-3 py-12 text-center">
                           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-50 text-violet-300">
                             <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -725,7 +678,7 @@ export const RolesPage = ({
                   {/* ── МОИ УСЛУГИ ──────────────────────────── */}
                   {outsourceTab === 'services' && (
                     <div>
-                      {filteredIncoming.length === 0 && filteredBatches.length === 0 ? (
+                      {filteredIncoming.length === 0 && filteredBatches.length === 0 && filteredPartners.filter((p) => !p.is_requester).length === 0 ? (
                         <div className="flex flex-col items-center gap-3 py-12 text-center">
                           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-300">
                             <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -743,7 +696,81 @@ export const RolesPage = ({
                         </div>
                       ) : (
                         <>
-                          {/* Ожидающие приглашения */}
+                          {/* Входящие запросы на партнёрство */}
+                          {filteredPartners.filter((p) => p.status === 'pending' && !p.is_requester).length > 0 && (
+                            <div>
+                              <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                Запросы на партнёрство
+                              </p>
+                              {filteredPartners
+                                .filter((p) => p.status === 'pending' && !p.is_requester)
+                                .map((p) => (
+                                  <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 font-mono text-xs font-bold text-violet-600">
+                                        C-{p.partner_short_id}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-sm font-semibold text-slate-800 truncate">{p.partner_name}</p>
+                                        <p className="text-xs text-slate-400">Хочет добавить вас как партнёра</p>
+                                      </div>
+                                    </div>
+                                    <div className="flex shrink-0 items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleRespondPartner(p.connection_id, true)}
+                                        disabled={respondingId === p.connection_id}
+                                        className="rounded-xl bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 disabled:opacity-50"
+                                      >
+                                        Принять
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleRespondPartner(p.connection_id, false)}
+                                        disabled={respondingId === p.connection_id}
+                                        className="rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+                                      >
+                                        Отклонить
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+
+                          {/* Подключены как исполнитель */}
+                          {filteredPartners.filter((p) => p.status === 'accepted' && !p.is_requester).length > 0 && (
+                            <div>
+                              <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                Подключены как партнёр
+                              </p>
+                              {filteredPartners
+                                .filter((p) => p.status === 'accepted' && !p.is_requester)
+                                .map((p) => (
+                                  <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 font-mono text-xs font-bold text-emerald-600">
+                                        C-{p.partner_short_id}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-sm font-semibold text-slate-800 truncate">{p.partner_name}</p>
+                                        <p className="text-xs text-slate-400">Вы — аутсорс-исполнитель</p>
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleRemovePartner(p.connection_id)}
+                                      disabled={respondingId === p.connection_id}
+                                      className="shrink-0 rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50 transition-colors"
+                                    >
+                                      Отключиться
+                                    </button>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+
+                          {/* Ожидающие приглашения на этап */}
                           {filteredIncoming.filter((i) => i.status === 'pending').length > 0 && (
                             <div>
                               <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
