@@ -47,7 +47,9 @@ export const DeleteConfirmModal = ({
           placeholder="Ваш пароль"
           value={passwordValue ?? ''}
           onChange={(e) => onPasswordChange?.(e.target.value)}
-          autoComplete="current-password"
+          autoComplete="new-password"
+          data-lpignore="true"
+          data-1p-ignore
         />
       )}
 

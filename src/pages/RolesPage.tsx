@@ -449,6 +449,7 @@ export const RolesPage = ({
                       ? 'Ролей ещё нет'
                       : `Поиск среди ${roles.length} ${roles.length === 1 ? 'роли' : roles.length < 5 ? 'ролей' : 'ролей'}...`
                   }
+                  autoComplete="off"
                   className="h-10 min-w-[260px] rounded-2xl bg-slate-100 px-4 text-sm text-slate-600 placeholder:text-slate-400 focus:outline-none focus:bg-slate-50 focus:ring-2 focus:ring-blue-100"
                 />
                 <div className="flex items-center gap-2.5">
@@ -509,6 +510,7 @@ export const RolesPage = ({
                   value={outsourceSearch}
                   onChange={(e) => setOutsourceSearch(e.target.value)}
                   placeholder="Поиск по компании, этапу, партии..."
+                  autoComplete="off"
                   className="h-10 min-w-[260px] rounded-2xl bg-slate-100 px-4 text-sm text-slate-600 placeholder:text-slate-400 focus:outline-none focus:bg-slate-50 focus:ring-2 focus:ring-violet-100"
                 />
                 <div className="flex items-center gap-2.5">
@@ -986,6 +988,9 @@ export const RolesPage = ({
                 onKeyDown={(e) => { if (e.key === 'Enter') void handleDisconnectConfirm() }}
                 placeholder="Ваш пароль"
                 autoFocus
+                autoComplete="new-password"
+                data-lpignore="true"
+                data-1p-ignore
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2.5 pl-4 pr-10 text-sm text-slate-800 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
               />
               <button
