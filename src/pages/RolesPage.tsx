@@ -221,10 +221,6 @@ export const RolesPage = ({
 
   // Подтверждение отключения от партнёра (для !is_requester)
   const [disconnectTarget, setDisconnectTarget] = useState<string | null>(null)
-  const [disconnectPassword, setDisconnectPassword] = useState('')
-  const [disconnectPasswordVisible, setDisconnectPasswordVisible] = useState(false)
-  const [disconnectPasswordReady, setDisconnectPasswordReady] = useState(false)
-  const [disconnectError, setDisconnectError] = useState<string | null>(null)
   const [disconnectLoading, setDisconnectLoading] = useState(false)
 
   const loadOutsourceData = useCallback(async () => {
@@ -290,26 +286,14 @@ export const RolesPage = ({
   }
 
   const handleDisconnectConfirm = async () => {
-    if (!disconnectTarget || !disconnectPassword.trim() || !supabase) return
+    if (!disconnectTarget) return
     setDisconnectLoading(true)
-    setDisconnectError(null)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user?.email) throw new Error('Не удалось получить пользователя')
-      const { error } = await supabase.auth.signInWithPassword({
-        email: user.email,
-        password: disconnectPassword,
-      })
-      if (error) {
-        setDisconnectError('Неверный пароль')
-        return
-      }
       await removePartner(disconnectTarget)
       await loadOutsourceData()
       setDisconnectTarget(null)
-      setDisconnectPassword('')
     } catch (err) {
-      setDisconnectError(err instanceof Error ? err.message : 'Ошибка')
+      alert(err instanceof Error ? err.message : 'Ошибка')
     } finally {
       setDisconnectLoading(false)
     }
@@ -799,7 +783,7 @@ export const RolesPage = ({
                                     </div>
                                     <button
                                       type="button"
-                                      onClick={() => { setDisconnectTarget(p.connection_id); setDisconnectPassword(''); setDisconnectError(null); setDisconnectPasswordReady(false) }}
+                                      onClick={() => { setDisconnectTarget(p.connection_id) }}
                                       className="shrink-0 rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition-colors"
                                     >
                                       Отключиться
@@ -973,54 +957,18 @@ export const RolesPage = ({
         </div>
       )}
 
-      {/* Модальное окно подтверждения отключения паролем */}
+      {/* Модальное окно подтверждения отключения */}
       {disconnectTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
             <h2 className="text-base font-semibold text-slate-800">Подтвердите отключение</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Введите ваш пароль чтобы отключиться от партнёра
+              Вы уверены, что хотите отключиться от этого партнёра?
             </p>
-            <div className="relative mt-4">
-              <input
-                type={disconnectPasswordVisible ? 'text' : 'password'}
-                readOnly={!disconnectPasswordReady}
-                onFocus={() => setDisconnectPasswordReady(true)}
-                value={disconnectPassword}
-                onChange={(e) => { setDisconnectPassword(e.target.value); setDisconnectError(null) }}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleDisconnectConfirm() }}
-                placeholder="Ваш пароль"
-                autoComplete="new-password"
-                data-lpignore="true"
-                data-1p-ignore
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-2.5 pl-4 pr-10 text-sm text-slate-800 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-              />
-              <button
-                type="button"
-                onClick={() => setDisconnectPasswordVisible((v) => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                tabIndex={-1}
-              >
-                {disconnectPasswordVisible ? (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-                    <line x1="1" y1="1" x2="23" y2="23"/>
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                    <circle cx="12" cy="12" r="3"/>
-                  </svg>
-                )}
-              </button>
-            </div>
-            {disconnectError && (
-              <p className="mt-2 text-xs text-rose-500">{disconnectError}</p>
-            )}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => { setDisconnectTarget(null); setDisconnectPassword(''); setDisconnectError(null) }}
+                onClick={() => setDisconnectTarget(null)}
                 disabled={disconnectLoading}
                 className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 disabled:opacity-50"
               >
@@ -1029,10 +977,10 @@ export const RolesPage = ({
               <button
                 type="button"
                 onClick={() => void handleDisconnectConfirm()}
-                disabled={disconnectLoading || !disconnectPassword.trim()}
+                disabled={disconnectLoading}
                 className="rounded-2xl bg-rose-500 px-4 py-2 text-sm font-medium text-white hover:bg-rose-600 disabled:opacity-50"
               >
-                {disconnectLoading ? 'Проверка...' : 'Отключиться'}
+                {disconnectLoading ? 'Отключение...' : 'Отключиться'}
               </button>
             </div>
           </div>
