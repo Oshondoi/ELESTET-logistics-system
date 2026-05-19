@@ -455,7 +455,7 @@ export const RolesPage = ({
                 />
                 <div className="flex items-center gap-2.5">
                   {canManage && (
-                    <Button className="rounded-2xl px-5 py-2.5" onClick={handleOpenCreate}>
+                    <Button className="h-10 rounded-2xl px-5" onClick={handleOpenCreate}>
                       + Создать роль
                     </Button>
                   )}
@@ -480,7 +480,7 @@ export const RolesPage = ({
                     </p>
                   </div>
                   {canManage && !roleSearch && (
-                    <Button className="mt-1 rounded-2xl px-5 py-2.5" onClick={handleOpenCreate}>
+                    <Button className="mt-1 h-10 rounded-2xl px-5" onClick={handleOpenCreate}>
                       + Создать роль
                     </Button>
                   )}
