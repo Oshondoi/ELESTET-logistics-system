@@ -3,6 +3,121 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 19.05.2026 — Аутсорс-партнёры (B2B контакты, список компаний)
+
+### SQL (`supabase/patch_outsource_partners.sql`) — применён в production
+- `outsource_partners` — таблица B2B-связей между компаниями (requester_id, partner_id, status: pending/accepted/declined)
+- UNIQUE(requester_id, partner_id) + CHECK requester ≠ partner
+- RLS: видят/изменяют оба участника, вставляет только инициатор
+- Уведомления через `batch_notifications` при запросе и ответе
+- RPCs:
+  - `send_partner_request(p_my_account_id, p_partner_short_id)` — поиск по short_id, защита от дублей, повторная отправка при declined
+  - `respond_to_partner_request(p_connection_id, p_accept)` — только получатель (partner_id)
+  - `get_my_partners(p_account_id)` → TABLE(connection_id, partner_id, partner_name, partner_short_id, status, is_requester, created_at)
+  - `remove_partner(p_connection_id)` — удаляет любой из участников
+
+### TypeScript (`src/types/index.ts`)
+- `OutsourcePartner` — новый интерфейс (connection_id, partner_id, partner_name, partner_short_id, status, is_requester, created_at)
+
+### outsourceService.ts
+- Импортирует `OutsourcePartner`
+- `fetchMyPartners(accountId)` → `db.rpc('get_my_partners', ...)`
+- `sendPartnerRequest(myAccountId, partnerShortId)` → `db.rpc('send_partner_request', ...)`
+- `respondToPartnerRequest(connectionId, accept)` → `db.rpc('respond_to_partner_request', ...)`
+- `removePartner(connectionId)` → `db.rpc('remove_partner', ...)`
+
+### AddOutsourceModal (`src/components/outsource/AddOutsourceModal.tsx`) — НОВЫЙ
+- Модалка «Добавить партнёра»: ввод C-ID → `sendPartnerRequest` → success animation → auto-close
+- Violet тема, валидация числа, обработка серверных ошибок (already exists / already pending и т.д.)
+
+### RolesPage — редизайн Аутсорс-таба
+- Суб-табы изменены: `'incoming' | 'outgoing'` → `'partners' | 'services'`
+- **Партнёры** (новый таб): входящие запросы на партнёрство (принять/отклонить), принятые партнёры (удалить), исходящие запросы (отменить), отклонённые (убрать)
+- **Мои услуги** (бывший `incoming`): входящие приглашения на этапы + активные партии — без изменений
+- Badge на главном табе Аутсорс: `totalPendingCount = pendingIncomingCount + pendingPartnerCount`
+- `loadOutsourceData` теперь грузит `fetchMyPartners` параллельно с остальными данными
+
+### OutsourceStagesModal — пикер партнёров
+- Форма приглашения переключается: **«Из партнёров»** (список `OutsourcePartner[]` кнопками) / **«Ввести C-ID»** (старый ручной ввод)
+- По умолчанию открывается «Из партнёров» если `partners.length > 0`
+- Партнёры загружаются параллельно в `loadStages` (фильтр: только `status === 'accepted'`)
+- Выбор партнёра → заполняет `invitePreview`, затем обычный `handleSendInvite`
+
+### App.tsx
+- Импорт `AddOutsourceModal`
+- `addOutsourceOpen` state
+- `onAddOutsource={() => setAddOutsourceOpen(true)}` в `<RolesPage>`
+- `<AddOutsourceModal>` рендерится когда `addOutsourceOpen && activeAccount`
+
+### TypeScript: 0 ошибок. Build: 629 модулей, статус 0.
+
+---
+
+## Что сделано за сессию 19.05.2026 — Аутсорс-система (B2B партии)
+
+### SQL схема (`supabase/patch_outsource.sql`) — применён в production
+- `batch_outsource_stages` — этапы аутсорса партии (статус, sort_order, qty_declared/received, has_discrepancy, started_at, completed_at)
+- `batch_stage_invites` — приглашения между компаниями (UNIQUE stage_id + invited_company_id)
+- `batch_journal` — иммутабельный журнал событий (только INSERT, без UPDATE/DELETE)
+- `batch_archive_votes` — голос за архивацию партии (UNIQUE batch_id + company_id)
+- `batch_notifications` — внутренние уведомления (title + body + is_read)
+- Системная компания C-0: `INSERT INTO accounts (id, name, short_id) VALUES ('00000000-...', 'Системная компания', 0) ON CONFLICT DO NOTHING`
+- RLS helper: `user_has_batch_access(p_batch_id)`, `user_is_batch_owner(p_batch_id)`
+- RPCs: `find_account_by_short_id`, `invite_company_to_stage`, `respond_to_invite`, `get_my_incoming_invites`, `get_my_outgoing_invites`, `get_outsource_batches`, `get_batch_journal`, `vote_batch_archive`
+- Cross-company RLS на `fulfillment_batches` и `fulfillment_items` (для исполнителей)
+
+### TypeScript типы (`src/types/index.ts`)
+- `OutsourceStageStatus`, `InviteStatus`
+- `BatchOutsourceStage`, `BatchOutsourceStageFormValues`
+- `BatchStageInvite`, `BatchJournalEntry`, `BatchNotification`
+- `IncomingInvite`, `OutgoingInvite`, `OutsourceBatch`
+
+### outsourceService.ts (`src/services/outsourceService.ts`)
+- Использует `const db = supabase as any` — т.к. Supabase types не знают о новых таблицах
+- `fetchOutsourceStages`, `createOutsourceStage`, `updateOutsourceStage`, `deleteOutsourceStage`, `updateStageStatus`
+- `findAccountByShortId`, `inviteCompanyToStage`, `respondToInvite`
+- `fetchIncomingInvites`, `fetchOutgoingInvites`, `fetchOutsourceBatches`
+- `fetchBatchJournal`, `addJournalEntry`
+- `fetchNotifications`, `markNotificationRead`, `markAllNotificationsRead`
+- `voteArchiveBatch`
+
+### OutsourceStagesModal (`src/components/fulfillment/OutsourceStagesModal.tsx`)
+- Props: `{ open, batch, accountId, accountShortId, isOwner, onClose }`
+- Вкладки: **Этапы** + **Журнал**
+- Создание/удаление этапов (только владелец), приглашение по C-ID (lookup → превью → подтвердить)
+- Старт/завершение (исполнитель), ввод qty_received, предупреждение о расхождении
+- Кнопка «Проголосовать за архив»
+- Violet тема
+
+### RolesPage (`src/pages/RolesPage.tsx`)
+- Добавлен prop `activeAccountShortId?: number | null`
+- Вкладки: **Сотрудники** (без изменений) / **Аутсорс** (с badge непрочитанных)
+- Аутсорс → Входящие: pending-приглашения с Accept/Decline, активные партии, история
+- Аутсорс → Исходящие: отправленные приглашения с цветными статусами
+
+### FulfillmentPage (`src/pages/FulfillmentPage.tsx`)
+- Импорт `OutsourceStagesModal`
+- `outsourceModalBatch` state
+- ID колонка: `C-{accountShortId}` (фиолетовый, мелкий) над `P-{short_id}`
+- Новая колонка **Аутсорс** с кнопкой-ссылкой (violet, иконка цепи)
+- `<OutsourceStagesModal>` в конце компонента
+
+### Уведомления — NotificationsPanel + Topbar
+- `src/components/ui/NotificationsPanel.tsx`: дропдаун, badge, mark read / mark all, violet индикатор
+- `src/components/layout/Topbar.tsx`:
+  - Props `activeAccountId`, `unreadCount`
+  - `notifOpen` state + `notifRef` (оборачивает кнопку И панель)
+  - Outside-click через `notifRef` — повторный клик по колокольчику закрывает, не переоткрывает
+- `src/App.tsx`: загрузка счётчика при смене аккаунта через `fetchNotifications`
+
+### README обновлён
+- Раздел «Аутсорс-система» в «Что уже есть»
+- SQL патч #46 в списке миграций
+- Строка в Roadmap (✅ Готово)
+- Структура папок: `fulfillment/`, `NotificationsPanel`, `outsourceService`
+
+---
+
 ## Что сделано за сессию 19.05.2026 — Фулфилмент Логистика: фикс стейта + авто-refresh рейсов
 
 ### rebuildSlotsFromSupplies — корректная инициализация модалки Логистики

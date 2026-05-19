@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
+import { NotificationsPanel } from '../ui/NotificationsPanel'
+import { supabase } from '../../lib/supabase'
 
 interface TopbarProps {
   title: string
   userName: string
   userEmail: string
   isAdmin?: boolean
+  activeAccountId?: string
+  unreadCount?: number
+  onNotificationClick?: () => void
   onAdminClick?: () => void
   onGlossaryClick?: () => void
   onDiaryClick?: () => void
@@ -13,11 +18,45 @@ interface TopbarProps {
   onSignOut: () => void
 }
 
-export const Topbar = ({ title, userName, userEmail, isAdmin, onAdminClick, onGlossaryClick, onDiaryClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
+export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
   const initial = userName ? userName.charAt(0).toUpperCase() : (userEmail ? userEmail.charAt(0).toUpperCase() : '?')
   const displayName = userName || userEmail || 'Профиль'
   const [open, setOpen] = useState(false)
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [localUnread, setLocalUnread] = useState(unreadCount ?? 0)
   const ref = useRef<HTMLDivElement>(null)
+  const notifRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { setLocalUnread(unreadCount ?? 0) }, [unreadCount])
+
+  // Realtime: новые уведомления → инкремент бейджа
+  useEffect(() => {
+    if (!activeAccountId || !supabase) return
+    const channel = supabase
+      .channel(`notif_bell_${activeAccountId}`)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .on('postgres_changes' as any, {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'batch_notifications',
+        filter: `account_id=eq.${activeAccountId}`,
+      }, () => {
+        setLocalUnread((v) => v + 1)
+      })
+      .subscribe()
+    return () => { void supabase?.removeChannel(channel) }
+  }, [activeAccountId])
+
+  useEffect(() => {
+    if (!notifOpen) return
+    const handler = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setNotifOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [notifOpen])
 
   useEffect(() => {
     if (!open) return
@@ -93,16 +132,32 @@ export const Topbar = ({ title, userName, userEmail, isAdmin, onAdminClick, onGl
             </button>
           </>
         )}
-        <button
-          type="button"
-          aria-label="Уведомления"
-          className="flex h-7 w-7 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50"
-        >
-          <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-            <path d="M12 5a4 4 0 0 0-4 4v2.5c0 .8-.3 1.6-.9 2.2L6 15h12l-1.1-1.3a3 3 0 0 1-.9-2.2V9a4 4 0 0 0-4-4Z" />
-            <path d="M10 18a2 2 0 0 0 4 0" />
-          </svg>
-        </button>
+        <div className="relative" ref={notifRef}>
+          <button
+            type="button"
+            aria-label="Уведомления"
+            onClick={() => setNotifOpen((v) => !v)}
+            className="relative flex h-7 w-7 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50"
+          >
+            <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M12 5a4 4 0 0 0-4 4v2.5c0 .8-.3 1.6-.9 2.2L6 15h12l-1.1-1.3a3 3 0 0 1-.9-2.2V9a4 4 0 0 0-4-4Z" />
+              <path d="M10 18a2 2 0 0 0 4 0" />
+            </svg>
+            {localUnread > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-violet-500 px-0.5 text-[9px] font-bold text-white leading-none">
+                {localUnread > 99 ? '99+' : localUnread}
+              </span>
+            )}
+          </button>
+          {activeAccountId && (
+            <NotificationsPanel
+              open={notifOpen}
+              accountId={activeAccountId}
+              onClose={() => setNotifOpen(false)}
+              onUnreadChange={(count) => setLocalUnread(count)}
+            />
+          )}
+        </div>
 
         {/* Профиль-дропдаун */}
         <div className="relative" ref={ref}>

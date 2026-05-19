@@ -513,24 +513,62 @@ supabase.channel(`trip_lines_changes_${accountId}`)
 - Каждому стикеру в наборе своё кол-во копий
 - Список наборов: название, дата, предпросмотр/скачать PDF, редактировать, удалить
 
+### Аутсорс-система — B2B последовательность партий (19.05.2026)
+
+Независимый бизнес-этап: любую партию фулфилмента можно отдать внешней компании (или нескольким последовательно).
+
+**Модель данных** (`supabase/patch_outsource.sql`):
+- `batch_outsource_stages` — этапы аутсорса партии (статус, кол-во заявлено/принято, расхождения)
+- `batch_stage_invites` — приглашения между компаниями по C-ID (уникально: stage + invited_company)
+- `batch_journal` — иммутабельный журнал событий партии (только INSERT)
+- `batch_archive_votes` — голосование за архивацию (каждая компания-участник голосует)
+- `batch_notifications` — внутренние уведомления
+- Системная компания C-0 (`00000000-0000-0000-0000-000000000000`) для системных событий
+
+**RPCs**: `find_account_by_short_id`, `invite_company_to_stage`, `respond_to_invite`, `get_my_incoming_invites`, `get_my_outgoing_invites`, `get_outsource_batches`, `get_batch_journal`, `vote_batch_archive`
+
+**Компоненты**:
+- `OutsourceStagesModal` — модалка партии: вкладки Этапы + Журнал, приглашение (выбор из партнёров или C-ID вручную), start/done с кол-вом, голос за архив
+- `AddOutsourceModal` (`src/components/outsource/`) — модаль «Добавить партнёра»: ввести C-ID → `send_partner_request` → success
+- `NotificationsPanel` — дропдаун в Topbar: badge с числом непрочитанных, mark read / mark all, violet тема
+
+**Аутсорс-партнёры** (`supabase/patch_outsource_partners.sql`, 19.05.2026 — слой поверх stage-invites):
+- `outsource_partners` — B2B-связи между компаниями (pending/accepted/declined), RLS, уведомления
+- RPCs: `send_partner_request`, `respond_to_partner_request`, `get_my_partners`, `remove_partner`
+- `OutsourcePartner` тип в `types/index.ts`
+- 4 функции в `outsourceService.ts`: `fetchMyPartners`, `sendPartnerRequest`, `respondToPartnerRequest`, `removePartner`
+
+**Флоу:**
+1. `+ Добавить партнёра` (Роли → Аутсорс) → C-ID → запрос отправлен
+2. Партнёр принимает/отклоняет во вкладке «Партнёры»
+3. Фулфилмент → Назначить исполнителя → список партнёров или C-ID вручную
+4. Подключённые видят свои партии в «Мои услуги»
+
+**Изменения в существующих страницах**:
+- `FulfillmentPage`: колонка Аутсорс (ссылка-иконка), C-ID компании над P-ID партии, `OutsourceStagesModal`
+- `RolesPage` → Аутсорс: **Партнёры** (список B2B-связей, запросы) / **Мои услуги** (входящие приглашения + активные партии)
+- `Topbar`: колокольчик → `NotificationsPanel`; outside-click через `notifRef`
+
 ## Структура
 
 ```text
 src/
   components/
-    layout/        — Sidebar, Topbar
+    layout/        — Sidebar, Topbar (с NotificationsPanel)
     trips/         — TripTable, TripLineFormModal, TripFormModal
     stores/        — StoreList, StoreFormModal
     accounts/      — AccountFormModal, DeleteAccountModal, ProfileModal
     roles/         — RoleFormModal
     stickers/      — StickerFormModal
     reviews/       — AiSettingsModal
-    ui/            — Button, Badge, Card, Input, Modal, Select, Textarea, InvoicePhotoCell, DeleteConfirmModal
+    fulfillment/   — OutsourceStagesModal
+    outsource/     — AddOutsourceModal
+    ui/            — Button, Badge, Card, Input, Modal, Select, Textarea, InvoicePhotoCell, DeleteConfirmModal, NotificationsPanel
   hooks/           — useAuth, useAccounts, useAppData, useRoles, useMyPermissions
   lib/             — supabase, constants, utils, stickerPdf, ean13
   pages/           — ShipmentsPage, StoresPage, HomePage, RolesPage, DirectoriesPage, StickersPage, ProductsPage, ReviewsPage, AuthPage
-  services/        — tripService, shipmentService, storeService, directoriesService, roleService, accountService, stickerService, reviewsService
-  types/           — index.ts (RolePermissions, FULL_PERMISSIONS, AiSettings, WbFeedbackRow, ...)
+  services/        — tripService, shipmentService, storeService, directoriesService, roleService, accountService, stickerService, reviewsService, outsourceService
+  types/           — index.ts (RolePermissions, FULL_PERMISSIONS, AiSettings, WbFeedbackRow, BatchOutsourceStage, BatchNotification, ...)
 supabase/
   schema.sql
   bootstrap.sql
@@ -608,6 +646,8 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 43. patch_excluded_nm_ids.sql  ← excluded_nm_ids integer[] в automation_settings (чёрный список артикулов)
 44. patch_accounts_short_id.sql ← Глобальный short_id для accounts (C-N в URL)
 45. patch_batches_short_id.sql  ← Per-account short_id для fulfillment_batches (P-N в URL)
+46. patch_outsource.sql              ← Аутсорс-система: batch_outsource_stages, batch_stage_invites, batch_journal, batch_archive_votes, batch_notifications; C-0; RLS; RPCs
+47. patch_outsource_partners.sql     ← B2B-партнёры: outsource_partners + RLS + 4 RPCs (send/respond/get/remove)
 
 4. `npm run dev`
 
@@ -650,6 +690,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **API keys browser block** | ✅ Готово | autoComplete=new-password + data-lpignore + data-1p-ignore на всех полях ключей |
 | **TS/Vercel build fix** | ✅ Готово | SpeechRecognition объявлен в vite-env.d.ts (TS2552 на Vercel устранена) |
 | **Sourcemap отключен** | ✅ Готово | `sourcemap: false` в vite.config.ts — исходники невидны через DevTools |
+| **Аутсорс-система (B2B партии)** | ✅ Готово | Многокомпанийный аутсорс фулфилмент-партий: этапы, приглашения по C-ID, журнал событий, расхождения, голосование за архив |
+| **Аутсорс-партнёры (B2B контакты)** | ✅ Готово | `outsource_partners` таблица + 4 RPC; список партнёров в Ролях → Аутсорс; пикер партнёров в ОутсорсСтейджсМодал; AddOutsourceModal |
+| **Уведомления** | ✅ Готово | NotificationsPanel в Topbar: badge непрочитанных, mark read/all, violet тема |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |

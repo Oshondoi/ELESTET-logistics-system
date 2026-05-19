@@ -1,6 +1,53 @@
 # Active Context
 
-## Current Focus (19.05.2026) — Фулфилмент Логистика: визуальный стейт + автообновление рейсов
+## Current Focus (19.05.2026) — Аутсорс-партнёры (B2B контакты) — ЗАВЕРШЕНО
+
+### Архитектура аутсорс-партнёров
+Добавлен слой «контактная книга компаний» поверх существующей системы stage-invites.
+
+**Флоу:**
+1. Роли → Аутсорс → «+ Добавить партнёра» → ввести C-ID → запрос отправлен
+2. Партнёр видит запрос во вкладке «Партнёры» → принимает/отклоняет
+3. В OutsourceStagesModal → «Назначить исполнителя» → сначала список партнёров, затем C-ID вручную
+4. Подключённые компании видят свои партии в «Мои услуги»
+
+**Ключевые файлы:**
+- `supabase/patch_outsource_partners.sql` — таблица + 4 RPC
+- `src/components/outsource/AddOutsourceModal.tsx` — новый модальник
+- `src/services/outsourceService.ts` — 4 новые функции
+- `src/types/index.ts` — `OutsourcePartner` интерфейс
+- `src/pages/RolesPage.tsx` — суб-табы `partners | services`
+- `src/components/fulfillment/OutsourceStagesModal.tsx` — пикер партнёров
+- `src/App.tsx` — onAddOutsource + render AddOutsourceModal
+
+---
+
+## Предыдущий фокус (19.05.2026) — Аутсорс-система (B2B партии) — ЗАВЕРШЕНО
+
+### Что реализовано:
+1. **SQL** — `patch_outsource.sql` применён. 5 таблиц + C-0 + RLS + 8 RPCs
+2. **Types** — `BatchOutsourceStage`, `BatchNotification`, `IncomingInvite` и др. в `types/index.ts`
+3. **Service** — `outsourceService.ts` (db = supabase as any, все CRUD + RPC функции)
+4. **OutsourceStagesModal** — модалка управления этапами партии (вкладки Этапы + Журнал)
+5. **RolesPage** — вкладки Сотрудники / Аутсорс (входящие + исходящие приглашения)
+6. **FulfillmentPage** — колонка Аутсорс + C-ID над P-ID + `OutsourceStagesModal`
+7. **NotificationsPanel** + **Topbar** — уведомления в колокольчике, outside-click фикс
+8. **README** + **Memory Bank** обновлены
+
+### Ключевой паттерн: новые Supabase таблицы без regenerate types
+```ts
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const db = supabase as any
+// db.from('batch_outsource_stages')... — работает, TypeScript не ругается
+```
+
+### Outside-click для вложенных дропдаунов (Topbar + NotificationsPanel)
+- Проблема: `mousedown` на документе срабатывает ДО `onClick` кнопки → панель закрывается и снова открывается
+- Решение: `notifRef` оборачивает **и кнопку, и панель**. Outside-click только в Topbar через `notifRef`. Клик по кнопке — внутри рефа, не закрывает.
+
+---
+
+## Предыдущий фокус (19.05.2026) — Фулфилмент Логистика: визуальный стейт + автообновление рейсов
 
 ### Сделано за сессию 19.05.2026:
 

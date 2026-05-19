@@ -796,3 +796,140 @@ export interface FulfillmentBoxWithItems extends FulfillmentBox {
 export interface FulfillmentSupplyWithBoxes extends FulfillmentSupply {
   boxes: FulfillmentBoxWithItems[]
 }
+
+// ─── Аутсорс-система ─────────────────────────────────────────
+
+export type OutsourceStageStatus =
+  | 'pending'       // ожидает принятия
+  | 'accepted'      // компания приняла
+  | 'in_progress'   // в работе
+  | 'done'          // выполнено
+  | 'disputed'      // расхождение
+  | 'cancelled'     // отменён
+
+export type InviteStatus = 'pending' | 'accepted' | 'declined'
+
+export interface BatchOutsourceStage {
+  id: string
+  batch_id: string
+  owner_account_id: string
+  sort_order: number
+  name: string
+  description: string | null
+  assigned_company_id: string | null
+  status: OutsourceStageStatus
+  qty_declared: number | null
+  qty_received: number | null
+  has_discrepancy: boolean
+  discrepancy_notes: string | null
+  accepted_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+  // joined from accounts (enriched)
+  assigned_company_name?: string | null
+  assigned_company_short_id?: number | null
+}
+
+export interface BatchOutsourceStageFormValues {
+  name: string
+  description?: string
+  sort_order?: number
+}
+
+export interface BatchStageInvite {
+  id: string
+  batch_id: string
+  stage_id: string
+  inviting_company_id: string
+  invited_company_id: string
+  status: InviteStatus
+  message: string | null
+  created_at: string
+  responded_at: string | null
+}
+
+export interface BatchJournalEntry {
+  id: string
+  batch_id: string
+  event_type: string
+  company_id: string | null
+  company_name: string | null
+  company_short_id: number | null
+  user_id: string | null
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface BatchNotification {
+  id: string
+  account_id: string
+  batch_id: string | null
+  stage_id: string | null
+  type: string
+  title: string
+  body: string | null
+  is_read: boolean
+  created_at: string
+}
+
+// Входящее приглашение (результат get_my_incoming_invites RPC)
+export interface IncomingInvite {
+  invite_id: string
+  batch_id: string
+  batch_name: string
+  batch_short_id: number | null
+  stage_id: string
+  stage_name: string
+  stage_sort_order: number
+  inviting_company_id: string
+  inviting_company_name: string
+  inviting_company_short_id: number | null
+  status: InviteStatus
+  message: string | null
+  created_at: string
+}
+
+// Исходящее приглашение (результат get_my_outgoing_invites RPC)
+export interface OutgoingInvite {
+  invite_id: string
+  batch_id: string
+  batch_name: string
+  batch_short_id: number | null
+  stage_id: string
+  stage_name: string
+  invited_company_id: string
+  invited_company_name: string
+  invited_company_short_id: number | null
+  status: InviteStatus
+  created_at: string
+  responded_at: string | null
+}
+
+// Партия как аутсорс-исполнитель
+export interface OutsourceBatch {
+  batch_id: string
+  batch_name: string
+  batch_short_id: number | null
+  batch_status: string
+  owner_company_id: string
+  owner_company_name: string
+  owner_company_short_id: number | null
+  stage_id: string
+  stage_name: string
+  stage_status: OutsourceStageStatus
+  stage_sort_order: number
+  created_at: string
+}
+
+// Аутсорс-партнёр (результат get_my_partners RPC)
+export interface OutsourcePartner {
+  connection_id: string
+  partner_id: string
+  partner_name: string
+  partner_short_id: number
+  status: 'pending' | 'accepted' | 'declined'
+  is_requester: boolean
+  created_at: string
+}

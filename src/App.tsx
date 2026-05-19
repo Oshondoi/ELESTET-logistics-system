@@ -23,6 +23,7 @@ import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
 import { ProductsPage } from './pages/ProductsPage'
 import { RolesPage } from './pages/RolesPage'
+import AddOutsourceModal from './components/outsource/AddOutsourceModal'
 import { ShipmentsPage } from './pages/ShipmentsPage'
 import { StoresPage } from './pages/StoresPage'
 import { DirectoriesPage } from './pages/DirectoriesPage'
@@ -32,6 +33,7 @@ import { InvoicesPage } from './pages/InvoicesPage'
 import { AdminPage } from './pages/AdminPage'
 import { GlossaryPage } from './pages/GlossaryPage'
 import { DiaryPage } from './pages/DiaryPage'
+import { fetchNotifications, markAllNotificationsRead } from './services/outsourceService'
 import type { Shipment, ShipmentWithStore } from './types'
 
 type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
@@ -187,10 +189,12 @@ function App() {
   const [shipmentModalOpen, setShipmentModalOpen] = useState(false)
   const [tripModalOpen, setTripModalOpen] = useState(false)
   const [storeModalOpen, setStoreModalOpen] = useState(false)
+  const [addOutsourceOpen, setAddOutsourceOpen] = useState(false)
   const [editingStore, setEditingStore] = useState<import('./types').Store | null>(null)
   const [editingAccount, setEditingAccount] = useState<import('./types').Account | null>(null)
   const [editAccountModalOpen, setEditAccountModalOpen] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0)
   const [profileUserName, setProfileUserName] = useState<string>(
     (session?.user?.user_metadata?.full_name as string) ?? ''
   )
@@ -331,6 +335,14 @@ function App() {
   useEffect(() => {
     if (effectivePage === 'shipments') void refreshTrips()
   }, [effectivePage])
+
+  // Загрузка счётчика непрочитанных уведомлений
+  useEffect(() => {
+    if (!activeAccount?.id) return
+    void fetchNotifications(activeAccount.id).then((notifs) => {
+      setUnreadNotifCount(notifs.filter((n) => !n.is_read).length)
+    })
+  }, [activeAccount?.id])
 
   const storesWithApiKey = useMemo(() => stores.filter((s) => s.api_key), [stores])
 
@@ -548,6 +560,9 @@ function App() {
             userName={profileUserName}
             userEmail={session?.user?.email ?? ''}
             isAdmin={isAdmin}
+            activeAccountId={activeAccount?.id}
+            unreadCount={unreadNotifCount}
+            onNotificationClick={undefined}
             onAdminClick={() => setActivePage('admin')}
             onGlossaryClick={() => setActivePage('glossary')}
             onDiaryClick={isAdmin ? () => setActivePage('diary') : undefined}
@@ -650,12 +665,14 @@ function App() {
                   roles={roles}
                   accounts={accounts}
                   activeAccountId={activeAccount?.id ?? ''}
+                  activeAccountShortId={activeAccount?.short_id ?? null}
                   isLoading={isRolesLoading}
                   onAdd={addRole}
                   onUpdate={updateRole}
                   onDelete={removeRole}
                   onClone={cloneRoleToAccount}
                   canManage={permissions.roles_manage}
+                  onAddOutsource={() => setAddOutsourceOpen(true)}
                 />
               ) : effectivePage === 'stickers' ? (
                 <StickersPage
@@ -771,6 +788,14 @@ function App() {
         userId={session?.user?.id ?? ''}
         onNameChange={(name) => setProfileUserName(name)}
       />
+
+      {addOutsourceOpen && activeAccount && (
+        <AddOutsourceModal
+          accountId={activeAccount.id}
+          onClose={() => setAddOutsourceOpen(false)}
+          onSuccess={() => setAddOutsourceOpen(false)}
+        />
+      )}
     </div>
   )
 }

@@ -78,6 +78,7 @@ import {
   uploadPackagingPhoto,
 } from '../services/fulfillmentService'
 import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
+import { OutsourceStagesModal } from '../components/fulfillment/OutsourceStagesModal'
 import {
   findProductByBarcode,
 } from '../services/fulfillmentService'
@@ -6571,6 +6572,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
   const [deleteTarget, setDeleteTarget] = useState<FulfillmentBatch | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [editTarget, setEditTarget] = useState<FulfillmentBatch | null>(null)
+  const [outsourceModalBatch, setOutsourceModalBatch] = useState<FulfillmentBatch | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [archivedBatches, setArchivedBatches] = useState<FulfillmentBatch[]>([])
   const [isArchiveLoading, setIsArchiveLoading] = useState(false)
@@ -6927,6 +6929,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
                 <th className="px-4 py-3 text-left">Партия</th>
                 <th className="px-4 py-3 text-left">Магазин</th>
                 <th className="px-4 py-3 text-left">Этап</th>
+                <th className="px-4 py-3 text-left">Аутсорс</th>
                 <th className="px-4 py-3 text-left">Статус</th>
                 <th className="px-4 py-3 text-left">Создана</th>
                 <th className="px-4 py-3 text-right">
@@ -6972,7 +6975,12 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
                     </td>
                     <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1.5">
-                        <span>{b.short_id != null ? `P-${b.short_id}` : '—'}</span>
+                        <div className="flex flex-col leading-tight">
+                          {accountShortId != null && (
+                            <span className="text-[10px] text-violet-400 font-semibold">C-{accountShortId}</span>
+                          )}
+                          <span>{b.short_id != null ? `P-${b.short_id}` : '—'}</span>
+                        </div>
                         {accountShortId != null && b.short_id != null && (() => {
                           const batchUrl = `${window.location.origin}/fulfillment/C-${accountShortId}/P-${b.short_id}`
                           return (
@@ -7064,6 +7072,21 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
                         )
                       })()}
                     </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      {!isArchived && (
+                        <button
+                          type="button"
+                          title="Аутсорс-этапы"
+                          onClick={() => setOutsourceModalBatch(b)}
+                          className="rounded-xl p-1.5 text-violet-400 hover:bg-violet-50 hover:text-violet-600"
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                          </svg>
+                        </button>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       {isArchived ? (
                         <span className="text-xs text-slate-400">
@@ -7127,6 +7150,17 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
           </table>
         )}
       </Card>
+
+      {outsourceModalBatch && (
+        <OutsourceStagesModal
+          open={!!outsourceModalBatch}
+          batch={outsourceModalBatch}
+          accountId={accountId}
+          accountShortId={accountShortId}
+          isOwner={canManage}
+          onClose={() => setOutsourceModalBatch(null)}
+        />
+      )}
 
     </div>
   )
