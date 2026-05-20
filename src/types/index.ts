@@ -7,6 +7,7 @@ export interface Product {
   account_id: string
   store_id: string
   nm_id: number          // WB артикул (nmID)
+  cost_price: number | null
   vendor_code: string | null
   name: string | null
   brand: string | null

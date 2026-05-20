@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import * as XLSX from 'xlsx'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
-import { fetchLastSync, fetchProducts, triggerSync } from '../services/productService'
+import { fetchLastSync, fetchProducts, triggerSync, updateProductsCost } from '../services/productService'
 import { fetchMarkingDefectsByStore } from '../services/fulfillmentService'
 import type { MarkingDefectRow } from '../services/fulfillmentService'
 import type { Product, Store, StoreSyncLog } from '../types'
@@ -20,6 +21,25 @@ function formatSyncTime(iso: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`
   if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`
   return `${Math.floor(diff / 86400)} дн назад`
+}
+
+function formatCostDraft(value: number | null | undefined): string {
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
+function parseCostDraft(value: string): number | null {
+  const normalized = value.trim().replace(',', '.')
+  if (!normalized) return null
+  const parsed = Number(normalized)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error('Себестоимость должна быть числом 0 или больше')
+  }
+  return Math.round(parsed * 100) / 100
+}
+
+function normalizedVendorCode(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase()
 }
 
 // Разбирает sizes из raw WB данных в массив строк-размеров
@@ -70,6 +90,10 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
   const [isSyncing, setIsSyncing] = useState(false)
   const [isLoadingProducts, setIsLoadingProducts] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
+  const [costError, setCostError] = useState<string | null>(null)
+  const [isCostEditMode, setIsCostEditMode] = useState(false)
+  const [isSavingCosts, setIsSavingCosts] = useState(false)
+  const [costDrafts, setCostDrafts] = useState<Record<string, string>>({})
   const [search, setSearch] = useState('')
   const [storeDropdownOpen, setStoreDropdownOpen] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
@@ -104,7 +128,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
       setAnyExpanded(false)
       localStorage.setItem('elestet-products-expand-all', 'false')
     } else {
-      setExpandedIds(new Set(filtered.map((p) => p.id)))
+      setExpandedIds(new Set(orderedProducts.map((p) => p.id)))
       setExpandAll(true)
       setAnyExpanded(true)
       localStorage.setItem('elestet-products-expand-all', 'true')
@@ -121,6 +145,14 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
   }, [])
 
   const selectedStore = stores.find((s) => s.id === selectedStoreId)
+
+  const buildCostDrafts = useCallback((source: Product[]) => {
+    const nextDrafts: Record<string, string> = {}
+    source.forEach((product) => {
+      nextDrafts[product.id] = formatCostDraft(product.cost_price)
+    })
+    return nextDrafts
+  }, [])
 
   const loadProducts = useCallback(async (storeId: string) => {
     if (!storeId) return
@@ -140,7 +172,13 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
     void loadProducts(selectedStoreId)
     setSearch('')
     setSyncError(null)
+    setCostError(null)
+    setIsCostEditMode(false)
   }, [selectedStoreId, loadProducts])
+
+  useEffect(() => {
+    setCostDrafts(buildCostDrafts(products))
+  }, [products, buildCostDrafts])
 
   const loadDefects = useCallback(async (storeId: string, accountId: string) => {
     if (!storeId || !accountId) return
@@ -186,6 +224,104 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
       p.barcodes.some((b) => b.includes(q))
     )
   })
+
+  const orderedProducts = [...filtered].sort((a, b) => {
+    const vendorCompare = normalizedVendorCode(a.vendor_code).localeCompare(
+      normalizedVendorCode(b.vendor_code),
+      'ru',
+      { numeric: true, sensitivity: 'base' },
+    )
+    if (vendorCompare !== 0) return vendorCompare
+
+    const nameCompare = (a.name ?? '').localeCompare(b.name ?? '', 'ru', { sensitivity: 'base' })
+    if (nameCompare !== 0) return nameCompare
+
+    return a.nm_id - b.nm_id
+  })
+
+  const hasCostChanges = products.some((product) => {
+    const current = formatCostDraft(product.cost_price)
+    const draft = costDrafts[product.id] ?? ''
+    return draft !== current
+  })
+
+  const handleStartCostEdit = () => {
+    setCostError(null)
+    setIsCostEditMode(true)
+  }
+
+  const handleCancelCostEdit = () => {
+    setCostError(null)
+    setCostDrafts(buildCostDrafts(products))
+    setIsCostEditMode(false)
+  }
+
+  const handleSaveCosts = async () => {
+    const changed = products.filter((product) => {
+      const current = formatCostDraft(product.cost_price)
+      const draft = costDrafts[product.id] ?? ''
+      return draft !== current
+    })
+
+    if (changed.length === 0) {
+      setIsCostEditMode(false)
+      return
+    }
+
+    setCostError(null)
+    setIsSavingCosts(true)
+    try {
+      const patches = changed.map((product) => ({
+        id: product.id,
+        cost_price: parseCostDraft(costDrafts[product.id] ?? ''),
+      }))
+
+      await updateProductsCost(patches)
+
+      const nextCostMap = new Map(patches.map((p) => [p.id, p.cost_price]))
+      setProducts((prev) => prev.map((product) => (
+        nextCostMap.has(product.id)
+          ? { ...product, cost_price: nextCostMap.get(product.id) ?? null }
+          : product
+      )))
+      setIsCostEditMode(false)
+    } catch (err) {
+      setCostError(err instanceof Error ? err.message : 'Не удалось сохранить себестоимость')
+    } finally {
+      setIsSavingCosts(false)
+    }
+  }
+
+  const handleDownloadCosts = () => {
+    const rows = orderedProducts.flatMap((product) => {
+      const barcodes = product.barcodes.length > 0 ? product.barcodes : ['']
+      const draftCost = costDrafts[product.id] ?? formatCostDraft(product.cost_price)
+      return barcodes.map((barcode) => ({
+        'Артикул WB': String(product.nm_id),
+        'Баркод': barcode,
+        'Себестоимость': draftCost,
+        'Артикул продавца': product.vendor_code ?? '',
+      }))
+    })
+
+    const sheet = XLSX.utils.json_to_sheet(rows)
+    const headers = ['Артикул WB', 'Баркод', 'Себестоимость', 'Артикул продавца'] as const
+    const colWidths = headers.map((header) => {
+      const maxContent = rows.reduce((max, row) => {
+        const value = row[header] ?? ''
+        return Math.max(max, String(value).length)
+      }, header.length)
+      return { wch: Math.min(Math.max(maxContent + 2, 12), 48) }
+    })
+    sheet['!cols'] = colWidths
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Себестоимость')
+
+    const now = new Date()
+    const datePart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    XLSX.writeFile(workbook, `cost_prices_${datePart}.xlsx`)
+  }
 
   return (
     <div className="space-y-4">
@@ -488,10 +624,63 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
               </span>
             )}
           </span>
-          {isLoadingProducts && (
-            <span className="text-xs text-slate-400">Загрузка...</span>
-          )}
+          <div className="flex items-center gap-2">
+            {isLoadingProducts && (
+              <span className="text-xs text-slate-400">Загрузка...</span>
+            )}
+            {!isLoadingProducts && (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="rounded-xl px-3 py-2 text-xs"
+                  onClick={handleDownloadCosts}
+                  disabled={isSavingCosts}
+                  title="Скачать Excel"
+                  aria-label="Скачать Excel"
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 3v11" />
+                    <path d="m7 10 5 5 5-5" />
+                    <path d="M5 21h14" />
+                  </svg>
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="rounded-xl px-3 py-2 text-xs"
+                  onClick={handleCancelCostEdit}
+                  disabled={!isCostEditMode || isSavingCosts}
+                >
+                  Отмена
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="rounded-xl px-3 py-2 text-xs"
+                  onClick={handleStartCostEdit}
+                  disabled={isCostEditMode || isSavingCosts}
+                >
+                  Редактировать
+                </Button>
+                <Button
+                  type="button"
+                  className="rounded-xl px-3 py-2 text-xs"
+                  onClick={() => void handleSaveCosts()}
+                  disabled={!isCostEditMode || !hasCostChanges || isSavingCosts}
+                >
+                  {isSavingCosts ? 'Сохранение...' : 'Сохранить'}
+                </Button>
+              </>
+            )}
+          </div>
         </div>
+
+        {costError && (
+          <div className="border-b border-slate-100 px-5 py-2">
+            <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-600">{costError}</p>
+          </div>
+        )}
 
         {/* Таблица */}
         {!isLoadingProducts && filtered.length === 0 ? (
@@ -530,9 +719,10 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                   <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Страна</th>
                   <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Предмет</th>
                   <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Категория</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Себестоимость</th>
                 </tr>
               </thead>
-              {filtered.map((product) => {
+              {orderedProducts.map((product) => {
                 const isExpanded = expandAll || expandedIds.has(product.id)
                 const sizeRows = getSizeRows(product)
                 return (
@@ -579,10 +769,25 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                       <td className="px-4 py-3 text-xs text-slate-500">{product.country ?? '—'}</td>
                       <td className="px-4 py-3 text-xs text-slate-400">{product.category ?? '—'}</td>
                       <td className="px-4 py-3 text-xs text-slate-400">{(product as any).category_parent ?? '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-slate-600">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={costDrafts[product.id] ?? ''}
+                          disabled={!isCostEditMode || isSavingCosts}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const next = e.target.value.replace(',', '.')
+                            setCostDrafts((prev) => ({ ...prev, [product.id]: next }))
+                          }}
+                          placeholder="—"
+                          className="h-8 w-28 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 placeholder:text-slate-300 focus:border-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                        />
+                      </td>
                     </tr>
                     {/* Строки размеров с анимацией (grid-trick как в логистике) */}
                     <tr>
-                      <td className="p-0" colSpan={9}>
+                      <td className="p-0" colSpan={12}>
                         <div
                           style={{
                             display: 'grid',

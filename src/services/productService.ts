@@ -1,6 +1,11 @@
 import { supabase } from '../lib/supabase'
 import type { Product, StoreSyncLog, SyncResult } from '../types'
 
+interface ProductCostPatch {
+  id: string
+  cost_price: number | null
+}
+
 /** Получить все товары магазина из локальной БД */
 export const fetchProducts = async (storeId: string): Promise<Product[]> => {
   if (!supabase) throw new Error('Supabase client is not configured')
@@ -13,6 +18,21 @@ export const fetchProducts = async (storeId: string): Promise<Product[]> => {
 
   if (error) throw error
   return (data ?? []) as Product[]
+}
+
+/** Обновить себестоимость для списка товаров */
+export const updateProductsCost = async (patches: ProductCostPatch[]): Promise<void> => {
+  if (!supabase) throw new Error('Supabase client is not configured')
+  if (patches.length === 0) return
+
+  for (const patch of patches) {
+    const { error } = await supabase
+      .from('products')
+      .update({ cost_price: patch.cost_price })
+      .eq('id', patch.id)
+
+    if (error) throw error
+  }
 }
 
 /** Получить последний лог синхронизации для магазина */
