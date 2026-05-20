@@ -25,8 +25,12 @@ export const updateProductsCost = async (patches: ProductCostPatch[]): Promise<v
   if (!supabase) throw new Error('Supabase client is not configured')
   if (patches.length === 0) return
 
+  // Supabase generated types may lag behind latest SQL patches (cost_price).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any
+
   for (const patch of patches) {
-    const { error } = await supabase
+    const { error } = await db
       .from('products')
       .update({ cost_price: patch.cost_price })
       .eq('id', patch.id)
