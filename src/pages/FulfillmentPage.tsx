@@ -16,6 +16,7 @@ import type {
   FulfillmentWorkTariff,
   BatchConsumable,
   Consumable,
+  ConsumableCatalogItem,
   Store,
   TripLine,
   TripWithLines,
@@ -83,7 +84,7 @@ import {
   findProductByBarcode,
 } from '../services/fulfillmentService'
 import { createTrip, addTripLine, setTripLineFulfillmentBatch, updateTripLineTripId } from '../services/tripService'
-import { fetchWorkTariffs, fetchConsumables } from '../services/directoriesService'
+import { fetchWorkTariffs, fetchConsumables, fetchConsumableCatalog } from '../services/directoriesService'
 import { Card } from '../components/ui/Card'
 import { InvoicePhotoCell } from '../components/ui/InvoicePhotoCell'
 import { createStoreInSupabase } from '../services/storeService'
@@ -411,15 +412,42 @@ const BatchDetailModal = ({
   const [markingItemName, setMarkingItemName] = useState<string | null>(null)
   const [markingQty, setMarkingQty] = useState('')
   const [markingDefect, setMarkingDefect] = useState('')
+  const [markingLabelsQty, setMarkingLabelsQty] = useState('')
+  const [markingLabelsAll, setMarkingLabelsAll] = useState(false)
+  const [markingConsumableId, setMarkingConsumableId] = useState<string>('')
   const [markingNotes, setMarkingNotes] = useState('')
   const [markingPerformerId, setMarkingPerformerId] = useState(userId)
   const [markingPerformerName, setMarkingPerformerName] = useState(userName || userEmail)
   const [markingPerformers, setMarkingPerformers] = useState<OtkPerformer[]>([])
   const [isAddingMarking, setIsAddingMarking] = useState(false)
   const [markingPhotoFiles, setMarkingPhotoFiles] = useState<File[]>([])
-  type MarkingBufferEntry = { tempId: string; performer_user_id: string | null; performer_name: string; tariff: string; qty: number; qty_defect: number; notes: string; photo_files: File[]; barcode: string | null; item_id: string | null; item_name: string | null }
+  type MarkingBufferEntry = {
+    tempId: string
+    performer_user_id: string | null
+    performer_name: string
+    tariff: string
+    qty: number
+    qty_defect: number
+    notes: string
+    photo_files: File[]
+    barcode: string | null
+    item_id: string | null
+    item_name: string | null
+    consumable_id: string | null
+    labels_qty: number | null
+    labels_all: boolean
+  }
   const [markingBuffer, setMarkingBuffer] = useState<MarkingBufferEntry[]>([])
-  const [markingEdits, setMarkingEdits] = useState<Record<string, { tariff: string; qty: number; qty_defect: number; notes: string; barcode: string }>>({})
+  const [markingEdits, setMarkingEdits] = useState<Record<string, {
+    tariff: string
+    qty: number
+    qty_defect: number
+    notes: string
+    barcode: string
+    consumable_id: string | null
+    labels_qty: number | null
+    labels_all: boolean
+  }>>({})
   const [markingDeletedIds, setMarkingDeletedIds] = useState<string[]>([])
   const [markingDeletedLogs, setMarkingDeletedLogs] = useState<FulfillmentMarkingLog[]>([])
   const [markingEditingId, setMarkingEditingId] = useState<string | null>(null)
@@ -449,6 +477,8 @@ const BatchDetailModal = ({
   const [boxesQtyMode, setBoxesQtyMode] = useState<'all' | 'custom'>('custom')
   const [boxesQtyInput, setBoxesQtyInput] = useState(String(batch.boxes_qty ?? 0))
   const [isSavingBoxesQty, setIsSavingBoxesQty] = useState(false)
+  const [boxCatalogItems, setBoxCatalogItems] = useState<ConsumableCatalogItem[]>([])
+  const [boxCatalogConsumableId, setBoxCatalogConsumableId] = useState<string>(batch.box_catalog_consumable_id ?? '')
   const [consumableSaving, setConsumableSaving] = useState<Record<string, boolean>>({})
 
   // Упаковка — журнал работ
@@ -466,9 +496,19 @@ const BatchDetailModal = ({
   const [isAddingPackagingLog, setIsAddingPackagingLog] = useState(false)
   const [packagingWorkPhotoFiles, setPackagingWorkPhotoFiles] = useState<File[]>([])
   const [packagingWorkConsumableId, setPackagingWorkConsumableId] = useState<string>('')
-  type PackagingBufferEntry = { tempId: string; performer_user_id: string | null; performer_name: string; tariff: string; qty: number; qty_defect: number; notes: string; photo_files: File[]; consumable_id: string | null; zip_bags_qty: number | null }
+  const [packagingWorkCatalogConsumableId, setPackagingWorkCatalogConsumableId] = useState<string>('')
+  const [zipCatalogItems, setZipCatalogItems] = useState<ConsumableCatalogItem[]>([])
+  type PackagingBufferEntry = { tempId: string; performer_user_id: string | null; performer_name: string; tariff: string; qty: number; qty_defect: number; notes: string; photo_files: File[]; consumable_id: string | null; catalog_consumable_id: string | null; zip_bags_qty: number | null }
   const [packagingBuffer, setPackagingBuffer] = useState<PackagingBufferEntry[]>([])
-  const [packagingEdits, setPackagingEdits] = useState<Record<string, { tariff: string; qty: number; qty_defect: number; notes: string }>>({})
+  const [packagingEdits, setPackagingEdits] = useState<Record<string, {
+    tariff: string
+    qty: number
+    qty_defect: number
+    notes: string
+    zip_bags_qty: number | null
+    zip_bags_all: boolean
+    catalog_consumable_id: string | null
+  }>>({})
   const [packagingDeletedIds, setPackagingDeletedIds] = useState<string[]>([])
   const [packagingAddModalOpen, setPackagingAddModalOpen] = useState(false)
   const [packagingEditingId, setPackagingEditingId] = useState<string | null>(null)
@@ -657,6 +697,11 @@ const BatchDetailModal = ({
     setIsLoadingMarking(true)
     setMarkingPerformerId(userId)
     setMarkingPerformerName(userName || userEmail)
+    setIsLoadingConsumables(true)
+    fetchConsumables(batch.account_id)
+      .then((ac) => setAccountConsumables(ac as Consumable[]))
+      .catch(() => setAccountConsumables([]))
+      .finally(() => setIsLoadingConsumables(false))
     Promise.all([fetchMarkingLogs(batch.id), fetchDeletedMarkingLogs(batch.id)])
       .then(([active, deleted]) => { setMarkingLogs(active); setMarkingDeletedLogs(deleted) })
       .catch(() => { setMarkingLogs([]); setMarkingDeletedLogs([]) })
@@ -723,12 +768,24 @@ const BatchDetailModal = ({
       .finally(() => setIsLoadingSupplies(false))
   }, [batch.id, viewStage])
 
+  // Загрузить расходники-короба при открытии этапа packing
+  useEffect(() => {
+    if (viewStage !== 'packing') return
+    fetchConsumableCatalog(batch.account_id)
+      .then((items) => setBoxCatalogItems((items as ConsumableCatalogItem[]).filter((i) => i.kind === 'Короб' && !!i.size).sort((a, b) => { const ap = a.size.split('x').map(Number); const bp = b.size.split('x').map(Number); for (let i = 0; i < Math.max(ap.length, bp.length); i++) { const d = (bp[i] || 0) - (ap[i] || 0); if (d !== 0) return d } return 0 })))
+      .catch(() => setBoxCatalogItems([]))
+  }, [batch.account_id, viewStage])
+
   // Загрузить расходники при открытии этапа packaging
   useEffect(() => {
     if (viewStage !== 'packaging') return
     setIsLoadingConsumables(true)
-    Promise.all([fetchBatchConsumables(batch.id), fetchConsumables(batch.account_id)])
-      .then(([bc, ac]) => { setBatchConsumables(bc); setAccountConsumables(ac as Consumable[]) })
+    Promise.all([fetchBatchConsumables(batch.id), fetchConsumables(batch.account_id), fetchConsumableCatalog(batch.account_id)])
+      .then(([bc, ac, catalog]) => {
+        setBatchConsumables(bc)
+        setAccountConsumables(ac as Consumable[])
+        setZipCatalogItems((catalog as ConsumableCatalogItem[]).filter((i) => i.kind === 'ZIP-пакет' && !!i.size).sort((a, b) => { const ap = a.size.split('x').map(Number); const bp = b.size.split('x').map(Number); for (let i = 0; i < Math.max(ap.length, bp.length); i++) { const d = (bp[i] || 0) - (ap[i] || 0); if (d !== 0) return d } return 0 }))
+      })
       .catch(() => {})
       .finally(() => setIsLoadingConsumables(false))
     // Загрузить логи работ упаковки
@@ -1360,6 +1417,26 @@ const BatchDetailModal = ({
     }
   }
 
+  const handleSaveBoxesQty = async () => {
+    if (!canManage) return
+    const allBoxesQty = supplies.reduce((s, sup) => s + sup.boxes.length, 0)
+    const qty = boxesQtyMode === 'all'
+      ? allBoxesQty
+      : Math.max(0, parseInt(boxesQtyInput, 10) || 0)
+    setIsSavingBoxesQty(true)
+    setError(null)
+    try {
+      const updated = await updateBatch(batch.id, { boxes_qty: qty, box_catalog_consumable_id: boxCatalogConsumableId || null })
+      setBatch((prev) => ({ ...prev, ...updated }))
+      onBatchUpdated(updated)
+      setBoxesQtyInput(String(qty))
+    } catch (err) {
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
+    } finally {
+      setIsSavingBoxesQty(false)
+    }
+  }
+
   const handleCatalogSearch = async (q: string) => {
     setCatalogSearch(q)
     if (q.trim().length < 2) { setCatalogResults([]); return }
@@ -1681,6 +1758,9 @@ const BatchDetailModal = ({
   const handleAddMarkingLog = () => {
     const qty = Number(markingQty) || 0
     const qtyDefect = Number(markingDefect) || 0
+    const labelsQty = markingLabelsAll
+      ? (qty > 0 ? qty : null)
+      : (Number(markingLabelsQty) > 0 ? Number(markingLabelsQty) : null)
     if (!markingBarcode.trim()) return
     if (qty <= 0 && qtyDefect <= 0) return
     const hasBarcodeItems = items.some((it) => it.barcode && it.barcode.trim() !== '')
@@ -1697,6 +1777,9 @@ const BatchDetailModal = ({
       barcode: markingBarcode.trim() || null,
       item_id: markingItemId,
       item_name: markingItemName,
+      consumable_id: markingConsumableId || null,
+      labels_qty: labelsQty,
+      labels_all: markingLabelsAll,
     }])
     setIsDirty(true)
     setMarkingBarcode('')
@@ -1704,6 +1787,9 @@ const BatchDetailModal = ({
     setMarkingItemName(null)
     setMarkingQty('')
     setMarkingDefect('')
+    setMarkingLabelsQty('')
+    setMarkingLabelsAll(false)
+    setMarkingConsumableId('')
     setMarkingNotes('')
     setMarkingPhotoFiles([])
     setMarkingAddModalOpen(false)
@@ -1760,18 +1846,19 @@ const BatchDetailModal = ({
       const deletedLogsNow = markingLogs.filter((l) => markingDeletedIds.includes(l.id))
       await Promise.all(deletedLogsNow.map(async (log) => {
         await deleteMarkingLog(log.id)
-        await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] }, new_values: {} })
+        await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [], consumable_id: log.consumable_id ?? null, labels_qty: log.labels_qty ?? null }, new_values: {} })
       }))
       await Promise.all(Object.entries(markingEdits).map(async ([id, v]) => {
         const originalLog = markingLogs.find((l) => l.id === id)
-        await updateMarkingLog(id, v)
+        const { labels_all: _labelsAll, ...dbPatch } = v
+        await updateMarkingLog(id, dbPatch)
         if (originalLog) {
           const oldVals: Record<string, unknown> = {}
           const newVals: Record<string, unknown> = {}
-          for (const k of Object.keys(v) as Array<keyof typeof v>) {
-            if (originalLog[k as keyof typeof originalLog] !== v[k]) {
+          for (const k of Object.keys(dbPatch) as Array<keyof typeof dbPatch>) {
+            if (originalLog[k as keyof typeof originalLog] !== dbPatch[k]) {
               oldVals[k] = originalLog[k as keyof typeof originalLog]
-              newVals[k] = v[k]
+              newVals[k] = dbPatch[k]
             }
           }
           if (Object.keys(newVals).length > 0) {
@@ -1797,8 +1884,10 @@ const BatchDetailModal = ({
           photo_urls: photoUrls,
           barcode: e.barcode ?? undefined,
           item_id: e.item_id ?? undefined,
+          consumable_id: e.consumable_id ?? undefined,
+          labels_qty: e.labels_qty,
         })
-        await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls } })
+        await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls, consumable_id: log.consumable_id ?? null, labels_qty: log.labels_qty ?? null } })
         return log
       }))
       setMarkingLogs((prev) => {
@@ -1845,6 +1934,7 @@ const BatchDetailModal = ({
       notes: packagingWorkNotes,
       photo_files: packagingWorkPhotoFiles,
       consumable_id: packagingWorkConsumableId || null,
+      catalog_consumable_id: packagingWorkCatalogConsumableId || null,
       zip_bags_qty: packagingWorkZipBagsAll
         ? (qty > 0 ? qty : null)
         : (Number(packagingWorkZipBags) > 0 ? Number(packagingWorkZipBags) : null),
@@ -1856,6 +1946,7 @@ const BatchDetailModal = ({
     setPackagingWorkZipBagsAll(false)
     setPackagingWorkPhotoFiles([])
     setPackagingWorkConsumableId('')
+    setPackagingWorkCatalogConsumableId('')
     setPackagingAddModalOpen(false)
     setIsDirty(true)
   }
@@ -1872,7 +1963,10 @@ const BatchDetailModal = ({
     setError(null)
     try {
       await Promise.all(packagingDeletedIds.map((id) => deletePackagingLog(id)))
-      await Promise.all(Object.entries(packagingEdits).map(([id, v]) => updatePackagingLog(id, v)))
+      await Promise.all(Object.entries(packagingEdits).map(([id, v]) => {
+        const { zip_bags_all: _zipBagsAll, ...dbPatch } = v
+        return updatePackagingLog(id, dbPatch)
+      }))
       const newLogs = await Promise.all(packagingBuffer.map(async (e) => {
         const photoUrls = e.photo_files.length > 0
           ? await Promise.all(e.photo_files.map((f) => uploadPackagingPhoto(userId || 'anon', batch.id, f)))
@@ -1891,6 +1985,7 @@ const BatchDetailModal = ({
           notes: e.notes || undefined,
           photo_urls: photoUrls,
           consumable_id: e.consumable_id,
+          catalog_consumable_id: e.catalog_consumable_id,
           zip_bags_qty: e.zip_bags_qty,
         })
       }))
@@ -1917,7 +2012,10 @@ const BatchDetailModal = ({
     try {
       if (packagingBuffer.length > 0 || Object.keys(packagingEdits).length > 0 || packagingDeletedIds.length > 0) {
         await Promise.all(packagingDeletedIds.map((id) => deletePackagingLog(id)))
-        await Promise.all(Object.entries(packagingEdits).map(([id, v]) => updatePackagingLog(id, v)))
+        await Promise.all(Object.entries(packagingEdits).map(([id, v]) => {
+          const { zip_bags_all: _zipBagsAll, ...dbPatch } = v
+          return updatePackagingLog(id, dbPatch)
+        }))
         await Promise.all(packagingBuffer.map(async (e) => {
           const photoUrls = e.photo_files.length > 0
             ? await Promise.all(e.photo_files.map((f) => uploadPackagingPhoto(userId || 'anon', batch.id, f)))
@@ -1963,18 +2061,19 @@ const BatchDetailModal = ({
         await Promise.all(markingDeletedIds.map(async (id) => {
           const log = markingLogs.find((l) => l.id === id)
           await deleteMarkingLog(id)
-          if (log) await addMarkingLogHistory({ log_id: id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [] }, new_values: {} })
+          if (log) await addMarkingLogHistory({ log_id: id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'deleted', old_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: log.photo_urls ?? [], consumable_id: log.consumable_id ?? null, labels_qty: log.labels_qty ?? null }, new_values: {} })
         }))
         await Promise.all(Object.entries(markingEdits).map(async ([id, v]) => {
           const originalLog = markingLogs.find((l) => l.id === id)
-          await updateMarkingLog(id, v)
+          const { labels_all: _labelsAll, ...dbPatch } = v
+          await updateMarkingLog(id, dbPatch)
           if (originalLog) {
             const oldVals: Record<string, unknown> = {}
             const newVals: Record<string, unknown> = {}
-            for (const k of Object.keys(v) as Array<keyof typeof v>) {
-              if (originalLog[k as keyof typeof originalLog] !== v[k]) {
+            for (const k of Object.keys(dbPatch) as Array<keyof typeof dbPatch>) {
+              if (originalLog[k as keyof typeof originalLog] !== dbPatch[k]) {
                 oldVals[k] = originalLog[k as keyof typeof originalLog]
-                newVals[k] = v[k]
+                newVals[k] = dbPatch[k]
               }
             }
             if (Object.keys(newVals).length > 0) {
@@ -2000,8 +2099,10 @@ const BatchDetailModal = ({
             photo_urls: photoUrls,
             barcode: e.barcode ?? undefined,
             item_id: e.item_id ?? undefined,
+            consumable_id: e.consumable_id ?? undefined,
+            labels_qty: e.labels_qty,
           })
-          await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls } })
+          await addMarkingLogHistory({ log_id: log.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, action: 'created', old_values: null, new_values: { performer_name: log.performer_name, tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', photo_urls: photoUrls, consumable_id: log.consumable_id ?? null, labels_qty: log.labels_qty ?? null } })
         }))
         setMarkingBuffer([])
         setMarkingEdits({})
@@ -3299,6 +3400,17 @@ const BatchDetailModal = ({
                             {markingTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                           </select>
                         </div>
+                        {/* Расходник */}
+                        {accountConsumables.length > 0 && (
+                          <div>
+                            <label className="mb-1 block text-xs font-medium text-slate-500">Расходник</label>
+                            <select value={markingConsumableId} onChange={(e) => setMarkingConsumableId(e.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                              <option value="">— не выбрано —</option>
+                              {accountConsumables.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                          </div>
+                        )}
                         {/* Годный / Брак */}
                         <div className="marking-modal-form flex gap-3">
                           <div className="flex-1">
@@ -3313,6 +3425,23 @@ const BatchDetailModal = ({
                               onKeyDown={(e) => { if (e.key === 'Enter') handleAddMarkingLog() }}
                               className="w-full rounded-xl border border-red-200 px-3 py-2 text-sm text-red-700 placeholder-red-300 focus:outline-none focus:ring-2 focus:ring-red-400" />
                           </div>
+                        </div>
+                        {/* Этикетки */}
+                        <div className="flex items-end gap-3">
+                          <div className="flex-1">
+                            <label className="mb-1 block text-xs font-medium text-slate-500">Этикетки (шт.)</label>
+                            <input type="number" min="0" placeholder="0"
+                              value={markingLabelsAll ? (Number(markingQty) > 0 ? markingQty : '0') : markingLabelsQty}
+                              onChange={(e) => { if (!markingLabelsAll) setMarkingLabelsQty(e.target.value) }}
+                              disabled={markingLabelsAll}
+                              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400" />
+                          </div>
+                          <label className="mb-2 flex shrink-0 cursor-pointer items-center gap-1.5">
+                            <input type="checkbox" checked={markingLabelsAll}
+                              onChange={(e) => setMarkingLabelsAll(e.target.checked)}
+                              className="h-5 w-5 cursor-pointer accent-blue-600" />
+                            <span className="whitespace-nowrap text-sm text-slate-600">Все товары</span>
+                          </label>
                         </div>
                         {/* Примечание */}
                         <div>
@@ -3393,11 +3522,13 @@ const BatchDetailModal = ({
                         return n !== ''
                       }).length
                       const totalPhotos = activeLogs.filter((l) => l.photo_urls && l.photo_urls.length > 0).length + markingBuffer.filter((e) => e.photo_files.length > 0).length
+                      const totalLabels = activeLogs.reduce((s, l) => s + (markingEdits[l.id]?.labels_qty ?? l.labels_qty ?? 0), 0) + markingBuffer.reduce((s, e) => s + (e.labels_qty ?? 0), 0)
                       const stats: { label: string; value: number | string; color?: string }[] = [
                         { label: 'Исполнителей', value: performers },
                         { label: 'Тарифов', value: tariffs },
                         { label: 'Годных', value: totalGood },
                         { label: 'Браков', value: totalDefect, color: totalDefect > 0 ? 'text-red-600' : undefined },
+                        { label: 'Этикеток', value: totalLabels },
                         { label: 'Итого Маркировка', value: totalGood + totalDefect },
                         { label: 'Примечаний', value: totalNotes },
                         { label: 'Фото', value: totalPhotos },
@@ -3425,7 +3556,16 @@ const BatchDetailModal = ({
                       {/* Сохранённые записи */}
                       {markingLogs.filter((l) => !markingDeletedIds.includes(l.id)).map((log) => {
                         const isEditing = markingEditingId === log.id
-                        const edit = markingEdits[log.id] ?? { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' }
+                        const edit = markingEdits[log.id] ?? {
+                          tariff: log.tariff,
+                          qty: log.qty,
+                          qty_defect: log.qty_defect,
+                          notes: log.notes ?? '',
+                          barcode: log.barcode ?? '',
+                          consumable_id: log.consumable_id ?? null,
+                          labels_qty: log.labels_qty ?? null,
+                          labels_all: (log.labels_qty ?? 0) > 0 && (log.labels_qty ?? 0) === log.qty,
+                        }
                         const logTime = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
                         const logDate = new Date(log.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
                         const isOwn = log.user_id === userId
@@ -3434,9 +3574,12 @@ const BatchDetailModal = ({
                           markingEdits[log.id].qty !== log.qty ||
                           markingEdits[log.id].qty_defect !== log.qty_defect ||
                           markingEdits[log.id].notes !== (log.notes ?? '') ||
-                          markingEdits[log.id].barcode !== (log.barcode ?? '')
+                          markingEdits[log.id].barcode !== (log.barcode ?? '') ||
+                          markingEdits[log.id].consumable_id !== (log.consumable_id ?? null) ||
+                          markingEdits[log.id].labels_qty !== (log.labels_qty ?? null)
                         )
                         const displayTariff = markingTariffsList.find((t) => t.id === edit.tariff)?.name ?? MARKING_TARIFFS.find((t) => t.id === edit.tariff)?.label ?? edit.tariff
+                        const displayConsumable = accountConsumables.find((c) => c.id === edit.consumable_id)?.name
                         return (
                           <div key={log.id} className="relative">
                             {/* Плейсхолдер — всегда занимает место в сетке */}
@@ -3457,12 +3600,23 @@ const BatchDetailModal = ({
                                             prev.qty === prevLog.qty &&
                                             prev.qty_defect === prevLog.qty_defect &&
                                             prev.notes === (prevLog.notes ?? '') &&
-                                            prev.barcode === (prevLog.barcode ?? '')
+                                            prev.barcode === (prevLog.barcode ?? '') &&
+                                            prev.consumable_id === (prevLog.consumable_id ?? null) &&
+                                            prev.labels_qty === (prevLog.labels_qty ?? null)
                                           ) {
                                             setMarkingEdits((p) => { const n = { ...p }; delete n[markingEditingId]; return n })
                                           }
                                         }
-                                        setMarkingEdits((p) => ({ ...p, [log.id]: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '', barcode: log.barcode ?? '' } }))
+                                        setMarkingEdits((p) => ({ ...p, [log.id]: {
+                                          tariff: log.tariff,
+                                          qty: log.qty,
+                                          qty_defect: log.qty_defect,
+                                          notes: log.notes ?? '',
+                                          barcode: log.barcode ?? '',
+                                          consumable_id: log.consumable_id ?? null,
+                                          labels_qty: log.labels_qty ?? null,
+                                          labels_all: (log.labels_qty ?? 0) > 0 && (log.labels_qty ?? 0) === log.qty,
+                                        } }))
                                         setMarkingEditingId(log.id)
                                       }}
                                       className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
@@ -3480,9 +3634,11 @@ const BatchDetailModal = ({
                                 <span className="truncate font-mono text-[10px] text-slate-400" title={log.barcode}>{log.barcode}</span>
                               )}
                               <span className="w-fit rounded-full bg-slate-100 px-2 py-0.5 text-[10px] leading-tight text-slate-600">{displayTariff}</span>
+                              {displayConsumable && <span className="w-fit rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] leading-tight text-emerald-700">{displayConsumable}</span>}
                               <div className="flex items-center gap-2">
                                 <span className="text-[10px] text-slate-400">Год: <span className="font-bold text-slate-800">{edit.qty}</span></span>
                                 <span className="text-[10px] text-slate-400">Бр: {edit.qty_defect > 0 ? <span className="font-bold text-red-600">{edit.qty_defect}</span> : <span className="text-slate-300">—</span>}</span>
+                                <span className="text-[10px] text-slate-400">Эт: {edit.labels_qty && edit.labels_qty > 0 ? <span className="font-bold text-emerald-700">{edit.labels_qty}</span> : <span className="text-slate-300">—</span>}</span>
                               </div>
                               {edit.notes && <span className="truncate text-[10px] italic text-slate-400" title={edit.notes}>{edit.notes}</span>}
                               <InvoicePhotoCell
@@ -3529,11 +3685,21 @@ const BatchDetailModal = ({
                                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
                                   {markingTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                                 </select>
+                                {accountConsumables.length > 0 && (
+                                  <select value={edit.consumable_id ?? ''} onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, consumable_id: e.target.value || null } }))}
+                                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                    <option value="">Расходник: не выбрано</option>
+                                    {accountConsumables.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                  </select>
+                                )}
                                 <div className="mt-1.5 flex items-center gap-3">
                                   <label className="flex items-center gap-1.5 text-xs text-slate-500">
                                     Годный
                                     <input type="number" min={0} value={edit.qty}
-                                      onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, qty: Number(e.target.value) } }))}
+                                      onChange={(e) => {
+                                        const nextQty = Number(e.target.value)
+                                        setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, qty: nextQty, labels_qty: edit.labels_all ? (nextQty > 0 ? nextQty : null) : edit.labels_qty } }))
+                                      }}
                                       className="w-20 rounded-lg border border-slate-200 px-2 py-1.5 text-center text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-400" />
                                   </label>
                                   <label className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -3541,6 +3707,33 @@ const BatchDetailModal = ({
                                     <input type="number" min={0} value={edit.qty_defect}
                                       onChange={(e) => setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, qty_defect: Number(e.target.value) } }))}
                                       className="w-20 rounded-lg border border-red-200 px-2 py-1.5 text-center text-sm font-medium text-red-600 focus:outline-none focus:ring-2 focus:ring-red-300" />
+                                  </label>
+                                </div>
+                                <div className="mt-1.5 flex items-end gap-2">
+                                  <div className="flex-1">
+                                    <label className="mb-0.5 block text-[10px] text-slate-500">Этикетки (шт.)</label>
+                                    <input type="number" min={0}
+                                      value={edit.labels_all ? (edit.qty > 0 ? edit.qty : 0) : (edit.labels_qty ?? '')}
+                                      onChange={(e) => {
+                                        if (edit.labels_all) return
+                                        const raw = Number(e.target.value)
+                                        setMarkingEdits((p) => ({ ...p, [log.id]: { ...edit, labels_qty: raw > 0 ? raw : null } }))
+                                      }}
+                                      disabled={edit.labels_all}
+                                      className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />
+                                  </div>
+                                  <label className="mb-1 flex shrink-0 cursor-pointer items-center gap-1 text-[10px] text-slate-500">
+                                    <input type="checkbox" checked={edit.labels_all}
+                                      onChange={(e) => setMarkingEdits((p) => ({
+                                        ...p,
+                                        [log.id]: {
+                                          ...edit,
+                                          labels_all: e.target.checked,
+                                          labels_qty: e.target.checked ? (edit.qty > 0 ? edit.qty : null) : edit.labels_qty,
+                                        },
+                                      }))}
+                                      className="h-3.5 w-3.5 cursor-pointer accent-blue-600" />
+                                    Все товары
                                   </label>
                                 </div>
                                 <input type="text" value={edit.notes}
@@ -3565,6 +3758,7 @@ const BatchDetailModal = ({
                       {markingBuffer.map((entry) => {
                         const isEditing = markingEditingId === entry.tempId
                         const tariffLabel = markingTariffsList.find((t) => t.id === entry.tariff)?.name ?? MARKING_TARIFFS.find((t) => t.id === entry.tariff)?.label ?? entry.tariff
+                        const entryConsumable = accountConsumables.find((c) => c.id === entry.consumable_id)?.name
                         return (
                           <div key={entry.tempId} className="relative">
                             {/* Плейсхолдер */}
@@ -3585,9 +3779,11 @@ const BatchDetailModal = ({
                               <span className="truncate text-xs font-semibold text-slate-700 leading-tight">{entry.performer_name}</span>
                               {entry.barcode && <span className="truncate font-mono text-[10px] text-slate-400">{entry.barcode}</span>}
                               <span className="w-fit rounded-full bg-amber-100 px-2 py-0.5 text-[10px] leading-tight text-amber-700">{tariffLabel}</span>
+                              {entryConsumable && <span className="w-fit rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] leading-tight text-emerald-700">{entryConsumable}</span>}
                               <div className="flex items-center gap-2">
                                 <span className="text-[10px] text-slate-400">Год: <span className="font-bold text-slate-800">{entry.qty}</span></span>
                                 <span className="text-[10px] text-slate-400">Бр: {entry.qty_defect > 0 ? <span className="font-bold text-red-600">{entry.qty_defect}</span> : <span className="text-slate-300">—</span>}</span>
+                                <span className="text-[10px] text-slate-400">Эт: {entry.labels_qty && entry.labels_qty > 0 ? <span className="font-bold text-emerald-700">{entry.labels_qty}</span> : <span className="text-slate-300">—</span>}</span>
                               </div>
                               {entry.notes && <span className="truncate text-[10px] italic text-slate-400">{entry.notes}</span>}
                               {entry.photo_files.length > 0 && <InvoicePhotoCell photoUrls={entry.photo_files.map((f) => URL.createObjectURL(f))} />}
@@ -3620,11 +3816,22 @@ const BatchDetailModal = ({
                                   className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
                                   {markingTariffsList.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                                 </select>
+                                {accountConsumables.length > 0 && (
+                                  <select value={entry.consumable_id ?? ''} onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, consumable_id: e.target.value || null } : x))}
+                                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                    <option value="">Расходник: не выбрано</option>
+                                    {accountConsumables.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                  </select>
+                                )}
                                 <div className="mt-1.5 flex items-center gap-3">
                                   <label className="flex items-center gap-1.5 text-xs text-slate-500">
                                     Годный
                                     <input type="number" min={0} value={entry.qty}
-                                      onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty: Number(e.target.value) } : x))}
+                                      onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? {
+                                        ...x,
+                                        qty: Number(e.target.value),
+                                        labels_qty: x.labels_all ? (Number(e.target.value) > 0 ? Number(e.target.value) : null) : x.labels_qty,
+                                      } : x))}
                                       className="w-20 rounded-lg border border-slate-200 px-2 py-1.5 text-center text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-400" />
                                   </label>
                                   <label className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -3632,6 +3839,30 @@ const BatchDetailModal = ({
                                     <input type="number" min={0} value={entry.qty_defect}
                                       onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? { ...x, qty_defect: Number(e.target.value) } : x))}
                                       className="w-20 rounded-lg border border-red-200 px-2 py-1.5 text-center text-sm font-medium text-red-600 focus:outline-none focus:ring-2 focus:ring-red-300" />
+                                  </label>
+                                </div>
+                                <div className="mt-1.5 flex items-end gap-2">
+                                  <div className="flex-1">
+                                    <label className="mb-0.5 block text-[10px] text-slate-500">Этикетки (шт.)</label>
+                                    <input type="number" min={0}
+                                      value={entry.labels_all ? (entry.qty > 0 ? entry.qty : 0) : (entry.labels_qty ?? '')}
+                                      onChange={(e) => setMarkingBuffer((p) => p.map((x) => {
+                                        if (x.tempId !== entry.tempId || x.labels_all) return x
+                                        const raw = Number(e.target.value)
+                                        return { ...x, labels_qty: raw > 0 ? raw : null }
+                                      }))}
+                                      disabled={entry.labels_all}
+                                      className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50 disabled:text-slate-400" />
+                                  </div>
+                                  <label className="mb-1 flex shrink-0 cursor-pointer items-center gap-1 text-[10px] text-slate-500">
+                                    <input type="checkbox" checked={entry.labels_all}
+                                      onChange={(e) => setMarkingBuffer((p) => p.map((x) => x.tempId === entry.tempId ? {
+                                        ...x,
+                                        labels_all: e.target.checked,
+                                        labels_qty: e.target.checked ? (x.qty > 0 ? x.qty : null) : x.labels_qty,
+                                      } : x))}
+                                      className="h-3.5 w-3.5 cursor-pointer accent-blue-600" />
+                                    Все товары
                                   </label>
                                 </div>
                                 <input type="text" value={entry.notes}
@@ -3872,6 +4103,19 @@ const BatchDetailModal = ({
                           <span className="whitespace-nowrap text-sm text-slate-600">Все товары</span>
                         </label>
                       </div>
+                      {/* ZIP-пакет из каталога расходников */}
+                      {zipCatalogItems.length > 0 && (
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-500">ZIP-пакет</label>
+                          <select value={packagingWorkCatalogConsumableId} onChange={(e) => setPackagingWorkCatalogConsumableId(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">— не выбрано —</option>
+                            {zipCatalogItems.map((c) => (
+                              <option key={c.id} value={c.id}>{c.size}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                       {/* Примечание */}
                       <div>
                         <label className="mb-1 block text-xs font-medium text-slate-500">Примечание</label>
@@ -3978,7 +4222,14 @@ const BatchDetailModal = ({
                   <div className="grid grid-cols-6 gap-2">
                     {packagingLogs.filter((l) => !packagingDeletedIds.includes(l.id)).map((log) => {
                       const isEditing = packagingEditingId === log.id
-                      const edit = packagingEdits[log.id] ?? { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' }
+                      const edit = packagingEdits[log.id] ?? {
+                        tariff: log.tariff,
+                        qty: log.qty,
+                        qty_defect: log.qty_defect,
+                        notes: log.notes ?? '',
+                        zip_bags_qty: log.zip_bags_qty ?? null,
+                        zip_bags_all: (log.zip_bags_qty ?? 0) > 0 && (log.zip_bags_qty ?? 0) === log.qty,
+                      }
                       const logTime = new Date(log.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
                       const logDate = new Date(log.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
                       const isOwn = log.user_id === userId
@@ -3986,7 +4237,9 @@ const BatchDetailModal = ({
                         packagingEdits[log.id].tariff !== log.tariff ||
                         packagingEdits[log.id].qty !== log.qty ||
                         packagingEdits[log.id].qty_defect !== log.qty_defect ||
-                        packagingEdits[log.id].notes !== (log.notes ?? '')
+                        packagingEdits[log.id].notes !== (log.notes ?? '') ||
+                        (packagingEdits[log.id].zip_bags_qty ?? 0) !== (log.zip_bags_qty ?? 0) ||
+                        (packagingEdits[log.id].catalog_consumable_id ?? null) !== (log.catalog_consumable_id ?? null)
                       )
                       const displayTariff = packagingTariffsList.find((t) => t.id === edit.tariff)?.name ?? edit.tariff
                       return (
@@ -4004,11 +4257,22 @@ const BatchDetailModal = ({
                                     if (packagingEditingId && packagingEditingId !== log.id) {
                                       const prev = packagingEdits[packagingEditingId]
                                       const prevLog = packagingLogs.find((l) => l.id === packagingEditingId)
-                                      if (prev && prevLog && prev.tariff === prevLog.tariff && prev.qty === prevLog.qty && prev.qty_defect === prevLog.qty_defect && prev.notes === (prevLog.notes ?? '')) {
+                                      if (prev && prevLog && prev.tariff === prevLog.tariff && prev.qty === prevLog.qty && prev.qty_defect === prevLog.qty_defect && prev.notes === (prevLog.notes ?? '') && (prev.zip_bags_qty ?? 0) === (prevLog.zip_bags_qty ?? 0)) {
                                         setPackagingEdits((p) => { const n = { ...p }; delete n[packagingEditingId]; return n })
                                       }
                                     }
-                                    setPackagingEdits((p) => ({ ...p, [log.id]: { tariff: log.tariff, qty: log.qty, qty_defect: log.qty_defect, notes: log.notes ?? '' } }))
+                                    setPackagingEdits((p) => ({
+                                      ...p,
+                                      [log.id]: {
+                                        tariff: log.tariff,
+                                        qty: log.qty,
+                                        qty_defect: log.qty_defect,
+                                        notes: log.notes ?? '',
+                                        zip_bags_qty: log.zip_bags_qty ?? null,
+                                        zip_bags_all: (log.zip_bags_qty ?? 0) > 0 && (log.zip_bags_qty ?? 0) === log.qty,
+                                        catalog_consumable_id: log.catalog_consumable_id ?? null,
+                                      },
+                                    }))
                                     setPackagingEditingId(log.id)
                                   }}
                                     className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-300 hover:bg-blue-50 hover:text-blue-500" title="Редактировать">
@@ -4032,8 +4296,8 @@ const BatchDetailModal = ({
                               <span className="text-[10px] text-slate-400">Упак: <span className="font-bold text-slate-800">{edit.qty}</span></span>
                               {edit.qty_defect > 0 && <span className="text-[10px] text-slate-400">Бр: <span className="font-bold text-red-600">{edit.qty_defect}</span></span>}
                             </div>
-                            {(log.zip_bags_qty ?? 0) > 0 && (
-                              <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">Зип: {log.zip_bags_qty} шт.</span>
+                            {(edit.zip_bags_qty ?? 0) > 0 && (
+                              <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">Зип: {edit.zip_bags_qty} шт.</span>
                             )}
                             {log.consumable_id && (() => { const c = accountConsumables.find((x) => x.id === log.consumable_id); return c ? <span className="w-fit rounded-full bg-teal-50 px-2 py-0.5 text-[10px] leading-tight text-teal-700">{c.name}</span> : null })()}
                             {edit.notes && <span className="truncate text-[10px] italic text-slate-400">{edit.notes}</span>}
@@ -4068,7 +4332,17 @@ const BatchDetailModal = ({
                                 <div className="flex-1">
                                   <div className="mb-0.5 text-[9px] font-medium text-slate-400">Упак</div>
                                   <input type="number" min="0" autoFocus value={edit.qty}
-                                    onChange={(e) => setPackagingEdits((p) => ({ ...p, [log.id]: { ...edit, qty: Number(e.target.value) || 0 } }))}
+                                    onChange={(e) => {
+                                      const qty = Number(e.target.value) || 0
+                                      setPackagingEdits((p) => ({
+                                        ...p,
+                                        [log.id]: {
+                                          ...edit,
+                                          qty,
+                                          zip_bags_qty: edit.zip_bags_all ? qty : edit.zip_bags_qty,
+                                        },
+                                      }))
+                                    }}
                                     className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-1 focus:ring-blue-400" />
                                 </div>
                                 <div className="flex-1">
@@ -4081,6 +4355,56 @@ const BatchDetailModal = ({
                               <input type="text" placeholder="Примечание" value={edit.notes}
                                 onChange={(e) => setPackagingEdits((p) => ({ ...p, [log.id]: { ...edit, notes: e.target.value } }))}
                                 className="mt-1.5 w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                              <div className="mt-1.5 flex items-end gap-1.5">
+                                <div className="flex-1">
+                                  <div className="mb-0.5 text-[9px] font-medium text-slate-400">Зип-пакеты (шт.)</div>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={edit.zip_bags_all ? String(edit.qty) : String(edit.zip_bags_qty ?? '')}
+                                    onChange={(e) => {
+                                      if (edit.zip_bags_all) return
+                                      const next = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0)
+                                      setPackagingEdits((p) => ({ ...p, [log.id]: { ...edit, zip_bags_qty: next } }))
+                                    }}
+                                    disabled={edit.zip_bags_all}
+                                    className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50 disabled:text-slate-400"
+                                  />
+                                </div>
+                                <label className="mb-0.5 flex shrink-0 cursor-pointer items-center gap-1 text-[10px] text-slate-600">
+                                  <input
+                                    type="checkbox"
+                                    checked={edit.zip_bags_all}
+                                    onChange={(e) => {
+                                      const all = e.target.checked
+                                      setPackagingEdits((p) => ({
+                                        ...p,
+                                        [log.id]: {
+                                          ...edit,
+                                          zip_bags_all: all,
+                                          zip_bags_qty: all ? Math.max(0, Number(edit.qty) || 0) : (edit.zip_bags_qty ?? null),
+                                        },
+                                      }))
+                                    }}
+                                    className="h-3.5 w-3.5 cursor-pointer accent-blue-600"
+                                  />
+                                  Все товары
+                                </label>
+                              </div>
+                              {zipCatalogItems.length > 0 && (
+                                <div className="mt-1.5">
+                                  <div className="mb-0.5 text-[9px] font-medium text-slate-400">ZIP-пакет</div>
+                                  <select
+                                    value={edit.catalog_consumable_id ?? ''}
+                                    onChange={(e) => setPackagingEdits((p) => ({ ...p, [log.id]: { ...edit, catalog_consumable_id: e.target.value || null } }))}
+                                    className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                    <option value="">— не выбрано —</option>
+                                    {zipCatalogItems.map((c) => (
+                                      <option key={c.id} value={c.id}>{c.size}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -4133,9 +4457,6 @@ const BatchDetailModal = ({
                         const totalBoxes = supplies.reduce((s, sup) => s + sup.boxes.length, 0)
                         setBoxesQtyMode('all')
                         setBoxesQtyInput(String(totalBoxes))
-                        if (canManage) {
-                          void updateBatch(batch.id, { boxes_qty: totalBoxes }).then(onBatchUpdated)
-                        }
                       }}
                       className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${boxesQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
@@ -4143,7 +4464,7 @@ const BatchDetailModal = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setBoxesQtyMode('custom'); setBoxesQtyInput('0') }}
+                      onClick={() => setBoxesQtyMode('custom')}
                       className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${boxesQtyMode === 'custom' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                       Указать вручную
@@ -4156,24 +4477,30 @@ const BatchDetailModal = ({
                     onChange={(e) => setBoxesQtyInput(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && boxesQtyMode === 'custom') {
-                        const qty = Math.max(0, parseInt(boxesQtyInput, 10) || 0)
-                        if (!canManage) return
-                        setIsSavingBoxesQty(true)
-                        void updateBatch(batch.id, { boxes_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingBoxesQty(false))
+                        void handleSaveBoxesQty()
                       }
                     }}
                     disabled={boxesQtyMode === 'all' || !canManage}
                     placeholder="0"
                     className="w-24 rounded-xl border border-slate-200 px-3 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                   />
+                  {boxCatalogItems.length > 0 && (
+                    <select
+                      value={boxCatalogConsumableId}
+                      onChange={(e) => setBoxCatalogConsumableId(e.target.value)}
+                      disabled={!canManage}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <option value="">— Тип короба —</option>
+                      {boxCatalogItems.map((c) => (
+                        <option key={c.id} value={c.id}>{c.size}</option>
+                      ))}
+                    </select>
+                  )}
                   <button
                     type="button"
-                    disabled={isSavingBoxesQty || !canManage || boxesQtyMode === 'all'}
-                    onClick={() => {
-                      const qty = Math.max(0, parseInt(boxesQtyInput, 10) || 0)
-                      setIsSavingBoxesQty(true)
-                      void updateBatch(batch.id, { boxes_qty: qty }).then(onBatchUpdated).finally(() => setIsSavingBoxesQty(false))
-                    }}
+                    disabled={isSavingBoxesQty || !canManage}
+                    onClick={() => { void handleSaveBoxesQty() }}
                     className="shrink-0 rounded-xl bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                   >
                     {isSavingBoxesQty ? '...' : 'Сохранить'}
@@ -5888,7 +6215,23 @@ const BatchDetailModal = ({
                         if (markingEditScanTarget) {
                           if (markingEditScanTarget.type === 'log') {
                             const id = markingEditScanTarget.id
-                            setMarkingEdits((p) => ({ ...p, [id]: { ...p[id], barcode: raw ?? '' } }))
+                            setMarkingEdits((p) => {
+                              if (p[id]) return { ...p, [id]: { ...p[id], barcode: raw ?? '' } }
+                              const source = markingLogs.find((l) => l.id === id)
+                              return {
+                                ...p,
+                                [id]: {
+                                  tariff: source?.tariff ?? markingTariff,
+                                  qty: source?.qty ?? 0,
+                                  qty_defect: source?.qty_defect ?? 0,
+                                  notes: source?.notes ?? '',
+                                  barcode: raw ?? '',
+                                  consumable_id: source?.consumable_id ?? null,
+                                  labels_qty: source?.labels_qty ?? null,
+                                  labels_all: (source?.labels_qty ?? 0) > 0 && (source?.labels_qty ?? 0) === (source?.qty ?? 0),
+                                },
+                              }
+                            })
                           } else {
                             const tid = markingEditScanTarget.tempId
                             setMarkingBuffer((p) => p.map((x) => x.tempId === tid ? { ...x, barcode: raw } : x))

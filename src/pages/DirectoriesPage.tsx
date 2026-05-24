@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Carrier, Consumable, FulfillmentWorkTariff, Warehouse } from '../types'
+import type { Carrier, Consumable, ConsumableCatalogItem, FulfillmentWorkTariff, Warehouse } from '../types'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
@@ -16,14 +16,36 @@ import {
   fetchAccountCurrencies,
   addAccountCurrency,
   deleteAccountCurrency,
+  setPrimaryCurrency,
+  updateCurrencyRate,
   fetchStageCurrencies,
   upsertStageCurrency,
   fetchConsumables,
   addConsumable,
   updateConsumable,
   deleteConsumable,
+  fetchConsumableCatalog,
+  addConsumableCatalogItem,
+  updateConsumableCatalogItem,
+  deleteConsumableCatalogItem,
 } from '../services/directoriesService'
 import type { CarrierUpdateData } from '../services/directoriesService'
+
+const CONSUMABLE_KIND_OPTIONS = [
+  { id: 'box', label: 'Короб' },
+  { id: 'zip', label: 'ZIP-пакет' },
+  { id: 'thermo', label: 'Термо этикетка' },
+] as const
+
+const CONSUMABLE_SIZE_OPTIONS: Record<string, string[]> = {
+  box: ['60x40x40', '60x40x30', '50x40x40', '40x30x30', '40x30x20'],
+  zip: ['40x35', '40x30', '35x30', '30x25', '25x20', '20x15'],
+}
+
+const CONSUMABLE_KIND_LABELS: Record<string, string> = {
+  box: 'Короб',
+  zip: 'ZIP-пакет',
+}
 
 interface DirectoryPanelProps {
   title: string
@@ -890,6 +912,8 @@ const ALL_CURRENCIES = [
   { code: 'USD', label: 'Доллар США',            symbol: '$' },
 ] as const
 
+const AUTO_FETCH_LS_KEY = (accountId: string) => `currency_auto_fetch_${accountId}`
+
 const CurrenciesPanel = ({
   accountId,
   canManage,
@@ -899,19 +923,86 @@ const CurrenciesPanel = ({
 }) => {
   const [enabled, setEnabled] = useState<Set<string>>(new Set())
   const [idMap, setIdMap] = useState<Record<string, string>>({})
+  const [primaryCode, setPrimaryCode] = useState<string | null>(null)
+  const [rateMap, setRateMap] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [toggling, setToggling] = useState<string | null>(null)
+  const [settingPrimary, setSettingPrimary] = useState<string | null>(null)
+  const [editingRate, setEditingRate] = useState<string | null>(null)
+  const [rateInput, setRateInput] = useState('')
+  const [savingRate, setSavingRate] = useState<string | null>(null)
+  const [autoFetch, setAutoFetch] = useState(false)
+  const [fetchingRates, setFetchingRates] = useState(false)
+  const [ratesUpdatedAt, setRatesUpdatedAt] = useState<Date | null>(null)
+
+  const fetchRatesFromAPI = async (
+    primary: string,
+    enabledSet: Set<string>,
+    ids: Record<string, string>,
+  ) => {
+    if (!primary) return
+    setFetchingRates(true)
+    try {
+      const resp = await fetch(`https://open.er-api.com/v6/latest/${primary}`)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const data = (await resp.json()) as { result: string; rates: Record<string, number> }
+      if (data.result !== 'success') throw new Error('API error')
+      const newRates: Record<string, number> = {}
+      const saves: Promise<void>[] = []
+      for (const code of enabledSet) {
+        if (code === primary) continue
+        const apiRate = data.rates[code]
+        if (apiRate && apiRate > 0) {
+          newRates[code] = apiRate
+          const id = ids[code]
+          if (id) saves.push(updateCurrencyRate(id, apiRate))
+        }
+      }
+      await Promise.all(saves)
+      setRateMap((prev) => ({ ...prev, ...newRates }))
+      setRatesUpdatedAt(new Date())
+    } catch (e) {
+      console.error('Rate fetch failed:', e)
+    } finally {
+      setFetchingRates(false)
+    }
+  }
 
   useEffect(() => {
     setLoading(true)
     fetchAccountCurrencies(accountId)
-      .then((list) => {
-        setEnabled(new Set(list.map((c) => c.code)))
-        setIdMap(Object.fromEntries(list.map((c) => [c.code, c.id])))
+      .then(async (list) => {
+        const enabledSet = new Set(list.map((c) => c.code))
+        const ids = Object.fromEntries(list.map((c) => [c.code, c.id]))
+        const primary = list.find((c) => c.is_primary)
+        const primaryC = primary?.code ?? null
+        setEnabled(enabledSet)
+        setIdMap(ids)
+        setPrimaryCode(primaryC)
+        setRateMap(Object.fromEntries(list.map((c) => [c.code, c.exchange_rate ?? 1])))
+        const isAuto = localStorage.getItem(AUTO_FETCH_LS_KEY(accountId)) === '1'
+        setAutoFetch(isAuto)
+        if (isAuto && primaryC) {
+          void fetchRatesFromAPI(primaryC, enabledSet, ids)
+        }
       })
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [accountId])
+
+  const toggleAutoFetch = async () => {
+    if (!canManage || fetchingRates) return
+    const next = !autoFetch
+    setAutoFetch(next)
+    if (next) {
+      localStorage.setItem(AUTO_FETCH_LS_KEY(accountId), '1')
+      if (primaryCode) {
+        void fetchRatesFromAPI(primaryCode, enabled, idMap)
+      }
+    } else {
+      localStorage.removeItem(AUTO_FETCH_LS_KEY(accountId))
+    }
+  }
 
   const toggle = async (code: string) => {
     if (!canManage || toggling) return
@@ -923,11 +1014,13 @@ const CurrenciesPanel = ({
           await deleteAccountCurrency(id)
           setEnabled((prev) => { const next = new Set(prev); next.delete(code); return next })
           setIdMap((prev) => { const next = { ...prev }; delete next[code]; return next })
+          if (primaryCode === code) setPrimaryCode(null)
         }
       } else {
         const row = await addAccountCurrency(accountId, code)
         setEnabled((prev) => new Set([...prev, code]))
         setIdMap((prev) => ({ ...prev, [code]: row.id }))
+        setRateMap((prev) => ({ ...prev, [code]: 1 }))
       }
     } catch (e) {
       console.error(e)
@@ -936,11 +1029,95 @@ const CurrenciesPanel = ({
     }
   }
 
+  const handleSetPrimary = async (code: string) => {
+    if (!canManage || settingPrimary) return
+    const id = idMap[code]
+    if (!id) return
+    setSettingPrimary(code)
+    try {
+      await setPrimaryCurrency(accountId, id)
+      setPrimaryCode(code)
+      if (autoFetch) {
+        void fetchRatesFromAPI(code, enabled, idMap)
+      }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setSettingPrimary(null)
+    }
+  }
+
+  const startEditRate = (code: string) => {
+    if (!canManage || primaryCode === code || autoFetch) return
+    setEditingRate(code)
+    setRateInput(String(rateMap[code] ?? 1))
+  }
+
+  const saveRate = async (code: string) => {
+    const id = idMap[code]
+    if (!id) { setEditingRate(null); return }
+    const rate = parseFloat(rateInput)
+    if (isNaN(rate) || rate <= 0) { setEditingRate(null); return }
+    setSavingRate(code)
+    try {
+      await updateCurrencyRate(id, rate)
+      setRateMap((prev) => ({ ...prev, [code]: rate }))
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setSavingRate(null)
+      setEditingRate(null)
+    }
+  }
+
+  const updatedLabel = ratesUpdatedAt
+    ? `Обновлено в ${ratesUpdatedAt.getHours().toString().padStart(2, '0')}:${ratesUpdatedAt.getMinutes().toString().padStart(2, '0')}`
+    : null
+
   return (
     <Card className="overflow-hidden rounded-3xl">
-      <div className="border-b border-slate-100 px-4 py-3">
-        <span className="text-sm font-semibold text-slate-900">Валюты</span>
-        <p className="mt-0.5 text-xs text-slate-400">Включённые валюты будут доступны при выборе в тарифах работ</p>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3">
+        <p className="text-xs text-slate-400">Включённые валюты будут доступны при выборе в тарифах работ</p>
+        {canManage && (
+          <button
+            type="button"
+            onClick={() => void toggleAutoFetch()}
+            disabled={fetchingRates}
+            title={autoFetch ? 'Авто-обновление курса включено (open.er-api.com)' : 'Включить авто-обновление курса с open.er-api.com'}
+            className={`flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
+              autoFetch
+                ? 'border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100'
+                : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+            }`}
+          >
+            {fetchingRates ? (
+              <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.25"/>
+                <path d="M21 12a9 9 0 00-9-9" strokeLinecap="round"/>
+              </svg>
+            ) : (
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                <path d="M3 3v5h5"/>
+              </svg>
+            )}
+            {fetchingRates ? 'Обновляется…' : autoFetch ? 'Авто-курс вкл' : 'Авто-курс'}
+            {autoFetch && !fetchingRates && updatedLabel && (
+              <span className="text-blue-400">· {updatedLabel}</span>
+            )}
+          </button>
+        )}
+      </div>
+      {/* Column headers */}
+      <div className="grid grid-cols-[40px_1fr_120px_140px] items-center gap-2 border-b border-slate-100 px-4 py-2">
+        <div />
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Валюта</div>
+        <div className="text-center text-[11px] font-semibold uppercase tracking-wide text-slate-400">Основная</div>
+        <div className="text-center text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Курс к основной
+          {autoFetch && <span className="ml-1 font-normal normal-case text-blue-400">· авто</span>}
+        </div>
       </div>
       {loading ? (
         <div className="flex items-center justify-center py-8 text-sm text-slate-400">Загрузка…</div>
@@ -949,11 +1126,15 @@ const CurrenciesPanel = ({
           {ALL_CURRENCIES.map((cur) => {
             const isOn = enabled.has(cur.code)
             const isToggling = toggling === cur.code
+            const isPrimary = primaryCode === cur.code
+            const isSettingPrimary = settingPrimary === cur.code
+            const rate = rateMap[cur.code] ?? 1
+            const isEditingRate = editingRate === cur.code
+            const isSavingThisRate = savingRate === cur.code
+            const rateReadOnly = autoFetch || !canManage
             return (
-              <div
-                key={cur.code}
-                className="flex items-center gap-4 px-4 py-3"
-              >
+              <div key={cur.code} className={`grid grid-cols-[40px_1fr_120px_140px] items-center gap-2 px-4 py-2.5 ${!isOn ? 'opacity-50' : ''}`}>
+                {/* Toggle */}
                 <button
                   type="button"
                   role="switch"
@@ -966,13 +1147,75 @@ const CurrenciesPanel = ({
                 >
                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${isOn ? 'translate-x-4' : 'translate-x-0'}`} />
                 </button>
-                <span className="w-10 rounded-lg bg-slate-100 px-2 py-0.5 text-center text-xs font-semibold text-slate-700">{cur.code}</span>
-                <span className="flex-1 text-sm text-slate-700">{cur.label}</span>
-                <span className="text-xs text-slate-400">{cur.symbol}</span>
-                {isToggling && <span className="text-xs text-slate-400">…</span>}
+                {/* Code + Name */}
+                <div className="flex items-center gap-2.5">
+                  <span className="w-10 rounded-lg bg-slate-100 px-2 py-0.5 text-center text-xs font-semibold text-slate-700">{cur.code}</span>
+                  <span className="text-sm text-slate-700">{cur.label}</span>
+                  <span className="text-xs text-slate-400">{cur.symbol}</span>
+                  {isToggling && <span className="text-xs text-slate-400">…</span>}
+                </div>
+                {/* Primary star */}
+                <div className="flex items-center justify-center">
+                  {isOn ? (
+                    <button
+                      type="button"
+                      disabled={!canManage || Boolean(settingPrimary)}
+                      onClick={() => void handleSetPrimary(cur.code)}
+                      title={isPrimary ? 'Основная валюта' : 'Сделать основной'}
+                      className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {isSettingPrimary ? (
+                        <span className="text-xs text-slate-400">…</span>
+                      ) : isPrimary ? (
+                        <svg viewBox="0 0 24 24" className="h-5 w-5 text-amber-500" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                      ) : (
+                        <svg viewBox="0 0 24 24" className="h-5 w-5 text-slate-300 hover:text-amber-400" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                      )}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-300">—</span>
+                  )}
+                </div>
+                {/* Exchange rate */}
+                <div className="flex items-center justify-center">
+                  {isOn ? (
+                    isPrimary ? (
+                      <span className="w-24 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1 text-center text-sm font-medium text-slate-400 select-none">1</span>
+                    ) : rateReadOnly ? (
+                      <span className={`w-24 rounded-lg border border-slate-200 px-3 py-1 text-center text-sm font-medium ${autoFetch ? 'border-blue-100 bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-500'}`}>
+                        {fetchingRates ? '…' : rate}
+                      </span>
+                    ) : isEditingRate ? (
+                      <input
+                        type="number" min="0.0001" step="any"
+                        value={rateInput}
+                        autoFocus
+                        onChange={(e) => setRateInput(e.target.value)}
+                        onBlur={() => void saveRate(cur.code)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') void saveRate(cur.code); if (e.key === 'Escape') setEditingRate(null) }}
+                        className="w-24 rounded-lg border border-blue-300 px-3 py-1 text-center text-sm outline-none focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => startEditRate(cur.code)}
+                        className="w-24 rounded-lg border border-slate-200 bg-white px-3 py-1 text-center text-sm font-medium text-slate-700 hover:border-blue-300 hover:bg-blue-50"
+                      >
+                        {isSavingThisRate ? '…' : rate}
+                      </button>
+                    )
+                  ) : (
+                    <span className="text-xs text-slate-300">—</span>
+                  )}
+                </div>
               </div>
             )
           })}
+        </div>
+      )}
+      {primaryCode === null && enabled.size > 0 && (
+        <div className="border-t border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-600">
+          Выберите основную валюту — нажмите ★ напротив нужной
         </div>
       )}
     </Card>
@@ -988,358 +1231,512 @@ const ConsumablesPanel = ({
   accountId: string
   canManage: boolean
 }) => {
-  const [items, setItems] = useState<Consumable[]>([])
+  const [catalogItems, setCatalogItems] = useState<ConsumableCatalogItem[]>([])
   const [loading, setLoading] = useState(true)
   const [enabledCurrencies, setEnabledCurrencies] = useState<string[]>([])
-  // add
-  const [addName, setAddName] = useState('')
-  const [addPrice, setAddPrice] = useState('')
-  const [addCost, setAddCost] = useState('')
-  const [addCurrency, setAddCurrency] = useState('RUB')
-  const [isAdding, setIsAdding] = useState(false)
-  // edit
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
-  const [editPrice, setEditPrice] = useState('')
-  const [editCost, setEditCost] = useState('')
-  const [editCurrency, setEditCurrency] = useState('RUB')
-  const [focusField, setFocusField] = useState<'name' | 'price' | 'cost'>('name')
-  // section currency
-  const [defaultCurrency, setDefaultCurrency] = useState('')
-  const [isApplyingToAll, setIsApplyingToAll] = useState(false)
-  // delete
-  const [deleteTarget, setDeleteTarget] = useState<Consumable | null>(null)
-  const [isDeleting, setIsDeleting] = useState(false)
+  const [activeCatalogKind, setActiveCatalogKind] = useState(
+    () => localStorage.getItem('catalog_active_kind') ?? 'Короб'
+  )
+  const [addSizeInput, setAddSizeInput] = useState('')
+  const [isAddingSize, setIsAddingSize] = useState(false)
+  const [addCatalogPrice, setAddCatalogPrice] = useState('')
+  const [addCatalogCost, setAddCatalogCost] = useState('')
+  const [editingCatalogId, setEditingCatalogId] = useState<string | null>(null)
+  const [editCatalogParam, setEditCatalogParam] = useState('')
+  const [editCatalogPrice, setEditCatalogPrice] = useState('')
+  const [editCatalogCost, setEditCatalogCost] = useState('')
+  const [focusCatalogField, setFocusCatalogField] = useState<'price' | 'cost'>('price')
+  const [addingNewKind, setAddingNewKind] = useState(false)
+  const [newKindName, setNewKindName] = useState('')
+  const [isAddingNewKind, setIsAddingNewKind] = useState(false)
+  // catalog section currency
+  const [defaultCatalogCurrency, setDefaultCatalogCurrency] = useState(
+    () => localStorage.getItem('catalog_section_currency') ?? ''
+  )
+  const [isApplyingCatalogToAll, setIsApplyingCatalogToAll] = useState(false)
+  const [addCatalogCurrency, setAddCatalogCurrency] = useState('RUB')
+  const [hiddenCatalogKinds, setHiddenCatalogKinds] = useState<string[]>([])
+  const [showKindManageModal, setShowKindManageModal] = useState(false)
+  const [kindDeleteConfirm, setKindDeleteConfirm] = useState<string | null>(null)
+  const [isDeletingKind, setIsDeletingKind] = useState(false)
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([fetchConsumables(accountId), fetchAccountCurrencies(accountId)])
-      .then(([data, cs]) => {
-        setItems(data)
+    Promise.all([fetchConsumableCatalog(accountId), fetchAccountCurrencies(accountId)])
+      .then(([catalog, cs]) => {
+        setCatalogItems(catalog)
         const codes = cs.map((c) => c.code)
         setEnabledCurrencies(codes)
-        setAddCurrency(codes[0] ?? 'RUB')
+        const savedCatalogCurrency = localStorage.getItem('catalog_section_currency')
+        const catalogCurrencies = [...new Set(catalog.map((i) => (i as ConsumableCatalogItem).currency).filter(Boolean))]
+        const inferredCatalogDefault = (!savedCatalogCurrency && catalogCurrencies.length === 1) ? (catalogCurrencies[0] ?? '') : (savedCatalogCurrency ?? '')
+        setDefaultCatalogCurrency(inferredCatalogDefault)
+        setAddCatalogCurrency(inferredCatalogDefault || (codes[0] ?? 'RUB'))
+        const hiddenSaved = JSON.parse(localStorage.getItem(`hidden_catalog_kinds_${accountId}`) ?? '[]') as string[]
+        setHiddenCatalogKinds(hiddenSaved)
       })
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [accountId])
 
-  const handleDefaultCurrencyChange = (currency: string) => {
-    setDefaultCurrency(currency)
-    if (currency) setAddCurrency(currency)
-  }
-
-  const handleApplyToAll = async () => {
-    if (!defaultCurrency) return
-    setIsApplyingToAll(true)
-    try {
-      await Promise.all(items.map((i) => updateConsumable(i.id, { currency: defaultCurrency })))
-      setItems((prev) => prev.map((i) => ({ ...i, currency: defaultCurrency })))
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setIsApplyingToAll(false)
+  const handleCatalogDefaultCurrencyChange = (currency: string) => {
+    setDefaultCatalogCurrency(currency)
+    if (currency) {
+      localStorage.setItem('catalog_section_currency', currency)
+      setAddCatalogCurrency(currency)
+    } else {
+      localStorage.removeItem('catalog_section_currency')
     }
   }
 
-  const handleAdd = async () => {
-    if (!addName.trim()) return
-    setIsAdding(true)
+  const handleCatalogApplyToAll = async () => {
+    if (!defaultCatalogCurrency) return
+    setIsApplyingCatalogToAll(true)
+    const targets = catalogItems.filter((i) => i.size !== '')
     try {
-      const item = await addConsumable(accountId, addName.trim(), Number(addPrice) || 0, Number(addCost) || 0, addCurrency)
-      setItems((prev) => [...prev, item])
-      setAddName('')
-      setAddPrice('')
-      setAddCost('')
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setIsAdding(false)
-    }
+      await Promise.all(targets.map((i) => updateConsumableCatalogItem(i.id, { currency: defaultCatalogCurrency })))
+      setCatalogItems((prev) => prev.map((i) => i.size !== '' ? { ...i, currency: defaultCatalogCurrency } : i))
+    } catch (e) { console.error(e) }
+    finally { setIsApplyingCatalogToAll(false) }
   }
 
-  const startEdit = (item: Consumable, field: 'name' | 'price' | 'cost' = 'name') => {
-    setEditingId(item.id)
-    setEditName(item.name)
-    setEditPrice('')
-    setEditCost('')
-    setEditCurrency(item.currency ?? 'RUB')
-    setFocusField(field)
+  const handleAddNewKind = async () => {
+    if (!newKindName.trim()) return
+    setIsAddingNewKind(true)
+    try {
+      const created = await addConsumableCatalogItem(accountId, newKindName.trim(), '')
+      setCatalogItems((prev) => [...prev, created])
+      setActiveCatalogKind(newKindName.trim())
+      localStorage.setItem('catalog_active_kind', newKindName.trim())
+      setNewKindName('')
+      setAddingNewKind(false)
+    } catch (e) { console.error(e) }
+    finally { setIsAddingNewKind(false) }
   }
 
-  const saveCurrentValues = async (id: string) => {
-    const current = items.find((i) => i.id === id)
+  const handleAddSizeForKind = async () => {
+    if (!addSizeInput.trim()) return
+    setIsAddingSize(true)
+    try {
+      const created = await addConsumableCatalogItem(accountId, activeCatalogKind, addSizeInput.trim(), Number(addCatalogPrice) || 0, Number(addCatalogCost) || 0, defaultCatalogCurrency || addCatalogCurrency)
+      setCatalogItems((prev) => [...prev, created])
+      setAddSizeInput('')
+      setAddCatalogPrice('')
+      setAddCatalogCost('')
+    } catch (e) { console.error(e) }
+    finally { setIsAddingSize(false) }
+  }
+
+  const startCatalogEdit = (item: ConsumableCatalogItem, field: 'price' | 'cost' = 'price') => {
+    setEditingCatalogId(item.id)
+    setEditCatalogParam(item.size)
+    setEditCatalogPrice('')
+    setEditCatalogCost('')
+    setFocusCatalogField(field)
+  }
+
+  const saveCatalogValues = async (id: string) => {
+    const current = catalogItems.find((i) => i.id === id)
     if (!current) return
     const patch = {
-      name: editName.trim() || current.name,
-      price: editPrice.trim() === '' ? current.price : Number(editPrice),
-      cost: editCost.trim() === '' ? current.cost : Number(editCost),
-      currency: editCurrency,
+      size: editCatalogParam.trim() || current.size,
+      price: editCatalogPrice.trim() === '' ? current.price : Number(editCatalogPrice),
+      cost: editCatalogCost.trim() === '' ? current.cost : Number(editCatalogCost),
     }
     try {
-      await updateConsumable(id, patch)
-      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
+      await updateConsumableCatalogItem(id, patch)
+      setCatalogItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
+    } catch (e) { console.error(e) }
+  }
+
+  const saveCatalogEdit = async (id: string) => {
+    await saveCatalogValues(id)
+    setEditingCatalogId(null)
+  }
+
+  const switchCatalogFocusField = async (newField: 'price' | 'cost', rowId: string) => {
+    await saveCatalogValues(rowId)
+    if (focusCatalogField === 'price') setEditCatalogPrice('')
+    else if (focusCatalogField === 'cost') setEditCatalogCost('')
+    setFocusCatalogField(newField)
+  }
+
+  const handleDeleteBase = async (id: string) => {
+    try {
+      await deleteConsumableCatalogItem(id)
+      setCatalogItems((prev) => prev.filter((item) => item.id !== id))
     } catch (e) {
       console.error(e)
     }
   }
 
-  const saveEdit = async (id: string) => {
-    await saveCurrentValues(id)
-    setEditingId(null)
+  const handleToggleHideKind = (kindLabel: string) => {
+    const allKindLabels = [
+      ...CONSUMABLE_KIND_OPTIONS.map(k => k.label),
+      ...catalogItems
+        .filter(item => item.size === '' && !CONSUMABLE_KIND_OPTIONS.some(k => k.label === item.kind))
+        .map(item => item.kind)
+        .filter((k, i, arr) => arr.indexOf(k) === i),
+    ]
+    setHiddenCatalogKinds(prev => {
+      const isHiding = !prev.includes(kindLabel)
+      const next = isHiding ? [...prev, kindLabel] : prev.filter(k => k !== kindLabel)
+      localStorage.setItem(`hidden_catalog_kinds_${accountId}`, JSON.stringify(next))
+      if (isHiding && activeCatalogKind === kindLabel) {
+        const firstVisible = allKindLabels.find(k => !next.includes(k))
+        if (firstVisible) {
+          setActiveCatalogKind(firstVisible)
+          localStorage.setItem('catalog_active_kind', firstVisible)
+        }
+      }
+      return next
+    })
   }
 
-  const switchFocusField = async (newField: typeof focusField, rowId: string) => {
-    await saveCurrentValues(rowId)
-    if (focusField === 'price') setEditPrice('')
-    else if (focusField === 'cost') setEditCost('')
-    setFocusField(newField)
-  }
-
-  const handleDelete = async () => {
-    if (!deleteTarget) return
-    setIsDeleting(true)
+  const handleDeleteKind = async (kindLabel: string) => {
+    setIsDeletingKind(true)
     try {
-      await deleteConsumable(deleteTarget.id)
-      setItems((prev) => prev.filter((i) => i.id !== deleteTarget.id))
-      setDeleteTarget(null)
-    } finally {
-      setIsDeleting(false)
-    }
+      const toDelete = catalogItems.filter(i => i.kind === kindLabel)
+      await Promise.all(toDelete.map(i => deleteConsumableCatalogItem(i.id)))
+      const updatedItems = catalogItems.filter(i => i.kind !== kindLabel)
+      setCatalogItems(updatedItems)
+      setHiddenCatalogKinds(prev => {
+        const next = prev.filter(k => k !== kindLabel)
+        localStorage.setItem(`hidden_catalog_kinds_${accountId}`, JSON.stringify(next))
+        return next
+      })
+      if (activeCatalogKind === kindLabel) {
+        const remainingKindLabels = [
+          ...CONSUMABLE_KIND_OPTIONS.map(k => k.label),
+          ...updatedItems
+            .filter(i => i.size === '' && !CONSUMABLE_KIND_OPTIONS.some(k => k.label === i.kind))
+            .map(i => i.kind)
+            .filter((k, i, arr) => arr.indexOf(k) === i),
+        ]
+        const firstKind = remainingKindLabels[0] ?? CONSUMABLE_KIND_OPTIONS[0].label
+        setActiveCatalogKind(firstKind)
+        localStorage.setItem('catalog_active_kind', firstKind)
+      }
+      setKindDeleteConfirm(null)
+    } catch (e) { console.error(e) }
+    finally { setIsDeletingKind(false) }
   }
 
   return (
     <Card className="overflow-hidden rounded-3xl">
-      <div className="border-b border-slate-100 px-4 py-3">
-        <span className="text-sm font-semibold text-slate-900">Расходники</span>
-      </div>
-
-      {/* Section currency bar */}
-      {canManage && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2">
-          <span className="text-xs text-slate-400">Валюта раздела:</span>
-          <select
-            value={defaultCurrency}
-            onChange={(e) => handleDefaultCurrencyChange(e.target.value)}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-blue-400"
-          >
-            <option value="">— не задано —</option>
-            {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-          {defaultCurrency && items.length > 0 && (
-            <button
-              type="button"
-              disabled={isApplyingToAll}
-              onClick={() => void handleApplyToAll()}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
-            >
-              {isApplyingToAll ? '…' : `Применить ко всем (${items.length})`}
-            </button>
-          )}
-          <span className="ml-auto text-xs text-slate-300">Применяется к новым расходникам автоматически</span>
-        </div>
-      )}
-
-      {/* Single table: header + add row + data rows */}
       {loading ? (
         <div className="flex items-center justify-center py-10 text-sm text-slate-400">Загрузка…</div>
       ) : (
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50/60">
-            <tr>
-              <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Название</th>
-              <th className="w-28 px-4 py-2 text-center">
-                <div className="text-xs font-medium text-slate-500">Цена</div>
-                <div className="text-[10px] font-normal text-slate-400">для заказчика</div>
-              </th>
-              <th className="w-28 px-4 py-2 text-center">
-                <div className="text-xs font-medium text-emerald-600">Себестоимость</div>
-                <div className="text-[10px] font-normal text-emerald-400">закупочная цена</div>
-              </th>
-              <th className="w-24 px-4 py-2 text-center text-xs font-medium text-slate-500">Валюта</th>
-              {canManage && <th className="w-[120px] px-4 py-2" />}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {/* Add row */}
-            {canManage && (
-              <tr className="bg-slate-50/40">
-                <td className="px-4 py-2">
-                  <input
-                    type="text"
-                    placeholder="Название (коробка, ZIP-пакет…)"
-                    value={addName}
-                    onChange={(e) => setAddName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-400 placeholder:text-slate-400"
-                  />
-                </td>
-                <td className="px-4 py-2">
-                  <input
-                    type="number" min="0" step="any" placeholder="0"
-                    value={addPrice}
-                    onChange={(e) => setAddPrice(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-                    title="Цена"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-sm outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  />
-                </td>
-                <td className="px-4 py-2">
-                  <input
-                    type="number" min="0" step="any" placeholder="0"
-                    value={addCost}
-                    onChange={(e) => setAddCost(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-                    title="Себестоимость"
-                    className="w-full rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-center text-sm text-emerald-700 outline-none focus:border-emerald-400 placeholder:text-emerald-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  />
-                </td>
-                <td className="px-4 py-2 text-center">
-                  {defaultCurrency ? (
-                    <span className="rounded-md bg-amber-100 px-2 py-1.5 text-xs font-medium text-amber-700">{defaultCurrency}</span>
-                  ) : (
+        <>
+          {(() => {
+            const catalogKinds = [
+              ...CONSUMABLE_KIND_OPTIONS,
+              ...catalogItems
+                .filter((item) => item.size === '' && !CONSUMABLE_KIND_OPTIONS.some((k) => k.label === item.kind))
+                .map((item) => ({ id: item.kind, label: item.kind }))
+                .filter((k, i, arr) => arr.findIndex((x) => x.id === k.id) === i),
+            ]
+            const visibleCatalogKinds = catalogKinds.filter(k => !hiddenCatalogKinds.includes(k.label))
+            const sizeItems = catalogItems
+              .filter((item) => item.kind === activeCatalogKind && item.size !== '')
+              .sort((a, b) => {
+                const numsA = a.size.split(/[xXхХ×]/).map(Number).filter((n) => !isNaN(n))
+                const numsB = b.size.split(/[xXхХ×]/).map(Number).filter((n) => !isNaN(n))
+                if (numsA.length > 0 && numsB.length > 0) {
+                  for (let i = 0; i < Math.max(numsA.length, numsB.length); i++) {
+                    const diff = (numsB[i] ?? 0) - (numsA[i] ?? 0)
+                    if (diff !== 0) return diff
+                  }
+                }
+                return b.size.localeCompare(a.size)
+              })
+            return (
+              <>
+                {/* Kind sub-tabs */}
+                <div className="flex items-center bg-slate-50 px-4 py-2 border-b border-slate-100">
+                  <div className="flex flex-wrap flex-1 items-center gap-0.5 overflow-x-auto">
+                  {visibleCatalogKinds.map((kind) => {
+                    const count = catalogItems.filter((item) => item.kind === kind.label && item.size !== '').length
+                    return (
+                      <button
+                        key={kind.id}
+                        type="button"
+                        onClick={() => { setActiveCatalogKind(kind.label); localStorage.setItem('catalog_active_kind', kind.label); setEditingCatalogId(null) }}
+                        className={`flex-shrink-0 rounded-xl px-3 py-1.5 text-xs font-medium transition-colors ${activeCatalogKind === kind.label ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700 hover:bg-white/60'}`}
+                      >
+                        {kind.label}
+                        {count > 0 && (
+                          <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${activeCatalogKind === kind.label ? 'bg-blue-100 text-blue-600' : 'bg-slate-200 text-slate-500'}`}>{count}</span>
+                        )}
+                      </button>
+                    )
+                  })}
+                  {canManage && (
+                    addingNewKind ? (
+                      <div className="flex items-center gap-1 ml-1">
+                        <input
+                          type="text"
+                          value={newKindName}
+                          autoFocus
+                          onChange={(e) => setNewKindName(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') void handleAddNewKind(); if (e.key === 'Escape') { setAddingNewKind(false); setNewKindName('') } }}
+                          placeholder="Вид расходника…"
+                          className="rounded-lg border border-blue-300 bg-white px-2 py-1 text-xs outline-none focus:border-blue-400 w-36"
+                        />
+                        <button type="button" onClick={() => void handleAddNewKind()} disabled={isAddingNewKind || !newKindName.trim()} className="rounded-lg bg-blue-600 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50">{isAddingNewKind ? '…' : 'OK'}</button>
+                        <button type="button" onClick={() => { setAddingNewKind(false); setNewKindName('') }} className="rounded-lg px-2 py-1 text-xs text-slate-400 hover:text-slate-600">✕</button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={() => setAddingNewKind(true)} className="ml-1 flex-shrink-0 rounded-xl px-3 py-1.5 text-xs font-medium text-blue-500 hover:text-blue-700 hover:bg-blue-50 transition-colors">+ Расходник</button>
+                    )
+                  )}
+                  </div>
+                  {canManage && (
+                    <button type="button" onClick={() => setShowKindManageModal(true)} className="ml-2 flex-shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors" title="Управление расходниками">
+                      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    </button>
+                  )}
+                </div>
+                {/* Section currency bar */}
+                {canManage && (
+                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2">
+                    <span className="text-xs text-slate-400">Валюта раздела:</span>
                     <select
-                      value={addCurrency}
-                      onChange={(e) => setAddCurrency(e.target.value)}
-                      className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-blue-400"
+                      value={defaultCatalogCurrency}
+                      onChange={(e) => handleCatalogDefaultCurrencyChange(e.target.value)}
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-blue-400"
                     >
+                      <option value="">— не задано —</option>
                       {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
                         <option key={c} value={c}>{c}</option>
                       ))}
                     </select>
-                  )}
-                </td>
-                <td className="px-4 py-2 text-right">
-                  <button
-                    type="button"
-                    onClick={() => void handleAdd()}
-                    disabled={isAdding || !addName.trim()}
-                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    {isAdding ? '…' : '+ Добавить'}
-                  </button>
-                </td>
-              </tr>
-            )}
-            {/* Data rows */}
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={canManage ? 5 : 4} className="py-8 text-center text-sm text-slate-400">Расходники не добавлены</td>
-              </tr>
-            ) : (
-              items.map((item) => {
-                const isEditing = editingId === item.id
-                const cellBase = canManage ? 'cursor-text' : ''
-                const viewCell = `px-4 py-1.5 ${cellBase}`
-                return (
-                  <tr key={item.id} className="group hover:bg-slate-50" onBlur={(e) => { if (isEditing && !e.currentTarget.contains(e.relatedTarget as Node)) setEditingId(null) }}>
-                    <td className={viewCell}>
-                      {isEditing && focusField === 'name' ? (
-                        <input
-                          type="text"
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          autoFocus
-                          onBlur={() => void saveCurrentValues(item.id)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(item.id); if (e.key === 'Escape') setEditingId(null) }}
-                          className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
-                        />
-                      ) : (
-                        <div
-                          className="rounded-lg px-2 py-1 text-sm text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-200"
-                          onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                          onClick={canManage ? (isEditing ? () => void switchFocusField('name', item.id) : () => startEdit(item, 'name')) : undefined}
-                        >{isEditing ? editName : item.name}</div>
-                      )}
-                    </td>
-                    <td className={viewCell}>
-                      {isEditing && focusField === 'price' ? (
-                        <input
-                          type="number" min="0" step="any"
-                          placeholder={String(item.price)}
-                          value={editPrice}
-                          autoFocus
-                          onChange={(e) => setEditPrice(e.target.value)}
-                          onBlur={() => { void saveCurrentValues(item.id); setEditPrice('') }}
-                          onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(item.id); if (e.key === 'Escape') setEditingId(null) }}
-                          className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        />
-                      ) : (
-                        <div
-                          className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-800 hover:bg-white hover:ring-1 hover:ring-slate-200"
-                          onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                          onClick={canManage ? (isEditing ? () => void switchFocusField('price', item.id) : () => startEdit(item, 'price')) : undefined}
-                        >{editPrice !== '' && isEditing ? editPrice : item.price}</div>
-                      )}
-                    </td>
-                    <td className={viewCell}>
-                      {isEditing && focusField === 'cost' ? (
-                        <input
-                          type="number" min="0" step="any"
-                          placeholder={String(item.cost)}
-                          value={editCost}
-                          autoFocus
-                          onChange={(e) => setEditCost(e.target.value)}
-                          onBlur={() => { void saveCurrentValues(item.id); setEditCost('') }}
-                          onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(item.id); if (e.key === 'Escape') setEditingId(null) }}
-                          className="w-full rounded-lg border border-emerald-200 px-2 py-1 text-center text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        />
-                      ) : (
-                        <div
-                          className="rounded-lg px-2 py-1 text-center text-sm font-medium text-emerald-700 hover:bg-white hover:ring-1 hover:ring-emerald-200"
-                          onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                          onClick={canManage ? (isEditing ? () => void switchFocusField('cost', item.id) : () => startEdit(item, 'cost')) : undefined}
-                        >{editCost !== '' && isEditing ? editCost : item.cost}</div>
-                      )}
-                    </td>
-                    <td className="px-4 py-1.5 text-center">
-                      {isEditing ? (
-                        <select
-                          value={editCurrency}
-                          onChange={(e) => setEditCurrency(e.target.value)}
-                          onBlur={() => void saveCurrentValues(item.id)}
-                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-blue-400"
-                        >
-                          {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{item.currency}</span>
-                      )}
-                    </td>
+                    {sizeItems.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={isApplyingCatalogToAll || !defaultCatalogCurrency}
+                        onClick={() => void handleCatalogApplyToAll()}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
+                      >
+                        {isApplyingCatalogToAll ? '…' : `Применить ко всем (${sizeItems.length})`}
+                      </button>
+                    )}
+                    <span className="ml-auto text-xs text-slate-300">Применяется к новым позициям автоматически</span>
+                  </div>
+                )}
+                {/* Catalog table */}
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50/60">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Параметр</th>
+                      <th className="w-28 px-4 py-2 text-center">
+                        <div className="text-xs font-medium text-slate-500">Цена</div>
+                        <div className="text-[10px] font-normal text-slate-400">для заказчика</div>
+                      </th>
+                      <th className="w-28 px-4 py-2 text-center">
+                        <div className="text-xs font-medium text-emerald-600">Себестоимость</div>
+                        <div className="text-[10px] font-normal text-emerald-400">закупочная</div>
+                      </th>
+                      <th className="w-24 px-4 py-2 text-center text-xs font-medium text-slate-500">Валюта</th>
+                      {canManage && <th className="w-[80px] px-4 py-2" />}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
                     {canManage && (
-                      <td className="px-4 py-1.5">
-                        <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                      <tr className="bg-slate-50/40">
+                        <td className="px-4 py-2">
+                          <input
+                            type="text"
+                            placeholder="Добавить параметр…"
+                            value={addSizeInput}
+                            onChange={(e) => setAddSizeInput(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') void handleAddSizeForKind() }}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-400 placeholder:text-slate-400"
+                          />
+                        </td>
+                        <td className="px-4 py-2">
+                          <input
+                            type="number" min="0" step="any" placeholder="0"
+                            value={addCatalogPrice}
+                            onChange={(e) => setAddCatalogPrice(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') void handleAddSizeForKind() }}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-center text-sm outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                          />
+                        </td>
+                        <td className="px-4 py-2">
+                          <input
+                            type="number" min="0" step="any" placeholder="0"
+                            value={addCatalogCost}
+                            onChange={(e) => setAddCatalogCost(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') void handleAddSizeForKind() }}
+                            className="w-full rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-center text-sm text-emerald-700 outline-none focus:border-emerald-400 placeholder:text-emerald-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                          />
+                        </td>
+                        <td className="px-4 py-2 text-center">
+                          {defaultCatalogCurrency ? (
+                            <span className="rounded-md bg-amber-100 px-2 py-1.5 text-xs font-medium text-amber-700">{defaultCatalogCurrency}</span>
+                          ) : (
+                            <select
+                              value={addCatalogCurrency}
+                              onChange={(e) => setAddCatalogCurrency(e.target.value)}
+                              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-blue-400"
+                            >
+                              {(enabledCurrencies.length > 0 ? enabledCurrencies : ['RUB']).map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-right">
                           <button
                             type="button"
-                            onMouseDown={(e) => { e.preventDefault(); setEditingId(null) }}
-                            onClick={() => setDeleteTarget(item)}
-                            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500"
+                            onClick={() => void handleAddSizeForKind()}
+                            disabled={isAddingSize || !addSizeInput.trim()}
+                            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
                           >
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                            {isAddingSize ? '…' : '+ Добавить'}
                           </button>
-                        </div>
-                      </td>
+                        </td>
+                      </tr>
                     )}
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
+                    {sizeItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={canManage ? 5 : 4} className="py-8 text-center text-sm text-slate-400">Параметры не добавлены</td>
+                      </tr>
+                    ) : sizeItems.map((item) => {
+                      const isEditing = editingCatalogId === item.id
+                      const cellBase = canManage ? 'cursor-text' : ''
+                      const viewCell = `px-4 py-1.5 ${cellBase}`
+                      return (
+                        <tr key={item.id} className="group hover:bg-slate-50" onBlur={(e) => { if (isEditing && !e.currentTarget.contains(e.relatedTarget as Node)) setEditingCatalogId(null) }}>
+                          <td className="px-4 py-1.5">
+                            <div className="rounded-lg px-2 py-1 text-sm text-slate-700">
+                              {item.size}
+                            </div>
+                          </td>
+                          <td className={viewCell}>
+                            {isEditing && focusCatalogField === 'price' ? (
+                              <input
+                                type="number" min="0" step="any"
+                                placeholder={String(item.price ?? 0)}
+                                value={editCatalogPrice}
+                                autoFocus
+                                onChange={(e) => setEditCatalogPrice(e.target.value)}
+                                onBlur={() => { void saveCatalogValues(item.id); setEditCatalogPrice('') }}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { void saveCatalogEdit(item.id) } if (e.key === 'Escape') { setEditingCatalogId(null) } }}
+                                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                              />
+                            ) : (
+                              <div
+                                className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-800 hover:bg-white hover:ring-1 hover:ring-slate-200"
+                                onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
+                                onClick={canManage ? (isEditing ? () => void switchCatalogFocusField('price', item.id) : () => startCatalogEdit(item, 'price')) : undefined}
+                              >
+                                {editCatalogPrice !== '' && isEditing ? editCatalogPrice : (item.price ?? 0)}
+                              </div>
+                            )}
+                          </td>
+                          <td className={viewCell}>
+                            {isEditing && focusCatalogField === 'cost' ? (
+                              <input
+                                type="number" min="0" step="any"
+                                placeholder={String(item.cost ?? 0)}
+                                value={editCatalogCost}
+                                autoFocus
+                                onChange={(e) => setEditCatalogCost(e.target.value)}
+                                onBlur={() => { void saveCatalogValues(item.id); setEditCatalogCost('') }}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { void saveCatalogEdit(item.id) } if (e.key === 'Escape') { setEditingCatalogId(null) } }}
+                                className="w-full rounded-lg border border-emerald-200 px-2 py-1 text-center text-sm text-emerald-700 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                              />
+                            ) : (
+                              <div
+                                className="rounded-lg px-2 py-1 text-center text-sm font-medium text-emerald-700 hover:bg-white hover:ring-1 hover:ring-emerald-200"
+                                onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
+                                onClick={canManage ? (isEditing ? () => void switchCatalogFocusField('cost', item.id) : () => startCatalogEdit(item, 'cost')) : undefined}
+                              >
+                                {editCatalogCost !== '' && isEditing ? editCatalogCost : (item.cost ?? 0)}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-4 py-1.5 text-center">
+                            {defaultCatalogCurrency
+                              ? <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">{defaultCatalogCurrency}</span>
+                              : <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{item.currency ?? 'RUB'}</span>
+                            }
+                          </td>
+                          {canManage && (
+                            <td className="px-4 py-1.5">
+                              <div className="flex items-center justify-end opacity-0 transition-opacity group-hover:opacity-100">
+                                <button type="button" onMouseDown={(e) => { e.preventDefault(); setEditingCatalogId(null) }} onClick={() => void handleDeleteBase(item.id)} className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500">
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )
+          })()}
+          {canManage && showKindManageModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { setShowKindManageModal(false); setKindDeleteConfirm(null) }}>
+              <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-800">Управление расходниками</h3>
+                  <button type="button" onClick={() => { setShowKindManageModal(false); setKindDeleteConfirm(null) }} className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                  </button>
+                </div>
+                <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto py-1">
+                  {[
+                    ...CONSUMABLE_KIND_OPTIONS,
+                    ...catalogItems
+                      .filter((item) => item.size === '' && !CONSUMABLE_KIND_OPTIONS.some((k) => k.label === item.kind))
+                      .map((item) => ({ id: item.kind, label: item.kind }))
+                      .filter((k, i, arr) => arr.findIndex((x) => x.id === k.id) === i),
+                  ].map(kind => {
+                    const isSystem = CONSUMABLE_KIND_OPTIONS.some(k => k.label === kind.label)
+                    const isHidden = hiddenCatalogKinds.includes(kind.label)
+                    const count = catalogItems.filter(i => i.kind === kind.label && i.size !== '').length
+                    return (
+                      <div key={kind.id} className={`grid items-center gap-3 px-5 py-3 ${isHidden ? 'opacity-50' : ''}`} style={{ gridTemplateColumns: '1fr auto auto' }}>
+                        <span className="min-w-0 truncate text-sm text-slate-700">
+                          {kind.label}
+                          {count > 0 && <span className="ml-1.5 text-xs text-slate-400">({count})</span>}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleHideKind(kind.label)}
+                          className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${isHidden ? 'bg-blue-50 text-blue-600 hover:bg-blue-100' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                        >
+                          {isHidden ? 'Показать' : 'Скрыть'}
+                        </button>
+                        {isSystem ? (
+                          <span className="rounded-md border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400">системный</span>
+                        ) : (
+                          kindDeleteConfirm === kind.label ? (
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-red-500">Удалить?</span>
+                              <button type="button" disabled={isDeletingKind} onClick={() => void handleDeleteKind(kind.label)} className="rounded-lg bg-red-500 px-2 py-1 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50">{isDeletingKind ? '…' : 'Да'}</button>
+                              <button type="button" onClick={() => setKindDeleteConfirm(null)} className="rounded-lg px-2 py-1 text-xs text-slate-400 hover:text-slate-600">Нет</button>
+                            </div>
+                          ) : (
+                            <button type="button" onClick={() => setKindDeleteConfirm(kind.label)} className="rounded-lg px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors">Удалить</button>
+                          )
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
-      <DeleteConfirmModal
-        open={Boolean(deleteTarget)}
-        title="Удалить расходник?"
-        description={`«${deleteTarget?.name ?? ''}» будет удалён.`}
-        isSubmitting={isDeleting}
-        onClose={() => { if (!isDeleting) setDeleteTarget(null) }}
-        onConfirm={() => void handleDelete()}
-      />
     </Card>
   )
 }
@@ -1548,6 +1945,13 @@ const WorkTariffsPanel = ({
   // delete tariff
   const [deleteTarget, setDeleteTarget] = useState<FulfillmentWorkTariff | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  // virtual row editing (склад из каталога без тарифа)
+  const [editingVirtualId, setEditingVirtualId] = useState<string | null>(null)
+  const [vPrice, setVPrice] = useState('')
+  const [vPriceKg, setVPriceKg] = useState('')
+  const [vWorker, setVWorker] = useState('')
+  const [vSenior, setVSenior] = useState('')
+  const [vFocusField, setVFocusField] = useState<'price' | 'pricekg' | 'worker' | 'senior'>('price')
 
   useEffect(() => {
     setLoading(true)
@@ -1694,13 +2098,58 @@ const WorkTariffsPanel = ({
     }
   }
 
+  // Объединённый список строк: склады из каталога (виртуальные) + реальные тарифы
+  const displayRows: Array<{ kind: 'tariff'; tariff: FulfillmentWorkTariff } | { kind: 'virtual'; warehouse: Warehouse }> = (() => {
+    if (!isWarehouseStage) return stageTariffs.map(t => ({ kind: 'tariff' as const, tariff: t }))
+    const result: Array<{ kind: 'tariff'; tariff: FulfillmentWorkTariff } | { kind: 'virtual'; warehouse: Warehouse }> = []
+    for (const w of warehouses) {
+      const existing = stageTariffs.find(t => t.name === w.name)
+      if (existing) result.push({ kind: 'tariff', tariff: existing })
+      else result.push({ kind: 'virtual', warehouse: w })
+    }
+    // Тарифы добавленные вручную, не совпадающие ни с одним складом
+    for (const t of stageTariffs) {
+      if (!warehouses.some(w => w.name === t.name)) result.push({ kind: 'tariff', tariff: t })
+    }
+    return result
+  })()
+
+  const startEditVirtual = (warehouseId: string, field: 'price' | 'pricekg' | 'worker' | 'senior' = 'price') => {
+    setEditingId(null)
+    setEditingVirtualId(warehouseId)
+    setVPrice('')
+    setVPriceKg('')
+    setVWorker('')
+    setVSenior('')
+    setVFocusField(field)
+  }
+
+  const saveVirtualRow = async (warehouseName: string) => {
+    if (vPrice === '' && vPriceKg === '' && vWorker === '' && vSenior === '') {
+      setEditingVirtualId(null)
+      return
+    }
+    const forcedCurrency = stageCurrencies[activeStage]
+    try {
+      const t = await addWorkTariff(
+        accountId, activeStage,
+        warehouseName,
+        Number(vPrice) || 0,
+        forcedCurrency || addCurrency,
+        Number(vWorker) || 0,
+        Number(vSenior) || 0,
+        Number(vPriceKg) || 0,
+      )
+      setTariffs(prev => [...prev, t])
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setEditingVirtualId(null)
+    }
+  }
+
   return (
     <Card className="overflow-hidden rounded-3xl">
-      {/* Header */}
-      <div className="border-b border-slate-100 px-4 py-3">
-        <span className="text-sm font-semibold text-slate-900">Тарифы работ</span>
-      </div>
-
       {/* Group tabs */}
       <div className="flex gap-0 border-b border-slate-100">
         {WORK_GROUPS.map((g) => (
@@ -1901,12 +2350,109 @@ const WorkTariffsPanel = ({
               </tr>
             )}
             {/* Data rows */}
-            {stageTariffs.length === 0 ? (
+            {displayRows.length === 0 ? (
               <tr>
                 <td colSpan={canManage ? (isWarehouseStage ? 7 : 6) : (isWarehouseStage ? 6 : 5)} className="py-8 text-center text-sm text-slate-400">Нет тарифов в этом разделе</td>
               </tr>
             ) : (
-                stageTariffs.map((t) => {
+                displayRows.map((row) => {
+                  // ── Виртуальная строка (склад без тарифа) ──
+                  if (row.kind === 'virtual') {
+                    const w = row.warehouse
+                    const isVEditing = editingVirtualId === w.id
+                    const vCellBase = canManage ? 'cursor-text' : ''
+                    const vViewCell = `px-4 py-1.5 ${vCellBase}`
+                    return (
+                      <tr
+                        key={`virtual_${w.id}`}
+                        className="group hover:bg-slate-50/70"
+                        onBlur={(e) => { if (isVEditing && !e.currentTarget.contains(e.relatedTarget as Node)) void saveVirtualRow(w.name) }}
+                      >
+                        <td className={vViewCell}>
+                          <div className="rounded-lg px-2 py-1 text-sm text-slate-400 italic">{w.name}</div>
+                        </td>
+                        <td className={vViewCell}>
+                          {isVEditing && vFocusField === 'price' ? (
+                            <input
+                              type="number" min="0" step="any" placeholder="0"
+                              value={vPrice} autoFocus
+                              onChange={(e) => setVPrice(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') void saveVirtualRow(w.name); if (e.key === 'Escape') setEditingVirtualId(null) }}
+                              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            />
+                          ) : (
+                            <div
+                              className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-400 hover:bg-white hover:ring-1 hover:ring-slate-200"
+                              onMouseDown={isVEditing ? (e) => e.preventDefault() : undefined}
+                              onClick={canManage ? () => { isVEditing ? setVFocusField('price') : startEditVirtual(w.id, 'price') } : undefined}
+                            >{vPrice !== '' && isVEditing ? vPrice : '—'}</div>
+                          )}
+                        </td>
+                        {isWarehouseStage && (
+                          <td className={vViewCell}>
+                            {isVEditing && vFocusField === 'pricekg' ? (
+                              <input
+                                type="number" min="0" step="any" placeholder="0"
+                                value={vPriceKg} autoFocus
+                                onChange={(e) => setVPriceKg(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') void saveVirtualRow(w.name); if (e.key === 'Escape') setEditingVirtualId(null) }}
+                                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                              />
+                            ) : (
+                              <div
+                                className="rounded-lg px-2 py-1 text-center text-sm font-medium text-slate-400 hover:bg-white hover:ring-1 hover:ring-slate-200"
+                                onMouseDown={isVEditing ? (e) => e.preventDefault() : undefined}
+                                onClick={canManage ? () => { isVEditing ? setVFocusField('pricekg') : startEditVirtual(w.id, 'pricekg') } : undefined}
+                              >{vPriceKg !== '' && isVEditing ? vPriceKg : '—'}</div>
+                            )}
+                          </td>
+                        )}
+                        <td className={vViewCell}>
+                          {isVEditing && vFocusField === 'worker' ? (
+                            <input
+                              type="number" min="0" step="any" placeholder="0"
+                              value={vWorker} autoFocus
+                              onChange={(e) => setVWorker(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') void saveVirtualRow(w.name); if (e.key === 'Escape') setEditingVirtualId(null) }}
+                              className="w-full rounded-lg border border-emerald-200 px-2 py-1 text-center text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            />
+                          ) : (
+                            <div
+                              className="rounded-lg px-2 py-1 text-center text-sm font-medium text-emerald-600 hover:bg-white hover:ring-1 hover:ring-emerald-200"
+                              onMouseDown={isVEditing ? (e) => e.preventDefault() : undefined}
+                              onClick={canManage ? () => { isVEditing ? setVFocusField('worker') : startEditVirtual(w.id, 'worker') } : undefined}
+                            >{vWorker !== '' && isVEditing ? vWorker : '—'}</div>
+                          )}
+                        </td>
+                        <td className={vViewCell}>
+                          {isVEditing && vFocusField === 'senior' ? (
+                            <input
+                              type="number" min="0" step="any" placeholder="0"
+                              value={vSenior} autoFocus
+                              onChange={(e) => setVSenior(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') void saveVirtualRow(w.name); if (e.key === 'Escape') setEditingVirtualId(null) }}
+                              className="w-full rounded-lg border border-blue-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            />
+                          ) : (
+                            <div
+                              className="rounded-lg px-2 py-1 text-center text-sm font-medium text-blue-600 hover:bg-white hover:ring-1 hover:ring-blue-200"
+                              onMouseDown={isVEditing ? (e) => e.preventDefault() : undefined}
+                              onClick={canManage ? () => { isVEditing ? setVFocusField('senior') : startEditVirtual(w.id, 'senior') } : undefined}
+                            >{vSenior !== '' && isVEditing ? vSenior : '—'}</div>
+                          )}
+                        </td>
+                        <td className="px-4 py-1.5 text-center">
+                          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-400">
+                            {stageCurrencies[activeStage] || addCurrency || 'RUB'}
+                          </span>
+                        </td>
+                        {canManage && <td />}
+                      </tr>
+                    )
+                  }
+
+                  // ── Реальная строка тарифа ──
+                  const t = row.tariff
                   const isEditing = editingId === t.id
                   const cellBase = canManage ? 'cursor-text' : ''
                   const viewCell = `px-4 py-1.5 ${cellBase}`
@@ -1914,25 +2460,15 @@ const WorkTariffsPanel = ({
                     <tr key={t.id} className="group hover:bg-slate-50" onBlur={(e) => { if (isEditing && !e.currentTarget.contains(e.relatedTarget as Node)) setEditingId(null) }}>
                       <td className={viewCell}>
                         {isEditing && focusField === 'name' ? (
-                          isWarehouseStage ? (
-                            <WarehouseSearchSelect
-                              value={editName}
-                              onChange={setEditName}
-                              warehouses={warehouses}
-                              autoOpen
-                              onBlur={() => void saveCurrentValues(t.id)}
-                            />
-                          ) : (
-                            <input
-                              type="text"
-                              value={editName}
-                              onChange={(e) => setEditName(e.target.value)}
-                              autoFocus
-                              onBlur={() => void saveCurrentValues(t.id)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
-                              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
-                            />
-                          )
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            autoFocus
+                            onBlur={() => void saveCurrentValues(t.id)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
+                            className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+                          />
                         ) : (
                           <div
                             className="rounded-lg px-2 py-1 text-sm text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-200"

@@ -33,10 +33,11 @@ import { InvoicesPage } from './pages/InvoicesPage'
 import { AdminPage } from './pages/AdminPage'
 import { GlossaryPage } from './pages/GlossaryPage'
 import { DiaryPage } from './pages/DiaryPage'
+import { FinanceReportPage } from './pages/FinanceReportPage'
 import { fetchNotifications, markAllNotificationsRead } from './services/outsourceService'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report'
 
 const PAGE_ROUTES: Record<PageKey, string> = {
   home: '/',
@@ -52,6 +53,7 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   admin: '/admin',
   glossary: '/glossary',
   diary: '/diary',
+  finance_report: '/finance-report',
 }
 
 const ROUTE_PAGES: Record<string, PageKey> = Object.fromEntries(
@@ -129,6 +131,7 @@ const pageTitles: Record<PageKey, string> = {
   admin: 'Администратор',
   glossary: 'Словарь',
   diary: 'Дневник ELESTET',
+  finance_report: 'Фин-отчет',
 }
 
 function App() {
@@ -315,6 +318,7 @@ function App() {
     admin: null,
     glossary: null,
     diary: null,
+    finance_report: null,
   }
 
   const isAdmin = session?.user?.email === 'sydykovsam@gmail.com'
@@ -325,7 +329,7 @@ function App() {
   const effectivePage: PageKey = (() => {
     if (isAccountsLoading || isPermissionsLoading) return activePage
     if ((activePage === 'admin' || activePage === 'glossary') && !isAdmin) return 'home'
-    if (activePage === 'diary' && !isAdmin) return 'home'
+    if ((activePage === 'diary' || activePage === 'finance_report') && !isAdmin) return 'home'
     const key = pagePermKey[activePage]
     if (key !== null && !permissions[key]) return 'home'
     return activePage
@@ -536,7 +540,7 @@ function App() {
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-900">
       <ToastContainer />
       <div className="flex h-full">
-        {effectivePage !== 'admin' && effectivePage !== 'glossary' && effectivePage !== 'diary' && (
+        {effectivePage !== 'admin' && effectivePage !== 'glossary' && effectivePage !== 'diary' && effectivePage !== 'finance_report' && (
           <Sidebar
             activePage={effectivePage}
             onSelectPage={setActivePage}
@@ -566,7 +570,8 @@ function App() {
             onAdminClick={() => setActivePage('admin')}
             onGlossaryClick={() => setActivePage('glossary')}
             onDiaryClick={isAdmin ? () => setActivePage('diary') : undefined}
-            onHomeClick={['admin', 'glossary', 'diary'].includes(effectivePage) ? () => setActivePage('home') : undefined}
+            onFinanceReportClick={isAdmin ? () => setActivePage('finance_report') : undefined}
+            onHomeClick={['admin', 'glossary', 'diary', 'finance_report'].includes(effectivePage) ? () => setActivePage('home') : undefined}
             onProfileClick={() => setProfileModalOpen(true)}
             onSignOut={() => void signOut()}
           />
@@ -719,6 +724,11 @@ function App() {
                   userId={session?.user?.id ?? ''}
                   userEmail={session?.user?.email ?? ''}
                   userName={profileUserName || (session?.user?.email ?? '')}
+                />
+              ) : effectivePage === 'finance_report' ? (
+                <FinanceReportPage
+                  accountId={activeAccount?.id ?? ''}
+                  stores={stores}
                 />
               ) : (
                 <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} />

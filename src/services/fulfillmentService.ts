@@ -143,6 +143,7 @@ export const updateBatch = async (
       | 'stage_packaging'
       | 'packaging_qty'
       | 'boxes_qty'
+      | 'box_catalog_consumable_id'
     >
   >,
 ): Promise<FulfillmentBatch> => {
@@ -557,6 +558,8 @@ export const addMarkingLog = async (entry: {
   photo_urls?: string[]
   barcode?: string | null
   item_id?: string | null
+  consumable_id?: string | null
+  labels_qty?: number | null
 }): Promise<import('../types').FulfillmentMarkingLog> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
@@ -570,7 +573,15 @@ export const addMarkingLog = async (entry: {
 
 export const updateMarkingLog = async (
   id: string,
-  patch: { tariff?: string; qty?: number; qty_defect?: number; notes?: string; photo_urls?: string[] }
+  patch: {
+    tariff?: string
+    qty?: number
+    qty_defect?: number
+    notes?: string
+    photo_urls?: string[]
+    consumable_id?: string | null
+    labels_qty?: number | null
+  }
 ): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await (supabase as any)
@@ -950,6 +961,7 @@ export const addPackagingLog = async (entry: {
   notes?: string
   photo_urls?: string[]
   consumable_id?: string | null
+  catalog_consumable_id?: string | null
   zip_bags_qty?: number | null
 }): Promise<import('../types').FulfillmentPackagingLog> => {
   if (!supabase) throw new Error('Supabase is not configured')
@@ -964,7 +976,7 @@ export const addPackagingLog = async (entry: {
 
 export const updatePackagingLog = async (
   id: string,
-  patch: { tariff?: string; qty?: number; qty_defect?: number; notes?: string; photo_urls?: string[] }
+  patch: { tariff?: string; qty?: number; qty_defect?: number; notes?: string; photo_urls?: string[]; zip_bags_qty?: number | null; catalog_consumable_id?: string | null }
 ): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await (supabase as any)

@@ -1,6 +1,79 @@
 # Active Context
 
-## Current Focus (20.05.2026) — ProductsPage: себестоимость артикула + Excel — ЗАВЕРШЕНО
+## Current Focus (24.05.2026) — Справочники → Валюты + InvoicesPage расходники + WorkTariffs фиксы — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### 1. InvoicesPage — карточка «Расходники» (реальные данные)
+- `fetchPackagingLogs` + `fetchConsumableCatalog` загружаются в `fetchWorks` (Promise.all из 8)
+- `catalogConsumableLines` — useMemo: агрегирует ZIP-пакеты из `packagingLogs` по `catalog_consumable_id`, добавляет коробку из `batch.box_catalog_consumable_id`
+- `consumablesSubtotal` включает старые расходники + новые catalog lines
+- JSX «Расходники»: показывает обе группы, subtotal в шапке карточки, empty state только если всё пусто
+
+#### 2. WorkTariffs — переименование тарифов (фикс)
+- Убрал `WarehouseSearchSelect` при `focusField === 'name'` для warehouse-этапов
+- Теперь всегда `<input type="text">` — можно свободно переименовывать
+
+#### 3. WorkTariffs — виртуальные строки складов
+- `displayRows` (IIFE) — для warehouse-этапов мержит список складов из `warehouses` prop с существующими тарифами
+- Если тариф для склада есть — `{ kind: 'tariff' }`, нет — `{ kind: 'virtual', warehouse }`
+- Orphan тарифы (не совпали ни со складом) добавляются в конец
+- Virtual row: имя склада курсивом/slate-400, поля цен "—" с hover-ring, клик активирует inline-редактирование
+- При сохранении (`saveVirtualRow`) — если хоть одно поле непустое → `addWorkTariff`
+
+#### 4. Справочники → Валюты — полный редизайн (24.05.2026)
+- **SQL**: `supabase/patch_currency_primary_rate.sql` ⚠️ (применить в Supabase Dashboard)
+  - `account_currencies.is_primary boolean NOT NULL DEFAULT false`
+  - `account_currencies.exchange_rate numeric NOT NULL DEFAULT 1`
+- **Тип** `AccountCurrency`: добавлены `is_primary: boolean`, `exchange_rate: number`
+- **Сервисы** в `directoriesService.ts`:
+  - `setPrimaryCurrency(accountId, id)` — снимает is_primary со всех, ставит на одну
+  - `updateCurrencyRate(id, rate)` — обновляет exchange_rate
+- **CurrenciesPanel** — новый UI:
+  - Шапка колонок: Валюта / Основная / Курс к основной
+  - ★ звёздочка: клик → назначить основную (amber-500 когда активна)
+  - Курс: кликабельный inline-edit (кроме основной → показывает "1" disabled)
+  - Отключённые валюты: вся строка opacity-50, поля "—"
+  - Подсказка снизу: если валюты включены, но основная не выбрана
+- **Авто-курс** (`AutoFetch`):
+  - Кнопка в шапке карточки (синяя при включении)
+  - Источник: `open.er-api.com/v6/latest/{primaryCode}` (ECB, бесплатно, без ключа)
+  - При включении → сразу запрашивает и сохраняет курсы в БД
+  - При загрузке страницы → если авто-курс был включён (localStorage `currency_auto_fetch_{accountId}`), автоматически обновляет
+  - Пока идёт запрос — spinner + "Обновляется…", поля заблокированы для ручного редактирования
+  - После запроса — показывает время: "Авто-курс вкл · Обновлено в 21:45"
+  - При смене основной валюты + авто-курс включён → пересчитывает курсы
+
+### Ключевые файлы
+- `src/pages/InvoicesPage.tsx`
+- `src/pages/DirectoriesPage.tsx` (WorkTariffsPanel + CurrenciesPanel)
+- `src/services/directoriesService.ts` (setPrimaryCurrency, updateCurrencyRate)
+- `src/types/index.ts` (AccountCurrency)
+- `supabase/patch_currency_primary_rate.sql` ⚠️ применить
+
+---
+
+## Previous Focus (23.05.2026) — Справочники → База расходников — ЗАВЕРШЕНО
+
+### Что реализовано
+1. **SQL** `patch_consumable_catalog_prices.sql` — добавляет `price numeric`, `cost numeric`, `currency text` в `consumable_catalog` (⚠️ ещё не применён в production)
+2. **Тип** `ConsumableCatalogItem` обновлён: `price`, `cost`, `currency`
+3. **Сервис** `directoriesService.ts`: `addConsumableCatalogItem` и `updateConsumableCatalogItem` принимают `currency`
+4. **Удалена вкладка «Тарифы на расходники»** полностью — весь код (состояния, функции, JSX, DeleteConfirmModal)
+5. **Добавлена «Валюта раздела»** — select + «Применить ко всем», аналог WorkTariffsPanel
+6. **Колонка «Валюта»** в таблице Base расходников
+7. **Параметр** — нередактируемая колонка (только Цена и Себестоимость в инлайн-редактировании)
+8. **localStorage**: `catalog_active_kind` — активный таб; `catalog_section_currency` — валюта раздела
+9. **Сортировка позиций** от большего к меньшему по размеру (числовой разбор `NxN`/`NxNxN`, fallback `localeCompare` для кастомных строк)
+
+### Важные детали
+- Сортировка: `split(/[xXхХ×]/).map(Number)` — поддерживает латинский, кириллический и символьный разделитель
+- `useRef` и `fetchConsumables` / `addConsumable` / `updateConsumable` / `deleteConsumable` / `Consumable` стали неиспользованными после удаления таба — оставлены в импорте (TypeScript не ругается без `noUnusedLocals`)
+- Build: ✓ 631 модуль, exit 0
+
+---
+
+## Previous Focus (20.05.2026) — ProductsPage: себестоимость артикула + Excel — ЗАВЕРШЕНО
 
 ### Что реализовано
 1. Колонка **«Себестоимость»** на уровне строки товара (не в размерах), общая для всех размеров артикула

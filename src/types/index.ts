@@ -50,6 +50,77 @@ export interface ProductDefect {
   created_at: string
 }
 
+export interface WbFinanceReportRow {
+  id: string
+  account_id: string
+  store_id: string
+  period_from: string
+  period_to: string
+  report_date: string | null
+  nm_id: number | null
+  barcode: string | null
+  vendor_code: string | null
+  // doc_type_name из WB: «Продажа», «Возврат», «Штраф», «Хранение» и т.д.
+  doc_type: string | null
+  operation_name: string | null
+  quantity: number
+  // retail_amount: итоговая сумма строки (+продажа, -возврат). WB «Продажа» = SUM WHERE > 0
+  retail_amount: number
+  // for_pay = ppvz_for_pay: К перечислению за товар (net: +продажи, -возвраты)
+  for_pay: number
+  commission: number
+  logistics_cost: number
+  storage_cost: number
+  acceptance_cost: number
+  penalties: number
+  // deduction и additional_payment хранятся РАЗДЕЛЬНО для правильного знака
+  deduction: number
+  additional_payment: number
+  raw: Record<string, unknown>
+  synced_at: string
+}
+
+export interface WbFinanceSyncResult {
+  success: boolean
+  count: number
+}
+
+export interface WbFinanceWeeklyReport {
+  id: string
+  account_id: string
+  store_id: string
+  report_id: number
+  legal_entity: string | null
+  period_from: string | null
+  period_to: string | null
+  report_date: string | null
+  report_type: string | null
+  sale_amount: number
+  loyalty_compensation: number
+  for_pay: number
+  logistics_cost: number
+  storage_cost: number
+  acceptance_cost: number
+  other_amount: number
+  penalties: number
+  to_pay: number
+  currency_name: string | null
+  rows_count: number
+  raw: Record<string, unknown>
+  synced_at: string
+}
+
+export interface WbFinanceWeeklyReportRow {
+  id: string
+  account_id: string
+  store_id: string
+  report_id: number
+  row_number: number
+  op_uid: string
+  raw: Record<string, unknown>
+  synced_at: string
+}
+
 // ─── Роли / Доступы ───────────────────────────────────────────
 
 export interface RolePermissions {
@@ -345,6 +416,8 @@ export interface AccountCurrency {
   id: string
   account_id: string
   code: string
+  is_primary: boolean
+  exchange_rate: number
   created_at: string
 }
 
@@ -352,6 +425,19 @@ export interface Consumable {
   id: string
   account_id: string
   name: string
+  kind: string | null
+  size: string | null
+  price: number
+  cost: number
+  currency: string
+  created_at: string
+}
+
+export interface ConsumableCatalogItem {
+  id: string
+  account_id: string
+  kind: string
+  size: string
   price: number
   cost: number
   currency: string
@@ -623,6 +709,7 @@ export interface FulfillmentBatch {
   stage_packaging: boolean
   packaging_qty: number | null
   boxes_qty: number | null
+  box_catalog_consumable_id?: string | null
   stage_marking: boolean
   stage_packing: boolean
   stage_logistics: boolean
@@ -695,11 +782,14 @@ export interface FulfillmentOtkLog {
 export interface FulfillmentMarkingLog extends FulfillmentOtkLog {
   barcode: string | null
   item_id: string | null
+  consumable_id: string | null
+  labels_qty?: number | null
 }
 
 // Аналог OtkLog для этапа Упаковки (без barcode/item_id)
 export interface FulfillmentPackagingLog extends FulfillmentOtkLog {
   consumable_id: string | null
+  catalog_consumable_id?: string | null
   zip_bags_qty?: number | null
 }
 

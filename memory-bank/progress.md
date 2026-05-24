@@ -3,6 +3,59 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 24.05.2026 — Справочники → Валюты + InvoicesPage + WorkTariffs фиксы
+
+### InvoicesPage — карточка «Расходники» (реальные данные из БД)
+- `fetchPackagingLogs` и `fetchConsumableCatalog` добавлены в `fetchWorks` (Promise.all теперь 8 элементов)
+- `catalogConsumableLines` (useMemo): ZIP-пакеты из `packagingLogs` агрегированы по `catalog_consumable_id`; коробка добавляется из `batch.box_catalog_consumable_id`
+- `consumablesSubtotal` = старые расходники + новые catalog lines
+- `grandTotal = fulfillmentSubtotal + consumablesSubtotal + logisticsSubtotal`
+- JSX «Расходники»: обе группы, subtotal в шапке, empty state только если всё пусто
+
+### WorkTariffsPanel — фикс переименования
+- Убран `WarehouseSearchSelect` в режиме `focusField === 'name'` для warehouse-этапов
+- Теперь всегда `<input type="text">` — свободное переименование
+
+### WorkTariffsPanel — виртуальные строки складов
+- `displayRows` (IIFE) мержит список складов (`warehouses` prop) с существующими тарифами
+- Если тариф для склада есть → `{ kind: 'tariff' }`, нет → `{ kind: 'virtual', warehouse }`
+- Orphan тарифы добавляются в конец списка
+- Virtual row: имя курсивом/slate-400, "—" с hover-ring, клик → inline-edit, onBlur → `saveVirtualRow` → `addWorkTariff`
+
+### Справочники → Валюты — полный редизайн + авто-курс
+- **SQL** `patch_currency_primary_rate.sql`: `is_primary boolean`, `exchange_rate numeric` в `account_currencies`
+- **Тип** `AccountCurrency` + поля `is_primary`, `exchange_rate`
+- **Сервис** `setPrimaryCurrency(accountId, id)` + `updateCurrencyRate(id, rate)`
+- **UI**: шапка колонок, ★ для основной (amber), inline-edit курса, disabled для основной
+- **Авто-курс**: кнопка в шапке → `open.er-api.com/v6/latest/{primaryCode}` → сохраняет в БД → блокирует ручное редактирование; состояние в localStorage; показывает время последнего обновления
+- Build: ✓ `built in 1.88s`, exit 0
+
+---
+
+## Что сделано за сессию 23.05.2026 — Справочники → База расходников
+
+### Удаление вкладки «Тарифы на расходники»
+- Полностью убрана вкладка `tariffs` из `ConsumablesPanel` (состояния, функции, JSX, `DeleteConfirmModal`)
+- Компонент стал однозначным: только «База расходников» (`consumable_catalog`)
+
+### Новые поля в базе расходников
+- SQL-патч `supabase/patch_consumable_catalog_prices.sql` ⚠️ (не применён) — добавляет `price`, `cost`, `currency` в `consumable_catalog`
+- Тип `ConsumableCatalogItem`: поля `price: number`, `cost: number`, `currency: string`
+- Сервис: `addConsumableCatalogItem(accountId, kind, size, price=0, cost=0, currency='RUB')` и `updateConsumableCatalogItem(id, {size?, price?, cost?, currency?})`
+
+### UX улучшения
+- **Валюта раздела** — select + «Применить ко всем (N)» (аналог WorkTariffsPanel), сохраняется в `localStorage('catalog_section_currency')`
+- **Колонка «Валюта»** в таблице — amber-badge при выбранной валюте раздела
+- **Параметр** нередактируем; инлайн-редактирование только Цена и Себестоимость (`focusCatalogField: 'price' | 'cost'`)
+- **Активный таб вида** сохраняется в `localStorage('catalog_active_kind')`
+- **Сортировка от большего к меньшему** во всех табах: числовой разбор `NxN`/`NxNxN` через `split(/[xXхХ×]/)`, fallback `localeCompare` desc
+
+### Технические заметки
+- Build: 631 модуль, exit 0
+- `ConsumableCatalogItem.currency` — `?? 0` для price/cost защищает от undefined до применения SQL-патча
+
+---
+
 ## Что сделано за сессию 20.05.2026 — ProductsPage: себестоимость артикула + Excel
 
 ### Себестоимость в Импорт ВБ

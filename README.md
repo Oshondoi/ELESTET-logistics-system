@@ -97,6 +97,32 @@ AI 01 = GTIN
 - Только чтение, фильтр по магазину, 4 чипа статистики в шапке
 - Сервис: `fetchMarkingDefectsByStore` + `MarkingDefectRow` в `fulfillmentService.ts`
 
+### Счёт клиенту — InvoicesPage расходники из каталога (24.05.2026)
+
+Карточка **«Расходники»** в InvoiceModal теперь показывает реальные данные:
+- **ZIP-пакеты**: агрегируются из `fulfillment_packaging_logs` по `catalog_consumable_id` → цена из `consumable_catalog`
+- **Коробка**: берётся из `batch.box_catalog_consumable_id` → цена из каталога
+- `grandTotal = fulfillmentSubtotal + consumablesSubtotal + logisticsSubtotal`
+- Empty state только если обе группы пусты
+
+### Тарифы работ — фиксы (24.05.2026)
+
+**Переименование тарифов**: убран `WarehouseSearchSelect` при редактировании имени — теперь всегда plain `<input>`.
+
+**Виртуальные строки складов**: панель тарифов для warehouse-этапов («Логистика в РФ» и т.п.) автоматически показывает все склады из «Склады назначения». Если тариф для склада ещё не создан — строка отображается серым курсивом с "—" в ценах. Клик на "—" → inline-редактирование → сохранение создаёт новый тариф.
+
+### Справочники → Валюты (24.05.2026)
+
+- **SQL** `patch_currency_primary_rate.sql` ⚠️ (применить): добавляет `is_primary boolean`, `exchange_rate numeric` в `account_currencies`
+- **Шапка колонок**: Валюта / Основная / Курс к основной
+- **★ Основная валюта**: amber-звёздочка, одна на аккаунт; используется для зарплат и счетов
+- **Курс**: inline-edit по клику; для основной показывает "1" (disabled); для отключённых "—"
+- **Авто-курс** (кнопка в шапке):
+  - Источник: `open.er-api.com/v6/latest/{primaryCode}` — ECB, бесплатно, без API-ключа, обновляется раз в сутки
+  - При включении → запрашивает курсы, сохраняет в БД, блокирует ручное редактирование
+  - Состояние сохраняется в `localStorage('currency_auto_fetch_{accountId}')` — автообновление при каждой загрузке страницы
+  - Показывает время последнего обновления и spinner во время запроса
+
 ### Счёт клиенту — InvoicesPage (10–11.05.2026)
 Модуль выставления счётов на основе данных FulfillmentБатч: каждая партия = один счёт.
 
@@ -109,6 +135,18 @@ AI 01 = GTIN
 - **Карточка «Расходники»**: пустая заглушка, TBD
 - **Share-кнопка**: `font-[inherit]` на `<button>` для совпадения размера текста с соседними ссылками
 - **URL-роутинг**: `/invoices/C-{accountShortId}/I-{batch.short_id}`
+
+### Справочники — База расходников (23.05.2026)
+
+Вкладка **Расходники** на странице Справочники — единственная вкладка «База расходников» (`consumable_catalog`). Вкладка «Тарифы на расходники» удалена.
+
+- **Структура**: виды (Табы, дополнительные через `+ Вид`) + размеры внутри каждого вида (табы: Короб / ZIP-пакет / свои)
+- **Новые поля** (`patch_consumable_catalog_prices.sql` ⚠️ применить): `price numeric`, `cost numeric`, `currency text`
+- **Инлайн-редактирование**: клик по цене/себестоимости → edit; параметр (размер) нередактируемый
+- **Валюта раздела**: select + «Применить ко всем (N)»; сохраняется в `localStorage('catalog_section_currency')`; amber-badge при установленной валюте
+- **Активный таб вида**: `localStorage('catalog_active_kind')` — переживает F5
+- **Сортировка**: размеры от большего к меньшему (числовой `NxN`/`NxNxN` через `split(/[xXхХ×]/)`, fallback `localeCompare` desc)
+- **Файлы**: `src/pages/DirectoriesPage.tsx` (`ConsumablesPanel`), `src/services/directoriesService.ts`, `src/types/index.ts` (`ConsumableCatalogItem`)
 
 ### Справочники — WB склады (11.05.2026)
 - `patch_wb_system_warehouses.sql`: 120+ реальных складов WB + 5 международных (Алматы, Астана, Бишкек, Минск, Ташкент)
@@ -648,6 +686,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 45. patch_batches_short_id.sql  ← Per-account short_id для fulfillment_batches (P-N в URL)
 46. patch_outsource.sql              ← Аутсорс-система: batch_outsource_stages, batch_stage_invites, batch_journal, batch_archive_votes, batch_notifications; C-0; RLS; RPCs
 47. patch_outsource_partners.sql     ← B2B-партнёры: outsource_partners + RLS + 4 RPCs (send/respond/get/remove)
+48. patch_consumable_catalog_prices.sql ← Поля price/cost/currency в consumable_catalog (⚠️ применить)
 
 4. `npm run dev`
 

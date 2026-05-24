@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { AccountCurrency, Carrier, CarrierTariff, Consumable, FulfillmentWorkTariff, WbUnloadTariff, Warehouse } from '../types'
+import type { AccountCurrency, Carrier, CarrierTariff, Consumable, ConsumableCatalogItem, FulfillmentWorkTariff, WbUnloadTariff, Warehouse } from '../types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => supabase as any
@@ -246,6 +246,19 @@ export const deleteAccountCurrency = async (id: string): Promise<void> => {
   if (error) throw error
 }
 
+export const setPrimaryCurrency = async (accountId: string, id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  await db().from('account_currencies').update({ is_primary: false }).eq('account_id', accountId)
+  const { error } = await db().from('account_currencies').update({ is_primary: true }).eq('id', id)
+  if (error) throw error
+}
+
+export const updateCurrencyRate = async (id: string, rate: number): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await db().from('account_currencies').update({ exchange_rate: rate }).eq('id', id)
+  if (error) throw error
+}
+
 export const fetchStageCurrencies = async (accountId: string): Promise<Record<string, string>> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await db()
@@ -314,11 +327,13 @@ export const addConsumable = async (
   price: number,
   cost: number,
   currency = 'RUB',
+  kind: string | null = null,
+  size: string | null = null,
 ): Promise<Consumable> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await db()
     .from('consumables')
-    .insert({ account_id: accountId, name, price, cost, currency })
+    .insert({ account_id: accountId, name, price, cost, currency, kind, size })
     .select()
     .single()
   if (error) throw error
@@ -327,7 +342,7 @@ export const addConsumable = async (
 
 export const updateConsumable = async (
   id: string,
-  patch: { name?: string; price?: number; cost?: number; currency?: string },
+  patch: { name?: string; price?: number; cost?: number; currency?: string; kind?: string | null; size?: string | null },
 ): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await db()
@@ -341,6 +356,57 @@ export const deleteConsumable = async (id: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await db()
     .from('consumables')
+    .delete()
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const fetchConsumableCatalog = async (accountId: string): Promise<ConsumableCatalogItem[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await db()
+    .from('consumable_catalog')
+    .select('*')
+    .eq('account_id', accountId)
+    .order('kind', { ascending: true })
+    .order('size', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as ConsumableCatalogItem[]
+}
+
+export const addConsumableCatalogItem = async (
+  accountId: string,
+  kind: string,
+  size: string,
+  price = 0,
+  cost = 0,
+  currency = 'RUB',
+): Promise<ConsumableCatalogItem> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await db()
+    .from('consumable_catalog')
+    .insert({ account_id: accountId, kind, size, price, cost, currency })
+    .select()
+    .single()
+  if (error) throw error
+  return data as ConsumableCatalogItem
+}
+
+export const updateConsumableCatalogItem = async (
+  id: string,
+  patch: { size?: string; price?: number; cost?: number; currency?: string },
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await db()
+    .from('consumable_catalog')
+    .update(patch)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export const deleteConsumableCatalogItem = async (id: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await db()
+    .from('consumable_catalog')
     .delete()
     .eq('id', id)
   if (error) throw error
