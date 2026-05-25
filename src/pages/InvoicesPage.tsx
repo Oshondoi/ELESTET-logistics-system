@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabase'
 import type {
   FulfillmentBatch, FulfillmentBatchStatus, FulfillmentOtkLog, FulfillmentMarkingLog,
   FulfillmentWorkTariff, FulfillmentSupplyWithBoxes, BatchConsumable, Consumable, Store, Trip, TripLine,
-  CarrierTariff, WbUnloadTariff, ConsumableCatalogItem, FulfillmentPackagingLog,
+  ConsumableCatalogItem, FulfillmentPackagingLog,
 } from '../types'
 
 type Tab = 'invoice' | 'payroll' | 'earned'
@@ -89,9 +89,8 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     supply: FulfillmentSupplyWithBoxes
     trip: Trip | null
     tripLine: TripLine | null
-    carrierTariff: CarrierTariff | null
-    wbUnloadTariff: WbUnloadTariff | null
-  }>>([])
+    workTariff: FulfillmentWorkTariff | null
+  }>>([])  
   const [logisticsLoading, setLogisticsLoading] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [tgClicked, setTgClicked] = useState(false)
@@ -153,19 +152,16 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     if (suppliesWithTrip.length === 0) return
     setLogisticsLoading(true)
     const fetchLogistics = async () => {
-      // Кэш: чтобы не дублировать запросы при нескольких поставках с одним рейсом/перевозчиком
+      // Кэш: чтобы не дублировать запросы при нескольких поставках с одним рейсом/складом
       const tripCache: Record<string, Trip> = {}
       const tripLineCache: Record<string, TripLine> = {}
-      const carrierIdCache: Record<string, string | null> = {}
-      const warehouseIdCache: Record<string, string | null> = {}
-      const carrierTariffCache: Record<string, CarrierTariff | null> = {}
-      const wbTariffCache: Record<string, WbUnloadTariff | null> = {}
+      const warehouseIdCache: Record<string, string> = {}  // отметка «уже запрашивали»
+      const wbTariffCache: Record<string, FulfillmentWorkTariff | null> = {}
       const results: Array<{
         supply: FulfillmentSupplyWithBoxes
         trip: Trip | null
         tripLine: TripLine | null
-        carrierTariff: CarrierTariff | null
-        wbUnloadTariff: WbUnloadTariff | null
+        workTariff: FulfillmentWorkTariff | null
       }> = []
       for (const supply of suppliesWithTrip) {
         let trip: Trip | null = null
@@ -188,44 +184,26 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
             if (tripLine) tripLineCache[supply.trip_line_id] = tripLine
           }
         }
-        let carrierTariff: CarrierTariff | null = null
-        let wbUnloadTariff: WbUnloadTariff | null = null
-        if (trip && tripLine) {
-          let carrierId: string | null = null
-          if (trip.carrier in carrierIdCache) {
-            carrierId = carrierIdCache[trip.carrier]
+        // Тариф берётся из fulfillment_work_tariffs (stage=wb_unload, name=склад назначения)
+        let workTariff: FulfillmentWorkTariff | null = null
+        if (tripLine?.destination_warehouse) {
+          const wName = tripLine.destination_warehouse
+          if (wName in warehouseIdCache) {
+            workTariff = wbTariffCache[wName] ?? null
           } else {
-            const { data } = await supabase!.from('carriers').select('id').eq('account_id', batch.account_id).eq('name', trip.carrier).limit(1)
-            carrierId = (data as Array<{ id: string }> | null)?.[0]?.id ?? null
-            carrierIdCache[trip.carrier] = carrierId
-          }
-          let warehouseId: string | null = null
-          if (tripLine.destination_warehouse in warehouseIdCache) {
-            warehouseId = warehouseIdCache[tripLine.destination_warehouse]
-          } else {
-            const { data } = await supabase!.from('warehouses').select('id').eq('name', tripLine.destination_warehouse).limit(1)
-            warehouseId = (data as Array<{ id: string }> | null)?.[0]?.id ?? null
-            warehouseIdCache[tripLine.destination_warehouse] = warehouseId
-          }
-          if (carrierId && warehouseId) {
-            const cacheKey = `${carrierId}_${warehouseId}`
-            if (cacheKey in carrierTariffCache) {
-              carrierTariff = carrierTariffCache[cacheKey]
-            } else {
-              const { data } = await supabase!.from('carrier_tariffs').select('*').eq('carrier_id', carrierId).eq('warehouse_id', warehouseId).maybeSingle()
-              carrierTariff = (data as CarrierTariff | null) ?? null
-              carrierTariffCache[cacheKey] = carrierTariff
-            }
-            if (warehouseId in wbTariffCache) {
-              wbUnloadTariff = wbTariffCache[warehouseId]
-            } else {
-              const { data } = await supabase!.from('wb_unload_tariffs').select('*').eq('account_id', batch.account_id).eq('warehouse_id', warehouseId).maybeSingle()
-              wbUnloadTariff = (data as WbUnloadTariff | null) ?? null
-              wbTariffCache[warehouseId] = wbUnloadTariff
-            }
+            const { data } = await (supabase as any)
+              .from('fulfillment_work_tariffs')
+              .select('*')
+              .eq('account_id', batch.account_id)
+              .eq('stage', 'wb_unload')
+              .eq('name', wName)
+              .maybeSingle()
+            workTariff = (data as FulfillmentWorkTariff | null) ?? null
+            warehouseIdCache[wName] = wName  // отмечаем что уже запрашивали
+            wbTariffCache[wName] = workTariff
           }
         }
-        results.push({ supply, trip, tripLine, carrierTariff, wbUnloadTariff })
+        results.push({ supply, trip, tripLine, workTariff })
       }
       setSupplyLogisticsData(results)
     }
@@ -312,15 +290,13 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     return total
   }, [batch.stage_packaging, batchConsumables, accountConsumables, catalogConsumableLines])
   const logisticsSubtotal = useMemo(() => {
-    return supplyLogisticsData.reduce((total, { supply, tripLine, carrierTariff, wbUnloadTariff }) => {
+    return supplyLogisticsData.reduce((total, { supply, tripLine, workTariff }) => {
       const effectiveTariffType = supply.logistics_tariff_type ?? logisticsTariffType
-      if (!effectiveTariffType || !tripLine) return total
+      if (!effectiveTariffType || !tripLine || !workTariff) return total
       if (effectiveTariffType === 'per_box') {
-        return total + (carrierTariff?.price_per_box ?? 0) * tripLine.box_qty
+        return total + (workTariff.price_per_unit ?? 0) * tripLine.box_qty
       }
-      return total +
-        (carrierTariff?.price_per_kg ?? 0) * (tripLine.weight ?? 0) +
-        (wbUnloadTariff?.price_per_box ?? 0) * tripLine.box_qty
+      return total + (workTariff.price_per_kg ?? 0) * (tripLine.weight ?? 0)
     }, 0)
   }, [supplyLogisticsData, logisticsTariffType])
   const grandTotal = fulfillmentSubtotal + consumablesSubtotal + logisticsSubtotal
@@ -527,7 +503,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                 ) : (
                   <>
                     {/* Переключатель типа тарифа — глобальный (дефолт для поставок без индивидуального типа) */}
-                    {supplyLogisticsData.some(({ carrierTariff, wbUnloadTariff }) => carrierTariff || wbUnloadTariff) && (
+                    {supplyLogisticsData.some(({ workTariff }) => workTariff) && (
                       <div className="flex gap-0.5 rounded-xl bg-slate-100 p-0.5 mb-2">
                         <button
                           type="button"
@@ -562,7 +538,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {supplyLogisticsData.map(({ supply, tripLine, carrierTariff, wbUnloadTariff }) => {
+                        {supplyLogisticsData.map(({ supply, tripLine, workTariff }) => {
                           const effectiveTariffType = supply.logistics_tariff_type ?? logisticsTariffType
                           const warehouseName = supply.warehouse_name || tripLine?.destination_warehouse || ''
                           const warehouseLabel = warehouseName ? (
@@ -571,50 +547,39 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                           return (
                             <React.Fragment key={supply.id}>
                               {/* За короб */}
-                              {effectiveTariffType === 'per_box' && carrierTariff && tripLine && (
+                              {effectiveTariffType === 'per_box' && workTariff && tripLine && (
                                 <tr>
                                   <td className="py-2 text-slate-800">Перевозка{warehouseLabel}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">{carrierTariff.price_per_box ?? '—'}</td>
+                                  <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit > 0 ? workTariff.price_per_unit : '—'}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">{tripLine.box_qty}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">
-                                    {(carrierTariff.price_per_box ?? 0) > 0 ? carrierTariff.price_per_box! * tripLine.box_qty : '—'}
+                                    {workTariff.price_per_unit > 0 ? workTariff.price_per_unit * tripLine.box_qty : '—'}
                                   </td>
                                 </tr>
                               )}
-                              {/* За кг — перевозка по весу */}
-                              {effectiveTariffType === 'per_kg' && carrierTariff && tripLine && (
+                              {/* За кг */}
+                              {effectiveTariffType === 'per_kg' && workTariff && tripLine && (
                                 <tr>
                                   <td className="py-2 text-slate-800">Перевозка (кг){warehouseLabel}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">{carrierTariff.price_per_kg ?? '—'}</td>
+                                  <td className="py-2 text-right font-medium text-slate-900">{(workTariff.price_per_kg ?? 0) > 0 ? workTariff.price_per_kg : '—'}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">{tripLine.weight ?? '—'}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">
-                                    {(carrierTariff.price_per_kg ?? 0) > 0 && (tripLine.weight ?? 0) > 0
-                                      ? carrierTariff.price_per_kg! * tripLine.weight!
+                                    {(workTariff.price_per_kg ?? 0) > 0 && (tripLine.weight ?? 0) > 0
+                                      ? workTariff.price_per_kg! * tripLine.weight!
                                       : '—'}
                                   </td>
                                 </tr>
                               )}
-                              {/* За кг — разгрузка ВБ отдельно */}
-                              {effectiveTariffType === 'per_kg' && tripLine && (
-                                <tr>
-                                  <td className="py-2 text-slate-800">Разгрузка ВБ{warehouseLabel}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">{wbUnloadTariff?.price_per_box ?? '—'}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">{tripLine.box_qty}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">
-                                    {(wbUnloadTariff?.price_per_box ?? 0) > 0 ? wbUnloadTariff!.price_per_box * tripLine.box_qty : '—'}
-                                  </td>
-                                </tr>
-                              )}
-                              {/* Нет тарифов для этой поставки */}
-                              {!carrierTariff && !wbUnloadTariff && (
+                              {/* Нет тарифа для этой поставки */}
+                              {!workTariff && (
                                 <tr>
                                   <td colSpan={4} className="py-3 text-xs text-slate-400">
                                     Тарифы не настроены{warehouseName ? ` (${warehouseName})` : ''}
                                   </td>
                                 </tr>
                               )}
-                              {/* Тарифы есть, но тип не определён */}
-                              {(carrierTariff || wbUnloadTariff) && !effectiveTariffType && (
+                              {/* Тариф есть, но тип не определён */}
+                              {workTariff && !effectiveTariffType && (
                                 <tr>
                                   <td colSpan={4} className="py-3 text-xs text-amber-500">Выберите тип тарифа выше ↑</td>
                                 </tr>
