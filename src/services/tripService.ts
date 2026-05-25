@@ -123,6 +123,16 @@ export const updateTripLineTripId = async (accountId: string, lineId: string, ne
   if (error) throw error
 }
 
+export const updateTripLineWeight = async (accountId: string, lineId: string, weight: number | null): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    .update({ weight } as any)
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+  if (error) throw error
+}
+
 export const archiveTripLine = async (accountId: string, lineId: string): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await supabase.rpc('archive_trip_line', {

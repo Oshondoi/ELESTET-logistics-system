@@ -83,7 +83,7 @@ import { OutsourceStagesModal } from '../components/fulfillment/OutsourceStagesM
 import {
   findProductByBarcode,
 } from '../services/fulfillmentService'
-import { createTrip, addTripLine, setTripLineFulfillmentBatch, updateTripLineTripId } from '../services/tripService'
+import { createTrip, addTripLine, setTripLineFulfillmentBatch, updateTripLineTripId, updateTripLineWeight } from '../services/tripService'
 import { fetchWorkTariffs, fetchConsumables, fetchConsumableCatalog } from '../services/directoriesService'
 import { Card } from '../components/ui/Card'
 import { InvoicePhotoCell } from '../components/ui/InvoicePhotoCell'
@@ -561,6 +561,7 @@ const BatchDetailModal = ({
   const [deleteSupplyConfirm, setDeleteSupplyConfirm] = useState<string | null>(null) // supplyId
   // Тип тарифа логистики для каждой поставки (переопределение, NULL = наследует от партии)
   const [supplyTariffTypeMap, setSupplyTariffTypeMap] = useState<Record<string, 'per_box' | 'per_kg' | null>>({})
+  const [supplyWeightMap, setSupplyWeightMap] = useState<Record<string, string>>({})
 
   // Буфер изменений приёмки
   const [receptionDraft, setReceptionDraft] = useState<Record<string, number>>(
@@ -759,6 +760,10 @@ const BatchDetailModal = ({
         const tariffMap: Record<string, 'per_box' | 'per_kg' | null> = {}
         loaded.forEach((s) => { tariffMap[s.id] = s.logistics_tariff_type ?? null })
         setSupplyTariffTypeMap(tariffMap)
+        // Инициализировать карту весов
+        const weightMap: Record<string, string> = {}
+        loaded.forEach((s) => { weightMap[s.id] = s.weight != null ? String(s.weight) : '' })
+        setSupplyWeightMap(weightMap)
         if (viewStage === 'logistics') {
           // Перестраиваем слоты из реальных данных — чтобы завершённые партии отображались корректно
           rebuildSlotsFromSupplies(loaded)
@@ -5367,6 +5372,21 @@ const BatchDetailModal = ({
                             {otherSlot && (
                               <div className="text-[10px] text-amber-500 pl-5 mt-0.5 truncate">{otherSlot.tripLabel || 'Другой рейс'}</div>
                             )}
+                            {/* Вес поставки */}
+                            <div className="mt-1 pl-5 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="number"
+                                value={supplyWeightMap[supply.id] ?? ''}
+                                onChange={(e) => {
+                                  setSupplyWeightMap((prev) => ({ ...prev, [supply.id]: e.target.value }))
+                                  setIsDirty(true)
+                                }}
+                                placeholder="кг"
+                                min={0}
+                                className="w-14 rounded px-1.5 py-0.5 text-[10px] border border-slate-200 text-slate-700 focus:outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                              <span className="text-[10px] text-slate-400">кг</span>
+                            </div>
                           </div>
                         )
                       })}
@@ -5442,11 +5462,15 @@ const BatchDetailModal = ({
                           setBatch((prev) => ({ ...prev, trip_id: firstTripId }))
                           onBatchUpdated({ ...updated, trip_id: firstTripId })
                         }
-                        // Сохранить тип тарифа для каждой поставки
+                        // Сохранить тип тарифа и вес для каждой поставки
                         await Promise.all(
-                          supplies.map((s) =>
-                            updateSupply(s.id, { logistics_tariff_type: supplyTariffTypeMap[s.id] ?? null })
-                          )
+                          supplies.map((s) => {
+                            const w = parseFloat(supplyWeightMap[s.id] ?? '')
+                            return updateSupply(s.id, {
+                              logistics_tariff_type: supplyTariffTypeMap[s.id] ?? null,
+                              weight: isNaN(w) ? null : w,
+                            })
+                          })
                         )
                         // Если этап уже завершён — синхронизировать поставки со страницей Логистики
                         if (batch.current_stage !== 'logistics' && batch.store_id) {
@@ -5465,6 +5489,12 @@ const BatchDetailModal = ({
                                 await updateTripLineTripId(batch.account_id, supply.trip_line_id, tripId)
                                 await updateSupply(supply.id, { trip_id: tripId })
                               }
+                              // Обновить вес trip_line из поставки
+                              const updatedW = parseFloat(supplyWeightMap[supply.id] ?? '')
+                              const newWeight = isNaN(updatedW) ? (supply.weight ?? null) : updatedW
+                              if (newWeight !== null) {
+                                await updateTripLineWeight(batch.account_id, supply.trip_line_id, newWeight)
+                              }
                             } else {
                               const boxQty = supply.boxes.length
                               const unitsQty = supply.boxes.reduce((sum, box) => sum + box.items.reduce((s2, item) => s2 + item.qty, 0), 0)
@@ -5475,7 +5505,7 @@ const BatchDetailModal = ({
                                 units_qty: unitsQty,
                                 units_total: unitsQty,
                                 arrived_box_qty: 0,
-                                weight: 0,
+                                weight: (() => { const w = parseFloat(supplyWeightMap[supply.id] ?? ''); return isNaN(w) ? (supply.weight ?? 0) : w })(),
                                 planned_marketplace_delivery_date: '',
                                 arrival_date: '',
                                 reception_date: receptionDateStr,
