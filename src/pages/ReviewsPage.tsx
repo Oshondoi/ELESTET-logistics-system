@@ -1368,13 +1368,25 @@ export const ReviewsPage = ({
 
                 {/* Answered badge (answered tab) */}
                 {tab === 'answered' && fb.answer?.text && (
-                  <div className="mt-3 border-t border-slate-100 pt-3">
+                  <div className="mt-3 border-t border-slate-100 pt-3 flex flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
                       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                       Ответ отправлен
                     </span>
+                    {row.reply_sent_at && (
+                      <span className="text-xs text-slate-400">
+                        {new Date(row.reply_sent_at).toLocaleString('ru-RU', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          timeZoneName: 'short',
+                        })}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
