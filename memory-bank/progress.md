@@ -3,6 +3,26 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 25.05.2026 — Отзывы: reply_source бейдж + компактная автоматизация
+
+### reply_source — источник ответа
+- Колонка `reply_source text` добавлена в `wb_feedbacks` (SQL применён)
+- Тип `WbFeedbackRow` обновлён; `markReplySent` принимает `source: 'manual' | 'auto'`
+- Edge Function `auto-reply` пишет `reply_source: 'auto'`; задеплоена
+- Вкладка «Отвечено»: `🤖 Автоответ` (violet) / `✍ Вручную` (slate) рядом с артикулом
+- Старые ответы: `null` → бейдж не показывается (норма)
+
+### Автоматизация — карточки компактнее
+- Кнопка «Выбрать» в одну строку с заголовком «Магазины» / «Артикулы»
+- Меньше вертикального пространства занято под контролы
+
+### Деплой
+- `supabase db query --linked` — SQL применён
+- `supabase functions deploy auto-reply` — EF задеплоена
+- `git push` — commit `e4a563b`, ветки `main` и `master`
+
+---
+
 ## Что сделано за сессию 24.05.2026 — Справочники → Валюты + InvoicesPage + WorkTariffs фиксы
 
 ### InvoicesPage — карточка «Расходники» (реальные данные из БД)

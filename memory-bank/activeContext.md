@@ -1,6 +1,48 @@
 # Active Context
 
-## Current Focus (24.05.2026) — Справочники → Валюты + InvoicesPage расходники + WorkTariffs фиксы — ЗАВЕРШЕНО
+## Current Focus (25.05.2026) — Отзывы: бейдж источника ответа (auto/manual) — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### 1. reply_source — новая колонка в БД
+- SQL `supabase/patch_reply_source.sql`: `ALTER TABLE wb_feedbacks ADD COLUMN IF NOT EXISTS reply_source text`
+- Значения: `'auto'` | `'manual'` | `null` (старые записи)
+- Применено в Supabase через `supabase db query --linked`
+
+#### 2. Типы и сервис
+- `WbFeedbackRow` в `src/types/index.ts`: добавлено поле `reply_source: 'manual' | 'auto' | null`
+- `loadFeedbackRowsFromDb` в `reviewsService.ts`: select и маппинг включает `reply_source`
+- `markReplySent(feedbackId, replyText, currentData?, source?)`: новый параметр `source: 'manual' | 'auto' = 'manual'`
+- Оба вызова `markReplySent` в ReviewsPage передают `'manual'`
+
+#### 3. Edge Function `auto-reply`
+- DB update теперь включает `reply_source: 'auto'`
+- Задеплоено: `supabase functions deploy auto-reply --project-ref jzucxqakvgzpgtvagsnq`
+
+#### 4. UI — бейдж в карточке «Отвечено»
+- Рядом с артикулом и WB# в вкладке «Отвечено»:
+  - `🤖 Автоответ` (bg-violet-100 / text-violet-600) — ответ от cron/EF
+  - `✍ Вручную` (bg-slate-100 / text-slate-500) — ответ из интерфейса
+  - Ничего — старые записи (`reply_source = null`)
+
+#### 5. Автоматизация — карточки Магазины/Артикулы компактнее
+- Кнопка «Выбрать» перенесена в одну строку с заголовком (flex justify-between)
+- Высота карточек уменьшилась, больше места для контента ниже
+
+### Ключевые файлы
+- `src/types/index.ts` (`WbFeedbackRow.reply_source`)
+- `src/services/reviewsService.ts` (`markReplySent`, `loadFeedbackRowsFromDb`)
+- `src/pages/ReviewsPage.tsx` (UI badge + compact automation cards)
+- `supabase/functions/auto-reply/index.ts` (`reply_source: 'auto'`)
+- `supabase/patch_reply_source.sql` (применён)
+
+### Важно
+- Старые ответы (до 25.05.2026) имеют `reply_source = null` — бейдж не показывается
+- Commit: `e4a563b` «feat: add reply_source badge (auto/manual) in answered reviews tab»
+
+---
+
+## Previous Focus (24.05.2026) — Справочники → Валюты + InvoicesPage расходники + WorkTariffs фиксы — ЗАВЕРШЕНО
 
 ### Что реализовано
 

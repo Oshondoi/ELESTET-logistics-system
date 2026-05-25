@@ -97,6 +97,17 @@ AI 01 = GTIN
 - Только чтение, фильтр по магазину, 4 чипа статистики в шапке
 - Сервис: `fetchMarkingDefectsByStore` + `MarkingDefectRow` в `fulfillmentService.ts`
 
+### Отзывы — источник ответа reply_source (25.05.2026)
+
+- **SQL** `patch_reply_source.sql` (применён): `wb_feedbacks.reply_source text` — `'auto'` | `'manual'` | `null`
+- **markReplySent** принимает `source: 'manual' | 'auto'` (default `'manual'`)
+- **Edge Function auto-reply** пишет `reply_source: 'auto'` при каждом автоответе
+- **Вкладка «Отвечено»**: бейдж рядом с артикулом:
+  - `🤖 Автоответ` (bg-violet-100) — ответ отправлен cron-автоматикой
+  - `✍ Вручную` (bg-slate-100) — ответ из интерфейса
+  - Пусто — записи до 25.05.2026 (reply_source = null)
+- **Автоматизация**: карточки «Магазины» и «Артикулы» стали однострочными (кнопка Выбрать inline с заголовком)
+
 ### Счёт клиенту — InvoicesPage расходники из каталога (24.05.2026)
 
 Карточка **«Расходники»** в InvoiceModal теперь показывает реальные данные:
