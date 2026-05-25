@@ -536,7 +536,9 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                                       <span className="text-[10px] text-slate-400">перевозка / кг</span>
                                     </td>
                                     <td className="py-2 text-right font-medium text-slate-900">{(workTariff.price_per_kg ?? 0) > 0 ? workTariff.price_per_kg : '—'}</td>
-                                    <td className="py-2 text-right font-medium text-slate-900">{supply.weight ?? '—'}</td>
+                                    <td className="py-2 text-right font-medium text-slate-900">
+                                      {supply.weight != null ? <>{supply.weight}<span className="text-[10px] text-slate-400 ml-0.5">кг</span></> : '—'}
+                                    </td>
                                     <td className="py-2 text-right font-medium text-slate-900">
                                       {(workTariff.price_per_kg ?? 0) > 0 && (supply.weight ?? 0) > 0
                                         ? workTariff.price_per_kg! * supply.weight!
@@ -547,7 +549,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                                     <tr>
                                       <td className="py-2 text-slate-800">
                                         {warehouseName && <span className="mr-1">{warehouseName}</span>}
-                                        <span className="text-[10px] text-slate-400">разгрузка ВБ / кор</span>
+                                        <span className="text-[10px] text-slate-400">Отгрузка на ВБ</span>
                                       </td>
                                       <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit}</td>
                                       <td className="py-2 text-right font-medium text-slate-900">{supply.boxes.length}</td>
