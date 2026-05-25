@@ -1419,51 +1419,61 @@ export const ReviewsPage = ({
           <div className="flex flex-wrap gap-4">
 
             {/* Магазины */}
-            <div className="flex-1 min-w-[200px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-sm font-semibold text-slate-800">Магазины</h3>
-              <p className="mt-0.5 text-xs text-slate-400">
-                {autoSettings.storeIds.length === 0
-                  ? 'Ни один магазин не выбран'
-                  : autoSettings.storeIds.length === storesWithKey.length
-                  ? `Все магазины (${storesWithKey.length})`
-                  : `Выбрано: ${autoSettings.storeIds.length} из ${storesWithKey.length}`}
-              </p>
-              <button
-                type="button"
-                onClick={() => { setPendingStoreIds(autoSettings.storeIds); setStoreModalOpen(true) }}
-                className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
-              >
-                Выбрать
-              </button>
+            <div className="flex-1 min-w-[200px] rounded-2xl border border-slate-200 bg-white px-5 py-3.5 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-slate-800">Магазины</h3>
+                  <p className="text-xs text-slate-400">
+                    {autoSettings.storeIds.length === 0
+                      ? 'Ни один не выбран'
+                      : autoSettings.storeIds.length === storesWithKey.length
+                      ? `Все (${storesWithKey.length})`
+                      : `Выбрано: ${autoSettings.storeIds.length} из ${storesWithKey.length}`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setPendingStoreIds(autoSettings.storeIds); setStoreModalOpen(true) }}
+                  className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
+                >
+                  Выбрать
+                </button>
+              </div>
               {autoSettings.storeIds.length === 0 && storesWithKey.length > 0 && (
-                <p className="mt-2 text-[11px] text-amber-600">Выберите хотя бы один магазин для запуска автоматизации</p>
+                <p className="mt-1.5 text-[11px] text-amber-600">Выберите хотя бы один магазин для запуска автоматизации</p>
               )}
             </div>
 
             {/* Артикулы */}
-            <div className="flex-1 min-w-[200px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-sm font-semibold text-slate-800">Артикулы</h3>
-              <p className="mt-0.5 text-xs text-slate-400">
-                {autoSettings.excludedNmIds.length === 0
-                  ? 'Все артикулы активны'
-                  : `Исключено: ${autoSettings.excludedNmIds.length} арт.`}
-              </p>
-              <button
-                type="button"
-                onClick={() => { setPendingExcludedIds(autoSettings.excludedNmIds); setArtModalStoreFilter(''); setArtModalProducts([]); setArtSearch(''); setArtModalOpen(true) }}
-                className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
-              >
-                Выбрать
-              </button>
-              {autoSettings.excludedNmIds.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => saveAutoSettingsToStorage({ ...autoSettings, excludedNmIds: [] })}
-                  className="mt-2 block text-[11px] text-slate-400 hover:text-red-500 transition"
-                >
-                  Включить все
-                </button>
-              )}
+            <div className="flex-1 min-w-[200px] rounded-2xl border border-slate-200 bg-white px-5 py-3.5 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-slate-800">Артикулы</h3>
+                  <p className="text-xs text-slate-400">
+                    {autoSettings.excludedNmIds.length === 0
+                      ? 'Все активны'
+                      : `Исключено: ${autoSettings.excludedNmIds.length} арт.`}
+                  </p>
+                </div>
+                <div className="shrink-0 flex items-center gap-2">
+                  {autoSettings.excludedNmIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => saveAutoSettingsToStorage({ ...autoSettings, excludedNmIds: [] })}
+                      className="text-[11px] text-slate-400 hover:text-red-500 transition"
+                    >
+                      Включить все
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setPendingExcludedIds(autoSettings.excludedNmIds); setArtModalStoreFilter(''); setArtModalProducts([]); setArtSearch(''); setArtModalOpen(true) }}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
+                  >
+                    Выбрать
+                  </button>
+                </div>
+              </div>
             </div>
 
           </div>
