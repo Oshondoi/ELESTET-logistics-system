@@ -20,6 +20,8 @@ import {
   updateCurrencyRate,
   fetchStageCurrencies,
   upsertStageCurrency,
+  fetchWarehouseSettings,
+  saveWarehouseSettings,
   fetchConsumables,
   addConsumable,
   updateConsumable,
@@ -29,7 +31,7 @@ import {
   updateConsumableCatalogItem,
   deleteConsumableCatalogItem,
 } from '../services/directoriesService'
-import type { CarrierUpdateData } from '../services/directoriesService'
+import type { CarrierUpdateData, WarehouseOrderSettings } from '../services/directoriesService'
 
 const CONSUMABLE_KIND_OPTIONS = [
   { id: 'box', label: 'Короб' },
@@ -262,21 +264,13 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = t
 
 const WarehousesPanel = ({
   title, items, onAdd, onDelete, onUpdate, canManage = true, canDelete = true, accountId,
-}: DirectoryPanelProps & { accountId: string }) => {
-  const SORT_KEY = 'warehouse_sort_mode'
-  const ORDER_KEY = `warehouse_order_${accountId}`
-
-  const [sortMode, setSortMode] = useState<'alpha' | 'custom'>(() => {
-    const s = localStorage.getItem(SORT_KEY)
-    return s === 'custom' ? 'custom' : 'alpha'
-  })
-  const [customOrder, setCustomOrder] = useState<string[]>(() => {
-    try {
-      const s = localStorage.getItem(ORDER_KEY)
-      return s ? (JSON.parse(s) as string[]) : []
-    } catch { return [] }
-  })
-
+  sortMode, orderIds, onSortChange,
+}: DirectoryPanelProps & {
+  accountId: string
+  sortMode: 'alpha' | 'custom'
+  orderIds: string[]
+  onSortChange: (next: import('../services/directoriesService').WarehouseOrderSettings) => void
+}) => {
   const [inputValue, setInputValue] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
@@ -291,27 +285,25 @@ const WarehousesPanel = ({
 
   const displayItems = useMemo(() => {
     if (sortMode === 'alpha') return [...items].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
-    const orderMap = new Map(customOrder.map((id, i) => [id, i]))
+    const orderMap = new Map(orderIds.map((id, i) => [id, i]))
     return [...items].sort((a, b) => (orderMap.get(a.id) ?? 999999) - (orderMap.get(b.id) ?? 999999))
-  }, [sortMode, items, customOrder])
+  }, [sortMode, items, orderIds])
 
   const applySortMode = (mode: 'alpha' | 'custom') => {
-    setSortMode(mode)
-    localStorage.setItem(SORT_KEY, mode)
     if (mode === 'custom') {
-      const order = [...items].sort((a, b) => a.name.localeCompare(b.name, 'ru')).map(i => i.id)
+      const alpha = [...items].sort((a, b) => a.name.localeCompare(b.name, 'ru')).map(i => i.id)
       const merged = [
-        ...customOrder.filter(id => items.some(x => x.id === id)),
-        ...order.filter(id => !customOrder.includes(id)),
+        ...orderIds.filter(id => items.some(x => x.id === id)),
+        ...alpha.filter(id => !orderIds.includes(id)),
       ]
-      setCustomOrder(merged)
-      localStorage.setItem(ORDER_KEY, JSON.stringify(merged))
+      onSortChange({ sort_mode: 'custom', order_ids: merged })
+    } else {
+      onSortChange({ sort_mode: 'alpha', order_ids: orderIds })
     }
   }
 
   const saveOrder = (newOrder: string[]) => {
-    setCustomOrder(newOrder)
-    localStorage.setItem(ORDER_KEY, JSON.stringify(newOrder))
+    onSortChange({ sort_mode: 'custom', order_ids: newOrder })
   }
 
   const handleMoveToPosition = (id: string, targetPos: number) => {
@@ -1918,10 +1910,12 @@ const WorkTariffsPanel = ({
   accountId,
   canManage,
   warehouses,
+  sortedWarehouses,
 }: {
   accountId: string
   canManage: boolean
   warehouses: Warehouse[]
+  sortedWarehouses: Warehouse[]
 }) => {
   const [tariffs, setTariffs] = useState<FulfillmentWorkTariff[]>([])
   const [loading, setLoading] = useState(true)
@@ -2112,19 +2106,7 @@ const WorkTariffsPanel = ({
   }
 
   // Объединённый список строк: склады из каталога (виртуальные) + реальные тарифы
-  const sortedWarehouses = useMemo(() => {
-    const sortMode = localStorage.getItem('warehouse_sort_mode')
-    if (sortMode === 'custom') {
-      try {
-        const orderStr = localStorage.getItem(`warehouse_order_${accountId}`)
-        const order: string[] = orderStr ? (JSON.parse(orderStr) as string[]) : []
-        const orderMap = new Map(order.map((id, i) => [id, i]))
-        return [...warehouses].sort((a, b) => (orderMap.get(a.id) ?? 999999) - (orderMap.get(b.id) ?? 999999))
-      } catch { /* fallthrough */ }
-    }
-    return [...warehouses].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
-  }, [warehouses, accountId])
-
+  // sortedWarehouses приходит как prop (порядок синхронизирован через БД)
   const displayRows: Array<{ kind: 'tariff'; tariff: FulfillmentWorkTariff } | { kind: 'virtual'; warehouse: Warehouse }> = (() => {
     if (!isWarehouseStage) return stageTariffs.map(t => ({ kind: 'tariff' as const, tariff: t }))
     const result: Array<{ kind: 'tariff'; tariff: FulfillmentWorkTariff } | { kind: 'virtual'; warehouse: Warehouse }> = []
@@ -2276,10 +2258,12 @@ const WorkTariffsPanel = ({
                 <div className="text-xs font-medium text-emerald-600">Исполнителю</div>
                 <div className="text-[10px] font-normal text-emerald-400">цена / за единицу</div>
               </th>
-              <th className="w-28 px-4 py-2 text-center">
-                <div className="text-xs font-medium text-blue-600">Старшему</div>
-                <div className="text-[10px] font-normal text-blue-400">цена / за единицу</div>
-              </th>
+              {!isWarehouseStage && (
+                <th className="w-28 px-4 py-2 text-center">
+                  <div className="text-xs font-medium text-blue-600">Старшему</div>
+                  <div className="text-[10px] font-normal text-blue-400">цена / за единицу</div>
+                </th>
+              )}
               <th className="w-24 px-4 py-2 text-center text-xs font-medium text-slate-500">Валюта</th>
               {canManage && <th className="w-[120px] px-4 py-2" />}
             </tr>
@@ -2338,16 +2322,18 @@ const WorkTariffsPanel = ({
                     className="w-full rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-center text-sm text-emerald-700 outline-none focus:border-emerald-400 placeholder:text-emerald-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                 </td>
-                <td className="px-4 py-2">
-                  <input
-                    type="number" min="0" step="any" placeholder="0"
-                    value={addPriceSenior}
-                    onChange={(e) => setAddPriceSenior(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
-                    title="Старшему"
-                    className="w-full rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-center text-sm text-blue-700 outline-none focus:border-blue-400 placeholder:text-blue-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  />
-                </td>
+                {!isWarehouseStage && (
+                  <td className="px-4 py-2">
+                    <input
+                      type="number" min="0" step="any" placeholder="0"
+                      value={addPriceSenior}
+                      onChange={(e) => setAddPriceSenior(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd() }}
+                      title="Старшему"
+                      className="w-full rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-center text-sm text-blue-700 outline-none focus:border-blue-400 placeholder:text-blue-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
+                  </td>
+                )}
                 <td className="px-4 py-2 text-center">
                   {stageCurrencies[activeStage] ? (
                     <span className="rounded-md bg-amber-100 px-2 py-1.5 text-xs font-medium text-amber-700">{stageCurrencies[activeStage]}</span>
@@ -2378,7 +2364,7 @@ const WorkTariffsPanel = ({
             {/* Data rows */}
             {displayRows.length === 0 ? (
               <tr>
-                <td colSpan={canManage ? (isWarehouseStage ? 7 : 6) : (isWarehouseStage ? 6 : 5)} className="py-8 text-center text-sm text-slate-400">Нет тарифов в этом разделе</td>
+                <td colSpan={canManage ? 6 : 5} className="py-8 text-center text-sm text-slate-400">Нет тарифов в этом разделе</td>
               </tr>
             ) : (
                 displayRows.map((row) => {
@@ -2450,23 +2436,7 @@ const WorkTariffsPanel = ({
                             >{vWorker !== '' && isVEditing ? vWorker : '—'}</div>
                           )}
                         </td>
-                        <td className={vViewCell}>
-                          {isVEditing && vFocusField === 'senior' ? (
-                            <input
-                              type="number" min="0" step="any" placeholder="0"
-                              value={vSenior} autoFocus
-                              onChange={(e) => setVSenior(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') void saveVirtualRow(w.name); if (e.key === 'Escape') setEditingVirtualId(null) }}
-                              className="w-full rounded-lg border border-blue-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                            />
-                          ) : (
-                            <div
-                              className="rounded-lg px-2 py-1 text-center text-sm font-medium text-blue-600 hover:bg-white hover:ring-1 hover:ring-blue-200"
-                              onMouseDown={isVEditing ? (e) => e.preventDefault() : undefined}
-                              onClick={canManage ? () => { isVEditing ? setVFocusField('senior') : startEditVirtual(w.id, 'senior') } : undefined}
-                            >{vSenior !== '' && isVEditing ? vSenior : '—'}</div>
-                          )}
-                        </td>
+
                         <td className="px-4 py-1.5 text-center">
                           <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-400">
                             {stageCurrencies[activeStage] || addCurrency || 'RUB'}
@@ -2565,26 +2535,28 @@ const WorkTariffsPanel = ({
                           >{editPriceWorker !== '' && isEditing ? editPriceWorker : (t.price_worker ?? 0)}</div>
                         )}
                       </td>
-                      <td className={viewCell}>
-                        {isEditing && focusField === 'senior' ? (
-                          <input
-                            type="number" min="0" step="any"
-                            placeholder={String(t.price_senior ?? 0)}
-                            value={editPriceSenior}
-                            autoFocus
-                            onChange={(e) => setEditPriceSenior(e.target.value)}
-                            onBlur={() => { void saveCurrentValues(t.id); setEditPriceSenior('') }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
-                            className="w-full rounded-lg border border-blue-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                          />
-                        ) : (
-                          <div
-                            className="rounded-lg px-2 py-1 text-center text-sm font-medium text-blue-700 hover:bg-white hover:ring-1 hover:ring-blue-200"
-                            onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
-                            onClick={canManage ? (isEditing ? () => void switchFocusField('senior', t.id) : () => startEdit(t, 'senior')) : undefined}
-                          >{editPriceSenior !== '' && isEditing ? editPriceSenior : (t.price_senior ?? 0)}</div>
-                        )}
-                      </td>
+                      {!isWarehouseStage && (
+                        <td className={viewCell}>
+                          {isEditing && focusField === 'senior' ? (
+                            <input
+                              type="number" min="0" step="any"
+                              placeholder={String(t.price_senior ?? 0)}
+                              value={editPriceSenior}
+                              autoFocus
+                              onChange={(e) => setEditPriceSenior(e.target.value)}
+                              onBlur={() => { void saveCurrentValues(t.id); setEditPriceSenior('') }}
+                              onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
+                              className="w-full rounded-lg border border-blue-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            />
+                          ) : (
+                            <div
+                              className="rounded-lg px-2 py-1 text-center text-sm font-medium text-blue-700 hover:bg-white hover:ring-1 hover:ring-blue-200"
+                              onMouseDown={isEditing ? (e) => e.preventDefault() : undefined}
+                              onClick={canManage ? (isEditing ? () => void switchFocusField('senior', t.id) : () => startEdit(t, 'senior')) : undefined}
+                            >{editPriceSenior !== '' && isEditing ? editPriceSenior : (t.price_senior ?? 0)}</div>
+                          )}
+                        </td>
+                      )}
                       <td className="px-4 py-1.5 text-center">
                         {isEditing ? (
                           stageCurrencies[activeStage] ? (
@@ -2676,6 +2648,25 @@ export const DirectoriesPage = ({
 }: DirectoriesPageProps) => {
   const [tariffCarrier, setTariffCarrier] = useState<Carrier | null>(null)
   const [editCarrier, setEditCarrier] = useState<Carrier | null>(null)
+
+  // ── Порядок складов (загружается из БД) ──────────────────────────
+  const [wsSettings, setWsSettings] = useState<WarehouseOrderSettings>({ sort_mode: 'alpha', order_ids: [] })
+  useEffect(() => {
+    void fetchWarehouseSettings(accountId).then(s => setWsSettings(s))
+  }, [accountId])
+
+  const sortedWarehouses = useMemo(() => {
+    if (wsSettings.sort_mode === 'custom') {
+      const orderMap = new Map(wsSettings.order_ids.map((id, i) => [id, i]))
+      return [...warehouses].sort((a, b) => (orderMap.get(a.id) ?? 999999) - (orderMap.get(b.id) ?? 999999))
+    }
+    return [...warehouses].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+  }, [wsSettings, warehouses])
+
+  const handleWsSettingsChange = (next: WarehouseOrderSettings) => {
+    setWsSettings(next)
+    void saveWarehouseSettings(accountId, next)
+  }
   const [tab, setTab] = useState<'dirs' | 'work' | 'consumables' | 'currencies'>(
     () => {
       const saved = localStorage.getItem('dirs_tab')
@@ -2739,12 +2730,15 @@ export const DirectoriesPage = ({
             canManage={canManage}
             canDelete={canDelete}
             accountId={accountId}
+            sortMode={wsSettings.sort_mode}
+            orderIds={wsSettings.order_ids}
+            onSortChange={handleWsSettingsChange}
           />
         </div>
       )}
 
       {tab === 'work' && (
-        <WorkTariffsPanel accountId={accountId} canManage={canManageTariffs} warehouses={warehouses} />
+        <WorkTariffsPanel accountId={accountId} canManage={canManageTariffs} warehouses={warehouses} sortedWarehouses={sortedWarehouses} />
       )}
 
       {tab === 'consumables' && (

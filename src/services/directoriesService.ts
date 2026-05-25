@@ -259,6 +259,35 @@ export const updateCurrencyRate = async (id: string, rate: number): Promise<void
   if (error) throw error
 }
 
+// ── Порядок складов (per account, синхронизируется через БД) ─────
+
+export interface WarehouseOrderSettings {
+  sort_mode: 'alpha' | 'custom'
+  order_ids: string[]
+}
+
+export const fetchWarehouseSettings = async (accountId: string): Promise<WarehouseOrderSettings> => {
+  if (!supabase) return { sort_mode: 'alpha', order_ids: [] }
+  const { data } = await db()
+    .from('account_warehouse_settings')
+    .select('sort_mode, order_ids')
+    .eq('account_id', accountId)
+    .maybeSingle()
+  if (!data) return { sort_mode: 'alpha', order_ids: [] }
+  return { sort_mode: data.sort_mode ?? 'alpha', order_ids: data.order_ids ?? [] }
+}
+
+export const saveWarehouseSettings = async (
+  accountId: string,
+  settings: WarehouseOrderSettings,
+): Promise<void> => {
+  if (!supabase) return
+  const { error } = await db()
+    .from('account_warehouse_settings')
+    .upsert({ account_id: accountId, sort_mode: settings.sort_mode, order_ids: settings.order_ids }, { onConflict: 'account_id' })
+  if (error) throw error
+}
+
 export const fetchStageCurrencies = async (accountId: string): Promise<Record<string, string>> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await db()
