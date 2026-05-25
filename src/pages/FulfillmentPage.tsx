@@ -5372,8 +5372,7 @@ const BatchDetailModal = ({
                             {otherSlot && (
                               <div className="text-[10px] text-amber-500 pl-5 mt-0.5 truncate">{otherSlot.tripLabel || 'Другой рейс'}</div>
                             )}
-                            {/* Вес поставки — только при тарифе за кг */}
-                            {effectiveTariffType === 'per_kg' && (
+                            {/* Вес поставки */}
                             <div className="mt-1 pl-5 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="number"
@@ -5388,7 +5387,6 @@ const BatchDetailModal = ({
                               />
                               <span className="text-[10px] text-slate-400">кг</span>
                             </div>
-                            )}
                           </div>
                         )
                       })}

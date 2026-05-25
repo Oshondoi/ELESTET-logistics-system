@@ -116,6 +116,28 @@ AI 01 = GTIN
 - `grandTotal = fulfillmentSubtotal + consumablesSubtotal + logisticsSubtotal`
 - Empty state только если обе группы пусты
 
+### Счёт клиенту — InvoicesPage: секция Логистика (26.05.2026)
+
+Секция **«Логистика»** разбита на рейсы (trips) с иерархией рейс → поставка.
+
+#### Структура секции
+- **Шапка рейса**: `Рейс А7 · Отправлен · Альфа карго · Поставка №1043` (статус-badge, перевозчик, номера поставок)
+- **Мини-шапка поставки**: `Коледино · 250 шт · Принято 19.05.26 · Отгружено 26.05.26`
+- **Таблица услуг** без дублирования склада: названия тарифов (`перевозка / кор`, `перевозка / кг`, `Отгрузка на ВБ`) в полный размер
+
+#### Система тарифов (важно)
+| Режим | Основной тариф (`logistics_rf`) | Дочерка (`wb_unload`) |
+|-------|----------------------------------|------------------------|
+| per_box | `price_per_unit` — всё включено (транспорт + разгрузка на ВБ) | Не используется |
+| per_kg | `price_per_kg` — только транспорт | `price_per_unit` — разгрузка на ВБ (отдельная строка «Отгрузка на ВБ») |
+
+Каждая поставка загружает оба тарифа параллельно. `logisticsSubtotal` использует правильный тариф для каждого режима.
+
+#### Per-supply тип тарифа
+- Колонка `logistics_tariff_type` в `fulfillment_supplies` (значения `per_box` / `per_kg`)
+- Если не задана — используется глобальный тип компании (`logisticsTariffType`)
+- SQL: `patch_supply_logistics_tariff_type.sql` ⚠️ (применить в Supabase Dashboard)
+
 ### Тарифы работ — фиксы (24.05.2026)
 
 **Переименование тарифов**: убран `WarehouseSearchSelect` при редактировании имени — теперь всегда plain `<input>`.
@@ -698,6 +720,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 46. patch_outsource.sql              ← Аутсорс-система: batch_outsource_stages, batch_stage_invites, batch_journal, batch_archive_votes, batch_notifications; C-0; RLS; RPCs
 47. patch_outsource_partners.sql     ← B2B-партнёры: outsource_partners + RLS + 4 RPCs (send/respond/get/remove)
 48. patch_consumable_catalog_prices.sql ← Поля price/cost/currency в consumable_catalog (⚠️ применить)
+49. patch_currency_primary_rate.sql     ← is_primary boolean, exchange_rate numeric в account_currencies (⚠️ применить)
+50. patch_reply_source.sql              ← wb_feedbacks.reply_source text ('auto'|'manual') ✅ применён
+51. patch_supply_logistics_tariff_type.sql ← logistics_tariff_type в fulfillment_supplies (⚠️ применить)
 
 4. `npm run dev`
 
@@ -725,6 +750,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Серверная автоматизация WB** | ✅ Готово | Dispatcher + auto-reply Edge Functions, cron, № запуск |
 | **Артикулы WB — чёрный список** | ✅ Готово | excludedNmIds, модалка с фото/поиском, синк с DB, Edge Function обновлена |
 | **Счёт клиенту (InvoicesPage)** | ✅ Готово | Список счётов (I-N), фулл-скрин модаль, Секции Фулфилмент+Логистика, урл-роутинг, share-кнопка |
+| **InvoicesPage: Логистика по рейсам** | ✅ Готово | Группировка по рейсам, мини-шапки поставок, правильные тарифы (logistics_rf=основной, wb_unload=дочерка) |
 | **Тарифы логистики** | ✅ Готово | Тарифы перевозчиков + отгрузка на склады ВБ |
 | **Стикеры QR поставки WB** | ✅ Готово | Edge Function wb-supply, QR PDF, кнопка пропуска |
 | **Стикеры 2в1** | ✅ Готово | Отдельная колонка combined_sticker_urls, фиолетовая группа кнопок |

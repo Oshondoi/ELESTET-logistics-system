@@ -1,6 +1,59 @@
 # Active Context
 
-## Current Focus (25.05.2026) — Отзывы: бейдж источника ответа (auto/manual) — ЗАВЕРШЕНО
+## Current Focus (26.05.2026) — InvoicesPage: реструктуризация секции Логистика — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### 1. Загрузка rfTariff из logistics_rf (баг-фикс — price_per_kg)
+- Была ошибка: `price_per_kg` в счёте показывало "—" — тарифы грузились только из `wb_unload`, где `price_per_kg = 0`
+- Фикс: для каждой поставки теперь загружаются **два тарифа** параллельно:
+  - `workTariff` = `fulfillment_work_tariffs` WHERE `stage='wb_unload'` → цена за разгрузку на ВБ (дочерка)
+  - `rfTariff` = `fulfillment_work_tariffs` WHERE `stage='logistics_rf'` → основной тариф логистики
+- `rfTariffCache` + `wbTariffCache` — кэши по имени склада (не дублируют запросы)
+
+#### 2. Разделение по рейсам (trip grouping)
+- IIFE в JSX группирует `supplyLogisticsData` по `trip.id` через `Map`
+- Каждая группа отделена разделителем (`border-t border-slate-200 mt-5`)
+- **Шапка рейса**: номер рейса / статус badge / перевозчик / номера поставок
+  - `Рейс А7 · Отправлен · Альфа карго · Поставка №1043`
+  - Badge статуса с цветовыми классами `TRIP_STATUS_STYLE`
+
+#### 3. Мини-шапки поставок (supply sub-header)
+- Под шапкой рейса для каждой поставки: `Коледино · 250 шт · Принято 19.05.26 · Отгружено 26.05.26`
+- Источник: `supply.warehouse_name || tripLine?.destination_warehouse`, `tripLine.units_qty`, `tripLine.reception_date`, `tripLine.shipped_date`
+
+#### 4. Таблица услуг — названия тарифов вместо склада
+- Имя склада убрано из строк таблицы (теперь оно в мини-шапке)
+- Названия тарифов (`перевозка / кор`, `перевозка / кг`, `Отгрузка на ВБ`) получили стиль `text-slate-800` (был `text-[10px] text-slate-400`)
+
+#### 5. Баг-фикс: per_box использовал wb_unload вместо logistics_rf
+- **Корень:** строка «перевозка / кор» тянула цену из `workTariff` (wb_unload — дочерка), а не из `rfTariff` (logistics_rf — основной тариф)
+- **Фикс:** для `per_box` режима:
+  - JSX строка: условие `rfTariff && ...`, цены из `rfTariff.price_per_unit`
+  - `logisticsSubtotal`: `rfTariff?.price_per_unit * boxQty` вместо `workTariff.price_per_unit * boxQty`
+  - Условие пропуска расчёта изменено: `if (!effectiveTariffType) return total` + для per_kg отдельно `if (!workTariff) return total`
+
+### Система тарифов логистики (важно)
+| Режим | Основной тариф (logistics_rf) | Дочерка (wb_unload) |
+|-------|-------------------------------|----------------------|
+| per_box | `price_per_unit` — всё включено (транспорт + разгрузка) | Не используется |
+| per_kg | `price_per_kg` — только транспорт | `price_per_unit` — разгрузка на ВБ (отдельная строка) |
+
+### Ключевые файлы
+- `src/pages/InvoicesPage.tsx` — всё изменено здесь
+- `supabase/patch_supply_logistics_tariff_type.sql` — ⚠️ **ещё не применён в Supabase**
+
+### SQL миграция (ожидает)
+```sql
+alter table public.fulfillment_supplies
+  add column if not exists logistics_tariff_type text
+  check (logistics_tariff_type in ('per_box', 'per_kg'));
+```
+Применить вручную в Supabase Dashboard.
+
+---
+
+## Previous Focus (25.05.2026) — Отзывы: бейдж источника ответа (auto/manual) — ЗАВЕРШЕНО
 
 ### Что реализовано
 

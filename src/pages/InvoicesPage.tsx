@@ -298,12 +298,13 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
   const logisticsSubtotal = useMemo(() => {
     return supplyLogisticsData.reduce((total, { supply, workTariff, rfTariff }) => {
       const effectiveTariffType = supply.logistics_tariff_type ?? logisticsTariffType
-      if (!effectiveTariffType || !workTariff) return total
+      if (!effectiveTariffType) return total
       const boxQty = supply.boxes.length
       const weight = supply.weight ?? 0
       if (effectiveTariffType === 'per_box') {
-        return total + (workTariff.price_per_unit ?? 0) * boxQty
+        return total + (rfTariff?.price_per_unit ?? 0) * boxQty
       }
+      if (!workTariff) return total
       // per_kg: транспорт (из logistics_rf) + разгрузка на складах ВБ (за короб из wb_unload)
       return total + (rfTariff?.price_per_kg ?? 0) * weight + (workTariff.price_per_unit ?? 0) * boxQty
     }, 0)
@@ -511,133 +512,155 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                   <p className="py-4 text-sm text-slate-400">Рейс не привязан</p>
                 ) : (
                   <>
-                    {/* Таблица услуг логистики */}
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-100">
-                          <th className="py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-400">Услуга</th>
-                          <th className="w-16 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Цена</th>
-                          <th className="w-14 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Кол-во</th>
-                          <th className="w-16 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Сумма</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-50">
-                        {supplyLogisticsData.map(({ supply, tripLine, workTariff, rfTariff }) => {
-                          const effectiveTariffType = supply.logistics_tariff_type ?? logisticsTariffType
-                          const warehouseName = supply.warehouse_name || tripLine?.destination_warehouse || ''
-                          const warehouseLabel = warehouseName ? (
-                            <span className="ml-1 text-[10px] text-slate-400">{warehouseName}</span>
-                          ) : null
-                          return (
-                            <React.Fragment key={supply.id}>
-                              {/* За короб */}
-                              {effectiveTariffType === 'per_box' && workTariff && (
-                                <tr>
-                                  <td className="py-2 text-slate-800">
-                                    {warehouseName && <span className="mr-1">{warehouseName}</span>}
-                                    <span className="text-[10px] text-slate-400">перевозка / кор</span>
-                                  </td>
-                                  <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit > 0 ? workTariff.price_per_unit : '—'}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">{supply.boxes.length}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">
-                                    {workTariff.price_per_unit > 0 ? workTariff.price_per_unit * supply.boxes.length : '—'}
-                                  </td>
-                                </tr>
+                    {(() => {
+                      // Группируем поставки по рейсу
+                      const groups: Array<{ trip: Trip | null; items: typeof supplyLogisticsData }> = []
+                      const seenTrips = new Map<string, number>()
+                      for (const item of supplyLogisticsData) {
+                        const key = item.trip?.id ?? 'no-trip'
+                        if (seenTrips.has(key)) {
+                          groups[seenTrips.get(key)!].items.push(item)
+                        } else {
+                          seenTrips.set(key, groups.length)
+                          groups.push({ trip: item.trip, items: [item] })
+                        }
+                      }
+                      return groups.map((group, groupIdx) => (
+                        <div key={group.trip?.id ?? 'no-trip'} className={groupIdx > 0 ? 'mt-5 pt-4 border-t border-slate-200' : ''}>
+                          {/* Заголовок рейса */}
+                          {group.trip && (
+                            <div className="flex items-center flex-wrap gap-2 mb-3">
+                              <span className="text-xs font-semibold text-slate-700">
+                                Рейс {group.trip.trip_number ?? `Черновик #${group.trip.draft_number}`}
+                              </span>
+                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${TRIP_STATUS_STYLE[group.trip.status] ?? 'bg-slate-100 text-slate-500'}`}>
+                                {group.trip.status}
+                              </span>
+                              {group.trip.carrier && (
+                                <span className="text-xs text-slate-400">· {group.trip.carrier}</span>
                               )}
-                              {/* За кг */}
-                              {effectiveTariffType === 'per_kg' && workTariff && (
-                                <>
-                                  <tr>
-                                    <td className="py-2 text-slate-800">
-                                      {warehouseName && <span className="mr-1">{warehouseName}</span>}
-                                      <span className="text-[10px] text-slate-400">перевозка / кг</span>
-                                    </td>
-                                    <td className="py-2 text-right font-medium text-slate-900">{(rfTariff?.price_per_kg ?? 0) > 0 ? rfTariff!.price_per_kg : '—'}</td>
-                                    <td className="py-2 text-right font-medium text-slate-900">
-                                      {supply.weight != null ? <>{supply.weight}<span className="text-[10px] text-slate-400 ml-0.5">кг</span></> : '—'}
-                                    </td>
-                                    <td className="py-2 text-right font-medium text-slate-900">
-                                      {(rfTariff?.price_per_kg ?? 0) > 0 && (supply.weight ?? 0) > 0
-                                        ? rfTariff!.price_per_kg! * supply.weight!
-                                        : '—'}
-                                    </td>
-                                  </tr>
-                                  {(workTariff.price_per_unit ?? 0) > 0 && (
-                                    <tr>
-                                      <td className="py-2 text-slate-800">
-                                        {warehouseName && <span className="mr-1">{warehouseName}</span>}
-                                        <span className="text-[10px] text-slate-400">Отгрузка на ВБ</span>
-                                      </td>
-                                      <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit}</td>
-                                      <td className="py-2 text-right font-medium text-slate-900">{supply.boxes.length}</td>
-                                      <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit * supply.boxes.length}</td>
-                                    </tr>
-                                  )}
-                                </>
-                              )}
-                              {/* Нет тарифа для этой поставки */}
-                              {!workTariff && (
-                                <tr>
-                                  <td colSpan={4} className="py-3 text-xs text-slate-400">
-                                    Тарифы не настроены{warehouseName ? ` (${warehouseName})` : ''}
-                                  </td>
-                                </tr>
-                              )}
-                              {/* Тариф есть, но тип не определён */}
-                              {workTariff && !effectiveTariffType && (
-                                <tr>
-                                  <td colSpan={4} className="py-3 text-xs text-amber-500">Тип тарифа не задан в настройках партии</td>
-                                </tr>
-                              )}
-                            </React.Fragment>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-
-                    {/* Метаданные рейсов */}
-                    {supplyLogisticsData.some(({ trip, tripLine }) => trip || tripLine) && (
-                      <div className="mt-3 border-t border-slate-100 pt-3">
-                        {/* Дедублицируем рейсы */}
-                        {Array.from(
-                          new Map(
-                            supplyLogisticsData
-                              .filter(({ trip }) => trip)
-                              .map(({ trip }) => [trip!.id, trip!])
-                          ).values()
-                        ).map((trip) => (
-                          <React.Fragment key={trip.id}>
-                            <InfoRow
-                              label="Рейс"
-                              value={
-                                <span className="flex items-center gap-1.5">
-                                  <span>{trip.trip_number ?? `Черновик #${trip.draft_number}`}</span>
-                                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${TRIP_STATUS_STYLE[trip.status] ?? 'bg-slate-100 text-slate-500'}`}>
-                                    {trip.status}
-                                  </span>
+                              {group.items.some(({ tripLine }) => tripLine?.shipment_number) && (
+                                <span className="text-xs text-slate-400">
+                                  · {group.items
+                                      .filter(({ tripLine }) => tripLine?.shipment_number)
+                                      .map(({ tripLine }) => `Поставка №${tripLine!.shipment_number}`)
+                                      .join(', ')}
                                 </span>
-                              }
-                            />
-                            <InfoRow label="Перевозчик" value={trip.carrier || null} />
-                            <InfoRow label="Дата отправки" value={formatDate(trip.departure_date)} />
-                            <InfoRow label="Дата прибытия" value={formatDate(trip.arrived_at)} />
-                          </React.Fragment>
-                        ))}
-                        {/* Строки tripLine по каждой поставке */}
-                        {supplyLogisticsData
-                          .filter(({ tripLine }) => tripLine)
-                          .map(({ supply, tripLine }) => (
-                            <React.Fragment key={supply.id}>
-                              <InfoRow label="Поставка №" value={tripLine!.shipment_number} />
-                              <InfoRow label="Склад назначения" value={tripLine!.destination_warehouse || null} />
-                              <InfoRow label="Коробов" value={tripLine!.box_qty} />
-                              <InfoRow label="Единиц" value={tripLine!.units_qty} />
-                              <InfoRow label="Дата приёмки (МП)" value={formatDate(tripLine!.reception_date)} />
-                              <InfoRow label="Отгружено" value={formatDate(tripLine!.shipped_date)} />
-                            </React.Fragment>
-                          ))}
-                      </div>
-                    )}
+                              )}
+                            </div>
+                          )}
+                          {/* Поставки внутри рейса */}
+                          {group.items.map(({ supply, tripLine, workTariff, rfTariff }, itemIdx) => {
+                            const effectiveTariffType = supply.logistics_tariff_type ?? logisticsTariffType
+                            const warehouseName = supply.warehouse_name || tripLine?.destination_warehouse || ''
+                            return (
+                              <div key={supply.id} className={itemIdx > 0 ? 'mt-3 pt-3 border-t border-slate-100' : ''}>
+                                {/* Заголовок поставки */}
+                                {(warehouseName || tripLine?.reception_date) && (
+                                  <div className="flex items-center gap-1.5 mb-1.5">
+                                    {warehouseName && (
+                                      <span className="text-[11px] font-semibold text-slate-500">{warehouseName}</span>
+                                    )}
+                                    {tripLine?.units_qty != null && tripLine.units_qty > 0 && (
+                                      <span className="text-[11px] text-slate-400">· {tripLine.units_qty} шт</span>
+                                    )}
+                                    {tripLine?.reception_date && (
+                                      <span className="text-[11px] text-slate-400">· Принято {formatDate(tripLine.reception_date)}</span>
+                                    )}
+                                    {tripLine?.shipped_date && (
+                                      <span className="text-[11px] text-slate-400">· Отгружено {formatDate(tripLine.shipped_date)}</span>
+                                    )}
+                                  </div>
+                                )}
+                                {/* Строки стоимости */}
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr className="border-b border-slate-100">
+                                      <th className="py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-400">Услуга</th>
+                                      <th className="w-16 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Цена</th>
+                                      <th className="w-14 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Кол-во</th>
+                                      <th className="w-16 py-2 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Сумма</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-50">
+                                    {/* За короб */}
+                                    {effectiveTariffType === 'per_box' && rfTariff && (
+                                      <tr>
+                                        <td className="py-2 text-slate-800">
+                                          перевозка / кор
+                                        </td>
+                                        <td className="py-2 text-right font-medium text-slate-900">{(rfTariff.price_per_unit ?? 0) > 0 ? rfTariff.price_per_unit : '—'}</td>
+                                        <td className="py-2 text-right font-medium text-slate-900">{supply.boxes.length}</td>
+                                        <td className="py-2 text-right font-medium text-slate-900">
+                                          {(rfTariff.price_per_unit ?? 0) > 0 ? rfTariff.price_per_unit! * supply.boxes.length : '—'}
+                                        </td>
+                                      </tr>
+                                    )}
+                                    {/* За кг */}
+                                    {effectiveTariffType === 'per_kg' && workTariff && (
+                                      <>
+                                        <tr>
+                                          <td className="py-2 text-slate-800">
+                                            перевозка / кг
+                                          </td>
+                                          <td className="py-2 text-right font-medium text-slate-900">{(rfTariff?.price_per_kg ?? 0) > 0 ? rfTariff!.price_per_kg : '—'}</td>
+                                          <td className="py-2 text-right font-medium text-slate-900">
+                                            {supply.weight != null ? <>{supply.weight}<span className="text-[10px] text-slate-400 ml-0.5">кг</span></> : '—'}
+                                          </td>
+                                          <td className="py-2 text-right font-medium text-slate-900">
+                                            {(rfTariff?.price_per_kg ?? 0) > 0 && (supply.weight ?? 0) > 0
+                                              ? rfTariff!.price_per_kg! * supply.weight!
+                                              : '—'}
+                                          </td>
+                                        </tr>
+                                        {(workTariff.price_per_unit ?? 0) > 0 && (
+                                          <tr>
+                                            <td className="py-2 text-slate-800">
+                                              Отгрузка на ВБ
+                                            </td>
+                                            <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit}</td>
+                                            <td className="py-2 text-right font-medium text-slate-900">{supply.boxes.length}</td>
+                                            <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit * supply.boxes.length}</td>
+                                          </tr>
+                                        )}
+                                      </>
+                                    )}
+                                    {/* Нет тарифа */}
+                                    {!workTariff && (
+                                      <tr>
+                                        <td colSpan={4} className="py-3 text-xs text-slate-400">
+                                          Тарифы не настроены{warehouseName ? ` (${warehouseName})` : ''}
+                                        </td>
+                                      </tr>
+                                    )}
+                                    {/* Тариф есть, но тип не определён */}
+                                    {workTariff && !effectiveTariffType && (
+                                      <tr>
+                                        <td colSpan={4} className="py-3 text-xs text-amber-500">Тип тарифа не задан в настройках партии</td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                                {/* Метаданные поставки */}
+                                {tripLine && (
+                                  <div className="mt-1">
+                                    <InfoRow label="Коробов" value={tripLine.box_qty} />
+                                    <InfoRow label="Единиц" value={tripLine.units_qty} />
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                          {/* Метаданные рейса */}
+                          {group.trip && (
+                            <div className="mt-3 border-t border-slate-100 pt-2">
+                              <InfoRow label="Дата отправки" value={formatDate(group.trip.departure_date)} />
+                              <InfoRow label="Дата прибытия" value={formatDate(group.trip.arrived_at)} />
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    })()}
                   </>
                 )}
               </div>
