@@ -206,7 +206,7 @@ export async function loadFeedbackRowsFromDb(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from('wb_feedbacks')
-    .select('id, store_id, account_id, data, is_answered, ai_reply, ai_reply_status, reply_sent_at, synced_at')
+    .select('id, store_id, account_id, data, is_answered, ai_reply, ai_reply_status, reply_sent_at, reply_source, synced_at')
     .eq('store_id', storeId)
     .eq('is_answered', isAnswered)
     .order('created_date', { ascending: false })
@@ -221,6 +221,7 @@ export async function loadFeedbackRowsFromDb(
     ai_reply: (row.ai_reply as string | null) ?? null,
     ai_reply_status: ((row.ai_reply_status as string) ?? 'none') as AiReplyStatus,
     reply_sent_at: (row.reply_sent_at as string | null) ?? null,
+    reply_source: (row.reply_source as 'manual' | 'auto' | null) ?? null,
     synced_at: row.synced_at as string,
   }))
 }
@@ -318,12 +319,14 @@ export async function markReplySent(
   feedbackId: string,
   replyText: string,
   currentData?: Record<string, unknown>,
+  source: 'manual' | 'auto' = 'manual',
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
   const updatePayload: Record<string, unknown> = {
     is_answered: true,
     ai_reply_status: 'sent',
     reply_sent_at: new Date().toISOString(),
+    reply_source: source,
   }
   if (currentData) {
     updatePayload.data = { ...currentData, isAnswered: true, answer: { text: replyText } }

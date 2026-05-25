@@ -596,7 +596,7 @@ export const ReviewsPage = ({
     setSendErrors((prev) => { const n = { ...prev }; delete n[row.id]; return n })
     try {
       await sendWbReply(activeStore.api_key, row.id, text)
-      await markReplySent(row.id, text, row.data as unknown as Record<string, unknown>)
+      await markReplySent(row.id, text, row.data as unknown as Record<string, unknown>, 'manual')
       setQueueRows((prev) => (prev ? prev.filter((r) => r.id !== row.id) : prev))
       setOpenReplyIds((prev) => { const n = new Set(prev); n.delete(row.id); return n })
     } catch (err) {
@@ -735,7 +735,7 @@ export const ReviewsPage = ({
         await new Promise((res) => setTimeout(res, halfDelayMs))
 
         await sendWbReply(activeStore.api_key, row.id, text)
-        await markReplySent(row.id, text)
+        await markReplySent(row.id, text, undefined, 'manual')
         setQueueRows((prev) => prev ? prev.filter((r) => r.id !== row.id) : prev)
         sent++
         const todayStr = new Date().toISOString().slice(0, 10)
@@ -1151,6 +1151,16 @@ export const ReviewsPage = ({
                       {fb.productDetails?.nmId && (
                         <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">
                           WB #{fb.productDetails.nmId}
+                        </span>
+                      )}
+                      {tab === 'answered' && row.reply_source === 'auto' && (
+                        <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600">
+                          🤖 Автоответ
+                        </span>
+                      )}
+                      {tab === 'answered' && row.reply_source === 'manual' && (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                          ✍ Вручную
                         </span>
                       )}
                     </div>

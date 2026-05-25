@@ -360,6 +360,7 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
           ai_reply: replyText,
           ai_reply_status: 'sent',
           reply_sent_at: new Date().toISOString(),
+          reply_source: 'auto',
           data: { ...row.data, isAnswered: true, answer: { text: replyText } },
         }).eq('id', row.id)
 

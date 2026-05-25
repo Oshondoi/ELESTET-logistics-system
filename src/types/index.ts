@@ -639,6 +639,7 @@ export interface WbFeedbackRow {
   ai_reply: string | null
   ai_reply_status: AiReplyStatus
   reply_sent_at: string | null
+  reply_source: 'manual' | 'auto' | null
   synced_at: string
 }
 
