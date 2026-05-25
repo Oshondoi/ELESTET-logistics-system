@@ -560,6 +560,9 @@ const BatchDetailModal = ({
   const [deleteBoxConfirm, setDeleteBoxConfirm] = useState<{ supplyId: string; boxId: string } | null>(null)
   const [deleteSupplyConfirm, setDeleteSupplyConfirm] = useState<string | null>(null) // supplyId
   const [isSavingLogisticsTariff, setIsSavingLogisticsTariff] = useState(false)
+  // Тип тарифа логистики для каждой поставки (переопределение, NULL = наследует от партии)
+  const [supplyTariffTypeMap, setSupplyTariffTypeMap] = useState<Record<string, 'per_box' | 'per_kg' | null>>({})
+  const [savingSupplyTariffId, setSavingSupplyTariffId] = useState<string | null>(null)
 
   // Буфер изменений приёмки
   const [receptionDraft, setReceptionDraft] = useState<Record<string, number>>(
@@ -754,6 +757,10 @@ const BatchDetailModal = ({
     fetchSupplies(batch.id)
       .then((loaded) => {
         setSupplies(loaded)
+        // Инициализировать карту типов тарифов из загруженных поставок
+        const tariffMap: Record<string, 'per_box' | 'per_kg' | null> = {}
+        loaded.forEach((s) => { tariffMap[s.id] = s.logistics_tariff_type ?? null })
+        setSupplyTariffTypeMap(tariffMap)
         if (viewStage === 'logistics') {
           // Перестраиваем слоты из реальных данных — чтобы завершённые партии отображались корректно
           rebuildSlotsFromSupplies(loaded)
@@ -5157,18 +5164,18 @@ const BatchDetailModal = ({
           {/* ПЕРЕДАЧА НА ЛОГИСТИКУ */}
           {viewStage === 'logistics' && (
             <div className="space-y-4">
-              {/* Тип тарифа логистики */}
+              {/* Тип тарифа логистики (по умолчанию для всех поставок партии) */}
               {canManage && (
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-700">Тип тарифа перевозки</p>
+                      <p className="text-sm font-semibold text-slate-700">Тариф по умолчанию</p>
                       <p className="mt-0.5 text-xs text-slate-400">
                         {batch.logistics_tariff_type === 'per_box'
-                          ? 'Цена за короб — разгрузка на склад ВБ включена в стоимость'
+                          ? 'За короб — разгрузка на ВБ включена в стоимость'
                           : batch.logistics_tariff_type === 'per_kg'
-                          ? 'Цена за кг — разгрузка на склад ВБ считается отдельно'
-                          : 'Укажите тип — это влияет на расчёт счёта'}
+                          ? 'За кг — разгрузка на ВБ считается отдельно'
+                          : 'Не задан — укажите тип для каждой поставки отдельно'}
                       </p>
                     </div>
                     <div className="flex shrink-0 gap-0.5 rounded-xl bg-slate-100 p-0.5">
@@ -5301,6 +5308,9 @@ const BatchDetailModal = ({
                         const isHere = assignedSlotId !== 'none' && assignedSlotId === slot.slotId
                         const otherSlot = !isHere && assignedSlotId !== 'none' ? tripSlots.find((s) => s.slotId === assignedSlotId) : null
                         const units = supply.boxes.reduce((s, b) => s + b.items.reduce((ss, i) => ss + i.qty, 0), 0)
+                        const supplyOwnType = supplyTariffTypeMap[supply.id] ?? null
+                        const effectiveTariffType = supplyOwnType ?? batch.logistics_tariff_type
+                        const isInherited = supplyOwnType === null
                         return (
                           <div
                             key={supply.id}
@@ -5324,6 +5334,48 @@ const BatchDetailModal = ({
                               <span className={`text-xs font-semibold truncate leading-tight ${isHere ? 'text-slate-800' : 'text-slate-500'}`}>{supply.warehouse_name ?? '—'}</span>
                             </div>
                             <div className="text-[11px] text-slate-400 pl-5">{supply.boxes.length} кор. · {units} ед.</div>
+                            {/* Тип тарифа поставки */}
+                            {canManage && (
+                              <div
+                                className="mt-1.5 pl-5 flex items-center gap-1"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {(['per_box', 'per_kg'] as const).map((type) => {
+                                  const label = type === 'per_box' ? 'короб' : 'кг'
+                                  const isActive = effectiveTariffType === type
+                                  const isOwn = supplyOwnType === type
+                                  return (
+                                    <button
+                                      key={type}
+                                      type="button"
+                                      disabled={savingSupplyTariffId === supply.id}
+                                      onClick={() => {
+                                        if (savingSupplyTariffId === supply.id) return
+                                        // Клик по уже выбранному собственному типу → сбросить (вернуть к наследованию)
+                                        const newType = isOwn ? null : type
+                                        setSupplyTariffTypeMap((prev) => ({ ...prev, [supply.id]: newType }))
+                                        setSavingSupplyTariffId(supply.id)
+                                        updateSupply(supply.id, { logistics_tariff_type: newType })
+                                          .catch(() => {
+                                            // откат при ошибке
+                                            setSupplyTariffTypeMap((prev) => ({ ...prev, [supply.id]: supplyOwnType }))
+                                          })
+                                          .finally(() => setSavingSupplyTariffId(null))
+                                      }}
+                                      className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition leading-tight ${
+                                        isActive
+                                          ? isOwn
+                                            ? 'bg-blue-500 text-white'
+                                            : 'bg-slate-200 text-slate-600'
+                                          : 'text-slate-300 hover:text-slate-500'
+                                      }`}
+                                    >
+                                      {label}{isActive && isInherited && type === effectiveTariffType ? ' авт.' : ''}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            )}
                             {otherSlot && (
                               <div className="text-[10px] text-amber-500 pl-5 mt-0.5 truncate">{otherSlot.tripLabel || 'Другой рейс'}</div>
                             )}

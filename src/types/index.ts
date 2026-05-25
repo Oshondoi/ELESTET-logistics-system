@@ -845,6 +845,7 @@ export interface FulfillmentSupply {
   trip_id: string | null
   trip_line_id: string | null
   weight: number | null
+  logistics_tariff_type: 'per_box' | 'per_kg' | null
   created_by: string | null
   created_at: string
   _local?: boolean
