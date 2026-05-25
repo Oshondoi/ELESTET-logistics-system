@@ -559,6 +559,7 @@ const BatchDetailModal = ({
   const [addBoxNum, setAddBoxNum] = useState('')
   const [deleteBoxConfirm, setDeleteBoxConfirm] = useState<{ supplyId: string; boxId: string } | null>(null)
   const [deleteSupplyConfirm, setDeleteSupplyConfirm] = useState<string | null>(null) // supplyId
+  const [isSavingLogisticsTariff, setIsSavingLogisticsTariff] = useState(false)
 
   // Буфер изменений приёмки
   const [receptionDraft, setReceptionDraft] = useState<Record<string, number>>(
@@ -5156,7 +5157,61 @@ const BatchDetailModal = ({
           {/* ПЕРЕДАЧА НА ЛОГИСТИКУ */}
           {viewStage === 'logistics' && (
             <div className="space-y-4">
-              {/* Переключатель режима — только если поставок > 1 */}
+              {/* Тип тарифа логистики */}
+              {canManage && (
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-700">Тип тарифа перевозки</p>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        {batch.logistics_tariff_type === 'per_box'
+                          ? 'Цена за короб — разгрузка на склад ВБ включена в стоимость'
+                          : batch.logistics_tariff_type === 'per_kg'
+                          ? 'Цена за кг — разгрузка на склад ВБ считается отдельно'
+                          : 'Укажите тип — это влияет на расчёт счёта'}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-0.5 rounded-xl bg-slate-100 p-0.5">
+                      <button
+                        type="button"
+                        disabled={isSavingLogisticsTariff}
+                        onClick={() => {
+                          if (isSavingLogisticsTariff || batch.logistics_tariff_type === 'per_box') return
+                          setIsSavingLogisticsTariff(true)
+                          updateBatch(batch.id, { logistics_tariff_type: 'per_box' })
+                            .then(() => setBatch((prev) => ({ ...prev, logistics_tariff_type: 'per_box' })))
+                            .finally(() => setIsSavingLogisticsTariff(false))
+                        }}
+                        className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${
+                          batch.logistics_tariff_type === 'per_box'
+                            ? 'bg-white text-slate-800 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                      >
+                        За короб
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSavingLogisticsTariff}
+                        onClick={() => {
+                          if (isSavingLogisticsTariff || batch.logistics_tariff_type === 'per_kg') return
+                          setIsSavingLogisticsTariff(true)
+                          updateBatch(batch.id, { logistics_tariff_type: 'per_kg' })
+                            .then(() => setBatch((prev) => ({ ...prev, logistics_tariff_type: 'per_kg' })))
+                            .finally(() => setIsSavingLogisticsTariff(false))
+                        }}
+                        className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${
+                          batch.logistics_tariff_type === 'per_kg'
+                            ? 'bg-white text-slate-800 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                      >
+                        За кг
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {/* ── Грид карточек рейсов ── */}
               <div className="flex flex-wrap gap-3 items-start">
                 {tripSlots.map((slot) => {
