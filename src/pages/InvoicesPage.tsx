@@ -184,10 +184,11 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
             if (tripLine) tripLineCache[supply.trip_line_id] = tripLine
           }
         }
-        // Тариф берётся из fulfillment_work_tariffs (stage=wb_unload, name=склад назначения)
+        // Тариф берётся из fulfillment_work_tariffs (stage=wb_unload, name=склад поставки)
+        // Используем supply.warehouse_name — надёжнее tripLine.destination_warehouse
         let workTariff: FulfillmentWorkTariff | null = null
-        if (tripLine?.destination_warehouse) {
-          const wName = tripLine.destination_warehouse
+        const wName = supply.warehouse_name
+        if (wName) {
           if (wName in warehouseIdCache) {
             workTariff = wbTariffCache[wName] ?? null
           } else {
@@ -199,7 +200,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
               .eq('name', wName)
               .maybeSingle()
             workTariff = (data as FulfillmentWorkTariff | null) ?? null
-            warehouseIdCache[wName] = wName  // отмечаем что уже запрашивали
+            warehouseIdCache[wName] = wName
             wbTariffCache[wName] = workTariff
           }
         }
@@ -290,13 +291,15 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     return total
   }, [batch.stage_packaging, batchConsumables, accountConsumables, catalogConsumableLines])
   const logisticsSubtotal = useMemo(() => {
-    return supplyLogisticsData.reduce((total, { supply, tripLine, workTariff }) => {
+    return supplyLogisticsData.reduce((total, { supply, workTariff }) => {
       const effectiveTariffType = supply.logistics_tariff_type ?? logisticsTariffType
-      if (!effectiveTariffType || !tripLine || !workTariff) return total
+      if (!effectiveTariffType || !workTariff) return total
+      const boxQty = supply.boxes.length
+      const weight = supply.weight ?? 0
       if (effectiveTariffType === 'per_box') {
-        return total + (workTariff.price_per_unit ?? 0) * tripLine.box_qty
+        return total + (workTariff.price_per_unit ?? 0) * boxQty
       }
-      return total + (workTariff.price_per_kg ?? 0) * (tripLine.weight ?? 0)
+      return total + (workTariff.price_per_kg ?? 0) * weight
     }, 0)
   }, [supplyLogisticsData, logisticsTariffType])
   const grandTotal = fulfillmentSubtotal + consumablesSubtotal + logisticsSubtotal
@@ -547,25 +550,25 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                           return (
                             <React.Fragment key={supply.id}>
                               {/* За короб */}
-                              {effectiveTariffType === 'per_box' && workTariff && tripLine && (
+                              {effectiveTariffType === 'per_box' && workTariff && (
                                 <tr>
                                   <td className="py-2 text-slate-800">Перевозка{warehouseLabel}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit > 0 ? workTariff.price_per_unit : '—'}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">{tripLine.box_qty}</td>
+                                  <td className="py-2 text-right font-medium text-slate-900">{supply.boxes.length}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">
-                                    {workTariff.price_per_unit > 0 ? workTariff.price_per_unit * tripLine.box_qty : '—'}
+                                    {workTariff.price_per_unit > 0 ? workTariff.price_per_unit * supply.boxes.length : '—'}
                                   </td>
                                 </tr>
                               )}
                               {/* За кг */}
-                              {effectiveTariffType === 'per_kg' && workTariff && tripLine && (
+                              {effectiveTariffType === 'per_kg' && workTariff && (
                                 <tr>
                                   <td className="py-2 text-slate-800">Перевозка (кг){warehouseLabel}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">{(workTariff.price_per_kg ?? 0) > 0 ? workTariff.price_per_kg : '—'}</td>
-                                  <td className="py-2 text-right font-medium text-slate-900">{tripLine.weight ?? '—'}</td>
+                                  <td className="py-2 text-right font-medium text-slate-900">{supply.weight ?? '—'}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">
-                                    {(workTariff.price_per_kg ?? 0) > 0 && (tripLine.weight ?? 0) > 0
-                                      ? workTariff.price_per_kg! * tripLine.weight!
+                                    {(workTariff.price_per_kg ?? 0) > 0 && (supply.weight ?? 0) > 0
+                                      ? workTariff.price_per_kg! * supply.weight!
                                       : '—'}
                                   </td>
                                 </tr>
