@@ -2455,23 +2455,7 @@ const WorkTariffsPanel = ({
                   return (
                     <tr key={t.id} className="group hover:bg-slate-50" onBlur={(e) => { if (isEditing && !e.currentTarget.contains(e.relatedTarget as Node)) setEditingId(null) }}>
                       <td className={viewCell}>
-                        {isEditing && focusField === 'name' && !isWarehouseStage ? (
-                          <input
-                            type="text"
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            autoFocus
-                            onBlur={() => void saveCurrentValues(t.id)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { void saveEdit(t.id) } if (e.key === 'Escape') { setEditingId(null) } }}
-                            className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
-                          />
-                        ) : (
-                          <div
-                            className={isWarehouseStage ? 'px-2 py-1 text-sm text-slate-700' : 'rounded-lg px-2 py-1 text-sm text-slate-700 hover:bg-white hover:ring-1 hover:ring-slate-200'}
-                            onMouseDown={isEditing && !isWarehouseStage ? (e) => e.preventDefault() : undefined}
-                            onClick={canManage && !isWarehouseStage ? (isEditing ? () => void switchFocusField('name', t.id) : () => startEdit(t, 'name')) : undefined}
-                          >{isEditing && !isWarehouseStage ? editName : t.name}</div>
-                        )}
+                        <div className="px-2 py-1 text-sm text-slate-700">{t.name}</div>
                       </td>
                       <td className={viewCell}>
                         {isEditing && focusField === 'price' ? (
