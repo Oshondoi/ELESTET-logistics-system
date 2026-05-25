@@ -103,6 +103,19 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
   const [packagingLogs, setPackagingLogs] = useState<FulfillmentPackagingLog[]>([])
   const [catalogItems, setCatalogItems] = useState<ConsumableCatalogItem[]>([])
   const [worksLoading, setWorksLoading] = useState(true)
+  const [logisticsTariffType, setLogisticsTariffType] = useState<'per_box' | 'per_kg' | null>(batch.logistics_tariff_type ?? null)
+  const [isSavingTariffType, setIsSavingTariffType] = useState(false)
+
+  const handleTariffTypeChange = async (type: 'per_box' | 'per_kg') => {
+    if (isSavingTariffType || !supabase) return
+    setLogisticsTariffType(type)
+    setIsSavingTariffType(true)
+    try {
+      await supabase.from('fulfillment_batches').update({ logistics_tariff_type: type }).eq('id', batch.id)
+    } finally {
+      setIsSavingTariffType(false)
+    }
+  }
 
   // Fetch works (OTK, marking, supplies, tariffs)
   useEffect(() => {
@@ -248,17 +261,17 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     return total
   }, [batch.stage_packaging, batchConsumables, accountConsumables, catalogConsumableLines])
   const logisticsSubtotal = useMemo(() => {
-    if (!tripLine) return 0
-    let total = 0
-    if (carrierTariff) {
-      total += (carrierTariff.price_per_box ?? 0) * tripLine.box_qty
-      total += (carrierTariff.price_per_kg ?? 0) * (tripLine.weight ?? 0)
+    if (!tripLine || !logisticsTariffType) return 0
+    if (logisticsTariffType === 'per_box') {
+      // Цена за короб: отгрузка на склад ВБ уже включена в цену перевозчика
+      return (carrierTariff?.price_per_box ?? 0) * tripLine.box_qty
     }
-    if (wbUnloadTariff) {
-      total += wbUnloadTariff.price_per_box * tripLine.box_qty
-    }
-    return total
-  }, [tripLine, carrierTariff, wbUnloadTariff])
+    // per_kg: цена за кг + отдельно разгрузка на складе ВБ за каждый короб
+    return (
+      (carrierTariff?.price_per_kg ?? 0) * (tripLine.weight ?? 0) +
+      (wbUnloadTariff?.price_per_box ?? 0) * tripLine.box_qty
+    )
+  }, [tripLine, carrierTariff, wbUnloadTariff, logisticsTariffType])
   const grandTotal = fulfillmentSubtotal + consumablesSubtotal + logisticsSubtotal
 
   const formatDate = (iso: string | null | undefined) =>
@@ -462,6 +475,31 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                   <p className="py-4 text-sm text-slate-400">Загрузка…</p>
                 ) : (
                   <>
+                    {/* Переключатель типа тарифа */}
+                    {(carrierTariff || wbUnloadTariff) && (
+                      <div className="flex gap-0.5 rounded-xl bg-slate-100 p-0.5 mb-2">
+                        <button
+                          type="button"
+                          disabled={isSavingTariffType}
+                          onClick={() => void handleTariffTypeChange('per_box')}
+                          className={`flex-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
+                            logisticsTariffType === 'per_box' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          За короб
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSavingTariffType}
+                          onClick={() => void handleTariffTypeChange('per_kg')}
+                          className={`flex-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
+                            logisticsTariffType === 'per_kg' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          За кг
+                        </button>
+                      </div>
+                    )}
                     {/* Таблица услуг логистики */}
                     <table className="w-full text-sm">
                       <thead>
@@ -473,36 +511,51 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {/* Перевозка (короба) */}
-                        {(carrierTariff?.price_per_box ?? 0) > 0 && tripLine && (
-                          <tr key="carrier-box">
+                        {/* За короб — только перевозка, WB разгрузка включена в цену */}
+                        {logisticsTariffType === 'per_box' && carrierTariff && tripLine && (
+                          <tr>
                             <td className="py-2 text-slate-800">Перевозка</td>
-                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff!.price_per_box}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff.price_per_box ?? '—'}</td>
                             <td className="py-2 text-right font-medium text-slate-900">{tripLine.box_qty}</td>
-                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff!.price_per_box! * tripLine.box_qty}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">
+                              {(carrierTariff.price_per_box ?? 0) > 0 ? carrierTariff.price_per_box! * tripLine.box_qty : '—'}
+                            </td>
                           </tr>
                         )}
-                        {/* Перевозка (кг) */}
-                        {(carrierTariff?.price_per_kg ?? 0) > 0 && (tripLine?.weight ?? 0) > 0 && tripLine && (
-                          <tr key="carrier-kg">
+                        {/* За кг — перевозка по весу */}
+                        {logisticsTariffType === 'per_kg' && carrierTariff && tripLine && (
+                          <tr>
                             <td className="py-2 text-slate-800">Перевозка (кг)</td>
-                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff!.price_per_kg}</td>
-                            <td className="py-2 text-right font-medium text-slate-900">{tripLine.weight}</td>
-                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff!.price_per_kg! * tripLine.weight!}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{carrierTariff.price_per_kg ?? '—'}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{tripLine.weight ?? '—'}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">
+                              {(carrierTariff.price_per_kg ?? 0) > 0 && (tripLine.weight ?? 0) > 0
+                                ? carrierTariff.price_per_kg! * tripLine.weight!
+                                : '—'}
+                            </td>
                           </tr>
                         )}
-                        {/* Разгрузка ВБ */}
-                        {(wbUnloadTariff?.price_per_box ?? 0) > 0 && tripLine && (
-                          <tr key="wb-unload">
+                        {/* За кг — разгрузка ВБ отдельно */}
+                        {logisticsTariffType === 'per_kg' && tripLine && (
+                          <tr>
                             <td className="py-2 text-slate-800">Разгрузка ВБ</td>
-                            <td className="py-2 text-right font-medium text-slate-900">{wbUnloadTariff!.price_per_box}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">{wbUnloadTariff?.price_per_box ?? '—'}</td>
                             <td className="py-2 text-right font-medium text-slate-900">{tripLine.box_qty}</td>
-                            <td className="py-2 text-right font-medium text-slate-900">{wbUnloadTariff!.price_per_box * tripLine.box_qty}</td>
+                            <td className="py-2 text-right font-medium text-slate-900">
+                              {(wbUnloadTariff?.price_per_box ?? 0) > 0 ? wbUnloadTariff!.price_per_box * tripLine.box_qty : '—'}
+                            </td>
                           </tr>
                         )}
+                        {/* Нет тарифов */}
                         {!carrierTariff && !wbUnloadTariff && (
-                          <tr key="no-tariffs">
+                          <tr>
                             <td colSpan={4} className="py-3 text-xs text-slate-400">Тарифы не настроены</td>
+                          </tr>
+                        )}
+                        {/* Тарифы есть, но тип не выбран */}
+                        {(carrierTariff || wbUnloadTariff) && !logisticsTariffType && (
+                          <tr>
+                            <td colSpan={4} className="py-3 text-xs text-amber-500">Выберите тип тарифа выше ↑</td>
                           </tr>
                         )}
                       </tbody>
