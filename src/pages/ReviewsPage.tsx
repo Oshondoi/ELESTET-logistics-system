@@ -191,6 +191,13 @@ export const ReviewsPage = ({
   const [answeredRows, setAnsweredRows] = useState<WbFeedbackRow[] | null>(null)
   const [countUnanswered, setCountUnanswered] = useState(0)
 
+  // ── Answered tab filters
+  const [afReviewFrom, setAfReviewFrom] = useState('')   // дата отзыва от
+  const [afReviewTo, setAfReviewTo]   = useState('')   // дата отзыва до
+  const [afReplyFrom, setAfReplyFrom] = useState('')   // дата ответа от
+  const [afReplyTo, setAfReplyTo]     = useState('')   // дата ответа до
+  const [afSource, setAfSource] = useState<'all' | 'auto' | 'manual'>('all')
+
   const [isFetching, setIsFetching] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
@@ -818,6 +825,27 @@ export const ReviewsPage = ({
 
   const currentRows = tab === 'answered' ? answeredRows : queueRows
 
+  // ── Apply answered filters
+  const hasAnsweredFilters = afReviewFrom || afReviewTo || afReplyFrom || afReplyTo || afSource !== 'all'
+  const filteredCurrentRows = (() => {
+    if (tab !== 'answered' || !currentRows) return currentRows
+    return currentRows.filter((row) => {
+      const fb = row.data
+      // дата отзыва
+      const reviewDate = fb.createdDate ? fb.createdDate.slice(0, 10) : ''
+      if (afReviewFrom && reviewDate < afReviewFrom) return false
+      if (afReviewTo   && reviewDate > afReviewTo)   return false
+      // дата ответа
+      const replyDate = row.reply_sent_at ? row.reply_sent_at.slice(0, 10) : ''
+      if (afReplyFrom && (!replyDate || replyDate < afReplyFrom)) return false
+      if (afReplyTo   && (!replyDate || replyDate > afReplyTo))   return false
+      // источник
+      if (afSource === 'auto'   && row.reply_source !== 'auto')   return false
+      if (afSource === 'manual' && row.reply_source !== 'manual') return false
+      return true
+    })
+  })()
+
   // ── Render
   return (
     <div className="flex flex-col gap-4">
@@ -1076,6 +1104,96 @@ export const ReviewsPage = ({
         </div>
       )}
 
+      {/* ── Answered filters bar */}
+      {tab === 'answered' && (
+        <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+
+          {/* Дата отзыва */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Дата отзыва</span>
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                value={afReviewFrom}
+                onChange={(e) => setAfReviewFrom(e.target.value)}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+              <span className="text-xs text-slate-300">—</span>
+              <input
+                type="date"
+                value={afReviewTo}
+                onChange={(e) => setAfReviewTo(e.target.value)}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+            </div>
+          </div>
+
+          {/* Дата ответа */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Дата ответа</span>
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                value={afReplyFrom}
+                onChange={(e) => setAfReplyFrom(e.target.value)}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+              <span className="text-xs text-slate-300">—</span>
+              <input
+                type="date"
+                value={afReplyTo}
+                onChange={(e) => setAfReplyTo(e.target.value)}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+            </div>
+          </div>
+
+          {/* Источник */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Источник</span>
+            <div className="flex gap-1">
+              {(['all', 'auto', 'manual'] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setAfSource(s)}
+                  className={cn(
+                    'rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors',
+                    afSource === s
+                      ? s === 'auto'
+                        ? 'border-violet-300 bg-violet-100 text-violet-700'
+                        : s === 'manual'
+                          ? 'border-blue-200 bg-blue-50 text-blue-600'
+                          : 'border-slate-300 bg-slate-100 text-slate-700'
+                      : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:text-slate-600',
+                  )}
+                >
+                  {s === 'all' ? 'Все' : s === 'auto' ? '🤖 Авто' : '✍ Вручную'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Сброс */}
+          {hasAnsweredFilters && (
+            <button
+              type="button"
+              onClick={() => { setAfReviewFrom(''); setAfReviewTo(''); setAfReplyFrom(''); setAfReplyTo(''); setAfSource('all') }}
+              className="ml-auto self-end rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-500 hover:bg-rose-100 transition-colors"
+            >
+              Сбросить
+            </button>
+          )}
+
+          {/* Счётчик результатов */}
+          {hasAnsweredFilters && filteredCurrentRows !== null && (
+            <span className="self-end text-xs text-slate-400">
+              {filteredCurrentRows.length} из {currentRows?.length ?? 0}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ── Queue / Answered tabs */}
       {tab !== 'templates' && tab !== 'test' && (
         <div className="flex flex-col gap-3">
@@ -1098,6 +1216,9 @@ export const ReviewsPage = ({
               {tab === 'queue' ? 'Все отзывы отвечены — отличная работа!' : 'Отвеченных отзывов нет.'}
             </div>
           )}
+          {!isFetching && !fetchError && tab === 'answered' && currentRows !== null && currentRows.length > 0 && filteredCurrentRows !== null && filteredCurrentRows.length === 0 && (
+            <div className="py-10 text-center text-sm text-slate-400">Ничего не найдено — попробуйте сбросить фильтры.</div>
+          )}
 
           {/* AI key notice (queue only, when reviews present) */}
           {tab === 'queue' && !isAiConfigured && (currentRows ?? []).length > 0 && (
@@ -1119,7 +1240,7 @@ export const ReviewsPage = ({
           )}
 
           {/* Feedback cards */}
-          {(currentRows ?? []).map((row) => {
+          {(filteredCurrentRows ?? []).map((row) => {
             const fb = row.data
             const isGenerating = generatingIds.has(row.id)
             const isSending = sendingIds.has(row.id)
