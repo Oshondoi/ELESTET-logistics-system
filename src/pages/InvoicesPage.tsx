@@ -90,6 +90,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     trip: Trip | null
     tripLine: TripLine | null
     workTariff: FulfillmentWorkTariff | null
+    rfTariff: FulfillmentWorkTariff | null
   }>>([])  
   const [logisticsLoading, setLogisticsLoading] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
@@ -145,11 +146,13 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
       const tripLineCache: Record<string, TripLine> = {}
       const warehouseIdCache: Record<string, string> = {}  // отметка «уже запрашивали»
       const wbTariffCache: Record<string, FulfillmentWorkTariff | null> = {}
+      const rfTariffCache: Record<string, FulfillmentWorkTariff | null> = {}
       const results: Array<{
         supply: FulfillmentSupplyWithBoxes
         trip: Trip | null
         tripLine: TripLine | null
         workTariff: FulfillmentWorkTariff | null
+        rfTariff: FulfillmentWorkTariff | null
       }> = []
       for (const supply of suppliesWithTrip) {
         let trip: Trip | null = null
@@ -172,27 +175,41 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
             if (tripLine) tripLineCache[supply.trip_line_id] = tripLine
           }
         }
-        // Тариф берётся из fulfillment_work_tariffs (stage=wb_unload, name=склад поставки)
+        // Тариф wb_unload: цена за короб (разгрузка на складе ВБ)
+        // Тариф logistics_rf: цена за кг (транспорт по РФ)
         // Используем supply.warehouse_name — надёжнее tripLine.destination_warehouse
         let workTariff: FulfillmentWorkTariff | null = null
+        let rfTariff: FulfillmentWorkTariff | null = null
         const wName = supply.warehouse_name
         if (wName) {
           if (wName in warehouseIdCache) {
             workTariff = wbTariffCache[wName] ?? null
+            rfTariff = rfTariffCache[wName] ?? null
           } else {
-            const { data } = await (supabase as any)
-              .from('fulfillment_work_tariffs')
-              .select('*')
-              .eq('account_id', batch.account_id)
-              .eq('stage', 'wb_unload')
-              .eq('name', wName)
-              .maybeSingle()
-            workTariff = (data as FulfillmentWorkTariff | null) ?? null
+            const [{ data: wbData }, { data: rfData }] = await Promise.all([
+              (supabase as any)
+                .from('fulfillment_work_tariffs')
+                .select('*')
+                .eq('account_id', batch.account_id)
+                .eq('stage', 'wb_unload')
+                .eq('name', wName)
+                .maybeSingle(),
+              (supabase as any)
+                .from('fulfillment_work_tariffs')
+                .select('*')
+                .eq('account_id', batch.account_id)
+                .eq('stage', 'logistics_rf')
+                .eq('name', wName)
+                .maybeSingle(),
+            ])
+            workTariff = (wbData as FulfillmentWorkTariff | null) ?? null
+            rfTariff = (rfData as FulfillmentWorkTariff | null) ?? null
             warehouseIdCache[wName] = wName
             wbTariffCache[wName] = workTariff
+            rfTariffCache[wName] = rfTariff
           }
         }
-        results.push({ supply, trip, tripLine, workTariff })
+        results.push({ supply, trip, tripLine, workTariff, rfTariff })
       }
       setSupplyLogisticsData(results)
     }
@@ -279,7 +296,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
     return total
   }, [batch.stage_packaging, batchConsumables, accountConsumables, catalogConsumableLines])
   const logisticsSubtotal = useMemo(() => {
-    return supplyLogisticsData.reduce((total, { supply, workTariff }) => {
+    return supplyLogisticsData.reduce((total, { supply, workTariff, rfTariff }) => {
       const effectiveTariffType = supply.logistics_tariff_type ?? logisticsTariffType
       if (!effectiveTariffType || !workTariff) return total
       const boxQty = supply.boxes.length
@@ -287,8 +304,8 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
       if (effectiveTariffType === 'per_box') {
         return total + (workTariff.price_per_unit ?? 0) * boxQty
       }
-      // per_kg: транспорт + разгрузка на складах ВБ (за короб)
-      return total + (workTariff.price_per_kg ?? 0) * weight + (workTariff.price_per_unit ?? 0) * boxQty
+      // per_kg: транспорт (из logistics_rf) + разгрузка на складах ВБ (за короб из wb_unload)
+      return total + (rfTariff?.price_per_kg ?? 0) * weight + (workTariff.price_per_unit ?? 0) * boxQty
     }, 0)
   }, [supplyLogisticsData, logisticsTariffType])
   const grandTotal = fulfillmentSubtotal + consumablesSubtotal + logisticsSubtotal
@@ -505,7 +522,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {supplyLogisticsData.map(({ supply, tripLine, workTariff }) => {
+                        {supplyLogisticsData.map(({ supply, tripLine, workTariff, rfTariff }) => {
                           const effectiveTariffType = supply.logistics_tariff_type ?? logisticsTariffType
                           const warehouseName = supply.warehouse_name || tripLine?.destination_warehouse || ''
                           const warehouseLabel = warehouseName ? (
@@ -535,13 +552,13 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                                       {warehouseName && <span className="mr-1">{warehouseName}</span>}
                                       <span className="text-[10px] text-slate-400">перевозка / кг</span>
                                     </td>
-                                    <td className="py-2 text-right font-medium text-slate-900">{(workTariff.price_per_kg ?? 0) > 0 ? workTariff.price_per_kg : '—'}</td>
+                                    <td className="py-2 text-right font-medium text-slate-900">{(rfTariff?.price_per_kg ?? 0) > 0 ? rfTariff!.price_per_kg : '—'}</td>
                                     <td className="py-2 text-right font-medium text-slate-900">
                                       {supply.weight != null ? <>{supply.weight}<span className="text-[10px] text-slate-400 ml-0.5">кг</span></> : '—'}
                                     </td>
                                     <td className="py-2 text-right font-medium text-slate-900">
-                                      {(workTariff.price_per_kg ?? 0) > 0 && (supply.weight ?? 0) > 0
-                                        ? workTariff.price_per_kg! * supply.weight!
+                                      {(rfTariff?.price_per_kg ?? 0) > 0 && (supply.weight ?? 0) > 0
+                                        ? rfTariff!.price_per_kg! * supply.weight!
                                         : '—'}
                                     </td>
                                   </tr>
