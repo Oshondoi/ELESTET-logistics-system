@@ -286,8 +286,8 @@ const WarehousesPanel = ({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
-  const dragIndex = useRef<number | null>(null)
+  const [posEditId, setPosEditId] = useState<string | null>(null)
+  const [posInput, setPosInput] = useState('')
 
   const displayItems = useMemo(() => {
     if (sortMode === 'alpha') return [...items].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
@@ -314,22 +314,23 @@ const WarehousesPanel = ({
     localStorage.setItem(ORDER_KEY, JSON.stringify(newOrder))
   }
 
-  const handleDragStart = (index: number) => { dragIndex.current = index }
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault()
-    setDragOverIndex(index)
+  const handleMoveToPosition = (id: string, targetPos: number) => {
+    const currentIds = displayItems.map(i => i.id)
+    const fromIndex = currentIds.indexOf(id)
+    if (fromIndex === -1) return
+    const toIndex = Math.max(0, Math.min(displayItems.length - 1, targetPos - 1))
+    if (fromIndex === toIndex) return
+    const next = [...currentIds]
+    next.splice(fromIndex, 1)
+    next.splice(toIndex, 0, id)
+    saveOrder(next)
   }
-  const handleDrop = (dropIndex: number) => {
-    const from = dragIndex.current
-    if (from === null || from === dropIndex) { setDragOverIndex(null); return }
-    const next = [...displayItems]
-    const [moved] = next.splice(from, 1)
-    next.splice(dropIndex, 0, moved)
-    saveOrder(next.map(i => i.id))
-    dragIndex.current = null
-    setDragOverIndex(null)
+
+  const commitPos = (id: string) => {
+    const n = parseInt(posInput, 10)
+    if (!isNaN(n) && n >= 1) handleMoveToPosition(id, n)
+    setPosEditId(null)
   }
-  const handleDragEnd = () => { dragIndex.current = null; setDragOverIndex(null) }
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -423,24 +424,36 @@ const WarehousesPanel = ({
             {displayItems.map((item, index) => (
               <li
                 key={item.id}
-                draggable={sortMode === 'custom'}
-                onDragStart={() => handleDragStart(index)}
-                onDragOver={(e) => handleDragOver(e, index)}
-                onDrop={() => handleDrop(index)}
-                onDragEnd={handleDragEnd}
-                className={`flex items-center gap-2 px-4 py-1.5 text-sm text-slate-700 transition-colors ${
-                  sortMode === 'custom' ? 'cursor-grab active:cursor-grabbing' : ''
-                } ${
-                  dragOverIndex === index && dragIndex.current !== index ? 'bg-blue-50' : 'hover:bg-slate-50'
-                }`}
+                className="flex items-center gap-2 px-4 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
               >
-                {/* Drag handle — только в custom режиме */}
+                {/* Поле позиции — только в custom режиме */}
                 {sortMode === 'custom' && (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-slate-300" fill="currentColor">
-                    <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
-                    <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
-                    <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
-                  </svg>
+                  posEditId === item.id ? (
+                    <input
+                      type="number"
+                      autoFocus
+                      value={posInput}
+                      min={1}
+                      max={displayItems.length}
+                      onChange={(e) => setPosInput(e.target.value)}
+                      onBlur={() => commitPos(item.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); commitPos(item.id) }
+                        if (e.key === 'Escape') setPosEditId(null)
+                      }}
+                      onFocus={(e) => e.target.select()}
+                      className="w-10 shrink-0 rounded-lg border border-blue-300 py-0.5 text-center text-xs font-medium text-slate-700 outline-none focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => { setPosEditId(item.id); setPosInput(String(index + 1)) }}
+                      title="Изменить позицию"
+                      className="w-10 shrink-0 rounded-lg border border-slate-200 bg-slate-50 py-0.5 text-center text-xs font-medium text-slate-400 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-500"
+                    >
+                      {index + 1}
+                    </button>
+                  )
                 )}
                 {editingId === item.id ? (
                   <>
@@ -2099,17 +2112,30 @@ const WorkTariffsPanel = ({
   }
 
   // Объединённый список строк: склады из каталога (виртуальные) + реальные тарифы
+  const sortedWarehouses = useMemo(() => {
+    const sortMode = localStorage.getItem('warehouse_sort_mode')
+    if (sortMode === 'custom') {
+      try {
+        const orderStr = localStorage.getItem(`warehouse_order_${accountId}`)
+        const order: string[] = orderStr ? (JSON.parse(orderStr) as string[]) : []
+        const orderMap = new Map(order.map((id, i) => [id, i]))
+        return [...warehouses].sort((a, b) => (orderMap.get(a.id) ?? 999999) - (orderMap.get(b.id) ?? 999999))
+      } catch { /* fallthrough */ }
+    }
+    return [...warehouses].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+  }, [warehouses, accountId])
+
   const displayRows: Array<{ kind: 'tariff'; tariff: FulfillmentWorkTariff } | { kind: 'virtual'; warehouse: Warehouse }> = (() => {
     if (!isWarehouseStage) return stageTariffs.map(t => ({ kind: 'tariff' as const, tariff: t }))
     const result: Array<{ kind: 'tariff'; tariff: FulfillmentWorkTariff } | { kind: 'virtual'; warehouse: Warehouse }> = []
-    for (const w of warehouses) {
+    for (const w of sortedWarehouses) {
       const existing = stageTariffs.find(t => t.name === w.name)
       if (existing) result.push({ kind: 'tariff', tariff: existing })
       else result.push({ kind: 'virtual', warehouse: w })
     }
     // Тарифы добавленные вручную, не совпадающие ни с одним складом
     for (const t of stageTariffs) {
-      if (!warehouses.some(w => w.name === t.name)) result.push({ kind: 'tariff', tariff: t })
+      if (!sortedWarehouses.some(w => w.name === t.name)) result.push({ kind: 'tariff', tariff: t })
     }
     return result
   })()
