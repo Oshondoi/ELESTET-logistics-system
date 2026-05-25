@@ -253,6 +253,15 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
         )
       }
       log.push(`${ts()} [${storeName}] синхронизировано ${unanswered.length} без ответа, ${answered.length} отвечено`)
+
+      // Сбрасываем ai_reply_status='sent' для отзывов, которые WB по-прежнему показывает
+      // как неотвеченные (WB не принял ответ или произошёл сбой ранее)
+      await db.from('wb_feedbacks')
+        .update({ ai_reply_status: 'none' })
+        .eq('store_id', store.id)
+        .eq('is_answered', false)
+        .eq('ai_reply_status', 'sent')
+
     } catch (e) {
       log.push(`${ts()} [${storeName}] ошибка синхронизации: ${(e as Error).message}`)
       continue
@@ -266,12 +275,21 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
       .eq('is_answered', false)
       .in('ai_reply_status', ['none', 'generated'])
 
-    const candidates = ((rows ?? []) as { id: string; data: Record<string, unknown>; ai_reply_status: string }[])
+    const allRows = (rows ?? []) as { id: string; data: Record<string, unknown>; ai_reply_status: string }[]
+    log.push(`${ts()} [${storeName}] в очереди БД: ${allRows.length}`)
+
+    const candidates = allRows
       .filter((row) => {
         const d = row.data
         const rating = d['productValuation'] as number
-        if (!settings.target_ratings.includes(rating)) return false
-        if (settings.require_text && !((d['text'] as string | undefined)?.trim())) return false
+        if (!settings.target_ratings.includes(rating)) {
+          log.push(`${ts()} [${storeName}] пропуск ${row.id.slice(0, 8)}: оценка ${rating} не в фильтре ${settings.target_ratings.join(',')}`)
+          return false
+        }
+        if (settings.require_text && !((d['text'] as string | undefined)?.trim())) {
+          log.push(`${ts()} [${storeName}] пропуск ${row.id.slice(0, 8)}: без текста (фильтр требует текст)`)
+          return false
+        }
         // Фильтр по чёрному списку артикулов
         if (settings.excluded_nm_ids && settings.excluded_nm_ids.length > 0) {
           const nmId = (d['productDetails'] as { nmId?: number } | null | undefined)?.nmId
