@@ -559,10 +559,8 @@ const BatchDetailModal = ({
   const [addBoxNum, setAddBoxNum] = useState('')
   const [deleteBoxConfirm, setDeleteBoxConfirm] = useState<{ supplyId: string; boxId: string } | null>(null)
   const [deleteSupplyConfirm, setDeleteSupplyConfirm] = useState<string | null>(null) // supplyId
-  const [isSavingLogisticsTariff, setIsSavingLogisticsTariff] = useState(false)
   // Тип тарифа логистики для каждой поставки (переопределение, NULL = наследует от партии)
   const [supplyTariffTypeMap, setSupplyTariffTypeMap] = useState<Record<string, 'per_box' | 'per_kg' | null>>({})
-  const [savingSupplyTariffId, setSavingSupplyTariffId] = useState<string | null>(null)
 
   // Буфер изменений приёмки
   const [receptionDraft, setReceptionDraft] = useState<Record<string, number>>(
@@ -5181,13 +5179,10 @@ const BatchDetailModal = ({
                     <div className="flex shrink-0 gap-0.5 rounded-xl bg-slate-100 p-0.5">
                       <button
                         type="button"
-                        disabled={isSavingLogisticsTariff}
                         onClick={() => {
-                          if (isSavingLogisticsTariff || batch.logistics_tariff_type === 'per_box') return
-                          setIsSavingLogisticsTariff(true)
-                          updateBatch(batch.id, { logistics_tariff_type: 'per_box' })
-                            .then(() => setBatch((prev) => ({ ...prev, logistics_tariff_type: 'per_box' })))
-                            .finally(() => setIsSavingLogisticsTariff(false))
+                          if (batch.logistics_tariff_type === 'per_box') return
+                          setBatch((prev) => ({ ...prev, logistics_tariff_type: 'per_box' }))
+                          setIsDirty(true)
                         }}
                         className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${
                           batch.logistics_tariff_type === 'per_box'
@@ -5199,13 +5194,10 @@ const BatchDetailModal = ({
                       </button>
                       <button
                         type="button"
-                        disabled={isSavingLogisticsTariff}
                         onClick={() => {
-                          if (isSavingLogisticsTariff || batch.logistics_tariff_type === 'per_kg') return
-                          setIsSavingLogisticsTariff(true)
-                          updateBatch(batch.id, { logistics_tariff_type: 'per_kg' })
-                            .then(() => setBatch((prev) => ({ ...prev, logistics_tariff_type: 'per_kg' })))
-                            .finally(() => setIsSavingLogisticsTariff(false))
+                          if (batch.logistics_tariff_type === 'per_kg') return
+                          setBatch((prev) => ({ ...prev, logistics_tariff_type: 'per_kg' }))
+                          setIsDirty(true)
                         }}
                         className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${
                           batch.logistics_tariff_type === 'per_kg'
@@ -5348,19 +5340,11 @@ const BatchDetailModal = ({
                                     <button
                                       key={type}
                                       type="button"
-                                      disabled={savingSupplyTariffId === supply.id}
                                       onClick={() => {
-                                        if (savingSupplyTariffId === supply.id) return
                                         // Клик по уже выбранному собственному типу → сбросить (вернуть к наследованию)
                                         const newType = isOwn ? null : type
                                         setSupplyTariffTypeMap((prev) => ({ ...prev, [supply.id]: newType }))
-                                        setSavingSupplyTariffId(supply.id)
-                                        updateSupply(supply.id, { logistics_tariff_type: newType })
-                                          .catch(() => {
-                                            // откат при ошибке
-                                            setSupplyTariffTypeMap((prev) => ({ ...prev, [supply.id]: supplyOwnType }))
-                                          })
-                                          .finally(() => setSavingSupplyTariffId(null))
+                                        setIsDirty(true)
                                       }}
                                       className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition leading-tight ${
                                         isActive
@@ -5444,13 +5428,22 @@ const BatchDetailModal = ({
                     else if (viewStage === 'logistics') {
                       setIsSavingDraft(true)
                       try {
-                        // Сохранить trip_id батча (первый слот) — всегда
+                        // Сохранить trip_id батча (первый слот) + глобальный тариф
                         const firstTripId = tripSlots[0]?.tripId ?? ''
+                        const updated = await updateBatch(batch.id, {
+                          ...(firstTripId ? { trip_id: firstTripId } : {}),
+                          logistics_tariff_type: batch.logistics_tariff_type,
+                        })
                         if (firstTripId) {
-                          const updated = await updateBatch(batch.id, { trip_id: firstTripId })
                           setBatch((prev) => ({ ...prev, trip_id: firstTripId }))
                           onBatchUpdated({ ...updated, trip_id: firstTripId })
                         }
+                        // Сохранить тип тарифа для каждой поставки
+                        await Promise.all(
+                          supplies.map((s) =>
+                            updateSupply(s.id, { logistics_tariff_type: supplyTariffTypeMap[s.id] ?? null })
+                          )
+                        )
                         // Если этап уже завершён — синхронизировать поставки со страницей Логистики
                         if (batch.current_stage !== 'logistics' && batch.store_id) {
                           const freshSupplies = await fetchSupplies(batch.id)
