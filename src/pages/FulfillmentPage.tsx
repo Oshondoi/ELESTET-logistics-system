@@ -4604,6 +4604,7 @@ const BatchDetailModal = ({
                             trip_id: null,
                             trip_line_id: null,
                             weight: null,
+                            logistics_tariff_type: null,
                             created_by: userId || null,
                             created_at: now,
                             boxes: [],
