@@ -515,7 +515,10 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                               {/* За короб */}
                               {effectiveTariffType === 'per_box' && workTariff && (
                                 <tr>
-                                  <td className="py-2 text-slate-800">Перевозка{warehouseLabel}</td>
+                                  <td className="py-2 text-slate-800">
+                                    {warehouseName && <span className="mr-1">{warehouseName}</span>}
+                                    <span className="text-[10px] text-slate-400">перевозка / кор</span>
+                                  </td>
                                   <td className="py-2 text-right font-medium text-slate-900">{workTariff.price_per_unit > 0 ? workTariff.price_per_unit : '—'}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">{supply.boxes.length}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">
@@ -526,7 +529,10 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                               {/* За кг */}
                               {effectiveTariffType === 'per_kg' && workTariff && (
                                 <tr>
-                                  <td className="py-2 text-slate-800">Перевозка (кг){warehouseLabel}</td>
+                                  <td className="py-2 text-slate-800">
+                                    {warehouseName && <span className="mr-1">{warehouseName}</span>}
+                                    <span className="text-[10px] text-slate-400">перевозка / кг</span>
+                                  </td>
                                   <td className="py-2 text-right font-medium text-slate-900">{(workTariff.price_per_kg ?? 0) > 0 ? workTariff.price_per_kg : '—'}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">{supply.weight ?? '—'}</td>
                                   <td className="py-2 text-right font-medium text-slate-900">
