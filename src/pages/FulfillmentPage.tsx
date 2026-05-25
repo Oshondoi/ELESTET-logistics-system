@@ -5182,6 +5182,8 @@ const BatchDetailModal = ({
                         onClick={() => {
                           if (batch.logistics_tariff_type === 'per_box') return
                           setBatch((prev) => ({ ...prev, logistics_tariff_type: 'per_box' }))
+                          // Сбросить все индивидуальные переопределения — глобальный тип применяется ко всем
+                          setSupplyTariffTypeMap((prev) => Object.fromEntries(Object.keys(prev).map((k) => [k, null])))
                           setIsDirty(true)
                         }}
                         className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${
@@ -5197,6 +5199,8 @@ const BatchDetailModal = ({
                         onClick={() => {
                           if (batch.logistics_tariff_type === 'per_kg') return
                           setBatch((prev) => ({ ...prev, logistics_tariff_type: 'per_kg' }))
+                          // Сбросить все индивидуальные переопределения — глобальный тип применяется ко всем
+                          setSupplyTariffTypeMap((prev) => Object.fromEntries(Object.keys(prev).map((k) => [k, null])))
                           setIsDirty(true)
                         }}
                         className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${
