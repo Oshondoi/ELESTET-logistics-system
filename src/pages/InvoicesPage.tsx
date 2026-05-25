@@ -105,19 +105,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
   const [packagingLogs, setPackagingLogs] = useState<FulfillmentPackagingLog[]>([])
   const [catalogItems, setCatalogItems] = useState<ConsumableCatalogItem[]>([])
   const [worksLoading, setWorksLoading] = useState(true)
-  const [logisticsTariffType, setLogisticsTariffType] = useState<'per_box' | 'per_kg' | null>(batch.logistics_tariff_type ?? null)
-  const [isSavingTariffType, setIsSavingTariffType] = useState(false)
-
-  const handleTariffTypeChange = async (type: 'per_box' | 'per_kg') => {
-    if (isSavingTariffType || !supabase) return
-    setLogisticsTariffType(type)
-    setIsSavingTariffType(true)
-    try {
-      await supabase.from('fulfillment_batches').update({ logistics_tariff_type: type }).eq('id', batch.id)
-    } finally {
-      setIsSavingTariffType(false)
-    }
-  }
+  const logisticsTariffType = batch.logistics_tariff_type ?? null
 
   // Fetch works (OTK, marking, supplies, tariffs)
   useEffect(() => {
@@ -505,31 +493,6 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                   <p className="py-4 text-sm text-slate-400">Рейс не привязан</p>
                 ) : (
                   <>
-                    {/* Переключатель типа тарифа — глобальный (дефолт для поставок без индивидуального типа) */}
-                    {supplyLogisticsData.some(({ workTariff }) => workTariff) && (
-                      <div className="flex gap-0.5 rounded-xl bg-slate-100 p-0.5 mb-2">
-                        <button
-                          type="button"
-                          disabled={isSavingTariffType}
-                          onClick={() => void handleTariffTypeChange('per_box')}
-                          className={`flex-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
-                            logisticsTariffType === 'per_box' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                          }`}
-                        >
-                          За короб
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isSavingTariffType}
-                          onClick={() => void handleTariffTypeChange('per_kg')}
-                          className={`flex-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
-                            logisticsTariffType === 'per_kg' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                          }`}
-                        >
-                          За кг
-                        </button>
-                      </div>
-                    )}
                     {/* Таблица услуг логистики */}
                     <table className="w-full text-sm">
                       <thead>
@@ -584,7 +547,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                               {/* Тариф есть, но тип не определён */}
                               {workTariff && !effectiveTariffType && (
                                 <tr>
-                                  <td colSpan={4} className="py-3 text-xs text-amber-500">Выберите тип тарифа выше ↑</td>
+                                  <td colSpan={4} className="py-3 text-xs text-amber-500">Тип тарифа не задан в настройках партии</td>
                                 </tr>
                               )}
                             </React.Fragment>
