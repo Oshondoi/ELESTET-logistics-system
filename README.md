@@ -117,6 +117,23 @@ AI 01 = GTIN
 - Только чтение, фильтр по магазину, 4 чипа статистики в шапке
 - Сервис: `fetchMarkingDefectsByStore` + `MarkingDefectRow` в `fulfillmentService.ts`
 
+### FulfillmentPage — единая таблица + пайплайн у исполнителя (29.05.2026)
+
+#### Единая таблица «Все» (commit ca88575)
+- Таб **«Все»**: свои и партнёрские партии в одной таблице, отсортированы по `created_at` desc
+- IIFE объединяет `filteredBatches` + `filteredPartnerBatches`, отличие строк — флаг `isPartner`
+- Таб **«Мои»**: без изменений, только свои партии
+
+#### Пайплайн-стадии у исполнителя (commit 8fa3505)
+- Исполнитель теперь видит верхний ряд pipeline-pills (Цех → Фулфил…) в своих партнёрских партиях
+- `partnerBatchPipelineMap: Map<batchId, {id,name,status,order}[]>` — useMemo из `partnerBatches[]`
+- Данные: `PartnerBatchInfo.my_stage_id/name/status/order` (уже загружены, дополнительных запросов нет)
+- Работает в Аутсорс-табе и merged-таблице «Все»
+
+#### Настройки фулфилмента — межсессионность
+- Таблица `fulfillment_settings`, привязка к `account_id`, upsert по `onConflict: 'account_id'`
+- Одна строка на компанию; любой сотрудник с любого устройства получает одни настройки
+
 ### FulfillmentPage — Pipeline система в батч-листе (27.05.2026)
 
 Поддержка многостадийного пайплайна (Цех → Фулфилмент и т.п.) в колонке **ЭТАП** списка партий.

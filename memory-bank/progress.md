@@ -3,6 +3,27 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 29.05.2026 — FulfillmentPage: единая таблица + пайплайн у исполнителя
+
+### Слияние «Мои» и «Аутсорс» партий в единую таблицу на табе «Все» (commit ca88575)
+- Таб **«Все»**: одна таблица вместо двух, свои и партнёрские вперемешку, сортировка по `created_at` desc
+- IIFE: `const allItems = [...filteredBatches.map(b=>({batch:b, isPartner:false})), ...filteredPartnerBatches.map(b=>({batch:b, isPartner:true}))].sort(...)`
+- `isBatchPartner === true` → логика партнёрской строки; `false` → логика собственной
+- Таб **«Мои»** (`filterOwner !== 'all'`): только свои партии (без изменений)
+
+### Пайплайн-стадии у исполнителя (commit 8fa3505)
+- **Проблема:** исполнитель не видел верхний ряд pipeline-pills в колонке Этап (видел только нижний ряд sub-stage dots)
+- **Причина:** `batchPipelineMap` содержит стадии только СВОИХ партий; batch_id партнёрских партий в него не попадают
+- **Решение:** `partnerBatchPipelineMap = useMemo(...)` — строится из `partnerBatches[]` (уже загруженных), содержащих `my_stage_id/name/status/order`
+- Оба места (Аутсорс-таб + merged «Все») обновлены — теперь `partnerPipelineStgs` используется для верхнего ряда
+- TypeScript: 0 ошибок
+
+### Подтверждена межсессионная персистентность настроек фулфилмента
+- `fulfillment_settings` → Supabase, привязка к `account_id`, `upsert onConflict: 'account_id'`
+- Любой сотрудник под любой компанией с любого устройства получает одни настройки
+
+---
+
 ## Что сделано за сессию 28.05.2026 (часть 2) — FulfillmentPage: access control + partner batch UI
 
 ### Баг-фикс: владелец мог завершить стадию за партнёра

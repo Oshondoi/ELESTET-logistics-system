@@ -1,6 +1,46 @@
 # Active Context
 
-## Current Focus (28.05.2026) — FulfillmentPage: контроль доступа к pipeline + UI партнёрских партий — ЗАВЕРШЕНО
+## Current Focus (29.05.2026) — FulfillmentPage: единая таблица + пайплайн у исполнителя — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### 1. Слияние «Мои» и «Аутсорс» партий в таб «Все» — единая таблица (commit ca88575)
+- Таб **«Все»**: вместо двух отдельных таблиц — одна, отсортированная по `created_at` desc
+- Свои партии и партнёрские партии стоят вперемешку
+- Реализовано через IIFE: `allItems = [...filteredBatches, ...filteredPartnerBatches].sort(...)`
+- Таб **«Мои»**: по-прежнему только свои партии
+
+#### 2. Пайплайн-стадии у исполнителя (commit 8fa3505)
+- **Проблема:** у исполнителя в таб «Аутсорс» и «Все» в колонке Этап отображался только нижний ряд (sub-stage dots), без верхнего ряда с pipeline-кружочками (как у владельца: Цех → Фулфил…)
+- **Причина:** партнёрские строки брали `batchPipelineMap.get(pb.id)`, но `batchPipelineMap` заполняется только из партий **текущего аккаунта** — чужие batch_id в него не попадают
+- **Решение:** `partnerBatchPipelineMap` (useMemo) — строится из `partnerBatches` (массив `PartnerBatchInfo`), которые уже содержат `my_stage_id`, `my_stage_name`, `my_stage_status`, `my_stage_order`
+  ```ts
+  const partnerBatchPipelineMap = useMemo(() => {
+    const map = new Map<string, {id,name,status,order}[]>()
+    for (const pb of partnerBatches) {
+      const arr = map.get(pb.batch_id) ?? []
+      arr.push({ id: pb.my_stage_id, name: pb.my_stage_name, status: pb.my_stage_status, order: pb.my_stage_order })
+      map.set(pb.batch_id, arr)
+    }
+    map.forEach(arr => arr.sort((a,b) => a.order - b.order))
+    return map
+  }, [partnerBatches])
+  ```
+- В обоих местах (Аутсорс-таб и merged-таблица «Все») ячейка Этап теперь рендерит:
+  - Верхний ряд: pipeline-кружки (violet = active, emerald = done, slate = pending)
+  - Нижний ряд: sub-stage dots (Приём / ОТК / Упак. / Марк. / Короба / Лог.)
+
+#### 3. Настройки фулфилмента — межсессионная персистентность
+- Подтверждено: `fulfillment_settings` хранится в Supabase по `account_id`
+- `upsert` с `onConflict: 'account_id'` — одна строка на компанию
+- Любой сотрудник под любой компанией с любого устройства видит одни и те же настройки
+
+### Ключевые файлы
+- `src/pages/FulfillmentPage.tsx` — все изменения (коммиты ca88575, 8fa3505)
+
+---
+
+## Previous Focus (28.05.2026) — FulfillmentPage: контроль доступа к pipeline + UI партнёрских партий — ЗАВЕРШЕНО
 
 ### Что реализовано
 
