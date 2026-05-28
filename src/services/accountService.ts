@@ -56,7 +56,8 @@ export const updateAccountInSupabase = async (
     throw new Error('Supabase client is not configured')
   }
 
-  const payload: Record<string, unknown> = { name: name.trim() }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const payload: any = { name: name.trim() }
   if (logoUrl !== undefined) payload.logo_url = logoUrl
 
   const { data, error } = await supabase
