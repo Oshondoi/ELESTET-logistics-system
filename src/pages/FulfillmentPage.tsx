@@ -7945,14 +7945,40 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                   return (
                     <tr key={pb.id} onClick={() => void handleOpenDetail(pb.id)} className="cursor-pointer hover:bg-slate-50/80 transition-colors">
                       <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0" disabled />
+                        <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                          checked={selectedBatchIds.has(pb.id)}
+                          onChange={(e) => { setSelectedBatchIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(pb.id); else next.delete(pb.id); return next }) }}
+                        />
                       </td>
                       <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex flex-col leading-tight">
-                          {info?.owner_short_id != null && (
-                            <span className="text-[10px] text-violet-400 font-semibold">C-{info.owner_short_id}</span>
-                          )}
-                          <span>{pb.short_id != null ? `P-${pb.short_id}` : '—'}</span>
+                        <div className="flex items-center gap-1.5">
+                          <div className="flex flex-col leading-tight">
+                            {info?.owner_short_id != null && (
+                              <span className="text-[10px] text-violet-400 font-semibold">C-{info.owner_short_id}</span>
+                            )}
+                            <span>{pb.short_id != null ? `P-${pb.short_id}` : '—'}</span>
+                          </div>
+                          {info?.owner_short_id != null && pb.short_id != null && (() => {
+                            const batchUrl = `${window.location.origin}/fulfillment/C-${info.owner_short_id}/P-${pb.short_id}`
+                            return (
+                              <div>
+                                <button type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    if (shareMenuPos?.batchId === pb.id) { setShareMenuPos(null); return }
+                                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                                    const openUp = rect.bottom + 130 > window.innerHeight - 20
+                                    setShareMenuPos({ left: rect.left, anchorTop: rect.top, anchorBottom: rect.bottom, openUp, batchId: pb.id, batchUrl })
+                                  }}
+                                  className="flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-50">
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                                  </svg>
+                                </button>
+                              </div>
+                            )
+                          })()}
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -7963,47 +7989,34 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                       </td>
                       <td className="px-4 py-3"><span className="text-slate-300">—</span></td>
                       <td className="px-4 py-3">
-                        {info && (
-                          <div className="flex flex-col gap-2">
-                            <div className="flex items-start">
-                              <div className="flex w-10 flex-col items-center">
-                                <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${info.my_stage_status === 'done' ? 'bg-emerald-500' : info.my_stage_status === 'active' ? 'bg-violet-500' : 'bg-slate-200'}`}>
-                                  {info.my_stage_status === 'done' && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
-                                  {info.my_stage_status === 'active' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                                </div>
-                                <span className={`mt-0.5 text-[9px] leading-tight max-w-[40px] truncate ${info.my_stage_status === 'done' ? 'text-emerald-600' : info.my_stage_status === 'active' ? 'text-violet-600 font-semibold' : 'text-slate-400'}`}>{info.my_stage_name}</span>
-                              </div>
-                            </div>
-                            <div className="flex items-start">
-                              {visibleStages.map((st, i) => {
-                                const isPast = i < visibleCurrentIdx
-                                const isCurrent = i === visibleCurrentIdx
-                                const qty = stageQty[st]
-                                const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
-                                const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
-                                let qtyColor = 'text-slate-400'
-                                if (showQty && prevQty !== undefined) {
-                                  if (qty === prevQty) qtyColor = 'text-emerald-600'
-                                  else if (qty > prevQty) qtyColor = 'text-blue-500'
-                                  else qtyColor = 'text-red-500'
-                                } else if (showQty && i === 0) { qtyColor = 'text-emerald-600' }
-                                return (
-                                  <div key={st} className="flex items-start">
-                                    <div className="flex w-10 flex-col items-center">
-                                      <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
-                                        {isPast && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
-                                        {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                                      </div>
-                                      <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{miniLabels[st] ?? st}</span>
-                                      <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>{showQty ? qty : '0'}</span>
-                                    </div>
-                                    {i < visibleStages.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                        <div className="flex items-start">
+                          {visibleStages.map((st, i) => {
+                            const isPast = i < visibleCurrentIdx
+                            const isCurrent = i === visibleCurrentIdx
+                            const qty = stageQty[st]
+                            const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
+                            const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
+                            let qtyColor = 'text-slate-400'
+                            if (showQty && prevQty !== undefined) {
+                              if (qty === prevQty) qtyColor = 'text-emerald-600'
+                              else if (qty > prevQty) qtyColor = 'text-blue-500'
+                              else qtyColor = 'text-red-500'
+                            } else if (showQty && i === 0) { qtyColor = 'text-emerald-600' }
+                            return (
+                              <div key={st} className="flex items-start">
+                                <div className="flex w-10 flex-col items-center">
+                                  <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
+                                    {isPast && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                    {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
                                   </div>
-                                )
-                              })}
-                            </div>
-                          </div>
-                        )}
+                                  <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{miniLabels[st] ?? st}</span>
+                                  <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>{showQty ? qty : '0'}</span>
+                                </div>
+                                {i < visibleStages.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                              </div>
+                            )
+                          })}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col items-start">
@@ -8017,10 +8030,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                         {new Date(pb.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                       </td>
                       <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                        {isOpening ? (
+                        {isOpening && (
                           <svg className="h-4 w-4 animate-spin text-violet-400" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-                        ) : (
-                          <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
                         )}
                       </td>
                     </tr>
@@ -8336,14 +8347,40 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                     return (
                       <tr key={pb.id} onClick={() => void handleOpenDetail(pb.id)} className="cursor-pointer hover:bg-slate-50/80 transition-colors">
                         <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                          <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0" disabled />
+                          <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                            checked={selectedBatchIds.has(pb.id)}
+                            onChange={(e) => { setSelectedBatchIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(pb.id); else next.delete(pb.id); return next }) }}
+                          />
                         </td>
                         <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex flex-col leading-tight">
-                            {info?.owner_short_id != null && (
-                              <span className="text-[10px] text-violet-400 font-semibold">C-{info.owner_short_id}</span>
-                            )}
-                            <span>{pb.short_id != null ? `P-${pb.short_id}` : '—'}</span>
+                          <div className="flex items-center gap-1.5">
+                            <div className="flex flex-col leading-tight">
+                              {info?.owner_short_id != null && (
+                                <span className="text-[10px] text-violet-400 font-semibold">C-{info.owner_short_id}</span>
+                              )}
+                              <span>{pb.short_id != null ? `P-${pb.short_id}` : '—'}</span>
+                            </div>
+                            {info?.owner_short_id != null && pb.short_id != null && (() => {
+                              const batchUrl = `${window.location.origin}/fulfillment/C-${info.owner_short_id}/P-${pb.short_id}`
+                              return (
+                                <div>
+                                  <button type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      if (shareMenuPos?.batchId === pb.id) { setShareMenuPos(null); return }
+                                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                                      const openUp = rect.bottom + 130 > window.innerHeight - 20
+                                      setShareMenuPos({ left: rect.left, anchorTop: rect.top, anchorBottom: rect.bottom, openUp, batchId: pb.id, batchUrl })
+                                    }}
+                                    className="flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-50">
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                                      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                                    </svg>
+                                  </button>
+                                </div>
+                              )
+                            })()}
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -8354,47 +8391,34 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                         </td>
                         <td className="px-4 py-3"><span className="text-slate-300">—</span></td>
                         <td className="px-4 py-3">
-                          {info && (
-                            <div className="flex flex-col gap-2">
-                              <div className="flex items-start">
-                                <div className="flex w-10 flex-col items-center">
-                                  <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${info.my_stage_status === 'done' ? 'bg-emerald-500' : info.my_stage_status === 'active' ? 'bg-violet-500' : 'bg-slate-200'}`}>
-                                    {info.my_stage_status === 'done' && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
-                                    {info.my_stage_status === 'active' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                                  </div>
-                                  <span className={`mt-0.5 text-[9px] leading-tight max-w-[40px] truncate ${info.my_stage_status === 'done' ? 'text-emerald-600' : info.my_stage_status === 'active' ? 'text-violet-600 font-semibold' : 'text-slate-400'}`}>{info.my_stage_name}</span>
-                                </div>
-                              </div>
-                              <div className="flex items-start">
-                                {visibleStages.map((st, i) => {
-                                  const isPast = i < visibleCurrentIdx
-                                  const isCurrent = i === visibleCurrentIdx
-                                  const qty = stageQty[st]
-                                  const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
-                                  const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
-                                  let qtyColor = 'text-slate-400'
-                                  if (showQty && prevQty !== undefined) {
-                                    if (qty === prevQty) qtyColor = 'text-emerald-600'
-                                    else if (qty > prevQty) qtyColor = 'text-blue-500'
-                                    else qtyColor = 'text-red-500'
-                                  } else if (showQty && i === 0) { qtyColor = 'text-emerald-600' }
-                                  return (
-                                    <div key={st} className="flex items-start">
-                                      <div className="flex w-10 flex-col items-center">
-                                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
-                                          {isPast && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
-                                          {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
-                                        </div>
-                                        <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{miniLabels[st] ?? st}</span>
-                                        <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>{showQty ? qty : '0'}</span>
-                                      </div>
-                                      {i < visibleStages.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                          <div className="flex items-start">
+                            {visibleStages.map((st, i) => {
+                              const isPast = i < visibleCurrentIdx
+                              const isCurrent = i === visibleCurrentIdx
+                              const qty = stageQty[st]
+                              const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
+                              const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
+                              let qtyColor = 'text-slate-400'
+                              if (showQty && prevQty !== undefined) {
+                                if (qty === prevQty) qtyColor = 'text-emerald-600'
+                                else if (qty > prevQty) qtyColor = 'text-blue-500'
+                                else qtyColor = 'text-red-500'
+                              } else if (showQty && i === 0) { qtyColor = 'text-emerald-600' }
+                              return (
+                                <div key={st} className="flex items-start">
+                                  <div className="flex w-10 flex-col items-center">
+                                    <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
+                                      {isPast && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                      {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
                                     </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          )}
+                                    <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{miniLabels[st] ?? st}</span>
+                                    <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>{showQty ? qty : '0'}</span>
+                                  </div>
+                                  {i < visibleStages.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                                </div>
+                              )
+                            })}
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-col items-start">
@@ -8408,10 +8432,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                           {new Date(pb.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                         </td>
                         <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                          {isOpening ? (
+                          {isOpening && (
                             <svg className="h-4 w-4 animate-spin text-violet-400" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-                          ) : (
-                            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
                           )}
                         </td>
                       </tr>
