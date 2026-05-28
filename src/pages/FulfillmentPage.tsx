@@ -8055,7 +8055,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
           </div>
         ) : (
           <>
-          {filteredBatches.length > 0 && (
+          {filterOwner !== 'all' && filteredBatches.length > 0 && (
           <table className="w-full text-sm">
             <thead className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
               <tr>
@@ -8316,61 +8316,198 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
             </tbody>
           </table>
           )}
-          {filterOwner === 'all' && filteredPartnerBatches.length > 0 && (
-            <>
-              {filteredBatches.length > 0 && (
-                <div className="border-t border-slate-100 px-4 py-2 bg-violet-50 text-[11px] font-semibold uppercase tracking-wide text-violet-500">Аутсорс</div>
-              )}
+          {filterOwner === 'all' && (() => {
+            const allItems = [
+              ...filteredBatches.map(b => ({ batch: b, isPartner: false as const })),
+              ...filteredPartnerBatches.map(b => ({ batch: b, isPartner: true as const })),
+            ].sort((a, bx) => new Date(bx.batch.created_at).getTime() - new Date(a.batch.created_at).getTime())
+            if (!allItems.length) return null
+            return (
               <table className="w-full text-sm">
                 <thead className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="w-8 px-3 py-3" />
+                    <th className="w-8 px-3 py-3">
+                      <input type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                        checked={filteredBatches.length > 0 && filteredBatches.every((b) => selectedBatchIds.has(b.id))}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelectedBatchIds(new Set(filteredBatches.map((b) => b.id)))
+                          else setSelectedBatchIds(new Set())
+                        }}
+                      />
+                    </th>
                     <th className="px-4 py-3 text-left">ID</th>
                     <th className="px-4 py-3 text-left">Партия</th>
                     <th className="px-4 py-3 text-left">Магазин</th>
                     <th className="px-4 py-3 text-left">Этап</th>
                     <th className="px-4 py-3 text-left">Статус</th>
                     <th className="px-4 py-3 text-left">Создана</th>
-                    <th className="px-4 py-3 text-right" />
+                    <th className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        title="Переместить выбранные в архив"
+                        disabled={selectedBatchIds.size === 0}
+                        onClick={() => setBulkDeleteConfirm(true)}
+                        className={`inline-flex items-center justify-center rounded-lg p-1 transition ${selectedBatchIds.size > 0 ? 'text-red-500 hover:bg-red-50' : 'cursor-default text-slate-300'}`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                        </svg>
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredPartnerBatches.map((pb) => {
-                    const info = partnerBatches.find((p) => p.batch_id === pb.id)
-                    const isOpening = isOpeningDetail === pb.id
-                    const miniLabels: Record<string, string> = { reception: 'Приём', otk: 'ОТК', packaging: 'Упак.', marking: 'Марк.', packing: 'Короба', logistics: 'Лог.' }
-                    const stageQty: Record<string, number | undefined> = { reception: pb.qty_received_sum, otk: pb.qty_otk_sum, packaging: pb.qty_packaging_sum, marking: pb.qty_marked_sum, packing: pb.qty_packed_sum, logistics: pb.qty_packed_sum }
-                    const effectiveSrc = info ? { ...pb, stage_otk: info.my_stage_otk, stage_packaging: info.my_stage_packaging, stage_marking: info.my_stage_marking, stage_packing: info.my_stage_packing, stage_logistics: info.my_stage_logistics } : pb
-                    const visibleStages = getEnabledStages(effectiveSrc).filter((s) => s !== 'done')
-                    const currentSubStage = info?.my_current_stage ?? pb.current_stage
-                    const visibleCurrentIdx = pb.status === 'done' || currentSubStage === 'done' ? visibleStages.length : visibleStages.indexOf(currentSubStage)
+                  {allItems.map(({ batch: batchItem, isPartner: isBatchPartner }) => {
+                    if (isBatchPartner) {
+                      const pb = batchItem
+                      const info = partnerBatches.find((p) => p.batch_id === pb.id)
+                      const isOpening = isOpeningDetail === pb.id
+                      const miniLabels: Record<string, string> = { reception: 'Приём', otk: 'ОТК', packaging: 'Упак.', marking: 'Марк.', packing: 'Короба', logistics: 'Лог.' }
+                      const stageQty: Record<string, number | undefined> = { reception: pb.qty_received_sum, otk: pb.qty_otk_sum, packaging: pb.qty_packaging_sum, marking: pb.qty_marked_sum, packing: pb.qty_packed_sum, logistics: pb.qty_packed_sum }
+                      const effectiveSrc = info ? { ...pb, stage_otk: info.my_stage_otk, stage_packaging: info.my_stage_packaging, stage_marking: info.my_stage_marking, stage_packing: info.my_stage_packing, stage_logistics: info.my_stage_logistics } : pb
+                      const visibleStages = getEnabledStages(effectiveSrc).filter((s) => s !== 'done')
+                      const currentSubStage = info?.my_current_stage ?? pb.current_stage
+                      const visibleCurrentIdx = pb.status === 'done' || currentSubStage === 'done' ? visibleStages.length : visibleStages.indexOf(currentSubStage)
+                      return (
+                        <tr key={`partner-${pb.id}`} onClick={() => void handleOpenDetail(pb.id)} className="cursor-pointer hover:bg-slate-50/80 transition-colors">
+                          <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                            <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                              checked={selectedBatchIds.has(pb.id)}
+                              onChange={(e) => { setSelectedBatchIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(pb.id); else next.delete(pb.id); return next }) }}
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-1.5">
+                              <div className="flex flex-col leading-tight">
+                                {info?.owner_short_id != null && (
+                                  <span className="text-[10px] text-violet-400 font-semibold">C-{info.owner_short_id}</span>
+                                )}
+                                <span>{pb.short_id != null ? `P-${pb.short_id}` : '—'}</span>
+                              </div>
+                              {info?.owner_short_id != null && pb.short_id != null && (() => {
+                                const batchUrl = `${window.location.origin}/fulfillment/C-${info.owner_short_id}/P-${pb.short_id}`
+                                return (
+                                  <div>
+                                    <button type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        if (shareMenuPos?.batchId === pb.id) { setShareMenuPos(null); return }
+                                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                                        const openUp = rect.bottom + 130 > window.innerHeight - 20
+                                        setShareMenuPos({ left: rect.left, anchorTop: rect.top, anchorBottom: rect.bottom, openUp, batchId: pb.id, batchUrl })
+                                      }}
+                                      className="flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-50">
+                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                                      </svg>
+                                    </button>
+                                  </div>
+                                )
+                              })()}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div>
+                              <p className="font-medium text-slate-800">{pb.name}</p>
+                              {info && <p className="text-xs text-slate-400 leading-tight">{info.owner_name}</p>}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3"><span className="text-slate-300">—</span></td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-start">
+                              {visibleStages.map((st, i) => {
+                                const isPast = i < visibleCurrentIdx
+                                const isCurrent = i === visibleCurrentIdx
+                                const qty = stageQty[st]
+                                const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
+                                const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
+                                let qtyColor = 'text-slate-400'
+                                if (showQty && prevQty !== undefined) {
+                                  if (qty === prevQty) qtyColor = 'text-emerald-600'
+                                  else if (qty > prevQty) qtyColor = 'text-blue-500'
+                                  else qtyColor = 'text-red-500'
+                                } else if (showQty && i === 0) { qtyColor = 'text-emerald-600' }
+                                return (
+                                  <div key={st} className="flex items-start">
+                                    <div className="flex w-10 flex-col items-center">
+                                      <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
+                                        {isPast && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                        {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                      </div>
+                                      <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{miniLabels[st] ?? st}</span>
+                                      <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>{showQty ? qty : '0'}</span>
+                                    </div>
+                                    {i < visibleStages.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col items-start">
+                              {pb.status === 'active' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>)}
+                              {pb.status === 'done' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)}
+                              {pb.status === 'cancelled' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>)}
+                              <span className={`mt-0.5 text-[10px] leading-tight font-medium ${pb.status === 'active' ? 'text-orange-600' : pb.status === 'done' ? 'text-emerald-600' : 'text-slate-400'}`}>{STATUS_LABELS[pb.status]}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-slate-400">
+                            {new Date(pb.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                          </td>
+                          <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                            {isOpening && (
+                              <svg className="h-4 w-4 animate-spin text-violet-400" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    }
+                    const b = batchItem
+                    const s = stores.find((st) => st.id === b.store_id)
+                    const disc = b.otk_discrepancy
+                    const isSelected = selectedBatchIds.has(b.id)
+                    const isArchived = isArchiveTab
                     return (
-                      <tr key={pb.id} onClick={() => void handleOpenDetail(pb.id)} className="cursor-pointer hover:bg-slate-50/80 transition-colors">
+                      <tr key={b.id} onClick={() => {
+                          if (shareMenuPos) { setShareMenuPos(null); return }
+                          if (!isArchived && isOpeningDetail !== b.id) void handleOpenDetail(b.id)
+                        }}
+                        className={`transition-colors ${isArchived ? '' : 'cursor-pointer hover:bg-slate-50/80'} ${isSelected ? 'bg-blue-50/60' : ''}`}>
                         <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                          <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
-                            checked={selectedBatchIds.has(pb.id)}
-                            onChange={(e) => { setSelectedBatchIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(pb.id); else next.delete(pb.id); return next }) }}
+                          <input type="checkbox"
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              setSelectedBatchIds((prev) => {
+                                const next = new Set(prev)
+                                if (e.target.checked) next.add(b.id)
+                                else next.delete(b.id)
+                                return next
+                              })
+                            }}
                           />
                         </td>
                         <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-1.5">
                             <div className="flex flex-col leading-tight">
-                              {info?.owner_short_id != null && (
-                                <span className="text-[10px] text-violet-400 font-semibold">C-{info.owner_short_id}</span>
+                              {accountShortId != null && (
+                                <span className="text-[10px] text-violet-400 font-semibold">C-{accountShortId}</span>
                               )}
-                              <span>{pb.short_id != null ? `P-${pb.short_id}` : '—'}</span>
+                              <span>{b.short_id != null ? `P-${b.short_id}` : '—'}</span>
                             </div>
-                            {info?.owner_short_id != null && pb.short_id != null && (() => {
-                              const batchUrl = `${window.location.origin}/fulfillment/C-${info.owner_short_id}/P-${pb.short_id}`
+                            {accountShortId != null && b.short_id != null && (() => {
+                              const batchUrl = `${window.location.origin}/fulfillment/C-${accountShortId}/P-${b.short_id}`
                               return (
                                 <div>
                                   <button type="button"
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      if (shareMenuPos?.batchId === pb.id) { setShareMenuPos(null); return }
+                                      if (shareMenuPos?.batchId === b.id) { setShareMenuPos(null); return }
                                       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
                                       const openUp = rect.bottom + 130 > window.innerHeight - 20
-                                      setShareMenuPos({ left: rect.left, anchorTop: rect.top, anchorBottom: rect.bottom, openUp, batchId: pb.id, batchUrl })
+                                      setShareMenuPos({ left: rect.left, anchorTop: rect.top, anchorBottom: rect.bottom, openUp, batchId: b.id, batchUrl })
                                     }}
                                     className="flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-50">
                                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
@@ -8384,65 +8521,174 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <div>
-                            <p className="font-medium text-slate-800">{pb.name}</p>
-                            {info && <p className="text-xs text-slate-400 leading-tight">{info.owner_name}</p>}
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium text-slate-800">{b.name}</p>
+                            {partnerBatchIds.has(b.id) && (
+                              <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-600">Аутсорс</span>
+                            )}
                           </div>
                         </td>
-                        <td className="px-4 py-3"><span className="text-slate-300">—</span></td>
                         <td className="px-4 py-3">
-                          <div className="flex items-start">
-                            {visibleStages.map((st, i) => {
-                              const isPast = i < visibleCurrentIdx
-                              const isCurrent = i === visibleCurrentIdx
-                              const qty = stageQty[st]
-                              const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
-                              const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
-                              let qtyColor = 'text-slate-400'
-                              if (showQty && prevQty !== undefined) {
-                                if (qty === prevQty) qtyColor = 'text-emerald-600'
-                                else if (qty > prevQty) qtyColor = 'text-blue-500'
-                                else qtyColor = 'text-red-500'
-                              } else if (showQty && i === 0) { qtyColor = 'text-emerald-600' }
-                              return (
-                                <div key={st} className="flex items-start">
-                                  <div className="flex w-10 flex-col items-center">
-                                    <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
-                                      {isPast && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
-                                      {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                          {s ? (
+                            <div>
+                              <p className="font-semibold text-slate-800">{s.supplier || s.name}</p>
+                              {s.supplier && <p className="text-xs text-slate-400 leading-tight">{s.name}</p>}
+                            </div>
+                          ) : <span className="text-slate-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          {(() => {
+                            const miniLabels: Record<string, string> = { reception: 'Приём', otk: 'ОТК', packaging: 'Упак.', marking: 'Марк.', packing: 'Короба', logistics: 'Лог.' }
+                            const stageQty: Record<string, number | undefined> = {
+                              reception: b.qty_received_sum,
+                              otk: b.qty_otk_sum,
+                              packaging: b.qty_packaging_sum,
+                              marking: b.qty_marked_sum,
+                              packing: b.qty_packed_sum,
+                              logistics: b.qty_packed_sum,
+                            }
+                            const stages = getEnabledStages(b).filter((s) => s !== 'done')
+                            const pipelineStgs = batchPipelineMap.get(b.id)
+                            const activePipelineStg = pipelineStgs?.find((ps) => ps.status === 'active')
+                            const currentSubStage = activePipelineStg?.current_stage ?? b.current_stage
+                            const visibleStages = activePipelineStg
+                              ? getEnabledStages({ ...b, stage_otk: activePipelineStg.stage_otk, stage_packaging: activePipelineStg.stage_packaging, stage_marking: activePipelineStg.stage_marking, stage_packing: activePipelineStg.stage_packing, stage_logistics: activePipelineStg.stage_logistics }).filter((s) => s !== 'done')
+                              : stages
+                            const visibleCurrentIdx = b.status === 'done' || currentSubStage === 'done' ? visibleStages.length : visibleStages.indexOf(currentSubStage)
+                            return (
+                              <div className="flex flex-col gap-2">
+                                {pipelineStgs && pipelineStgs.length > 0 && (() => {
+                                  const activeIdx = pipelineStgs.findIndex((ps) => ps.status === 'active')
+                                  return (
+                                    <div className="flex items-start">
+                                      {pipelineStgs.map((ps, pi) => (
+                                        <div key={ps.id} className="flex items-start">
+                                          <div className="flex w-10 flex-col items-center">
+                                            <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${ps.status === 'done' ? 'bg-emerald-500' : ps.status === 'active' ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                                              {ps.status === 'done' && (
+                                                <svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none">
+                                                  <path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                </svg>
+                                              )}
+                                              {ps.status === 'active' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                            </div>
+                                            <span className={`mt-0.5 text-[9px] leading-tight max-w-[40px] truncate ${ps.status === 'done' ? 'text-emerald-600' : ps.status === 'active' ? 'text-violet-600 font-semibold' : 'text-slate-400'}`}>{ps.name}</span>
+                                          </div>
+                                          {pi < pipelineStgs.length - 1 && (
+                                            <div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${pi < activeIdx || activeIdx === -1 ? 'bg-emerald-300' : 'bg-slate-300'}`} />
+                                          )}
+                                        </div>
+                                      ))}
                                     </div>
-                                    <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{miniLabels[st] ?? st}</span>
-                                    <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>{showQty ? qty : '0'}</span>
-                                  </div>
-                                  {i < visibleStages.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                                  )
+                                })()}
+                                <div className="flex items-start">
+                                {visibleStages.map((st, i) => {
+                                  const isPast = i < visibleCurrentIdx
+                                  const isCurrent = i === visibleCurrentIdx
+                                  const qty = stageQty[st]
+                                  const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
+                                  const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
+                                  let qtyColor = 'text-slate-400'
+                                  if (showQty && prevQty !== undefined) {
+                                    if (qty === prevQty) qtyColor = 'text-emerald-600'
+                                    else if (qty > prevQty) qtyColor = 'text-blue-500'
+                                    else qtyColor = 'text-red-500'
+                                  } else if (showQty && i === 0) {
+                                    qtyColor = 'text-emerald-600'
+                                  }
+                                  return (
+                                    <div key={st} className="flex items-start">
+                                      <div className="flex w-10 flex-col items-center">
+                                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
+                                          {isPast && (
+                                            <svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none">
+                                              <path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                            </svg>
+                                          )}
+                                          {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                        </div>
+                                        <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>
+                                          {miniLabels[st] ?? st}
+                                        </span>
+                                        <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>
+                                          {showQty ? qty : '0'}
+                                        </span>
+                                      </div>
+                                      {i < visibleStages.length - 1 && (
+                                        <div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />
+                                      )}
+                                    </div>
+                                  )
+                                })}
                                 </div>
-                              )
-                            })}
-                          </div>
+                              </div>
+                            )
+                          })()}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex flex-col items-start">
-                            {pb.status === 'active' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>)}
-                            {pb.status === 'done' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)}
-                            {pb.status === 'cancelled' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>)}
-                            <span className={`mt-0.5 text-[10px] leading-tight font-medium ${pb.status === 'active' ? 'text-orange-600' : pb.status === 'done' ? 'text-emerald-600' : 'text-slate-400'}`}>{STATUS_LABELS[pb.status]}</span>
-                          </div>
+                          {isArchived ? (
+                            <span className="text-xs text-slate-400">
+                              {b.deleted_at ? new Date(b.deleted_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
+                            </span>
+                          ) : (
+                            <div className="flex flex-col items-start">
+                              {b.status === 'active' && (
+                                <svg viewBox="0 0 24 24" className="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                                </svg>
+                              )}
+                              {b.status === 'done' && (
+                                <svg viewBox="0 0 24 24" className="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+                                </svg>
+                              )}
+                              {b.status === 'cancelled' && (
+                                <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+                                </svg>
+                              )}
+                              <span className={`mt-0.5 text-[10px] leading-tight font-medium ${
+                                b.status === 'active' ? 'text-orange-600' : b.status === 'done' ? 'text-emerald-600' : 'text-slate-400'
+                              }`}>{STATUS_LABELS[b.status]}</span>
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-slate-400">
-                          {new Date(pb.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                          {new Date(b.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                         </td>
                         <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                          {isOpening && (
-                            <svg className="h-4 w-4 animate-spin text-violet-400" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-                          )}
+                          {isArchived ? (
+                            <button type="button" disabled={isRestoring === b.id}
+                              onClick={() => void handleRestore(b)}
+                              className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
+                              {isRestoring === b.id ? 'Восстановление…' : 'Восстановить'}
+                            </button>
+                          ) : canManage ? (
+                            <div className="flex items-center justify-end gap-1">
+                              <button type="button" onClick={() => setEditTarget(b)}
+                                className="rounded-xl p-1.5 text-slate-300 hover:bg-blue-50 hover:text-blue-400">
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                </svg>
+                              </button>
+                              <button type="button" onClick={() => setDeleteTarget(b)}
+                                className="rounded-xl p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-400">
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                                </svg>
+                              </button>
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
-            </>
-          )}
+            )
+          })()}
           </>
         )}
       </Card>
