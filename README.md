@@ -19,7 +19,27 @@ MVP веб-приложения для логистики поставок на 
 
 - SaaS-структура данных: `profiles`, `accounts`, `account_members`, `stores`, `trips`, `trip_lines`, `carriers`, `warehouses`, `roles`
 - Supabase Auth: регистрация (Имя + Email + Пароль обязательны), вход, выход
-- Company flow: создание, список, switcher, сохранение в localStorage, **архивное удаление** (только владелец + пароль, 15 дней в архиве → жёсткое удаление через pg_cron), редактирование названия
+- Company flow: создание, список, switcher, сохранение в localStorage, **архивное удаление** (только владелец + пароль, 15 дней в архиве → жёсткое удаление через pg_cron), редактирование названия + логотипа
+
+## Логотип компании (logo_url)
+
+Загрузить логотип может любой пользователь бесплатно (EditAccountModal → карандаш).
+Форматы: PNG, JPG, WebP (→ конвертируются в WebP), SVG (загружается as-is).
+Storage bucket: `company-logos` (public), путь: `{account_id}/logo.webp|svg`.
+DB: `accounts.logo_url`, `accounts.logo_subscription_until`.
+
+### Что показывается бесплатно (просто `account.logo_url`)
+- Селектор компаний в сайдбаре (кружок рядом с названием)
+- Страница Роли → "Ваш ID"
+- Карточки партнёров в Аутсорсе
+- Счета (шапка документа)
+- **Любые новые места в будущем — автоматически бесплатно**
+
+### Что требует платной подписки (`logo_subscription_until > NOW()`)
+1. Левый верхний угол сайдбара (замена логотипа `E ELESTET`)
+2. `<title>` браузерной вкладки + favicon (white-label)
+
+Без подписки в верхнем углу показывается `E ELESTET` (реклама сервиса).
 - Деплой на Vercel: env переменные, email-подтверждение → Vercel-домен
 - Домен `elestet.net` зарегистрирован на **Namecheap**; DNS настраивается там (Advanced DNS → CNAME/A-запись на Vercel)
 - Левый сайдбар: зафиксирован по высоте (`h-screen sticky`), бренд, company switcher (edit + delete), nav, выход
@@ -96,6 +116,27 @@ AI 01 = GTIN
 - Вкладка «Браки» в `ProductsPage` читает `fulfillment_marking_logs` где `qty_defect > 0`
 - Только чтение, фильтр по магазину, 4 чипа статистики в шапке
 - Сервис: `fetchMarkingDefectsByStore` + `MarkingDefectRow` в `fulfillmentService.ts`
+
+### FulfillmentPage — Pipeline система в батч-листе (27.05.2026)
+
+Поддержка многостадийного пайплайна (Цех → Фулфилмент и т.п.) в колонке **ЭТАП** списка партий.
+
+#### Pipeline pills
+- Над step dots отображаются pills стадий пайплайна: цветной dot + название
+- Статусы: `done` (emerald) / `active` (violet) / `pending` (slate)
+- Коннекторы: emerald = прошедшая стадия, slate = будущая
+
+#### Step dots = шаги АКТИВНОЙ стадии
+- Отображаемые шаги зависят от конфигурации **активной** pipeline-стадии, а не от union-флагов батча
+- Цех (все шаги выкл.) → только «Приём»; Фулфилмент (все вкл.) → полная цепочка шагов
+- `visibleStages` вычисляется из `activePipelineStg.stage_otk/packaging/marking/packing/logistics`
+
+#### Технические детали
+- `batchPipelineMap: Map<string, BatchPipelineStage[]>` — стейт в FulfillmentPage
+- `fetchAllBatchPipelineStages(batchIds)` — загружает стадии всех партий одним запросом
+- После создания партии с pipeline → карта обновляется оптимистично без перезагрузки
+- При `use_pipeline=true` в CreateBatchModal: batch-флаги = union всех стадий пайплайна
+- Исполнитель в настройках пайплайна: дропдаун показывает только `partner_name` (без `#short_id`)
 
 ### Отзывы — источник ответа reply_source (25.05.2026)
 
@@ -620,6 +661,94 @@ supabase.channel(`trip_lines_changes_${accountId}`)
 - `RolesPage` → Аутсорс: **Партнёры** (список B2B-связей, запросы) / **Мои услуги** (входящие приглашения + активные партии)
 - `Topbar`: колокольчик → `NotificationsPanel`; outside-click через `notifRef`
 
+### Аутсорс B2B v2 — контроль доступа к pipeline + UI партнёрских партий (28.05.2026 v2)
+
+#### Баг-фикс: `canCompletePipelineStage` — только исполнитель
+Владелец больше не может нажать «Завершить стадию» если назначен партнёр-исполнитель.
+```tsx
+// Правильная логика: если partner назначен → только он; иначе → только owner
+const canCompletePipelineStage = !isPipelineLoading && activePipelineStage !== null && (
+  activePipelineStage.partner_account_id !== null
+    ? activePipelineStage.partner_account_id === accountId
+    : activePipelineStage.owner_account_id === accountId
+)
+```
+
+#### Баг-фикс: `isPipelineLoading` — race condition при открытии модалки
+- Без этого: `pipelineStgs = []` → `activePipelineStage = null` → `canManageStageData = true` до загрузки → контролы доступны преждевременно
+- Фикс: `isPipelineLoading = true` инициально, сбрасывается в `.finally()` после fetch
+- Все access-guards (`canManageStageData`, `canCompletePipelineStage`, `stagePartnerLocked`) начинаются с проверки `!isPipelineLoading`
+
+#### Дефолтный таб фильтра — «Все»
+`useState<'mine'|'outsource'|'all'>('all')` — вместо прежнего `'mine'`
+
+#### Таблица партнёрских партий — полный ребилд (паритет с таблицей владельца)
+Оба вхождения (таб «Аутсорс» + секция «Все») теперь имеют 9 колонок идентичных основному списку:
+
+| Колонка | Данные |
+|---------|--------|
+| checkbox | disabled |
+| ID | `C-{owner_short_id}` / `P-{batch_short_id}` |
+| Партия | `pb.name` + `info.owner_name` subtitle |
+| Магазин | «—» (нет доступа) |
+| Этап | Pipeline pill + sub-stage dots с qty-цветами |
+| Статус | иконка + текст |
+| Создана | дата |
+| действия | chevron / spinner (без edit/delete) |
+
+Header: `bg-slate-50` — идентично таблице владельца. TypeScript: 0 ошибок.
+
+### Аутсорс B2B v2 — кросс-компанийный пайплайн (28.05.2026)
+
+Полная реализация B2B аутсорса: Компания A назначает принятого партнёра (Компанию B) исполнителем этапа пайплайна → Компания B видит эти партии у себя в Фулфилменте.
+
+**Поток:**
+1. Роли → Аутсорс → «Пригласить компанию» (C-ID в любом формате: `С-14`, `c14`, `С 14` и т.п. — берём только цифры)
+2. Партнёр принимает приглашение во вкладке «Приглашения»
+3. Принятый партнёр появляется в дропдауне «Исполнитель» при создании пайплайн-стадии
+4. Компания B видит партию в FulfillmentPage → «Партии на аутсорс»
+5. BatchDetailModal открывается в режиме read-only (`isPartnerBatch=true`)
+
+**SQL-патч** `supabase/patch_outsource_b2b_v2.sql` ⚠️ (применить):
+- `get_executor_options` → только `status='accepted'` партнёры
+- `_is_batch_partner` helper для RLS
+- Партнёрский SELECT на `fulfillment_items`, `fulfillment_otk_logs`, `fulfillment_marking_logs`, `fulfillment_packaging_logs`
+
+**Сервис** `fetchPartnerBatchesFull(batchIds)` в `fulfillmentService.ts` — загружает полные батчи партнёра через `.in('id', batchIds)`.
+
+**RolesPage — 3 суб-вкладки в табе «Аутсорс»:**
+| Вкладка | Содержимое |
+|---------|-----------|
+| Аутсорс | Мой C-ID + форма приглашения + список принятых партнёров (только ID, без имени — конфиденциальность) |
+| Мои услуги | Партии где я — исполнитель (имя батча, владелец, этап, статус) |
+| Приглашения | «Приглашён» (входящие: имя + ID, Accept/Decline) + «Пригласили» (исходящие: только ID + статус) |
+
+**FulfillmentPage — секция «Партии на аутсорс»:**
+- Отдельная таблица под основным списком батчей
+- Показывает: имя партии + бейдж «Аутсорс», владелец (C{short_id}), статус, мой этап
+- Клик → BatchDetailModal в режиме read-only (`isPartnerBatch=true` когда `batch.account_id !== accountId`)
+
+### FulfillmentPage — Pipeline система в батч-листе (27.05.2026)
+
+Поддержка многостадийного пайплайна (Цех → Фулфилмент и т.п.) в колонке **ЭТАП** списка партий.
+
+#### Pipeline pills
+- Над step dots отображаются pills стадий пайплайна: цветной dot + название
+- Статусы: `done` (emerald) / `active` (violet) / `pending` (slate)
+- Коннекторы: emerald = прошедшая стадия, slate = будущая
+
+#### Step dots = шаги АКТИВНОЙ стадии
+- Отображаемые шаги зависят от конфигурации **активной** pipeline-стадии, а не от union-флагов батча
+- Цех (все шаги выкл.) → только «Приём»; Фулфилмент (все вкл.) → полная цепочка шагов
+- `visibleStages` вычисляется из `activePipelineStg.stage_otk/packaging/marking/packing/logistics`
+
+#### Технические детали
+- `batchPipelineMap: Map<string, BatchPipelineStage[]>` — стейт в FulfillmentPage
+- `fetchAllBatchPipelineStages(batchIds)` — загружает стадии всех партий одним запросом
+- После создания партии с pipeline → карта обновляется оптимистично без перезагрузки
+- При `use_pipeline=true` в CreateBatchModal: batch-флаги = union всех стадий пайплайна
+- Исполнитель в настройках пайплайна: дропдаун показывает только `partner_name` (без `#short_id`)
+
 ## Структура
 
 ```text
@@ -723,6 +852,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 49. patch_currency_primary_rate.sql     ← is_primary boolean, exchange_rate numeric в account_currencies (⚠️ применить)
 50. patch_reply_source.sql              ← wb_feedbacks.reply_source text ('auto'|'manual') ✅ применён
 51. patch_supply_logistics_tariff_type.sql ← logistics_tariff_type в fulfillment_supplies (⚠️ применить)
+52. patch_outsource_b2b_v2.sql           ← Кросс-компанийный пайплайн: get_executor_options (только принятые партнёры), _is_batch_partner RLS helper, партнёрские права на fulfillment_items/otk/marking/packaging logs (⚠️ применить)
 
 4. `npm run dev`
 
@@ -769,6 +899,8 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Аутсорс-система (B2B партии)** | ✅ Готово | Многокомпанийный аутсорс фулфилмент-партий: этапы, приглашения по C-ID, журнал событий, расхождения, голосование за архив |
 | **Аутсорс-партнёры (B2B контакты)** | ✅ Готово | `outsource_partners` таблица + 4 RPC; список партнёров в Ролях → Аутсорс; пикер партнёров в ОутсорсСтейджсМодал; AddOutsourceModal |
 | **Уведомления** | ✅ Готово | NotificationsPanel в Topbar: badge непрочитанных, mark read/all, violet тема |
+| **Pipeline система (батч-лист)** | ✅ Готово | Pills стадий + step dots активной стадии в колонке ЭТАП; batchPipelineMap; fetchAllBatchPipelineStages |
+| **Аутсорс B2B v2 (кросс-компания)** | ✅ Готово | RolesPage 3 суб-вкладки (Аутсорс/Мои услуги/Приглашения); FulfillmentPage «Партии на аутсорс»; BatchDetailModal read-only для партнёра; гибкий парсинг C-ID (любой формат) |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |

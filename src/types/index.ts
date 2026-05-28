@@ -275,6 +275,8 @@ export interface Account {
   deleted_at?: string | null
   my_role?: MemberRole
   short_id?: number | null
+  logo_url?: string | null
+  logo_subscription_until?: string | null
 }
 
 export interface AccountMember {
@@ -890,70 +892,7 @@ export interface FulfillmentSupplyWithBoxes extends FulfillmentSupply {
   boxes: FulfillmentBoxWithItems[]
 }
 
-// ─── Аутсорс-система ─────────────────────────────────────────
-
-export type OutsourceStageStatus =
-  | 'pending'       // ожидает принятия
-  | 'accepted'      // компания приняла
-  | 'in_progress'   // в работе
-  | 'done'          // выполнено
-  | 'disputed'      // расхождение
-  | 'cancelled'     // отменён
-
-export type InviteStatus = 'pending' | 'accepted' | 'declined'
-
-export interface BatchOutsourceStage {
-  id: string
-  batch_id: string
-  owner_account_id: string
-  sort_order: number
-  name: string
-  description: string | null
-  assigned_company_id: string | null
-  status: OutsourceStageStatus
-  qty_declared: number | null
-  qty_received: number | null
-  has_discrepancy: boolean
-  discrepancy_notes: string | null
-  accepted_at: string | null
-  started_at: string | null
-  completed_at: string | null
-  created_at: string
-  updated_at: string
-  // joined from accounts (enriched)
-  assigned_company_name?: string | null
-  assigned_company_short_id?: number | null
-}
-
-export interface BatchOutsourceStageFormValues {
-  name: string
-  description?: string
-  sort_order?: number
-}
-
-export interface BatchStageInvite {
-  id: string
-  batch_id: string
-  stage_id: string
-  inviting_company_id: string
-  invited_company_id: string
-  status: InviteStatus
-  message: string | null
-  created_at: string
-  responded_at: string | null
-}
-
-export interface BatchJournalEntry {
-  id: string
-  batch_id: string
-  event_type: string
-  company_id: string | null
-  company_name: string | null
-  company_short_id: number | null
-  user_id: string | null
-  payload: Record<string, unknown>
-  created_at: string
-}
+// ─── Уведомления ─────────────────────────────────────────────
 
 export interface BatchNotification {
   id: string
@@ -967,56 +906,54 @@ export interface BatchNotification {
   created_at: string
 }
 
-// Входящее приглашение (результат get_my_incoming_invites RPC)
-export interface IncomingInvite {
-  invite_id: string
-  batch_id: string
-  batch_name: string
-  batch_short_id: number | null
-  stage_id: string
-  stage_name: string
-  stage_sort_order: number
-  inviting_company_id: string
-  inviting_company_name: string
-  inviting_company_short_id: number | null
-  status: InviteStatus
-  message: string | null
+// ── Исполнители пайплайна ───────────────────────────────────
+export interface ExecutorOption {
+  account_id: string
+  account_name: string
+  account_short_id: number
+  option_type: 'own' | 'partner'
+}
+
+// ── Pipeline: конфиг аккаунта (шаблон стадий) ───────────────
+export interface AccountPipelineStage {
+  id: string
+  account_id: string
+  order_index: number
+  name: string
+  partner_account_id: string | null
+  // enriched from get_account_pipeline RPC
+  partner_name: string | null
+  partner_short_id: number | null
+  stage_otk: boolean
+  stage_packaging: boolean
+  stage_marking: boolean
+  stage_packing: boolean
+  stage_logistics: boolean
   created_at: string
 }
 
-// Исходящее приглашение (результат get_my_outgoing_invites RPC)
-export interface OutgoingInvite {
-  invite_id: string
+// ── Pipeline: снапшот стадии для конкретной партии ───────────
+export interface BatchPipelineStage {
+  id: string
   batch_id: string
-  batch_name: string
-  batch_short_id: number | null
-  stage_id: string
-  stage_name: string
-  invited_company_id: string
-  invited_company_name: string
-  invited_company_short_id: number | null
-  status: InviteStatus
+  owner_account_id: string
+  partner_account_id: string | null
+  order_index: number
+  name: string
+  current_stage: FulfillmentStage
+  status: 'pending' | 'active' | 'done'
+  stage_otk: boolean
+  stage_packaging: boolean
+  stage_marking: boolean
+  stage_packing: boolean
+  stage_logistics: boolean
+  activated_at: string | null
+  completed_at: string | null
   created_at: string
-  responded_at: string | null
+  updated_at: string
 }
 
-// Партия как аутсорс-исполнитель
-export interface OutsourceBatch {
-  batch_id: string
-  batch_name: string
-  batch_short_id: number | null
-  batch_status: string
-  owner_company_id: string
-  owner_company_name: string
-  owner_company_short_id: number | null
-  stage_id: string
-  stage_name: string
-  stage_status: OutsourceStageStatus
-  stage_sort_order: number
-  created_at: string
-}
-
-// Аутсорс-партнёр (результат get_my_partners RPC)
+// ── Outsource: партнёрская связь ────────────────────────────
 export interface OutsourcePartner {
   connection_id: string
   partner_id: string
@@ -1025,4 +962,26 @@ export interface OutsourcePartner {
   status: 'pending' | 'accepted' | 'declined'
   is_requester: boolean
   created_at: string
+}
+
+// ── Pipeline: партнёрская партия (результат get_partner_batches) ─
+export interface PartnerBatchInfo {
+  batch_id: string
+  my_stage_id: string
+  my_stage_order: number
+  my_stage_name: string
+  my_stage_status: 'pending' | 'active' | 'done'
+  my_current_stage: FulfillmentStage
+  my_stage_otk: boolean
+  my_stage_packaging: boolean
+  my_stage_marking: boolean
+  my_stage_packing: boolean
+  my_stage_logistics: boolean
+  batch_name: string
+  batch_short_id: number | null
+  batch_status: string
+  batch_created_at: string
+  owner_account_id: string
+  owner_name: string
+  owner_short_id: number | null
 }

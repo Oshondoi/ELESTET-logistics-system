@@ -243,7 +243,7 @@ export const Sidebar = ({
                 }
               }}
               className={cn(
-                'flex w-full items-center justify-between rounded-lg px-1 py-1.5 text-left transition-colors duration-150',
+                'flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1.5 text-left transition-colors duration-150',
                 isCompanyOpen ? 'bg-slate-100' : 'bg-transparent hover:bg-slate-100',
               )}
             >
@@ -290,9 +290,9 @@ export const Sidebar = ({
                         onSelectAccount(account.id)
                         setIsCompanyOpen(false)
                       }}
-                      className="group flex w-full items-center justify-between rounded-[12px] px-[16px] py-[13px] text-left transition hover:bg-[#F8FAFF]"
+                      className="group flex w-full items-center justify-between gap-3 rounded-[12px] px-3 py-2 text-left transition hover:bg-[#F8FAFF]"
                     >
-                      <span>
+                      <span className="min-w-0">
                         <span className="block text-[15px] font-bold text-slate-900">{account.name}</span>
                         <span className="mt-0.5 block text-[12px] text-[#61729E]">{listCompanyIdLabel}</span>
                       </span>
@@ -301,7 +301,7 @@ export const Sidebar = ({
                         {isSelected ? (
                           <svg
                             viewBox="0 0 24 24"
-                            className={cn('h-4 w-4 text-[#4A73FF]', isOwner ? 'transition-opacity group-hover:opacity-0' : '')}
+                            className="h-4 w-4 text-[#4A73FF]"
                             fill="none"
                             stroke="currentColor"
                             strokeWidth="2"
@@ -310,7 +310,7 @@ export const Sidebar = ({
                           </svg>
                         ) : null}
                       {isOwner ? (
-                        <span className={`absolute inset-0 flex items-center justify-center gap-1 transition-opacity ${isSelected ? 'opacity-0 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                        <span className="absolute inset-0 flex items-center justify-center gap-1">
                           <button
                             type="button"
                             aria-label="Редактировать компанию"

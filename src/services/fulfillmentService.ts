@@ -77,6 +77,19 @@ export const fetchBatches = async (accountId: string): Promise<FulfillmentBatch[
   return (data ?? []).map(attachQtySums) as FulfillmentBatch[]
 }
 
+// Полные данные партнёрских партий (для аутсорс-компании, видящей чужие партии)
+export const fetchPartnerBatchesFull = async (batchIds: string[]): Promise<FulfillmentBatch[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  if (batchIds.length === 0) return []
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_batches')
+    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at), fulfillment_packaging_logs(qty, qty_defect, deleted_at)')
+    .in('id', batchIds)
+    .is('deleted_at', null)
+  if (error) throw error
+  return (data ?? []).map(attachQtySums) as FulfillmentBatch[]
+}
+
 export const fetchArchivedBatches = async (accountId: string): Promise<FulfillmentBatch[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)

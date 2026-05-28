@@ -26,6 +26,7 @@ import type {
 import {
   fetchBatches,
   fetchBatchWithItems,
+  fetchPartnerBatchesFull,
   fetchFulfillmentSettings,
   upsertFulfillmentSettings,
   createBatch,
@@ -79,10 +80,10 @@ import {
   uploadPackagingPhoto,
 } from '../services/fulfillmentService'
 import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
-import { OutsourceStagesModal } from '../components/fulfillment/OutsourceStagesModal'
-import {
-  findProductByBarcode,
-} from '../services/fulfillmentService'
+import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, initBatchPipeline, completeBatchPipelineStage, fetchPartnerBatches, fetchAllBatchPipelineStages } from '../services/pipelineService'
+import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo } from '../types'
+import { fetchExecutorOptions } from '../services/outsourceService'
+import { findProductByBarcode } from '../services/fulfillmentService'
 import { createTrip, addTripLine, setTripLineFulfillmentBatch, updateTripLineTripId, updateTripLineWeight } from '../services/tripService'
 import { fetchWorkTariffs, fetchConsumables, fetchConsumableCatalog } from '../services/directoriesService'
 import { Card } from '../components/ui/Card'
@@ -128,6 +129,7 @@ const STATUS_COLORS: Record<string, string> = {
 interface FulfillmentPageProps {
   accountId: string
   accountShortId: number | null
+  accountName?: string
   stores: Store[]
   trips: TripWithLines[]
   warehouses: Warehouse[]
@@ -275,6 +277,7 @@ interface DetailModalProps {
   userId: string
   userEmail: string
   userName: string
+  isPartnerBatch?: boolean
   onClose: () => void
   onBatchUpdated: (b: FulfillmentBatch) => void
   onItemsChanged: (items: FulfillmentItem[]) => void
@@ -291,7 +294,7 @@ const BatchDetailModal = ({
   stores,
   trips,
   warehouses,
-  canManage,
+  canManage: canManageRaw,
   canOtkAssign,
   canStageJump,
   canPackingAutoAdd,
@@ -299,6 +302,7 @@ const BatchDetailModal = ({
   userId,
   userEmail,
   userName,
+  isPartnerBatch = false,
   onClose,
   onBatchUpdated,
   onItemsChanged,
@@ -307,6 +311,8 @@ const BatchDetailModal = ({
   onTripCreated,
   zIndex = 50,
 }: DetailModalProps) => {
+  // Партнёр не может управлять чужой партией (только читать + завершать свой этап)
+  const canManage = isPartnerBatch ? false : canManageRaw
   const [batch, setBatch] = useState<FulfillmentBatchWithItems>(initialBatch)
   const [shareOpen, setShareOpen] = useState(false)
   const [linkCopied, setLinkCopied] = useState(false)
@@ -574,8 +580,6 @@ const BatchDetailModal = ({
   const [isSavingDraft, setIsSavingDraft] = useState(false)
 
   const store = stores.find((s) => s.id === batch.store_id)
-  const enabledStages = getEnabledStages(batch)
-  const currentIdx = enabledStages.indexOf(batch.current_stage)
 
   // Загрузить тарифы работ из БД
   useEffect(() => {
@@ -594,6 +598,73 @@ const BatchDetailModal = ({
   // Текущий просматриваемый этап (может отличаться от batch.current_stage при навигации)
   const [viewStage, setViewStage] = useState<FulfillmentStage>(initialBatch.current_stage)
 
+  // ── Pipeline stages ──────────────────────────────────────────
+  const [pipelineStgs, setPipelineStgs] = useState<BatchPipelineStage[]>([])
+  const [isPipelineLoading, setIsPipelineLoading] = useState(true)
+  const [isCompletingPipelineStage, setIsCompletingPipelineStage] = useState(false)
+
+  useEffect(() => {
+    setIsPipelineLoading(true)
+    fetchBatchPipeline(initialBatch.id)
+      .then(setPipelineStgs)
+      .catch(() => {})
+      .finally(() => setIsPipelineLoading(false))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialBatch.id])
+
+  const activePipelineStage = pipelineStgs.find((s) => s.status === 'active') ?? null
+  const effectiveStageSource = activePipelineStage
+    ? {
+        ...batch,
+        stage_otk: activePipelineStage.stage_otk,
+        stage_packaging: activePipelineStage.stage_packaging,
+        stage_marking: activePipelineStage.stage_marking,
+        stage_packing: activePipelineStage.stage_packing,
+        stage_logistics: activePipelineStage.stage_logistics,
+      }
+    : batch
+  const activeSubStage = activePipelineStage?.current_stage ?? batch.current_stage
+  const enabledStages = getEnabledStages(effectiveStageSource)
+  const currentIdx = enabledStages.indexOf(activeSubStage)
+  // Только тот, кто является исполнителем активной стадии, может её завершить:
+  // - если партнёр назначен — только партнёр; - если нет — только владелец
+  const canCompletePipelineStage = !isPipelineLoading && activePipelineStage !== null && (
+    activePipelineStage.partner_account_id !== null
+      ? activePipelineStage.partner_account_id === accountId
+      : activePipelineStage.owner_account_id === accountId
+  )
+
+  // Активный этап пайплайна выполняется партнёром — владелец не может редактировать данные
+  // isPipelineLoading: пока не загружено — блокируем (защита от race condition)
+  const stagePartnerLocked = !isPipelineLoading && activePipelineStage !== null
+    && activePipelineStage.partner_account_id !== null
+    && activePipelineStage.partner_account_id !== accountId
+  // Текущий пользователь — назначенный партнёр-исполнитель активного этапа
+  const isPartnerExecutorOfActiveStage = !isPipelineLoading && activePipelineStage !== null
+    && activePipelineStage.partner_account_id === accountId
+  // Право на редактирование данных этапа (приёмка, ОТК, маркировка, упаковка, паллеты)
+  // Во время загрузки пайплайна — блокируем, чтобы не было временного доступа до получения данных
+  const canManageStageData = isPipelineLoading
+    ? false
+    : stagePartnerLocked
+      ? false
+      : (canManage || isPartnerExecutorOfActiveStage)
+
+  const handleCompletePipelineStage = async () => {
+    if (!activePipelineStage) return
+    setIsCompletingPipelineStage(true)
+    try {
+      await completeBatchPipelineStage(activePipelineStage.id)
+      const updated = await fetchBatchPipeline(initialBatch.id)
+      setPipelineStgs(updated)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка завершения стадии')
+    } finally {
+      setIsCompletingPipelineStage(false)
+    }
+  }
+  // ────────────────────────────────────────────────────────────
+
   // Дата завершения этапа Приёмка
   const [receptionCompletedDate, setReceptionCompletedDate] = useState<string | null>(null)
   useEffect(() => {
@@ -602,7 +673,7 @@ const BatchDetailModal = ({
   }, [initialBatch.id])
 
   // Синхронизировать viewStage при реальном переходе этапа
-  useEffect(() => { setViewStage(batch.current_stage) }, [batch.current_stage])
+  useEffect(() => { setViewStage(activeSubStage) }, [activeSubStage])
 
   // Закрывать share-попап по клику снаружи
   useEffect(() => {
@@ -1429,7 +1500,7 @@ const BatchDetailModal = ({
   }
 
   const handleSaveBoxesQty = async () => {
-    if (!canManage) return
+    if (!canManageStageData) return
     const allBoxesQty = supplies.reduce((s, sup) => s + sup.boxes.length, 0)
     const qty = boxesQtyMode === 'all'
       ? allBoxesQty
@@ -2317,16 +2388,16 @@ const BatchDetailModal = ({
           <div className="flex items-start" style={{ minHeight: 96 }}>
             {(['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics'] as FulfillmentStage[]).map((s, idx, arr) => {
               const stageIdx = STAGE_ORDER.indexOf(s)
-              const currentStageIdx = STAGE_ORDER.indexOf(batch.current_stage)
+              const currentStageIdx = STAGE_ORDER.indexOf(activeSubStage)
               const isDone = currentStageIdx > stageIdx
-              const isCurrent = batch.current_stage === s
+              const isCurrent = activeSubStage === s
               const isPast = stageIdx <= currentStageIdx
               const isLast = idx === arr.length - 1
               // этап включён?
               const keyMap: Record<string, keyof typeof batch> = { otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' }
               const stageKey = keyMap[s]
-              const isEnabled = s === 'reception' || !stageKey || batch[stageKey] as boolean
-              const canToggle = canManage && batch.status === 'active' && !isPast && !!stageKey && !isSavingBatchStages
+              const isEnabled = s === 'reception' || !stageKey || effectiveStageSource[stageKey] as boolean
+              const canToggle = (!activePipelineStage || stagePartnerLocked) && canManage && batch.status === 'active' && !isPast && !!stageKey && !isSavingBatchStages
 
               const handleClick = () => {
                 if (isPast && canStageJump && isEnabled) {
@@ -2384,11 +2455,11 @@ const BatchDetailModal = ({
                     </div>
                     {!isLast && (() => {
                       const km: Record<string, keyof typeof batch> = { otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' }
-                      const getEnabled = (st: FulfillmentStage) => st === 'reception' || !km[st] || (batch[km[st]] as boolean)
+                      const getEnabled = (st: FulfillmentStage) => st === 'reception' || !km[st] || (effectiveStageSource[km[st]] as boolean)
                       const getColor = (st: FulfillmentStage) => {
                         const si = STAGE_ORDER.indexOf(st)
                         if (currentStageIdx > si) return 'bg-emerald-400'
-                        if (batch.current_stage === st) return 'bg-blue-500'
+                        if (activeSubStage === st) return 'bg-blue-500'
                         return 'bg-slate-200'
                       }
                       // Ближайший включённый слева (включая idx)
@@ -2450,6 +2521,72 @@ const BatchDetailModal = ({
             })}
           </div>
         </div>
+
+        {/* Pipeline stages block */}
+        {pipelineStgs.length > 0 && (
+          <div className="border-b border-slate-100 bg-violet-50/60 px-6 py-3">
+            <div className="flex items-center justify-between gap-4">
+              {/* Stage pills */}
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-0.5">
+                {pipelineStgs.map((s, idx) => (
+                  <div key={s.id} className="flex shrink-0 items-center gap-1.5">
+                    <div className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                      s.status === 'done'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : s.status === 'active'
+                          ? 'bg-violet-500 text-white shadow-sm'
+                          : 'bg-slate-100 text-slate-400'
+                    }`}>
+                      {s.status === 'done' && (
+                        <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5"/></svg>
+                      )}
+                      {s.status === 'active' && (
+                        <span className="h-2 w-2 shrink-0 rounded-full bg-white/70 animate-pulse" />
+                      )}
+                      {s.status === 'pending' && (
+                        <span className="h-2 w-2 shrink-0 rounded-full bg-slate-300" />
+                      )}
+                      <span className="max-w-[100px] truncate">{s.name}</span>
+                    </div>
+                    {idx < pipelineStgs.length - 1 && (
+                      <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M9 18l6-6-6-6"/>
+                      </svg>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {/* Complete button */}
+              {canCompletePipelineStage && (
+                <button
+                  type="button"
+                  onClick={() => void handleCompletePipelineStage()}
+                  disabled={isCompletingPipelineStage}
+                  className="shrink-0 flex items-center gap-1.5 rounded-xl bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50 transition-colors"
+                >
+                  {isCompletingPipelineStage ? (
+                    <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+                  )}
+                  Завершить стадию
+                </button>
+              )}
+            </div>
+            {/* Active stage details */}
+            {activePipelineStage && (
+              <p className="mt-1.5 text-[11px] text-violet-500">
+                Активна: <span className="font-semibold">{activePipelineStage.name}</span>
+                {activePipelineStage.partner_account_id
+                  ? ' — передана партнёру'
+                  : ' — выполняется вашей компанией'}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-y-scroll px-6 py-4 [scrollbar-color:theme(colors.slate.300)_transparent] [scrollbar-width:thin]">
@@ -2574,7 +2711,7 @@ const BatchDetailModal = ({
             <div className="space-y-4">
 
               {/* Переключатель режимов */}
-              {canManage && (
+              {canManageStageData && (
                 <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-0.5 w-fit">
                   {([
                     ['bulk', 'Навалом'],
@@ -2592,7 +2729,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Режим: По баркоду */}
-              {canManage && addMode === 'barcode' && (
+              {canManageStageData && addMode === 'barcode' && (
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-3">
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Баркод *</span>
@@ -2665,7 +2802,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Камера приёмки */}
-              {canManage && addMode === 'barcode' && receptionCameraOpen && createPortal(
+              {canManageStageData && addMode === 'barcode' && receptionCameraOpen && createPortal(
                 <div
                   className="fixed inset-0 z-50 flex flex-col bg-black"
                   onClick={() => setReceptionCameraOpen(false)}
@@ -2697,7 +2834,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Режим: Навалом */}
-              {canManage && addMode === 'bulk' && (
+              {canManageStageData && addMode === 'bulk' && (
                 <div className="rounded-2xl bg-slate-50 p-3 space-y-2">
                   <div className="flex flex-wrap items-end gap-2">
                     <div className="flex flex-col gap-1">
@@ -2727,7 +2864,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Режим: По предмету */}
-              {canManage && addMode === 'subject' && (
+              {canManageStageData && addMode === 'subject' && (
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-3">
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Предмет / Категория *</span>
@@ -2754,7 +2891,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Режим: Готовые короба */}
-              {canManage && addMode === 'boxes' && (
+              {canManageStageData && addMode === 'boxes' && (
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-orange-50 p-3 border border-orange-100">
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Единиц *</span>
@@ -2783,7 +2920,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Режим: Из каталога */}
-              {canManage && addMode === 'catalog' && (
+              {canManageStageData && addMode === 'catalog' && (
                 <div className="space-y-3">
                   {!store?.api_key ? (
                     <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
@@ -2869,7 +3006,7 @@ const BatchDetailModal = ({
                         <th className="px-4 py-2.5 text-left">Размер</th>
                         <th className="px-3 py-2.5 text-center">Принято</th>
                         {items.some((i) => i.boxes) && <th className="px-3 py-2.5 text-center">Коробов</th>}
-                        {canManage && <th className="px-3 py-2.5" />}
+                        {canManageStageData && <th className="px-3 py-2.5" />}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -2880,7 +3017,7 @@ const BatchDetailModal = ({
                           <td className="px-4 py-2.5 text-slate-500">{it.color ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-slate-500">{it.size ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-3 py-2.5 text-center">
-                            {canManage ? (
+                            {canManageStageData ? (
                               <input type="number" min={0} value={receptionDraft[it.id] ?? it.qty_received}
                                 onChange={(e) => handleUpdateReceivedDraft(it.id, Number(e.target.value))}
                                 className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-300"
@@ -2894,7 +3031,7 @@ const BatchDetailModal = ({
                                 : <span className="text-slate-300">—</span>}
                             </td>
                           )}
-                          {canManage && (
+                          {canManageStageData && (
                             <td className="px-3 py-2.5 text-center">
                               <button type="button" onClick={() => void handleDeleteItem(it.id)} className="text-slate-300 hover:text-red-400">
                                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
@@ -2918,7 +3055,7 @@ const BatchDetailModal = ({
                         </td>
                         <td className="px-3 py-2.5 text-center text-slate-800">{tReceived}</td>
                         {items.some((i) => i.boxes) && <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, i) => s + (i.boxes ?? 0), 0) || '—'}</td>}
-                        {canManage && <td />}
+                        {canManageStageData && <td />}
                       </tr>
                     </tfoot>
                   </table>
@@ -2936,7 +3073,7 @@ const BatchDetailModal = ({
             const tReceived = items.reduce((s, it) => s + (it.qty_received ?? 0), 0)
             const tOtk = otkLogs.filter((l) => !otkDeletedIds.includes(l.id)).reduce((s, l) => s + (otkEdits[l.id]?.qty ?? l.qty) + (otkEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + otkBuffer.reduce((s, e) => s + e.qty + e.qty_defect, 0)
             const diff = tOtk - tReceived
-            const canAdvance = canManage || tOtk >= tReceived
+            const canAdvance = canManageStageData && (canManage || tOtk >= tReceived)
             return (
               <div className="space-y-4">
                 {/* Модалка добавления работы */}
@@ -3042,10 +3179,12 @@ const BatchDetailModal = ({
                 ) : otkLogs.length === 0 && otkBuffer.length === 0 ? (
                   <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 py-10">
                     <p className="text-sm text-slate-400">Записей нет — добавьте первую работу</p>
-                    <button type="button" onClick={() => setOtkAddModalOpen(true)}
-                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-                      + Добавить работу
-                    </button>
+                    {canManageStageData && (
+                      <button type="button" onClick={() => setOtkAddModalOpen(true)}
+                        className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                        + Добавить работу
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -3083,15 +3222,15 @@ const BatchDetailModal = ({
                               </span>
                             ))}
                           </div>
-                          <button type="button" onClick={() => setOtkAddModalOpen(true)}
-                            className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
-                            + Добавить работу
-                          </button>
+                          {canManageStageData && (
+                            <button type="button" onClick={() => setOtkAddModalOpen(true)}
+                              className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
+                              + Добавить работу
+                            </button>
+                          )}
                         </div>
                       )
                     })()}
-
-                    {/* Сетка карточек */}
                     <div className="grid grid-cols-6 gap-2">
                       {/* Сохранённые записи */}
                       {otkLogs.filter((l) => !otkDeletedIds.includes(l.id)).map((log) => {
@@ -3118,7 +3257,7 @@ const BatchDetailModal = ({
                                 <span className="text-[11px] font-semibold text-slate-700 tabular-nums">{logTime}</span>
                                 <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
                               </button>
-                              {(isOwn || canManage) && (
+                              {(isOwn || canManageStageData) && (
                                 <div className="flex items-center gap-0.5">
                                   <button type="button" onClick={() => {
                                       // Чистим незакоммиченные edits предыдущей карточки если ничего не менялось
@@ -3156,9 +3295,9 @@ const BatchDetailModal = ({
                             {edit.notes && <span className="truncate text-[10px] italic text-slate-400" title={edit.notes}>{edit.notes}</span>}
                             <InvoicePhotoCell
                               photoUrls={log.photo_urls ?? []}
-                              onAdd={(isOwn || canManage) ? (file) => handleAddOtkPhoto(log.id, file) : undefined}
-                              onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceOtkPhoto(log.id, idx, file) : undefined}
-                              onRemove={(isOwn || canManage) ? (idx) => handleRemoveOtkPhoto(log.id, idx) : undefined}
+                              onAdd={(isOwn || canManageStageData) ? (file) => handleAddOtkPhoto(log.id, file) : undefined}
+                              onReplace={(isOwn || canManageStageData) ? (idx, file) => handleReplaceOtkPhoto(log.id, idx, file) : undefined}
+                              onRemove={(isOwn || canManageStageData) ? (idx) => handleRemoveOtkPhoto(log.id, idx) : undefined}
                             />
                           </div>
                           {/* Редактируемая карточка — абсолютный слой, не двигает сетку */}
@@ -3207,9 +3346,9 @@ const BatchDetailModal = ({
                               <div className="mt-1.5">
                                 <InvoicePhotoCell
                                   photoUrls={log.photo_urls ?? []}
-                                  onAdd={(isOwn || canManage) ? (file) => handleAddOtkPhoto(log.id, file) : undefined}
-                                  onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceOtkPhoto(log.id, idx, file) : undefined}
-                                  onRemove={(isOwn || canManage) ? (idx) => handleRemoveOtkPhoto(log.id, idx) : undefined}
+                                  onAdd={(isOwn || canManageStageData) ? (file) => handleAddOtkPhoto(log.id, file) : undefined}
+                                  onReplace={(isOwn || canManageStageData) ? (idx, file) => handleReplaceOtkPhoto(log.id, idx, file) : undefined}
+                                  onRemove={(isOwn || canManageStageData) ? (idx) => handleRemoveOtkPhoto(log.id, idx) : undefined}
                                 />
                               </div>
                             </div>
@@ -3313,7 +3452,7 @@ const BatchDetailModal = ({
           {viewStage === 'marking' && (() => {
             const tReceived = items.reduce((s, it) => s + (it.qty_received ?? 0), 0)
             const tMarking = markingLogs.filter((l) => !markingDeletedIds.includes(l.id)).reduce((s, l) => s + (markingEdits[l.id]?.qty ?? l.qty) + (markingEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + markingBuffer.reduce((s, e) => s + e.qty + e.qty_defect, 0)
-            const canAdvance = canManage || tMarking >= tReceived
+            const canAdvance = canManageStageData && (canManage || tMarking >= tReceived)
             return (
               <div className="space-y-4">
                 {/* Модалка добавления работы */}
@@ -3508,10 +3647,12 @@ const BatchDetailModal = ({
                 ) : markingLogs.length === 0 && markingBuffer.length === 0 ? (
                   <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 py-10">
                     <p className="text-sm text-slate-400">Записей нет — добавьте первую работу</p>
-                    <button type="button" onClick={() => setMarkingAddModalOpen(true)}
-                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-                      + Добавить работу
-                    </button>
+                    {canManageStageData && (
+                      <button type="button" onClick={() => setMarkingAddModalOpen(true)}
+                        className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                        + Добавить работу
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -3554,15 +3695,15 @@ const BatchDetailModal = ({
                               </span>
                             ))}
                           </div>
-                          <button type="button" onClick={() => setMarkingAddModalOpen(true)}
-                            className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
-                            + Добавить работу
-                          </button>
+                          {canManageStageData && (
+                            <button type="button" onClick={() => setMarkingAddModalOpen(true)}
+                              className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
+                              + Добавить работу
+                            </button>
+                          )}
                         </div>
                       )
                     })()}
-
-                    {/* Сетка карточек */}
                     <div className="grid grid-cols-6 gap-2">
                       {/* Сохранённые записи */}
                       {markingLogs.filter((l) => !markingDeletedIds.includes(l.id)).map((log) => {
@@ -3600,7 +3741,7 @@ const BatchDetailModal = ({
                                   <span className="text-[11px] font-semibold text-slate-700 tabular-nums">{logTime}</span>
                                   <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
                                 </div>
-                                {(isOwn || canManage) && (
+                                {(isOwn || canManageStageData) && (
                                   <div className="flex items-center gap-0.5">
                                     <button type="button" onClick={() => {
                                         if (markingEditingId && markingEditingId !== log.id) {
@@ -3654,9 +3795,9 @@ const BatchDetailModal = ({
                               {edit.notes && <span className="truncate text-[10px] italic text-slate-400" title={edit.notes}>{edit.notes}</span>}
                               <InvoicePhotoCell
                                 photoUrls={log.photo_urls ?? []}
-                                onAdd={(isOwn || canManage) ? (file) => handleAddMarkingPhoto(log.id, file) : undefined}
-                                onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
-                                onRemove={(isOwn || canManage) ? (idx) => handleRemoveMarkingPhoto(log.id, idx) : undefined}
+                                onAdd={(isOwn || canManageStageData) ? (file) => handleAddMarkingPhoto(log.id, file) : undefined}
+                                onReplace={(isOwn || canManageStageData) ? (idx, file) => handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
+                                onRemove={(isOwn || canManageStageData) ? (idx) => handleRemoveMarkingPhoto(log.id, idx) : undefined}
                               />
                             </div>
                             {/* Редактируемая карточка — абсолютный слой, не двигает сетку */}
@@ -3754,9 +3895,9 @@ const BatchDetailModal = ({
                                 <div className="mt-1.5">
                                   <InvoicePhotoCell
                                     photoUrls={log.photo_urls ?? []}
-                                    onAdd={(isOwn || canManage) ? (file) => handleAddMarkingPhoto(log.id, file) : undefined}
-                                    onReplace={(isOwn || canManage) ? (idx, file) => handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
-                                    onRemove={(isOwn || canManage) ? (idx) => handleRemoveMarkingPhoto(log.id, idx) : undefined}
+                                    onAdd={(isOwn || canManageStageData) ? (file) => handleAddMarkingPhoto(log.id, file) : undefined}
+                                    onReplace={(isOwn || canManageStageData) ? (idx, file) => handleReplaceMarkingPhoto(log.id, idx, file) : undefined}
+                                    onRemove={(isOwn || canManageStageData) ? (idx) => handleRemoveMarkingPhoto(log.id, idx) : undefined}
                                   />
                                 </div>
                               </div>
@@ -4181,7 +4322,7 @@ const BatchDetailModal = ({
               ) : packagingLogs.length === 0 && packagingBuffer.length === 0 ? (
                 <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-200 py-10">
                   <p className="text-sm text-slate-400">Записей работы нет — добавьте первую</p>
-                  {canManage && (
+                  {canManageStageData && (
                     <button type="button" onClick={() => setPackagingAddModalOpen(true)}
                       className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
                       + Добавить работу
@@ -4219,7 +4360,7 @@ const BatchDetailModal = ({
                             </span>
                           ))}
                         </div>
-                        {canManage && (
+                        {canManageStageData && (
                           <button type="button" onClick={() => setPackagingAddModalOpen(true)}
                             className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
                             + Добавить работу
@@ -4262,7 +4403,7 @@ const BatchDetailModal = ({
                                 <span className="text-[11px] font-semibold text-slate-700 tabular-nums">{logTime}</span>
                                 <span className="text-[10px] text-slate-400 tabular-nums">{logDate}</span>
                               </div>
-                              {(isOwn || canManage) && (
+                              {(isOwn || canManageStageData) && (
                                 <div className="flex items-center gap-0.5">
                                   <button type="button" onClick={() => {
                                     if (packagingEditingId && packagingEditingId !== log.id) {
@@ -4491,7 +4632,7 @@ const BatchDetailModal = ({
                         void handleSaveBoxesQty()
                       }
                     }}
-                    disabled={boxesQtyMode === 'all' || !canManage}
+                    disabled={boxesQtyMode === 'all' || !canManageStageData}
                     placeholder="0"
                     className="w-24 rounded-xl border border-slate-200 px-3 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                   />
@@ -4499,7 +4640,7 @@ const BatchDetailModal = ({
                     <select
                       value={boxCatalogConsumableId}
                       onChange={(e) => setBoxCatalogConsumableId(e.target.value)}
-                      disabled={!canManage}
+                      disabled={!canManageStageData}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       <option value="">— Тип короба —</option>
@@ -4510,7 +4651,7 @@ const BatchDetailModal = ({
                   )}
                   <button
                     type="button"
-                    disabled={isSavingBoxesQty || !canManage}
+                    disabled={isSavingBoxesQty || !canManageStageData}
                     onClick={() => { void handleSaveBoxesQty() }}
                     className="shrink-0 rounded-xl bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                   >
@@ -4527,7 +4668,7 @@ const BatchDetailModal = ({
               <>
                   {/* Тулбар: склад + кнопка добавить */}
                   <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2">
-                    {canManage && (
+                    {canManageStageData && (
                       <div className="relative flex-1 min-w-0">
                         {isWarehouseDropdownOpen ? (
                           <div className="flex items-center gap-2 rounded-xl border border-blue-400 ring-2 ring-blue-100 px-2.5 py-1.5 bg-white">
@@ -4586,7 +4727,7 @@ const BatchDetailModal = ({
                       </div>
                     )}
                     {/* Кнопка добавить */}
-                    {canManage && (
+                    {canManageStageData && (
                       <button
                         disabled={!selectedWarehouseId}
                         onClick={() => {
@@ -4633,7 +4774,7 @@ const BatchDetailModal = ({
                         const totalItems = supply.boxes.reduce((s, b) => s + b.items.reduce((ss, i) => ss + i.qty, 0), 0)
                         const closedBoxes = supply.boxes.filter((b) => b.status === 'closed').length
                         const isActiveStage = batch.current_stage === 'packing'
-                        const canDeleteCard = canManage && (isActiveStage || canSupplyDeleteLocked)
+                        const canDeleteCard = canManageStageData && (isActiveStage || canSupplyDeleteLocked)
                         const linkedLine = supply.trip_line_id
                           ? trips.flatMap((t) => t.lines).find((l) => l.id === supply.trip_line_id)
                           : null
@@ -4692,7 +4833,7 @@ const BatchDetailModal = ({
                             <div className="flex items-center gap-3">
                               {(() => {
                                 const isActiveStage = batch.current_stage === 'packing'
-                                const canDelete = canManage && (isActiveStage || canSupplyDeleteLocked)
+                                const canDelete = canManageStageData && (isActiveStage || canSupplyDeleteLocked)
                                 return canDelete ? (
                                   <button
                                     onClick={() => setDeleteSupplyConfirm(supply.id)}
@@ -4751,7 +4892,7 @@ const BatchDetailModal = ({
                                     <span className="text-xs text-slate-400">{box.items.length} позиций · {boxTotal} ед.</span>
                                     <div className="flex-1" />
                                     {/* Авто-добавление (если есть право) */}
-                                    {canPackingAutoAdd && canManage && isOpen && (
+                                    {canPackingAutoAdd && canManageStageData && isOpen && (
                                       <button
                                         type="button"
                                         onClick={() => setPackingAutoAdd((v) => !v)}
@@ -4766,7 +4907,7 @@ const BatchDetailModal = ({
                                         Авто
                                       </button>
                                     )}
-                                    {canManage && isOpen && (
+                                    {canManageStageData && isOpen && (
                                       <button
                                         onClick={() => {
                                           setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, status: 'closed' } : b) } : s))
@@ -4777,7 +4918,7 @@ const BatchDetailModal = ({
                                         Закрыть ✓
                                       </button>
                                     )}
-                                    {canManage && !isOpen && (
+                                    {canManageStageData && !isOpen && (
                                       <button
                                         onClick={() => {
                                           if (!box._local) void reopenBox(box.id)
@@ -4788,7 +4929,7 @@ const BatchDetailModal = ({
                                         Открыть повторно
                                       </button>
                                     )}
-                                    {canManage && (
+                                    {canManageStageData && (
                                       <button
                                         onClick={() => setDeleteBoxConfirm({ supplyId: supply.id, boxId: box.id })}
                                         className="text-xs text-red-400 hover:text-red-600"
@@ -4854,7 +4995,7 @@ const BatchDetailModal = ({
                                               </div>
                                               <div className="flex items-center gap-2 flex-shrink-0 pt-0.5">
                                                 <span className="text-slate-700 font-medium text-xs">{item.qty}&nbsp;ед.</span>
-                                                {canManage && isOpen && (
+                                                {canManageStageData && isOpen && (
                                                   <button
                                                     onClick={async () => {
                                                       if (!item._local) await deleteBoxItem(item.id)
@@ -4872,7 +5013,7 @@ const BatchDetailModal = ({
                                   </div>
 
                                   {/* Форма добавления позиции (только открытый короб) */}
-                                  {canManage && isOpen && (
+                                  {canManageStageData && isOpen && (
                                     <div className="border-t border-slate-100 px-5 py-4 space-y-3">
                                       <div className="flex items-center gap-2">
                                         <div className="relative flex-1">
@@ -4991,7 +5132,7 @@ const BatchDetailModal = ({
                           </div>
 
                           {/* Подвал: добавить короб */}
-                          {canManage && (
+                          {canManageStageData && (
                             <div className="border-t border-slate-100 px-5 py-3">
                               <button
                                 onClick={() => { setAddBoxNum(String(nextBoxNum)); setAddBoxModal({ supplyId: supply.id, nextNum: nextBoxNum }) }}
@@ -5169,7 +5310,7 @@ const BatchDetailModal = ({
           {viewStage === 'logistics' && (
             <div className="space-y-4">
               {/* Тип тарифа логистики (по умолчанию для всех поставок партии) */}
-              {canManage && (
+              {canManageStageData && (
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
@@ -5337,7 +5478,7 @@ const BatchDetailModal = ({
                             </div>
                             <div className="text-[11px] text-slate-400 pl-5">{supply.boxes.length} кор. · {units} ед.</div>
                             {/* Тип тарифа поставки */}
-                            {canManage && (
+                            {canManageStageData && (
                               <div
                                 className="mt-1.5 pl-5 flex items-center gap-1"
                                 onClick={(e) => e.stopPropagation()}
@@ -5435,14 +5576,14 @@ const BatchDetailModal = ({
         </div>
 
         {/* Footer */}
-        {(canManage || (batch.current_stage !== 'done' && batch.current_stage === 'otk')) && (
+        {(canManageStageData || (batch.current_stage !== 'done' && batch.current_stage === 'otk')) && (
           <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
             <span className="text-sm text-slate-400">
               Этап {Math.max(1, currentIdx + 1)} из {enabledStages.filter((s) => s !== 'done').length}
             </span>
             <div className="flex items-center gap-3">
               {/* Кнопка Сохранить — всегда видна, заглушена когда нет изменений */}
-              {canManage && (
+              {canManageStageData && (
                 <button type="button"
                   onClick={() => void (async () => {
                     if (viewStage === 'reception') await handleSaveReceptionDraft()
@@ -5545,7 +5686,7 @@ const BatchDetailModal = ({
               {batch.current_stage !== 'done' && viewStage === batch.current_stage && (<>
               {batch.current_stage === 'reception' && (
                 <button type="button" onClick={() => setPendingAdvance(true)}
-                  disabled={isSavingStage || items.length === 0}
+                  disabled={isSavingStage || items.length === 0 || !canManageStageData}
                   className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                   {nextStageName === 'done' ? 'Завершить партию' : `Перейти к ${STAGE_LABELS_TO[nextStageName ?? 'done'] ?? STAGE_LABELS[nextStageName ?? 'done']}`}
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -5556,7 +5697,7 @@ const BatchDetailModal = ({
               {batch.current_stage === 'otk' && (() => {
                 const tReceived = items.reduce((s, it) => s + (it.qty_received ?? 0), 0)
                 const tOtk = otkLogs.filter((l) => !otkDeletedIds.includes(l.id)).reduce((s, l) => s + (otkEdits[l.id]?.qty ?? l.qty) + (otkEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + otkBuffer.reduce((s, e) => s + e.qty + e.qty_defect, 0)
-                const canAdvance = canManage || tOtk >= tReceived
+                const canAdvance = canManageStageData && (canManage || tOtk >= tReceived)
                 return (
                   <button type="button" onClick={() => setPendingAdvance(true)}
                     disabled={isSavingStage || !canAdvance}
@@ -5570,7 +5711,7 @@ const BatchDetailModal = ({
               })()}
               {(batch.current_stage === 'packaging' || batch.current_stage === 'marking' || batch.current_stage === 'packing' || batch.current_stage === 'logistics') && (
                 <button type="button" onClick={() => setPendingAdvance(true)}
-                  disabled={isSavingStage}
+                  disabled={isSavingStage || !canManageStageData}
                   className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                   {`Завершить ${STAGE_LABELS[batch.current_stage]}`}
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -5680,7 +5821,7 @@ const BatchDetailModal = ({
               <div className="flex shrink-0 gap-1 border-b border-slate-100 px-4 py-2">
                 {(['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics'] as FulfillmentStage[]).map((key) => {
                   const isActive = otkHistoryStageTab === key
-                  const isEnabled = key === 'reception' || key === 'otk' || key === 'packaging' || batch[({ otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' } as Record<string, keyof typeof batch>)[key] as keyof typeof batch] as boolean
+                  const isEnabled = key === 'reception' || effectiveStageSource[({ otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' } as Record<string, keyof typeof batch>)[key] as keyof typeof batch] as boolean
                   if (!isEnabled) return (
                     <div key={key} className="flex shrink-0 items-center rounded-xl px-3 py-1.5 text-xs text-slate-300 cursor-not-allowed select-none">{stageLabels[key]}</div>
                   )
@@ -6663,6 +6804,8 @@ interface CreateBatchModalProps {
   stores: Store[]
   accountId: string
   settings: FulfillmentSettings | null
+  hasPipeline: boolean
+  pipelineStages: AccountPipelineStage[]
   onClose: () => void
   onStoreCreated: (store: Store) => void
   onSubmit: (values: {
@@ -6673,13 +6816,15 @@ interface CreateBatchModalProps {
     stage_marking: boolean
     stage_packing: boolean
     stage_logistics: boolean
+    use_pipeline: boolean
   }, closeOnly?: boolean) => Promise<void>
 }
 
-const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onStoreCreated }: CreateBatchModalProps) => {
+const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineStages, onClose, onSubmit, onStoreCreated }: CreateBatchModalProps) => {
   const [name, setName] = useState(todayName)
   const [storeId, setStoreId] = useState('')
   const [pendingStore, setPendingStore] = useState<Store | null>(null)
+  const [usePipeline, setUsePipeline] = useState(hasPipeline)
 
   // sub-modal: pick store
   const [pickStoreOpen, setPickStoreOpen] = useState(false)
@@ -6749,8 +6894,15 @@ const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onSt
     setIsSaving(true)
     setError(null)
     const effectiveStoreId = storeIdOverride !== undefined ? storeIdOverride : storeId
+    // Когда включён пайплайн — флаги этапов = объединение всех стадий пайплайна
+    const usePipelineFlags = usePipeline && pipelineStages.length > 0
+    const effectiveOtk = usePipelineFlags ? pipelineStages.some((s) => s.stage_otk) : stageOtk
+    const effectivePackaging = usePipelineFlags ? pipelineStages.some((s) => s.stage_packaging) : stagePackaging
+    const effectiveMarking = usePipelineFlags ? pipelineStages.some((s) => s.stage_marking) : stageMarking
+    const effectivePacking = usePipelineFlags ? pipelineStages.some((s) => s.stage_packing) : stagePacking
+    const effectiveLogistics = usePipelineFlags ? pipelineStages.some((s) => s.stage_logistics) : stageLogistics
     try {
-      await onSubmit({ name: name.trim(), store_id: effectiveStoreId || null, stage_otk: stageOtk, stage_packaging: stagePackaging, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics }, closeOnlyRef.current)
+      await onSubmit({ name: name.trim(), store_id: effectiveStoreId || null, stage_otk: effectiveOtk, stage_packaging: effectivePackaging, stage_marking: effectiveMarking, stage_packing: effectivePacking, stage_logistics: effectiveLogistics, use_pipeline: usePipeline }, closeOnlyRef.current)
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
       setIsSaving(false)
@@ -6825,6 +6977,19 @@ const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onSt
               <StageToggle label="Передача на логистику" value={stageLogistics} onChange={setStageLogistics} />
             </div>
           </div>
+          {hasPipeline && (
+            <div className="flex cursor-pointer items-center gap-3 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3"
+              onClick={() => setUsePipeline((v) => !v)}>
+              <button type="button"
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${usePipeline ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${usePipeline ? 'translate-x-[22px]' : 'translate-x-[2px]'}`} />
+              </button>
+              <div>
+                <p className="text-sm font-medium text-violet-800">Использовать пайплайн</p>
+                <p className="text-xs text-violet-500">Партия будет привязана к настроенным стадиям аутсорса</p>
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-between pt-1">
             <button type="submit" disabled={isSaving}
               onClick={() => { closeOnlyRef.current = true }}
@@ -6973,11 +7138,16 @@ const CreateBatchModal = ({ stores, accountId, settings, onClose, onSubmit, onSt
 // ══════════════════════════════════════════════════════════════
 interface SettingsModalProps {
   settings: FulfillmentSettings | null
+  accountId: string
+  accountName?: string
   onClose: () => void
   onSave: (s: Partial<FulfillmentSettings>) => Promise<void>
 }
 
-const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
+const SettingsModal = ({ settings, accountId, accountName = '', onClose, onSave }: SettingsModalProps) => {
+  const [activeTab, setActiveTab] = useState<'general' | 'pipeline'>('general')
+
+  // ── General tab state ──
   const [stageOtk, setStageOtk] = useState(settings?.stage_otk ?? true)
   const [stagePackaging, setStagePackaging] = useState(settings?.stage_packaging ?? true)
   const [stageMarking, setStageMarking] = useState(settings?.stage_marking ?? true)
@@ -6987,8 +7157,10 @@ const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
 
   const handleSave = async () => {
     setIsSaving(true)
-    try { await onSave({ stage_otk: stageOtk, stage_packaging: stagePackaging, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics }) }
-    finally { setIsSaving(false) }
+    try {
+      await onSave({ stage_otk: stageOtk, stage_packaging: stagePackaging, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics })
+      setGeneralDirty(false)
+    } finally { setIsSaving(false) }
   }
 
   const Toggle = ({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) => (
@@ -7001,33 +7173,322 @@ const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
     </div>
   )
 
+  // ── Pipeline tab state ──
+  const [pipelineStages, setPipelineStages] = useState<AccountPipelineStage[]>([])
+  const [executorOptions, setExecutorOptions] = useState<import('../types').ExecutorOption[]>([])
+  const [pipelineLoading, setPipelineLoading] = useState(false)
+  const [pipelineSaving, setPipelineSaving] = useState(false)
+  const [pipelineError, setPipelineError] = useState<string | null>(null)
+  const [activePipelineStageIdx, setActivePipelineStageIdx] = useState(0)
+
+  const [generalDirty, setGeneralDirty] = useState(false)
+  const [pipelineDirty, setPipelineDirty] = useState(false)
+  const [confirmClose, setConfirmClose] = useState(false)
+  const isDirty = generalDirty || pipelineDirty
+
+  // draft editing of pipeline (converted from AccountPipelineStage to editable form)
+  const [draftStages, setDraftStages] = useState<Array<{
+    key: string
+    name: string
+    partner_account_id: string | null
+    stage_otk: boolean
+    stage_packaging: boolean
+    stage_marking: boolean
+    stage_packing: boolean
+    stage_logistics: boolean
+  }>>([])
+
+  const loadPipeline = useCallback(async () => {
+    setPipelineLoading(true)
+    setPipelineError(null)
+    try {
+      const [stgs, opts] = await Promise.all([
+        fetchAccountPipeline(accountId),
+        fetchExecutorOptions(accountId),
+      ])
+      setExecutorOptions(opts)
+      setPipelineStages(stgs)
+      setDraftStages(stgs.map((s) => ({
+        key: s.id,
+        name: s.name,
+        partner_account_id: s.partner_account_id,
+        stage_otk: s.stage_otk,
+        stage_packaging: s.stage_packaging,
+        stage_marking: s.stage_marking,
+        stage_packing: s.stage_packing,
+        stage_logistics: s.stage_logistics,
+      })))
+      setPipelineDirty(false)
+    } catch (e) {
+      setPipelineError(e instanceof Error ? e.message : 'Ошибка загрузки пайплайна')
+    } finally {
+      setPipelineLoading(false)
+    }
+  }, [accountId])
+
+  useEffect(() => {
+    if (activeTab === 'pipeline') void loadPipeline()
+  }, [activeTab, loadPipeline])
+
+  const addDraftStage = () => {
+    setDraftStages((prev) => {
+      const next = [...prev, {
+        key: `new-${Date.now()}`,
+        name: `Стадия ${prev.length + 1}`,
+        partner_account_id: null,
+        stage_otk: false,
+        stage_packaging: false,
+        stage_marking: false,
+        stage_packing: false,
+        stage_logistics: false,
+      }]
+      setActivePipelineStageIdx(next.length - 1)
+      return next
+    })
+    setPipelineDirty(true)
+  }
+
+  const removeDraftStage = (idx: number) => {
+    setDraftStages((prev) => {
+      const next = prev.filter((_, i) => i !== idx)
+      setActivePipelineStageIdx((ai) => Math.min(ai, Math.max(0, next.length - 1)))
+      return next
+    })
+    setPipelineDirty(true)
+  }
+
+  const updateDraftStage = <K extends keyof (typeof draftStages)[number]>(
+    idx: number,
+    field: K,
+    value: (typeof draftStages)[number][K],
+  ) => {
+    setDraftStages((prev) => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s))
+    setPipelineDirty(true)
+  }
+
+  const moveDraftStage = (idx: number, dir: -1 | 1) => {
+    const next = idx + dir
+    if (next < 0 || next >= draftStages.length) return
+    setDraftStages((prev) => {
+      const arr = [...prev]
+      ;[arr[idx], arr[next]] = [arr[next], arr[idx]]
+      return arr
+    })
+    setActivePipelineStageIdx(next)
+    setPipelineDirty(true)
+  }
+
+  const handleSavePipeline = async () => {
+    setPipelineSaving(true)
+    setPipelineError(null)
+    try {
+      await saveAccountPipeline(accountId, draftStages)
+      setPipelineDirty(false)
+    } catch (e) {
+      setPipelineError(e instanceof Error ? e.message : 'Ошибка сохранения')
+    } finally {
+      setPipelineSaving(false)
+    }
+  }
+
+  const handleClose = () => {
+    if (isDirty) { setConfirmClose(true) } else { onClose() }
+  }
+
+  const handleSaveAndExit = async () => {
+    setConfirmClose(false)
+    try {
+      if (generalDirty) {
+        await onSave({ stage_otk: stageOtk, stage_packaging: stagePackaging, stage_marking: stageMarking, stage_packing: stagePacking, stage_logistics: stageLogistics })
+        setGeneralDirty(false)
+      }
+      if (pipelineDirty) {
+        await saveAccountPipeline(accountId, draftStages)
+        setPipelineDirty(false)
+      }
+    } catch { /* ошибки обрабатываются в onSave/saveAccountPipeline */ }
+    onClose()
+  }
+
+  const StepToggle = ({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) => (
+    <button type="button" onClick={() => onChange(!value)}
+      className={`rounded-lg px-2 py-1 text-xs transition-colors ${value ? 'bg-violet-100 text-violet-700 font-medium' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}>
+      {label}
+    </button>
+  )
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-sm overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={handleClose}>
+      <div className="relative w-[70vw] h-[90vh] flex flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="border-b border-slate-100 px-6 py-5">
           <p className="text-base font-semibold text-slate-800">Настройки фулфилмента</p>
-          <p className="mt-0.5 text-xs text-slate-400">Этапы по умолчанию для новых партий</p>
-        </div>
-        <div className="divide-y divide-slate-100 px-6">
-          <div className="flex items-center justify-between py-2.5 opacity-40">
-            <span className="text-sm text-slate-700">Приёмка</span>
-            <span className="text-xs text-slate-400">всегда</span>
+          {/* Tabs */}
+          <div className="mt-3 flex gap-1 rounded-xl bg-slate-100 p-1">
+            <button type="button" onClick={() => setActiveTab('general')}
+              className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${activeTab === 'general' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+              Общие
+            </button>
+            <button type="button" onClick={() => setActiveTab('pipeline')}
+              className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${activeTab === 'pipeline' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+              Пайплайн
+            </button>
           </div>
-          <Toggle label="ОТК" value={stageOtk} onChange={setStageOtk} />
-          <Toggle label="Упаковка" value={stagePackaging} onChange={setStagePackaging} />
-          <Toggle label="Маркировка" value={stageMarking} onChange={setStageMarking} />
-          <Toggle label="Формирование коробов" value={stagePacking} onChange={setStagePacking} />
-          <Toggle label="Передача на логистику" value={stageLogistics} onChange={setStageLogistics} />
         </div>
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
-          <button type="button" onClick={onClose} className="rounded-2xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50">
-            Отмена
-          </button>
-          <button type="button" onClick={() => void handleSave()} disabled={isSaving}
-            className="rounded-2xl bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-            {isSaving ? 'Сохранение…' : 'Сохранить'}
-          </button>
-        </div>
+
+        {activeTab === 'general' && (
+          <>
+            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 px-6">
+              <div className="flex items-center justify-between py-2.5 opacity-40">
+                <span className="text-sm text-slate-700">Приёмка</span>
+                <span className="text-xs text-slate-400">всегда</span>
+              </div>
+              <Toggle label="ОТК" value={stageOtk} onChange={(v) => { setStageOtk(v); setGeneralDirty(true) }} />
+              <Toggle label="Упаковка" value={stagePackaging} onChange={(v) => { setStagePackaging(v); setGeneralDirty(true) }} />
+              <Toggle label="Маркировка" value={stageMarking} onChange={(v) => { setStageMarking(v); setGeneralDirty(true) }} />
+              <Toggle label="Формирование коробов" value={stagePacking} onChange={(v) => { setStagePacking(v); setGeneralDirty(true) }} />
+              <Toggle label="Передача на логистику" value={stageLogistics} onChange={(v) => { setStageLogistics(v); setGeneralDirty(true) }} />
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+              <button type="button" onClick={handleClose} className="rounded-2xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50">
+                Отмена
+              </button>
+              <button type="button" onClick={() => void handleSave()} disabled={isSaving}
+                className="rounded-2xl bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                {isSaving ? 'Сохранение…' : 'Сохранить'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {activeTab === 'pipeline' && (
+          <>
+            {/* Строка с табами стадий + кнопка добавить */}
+            <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-100 px-4 py-2">
+              {draftStages.map((s, idx) => (
+                <button key={s.key} type="button" onClick={() => setActivePipelineStageIdx(idx)}
+                  className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                    activePipelineStageIdx === idx
+                      ? 'bg-violet-100 text-violet-700'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+                  }`}>
+                  {idx + 1}. {s.name || 'Без названия'}
+                </button>
+              ))}
+              <button type="button" onClick={addDraftStage}
+                className="ml-1 flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                Добавить
+              </button>
+            </div>
+
+            {/* Редактор текущей стадии */}
+            <div className="flex-1 overflow-y-auto px-6 py-5">
+              {pipelineLoading ? (
+                <div className="flex justify-center py-10">
+                  <svg className="h-6 w-6 animate-spin text-blue-400" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                </div>
+              ) : draftStages.length === 0 ? (
+                <p className="py-10 text-center text-sm text-slate-400">Нет стадий. Нажмите «Добавить» чтобы создать первую.</p>
+              ) : (() => {
+                const idx = Math.min(activePipelineStageIdx, draftStages.length - 1)
+                const s = draftStages[idx]
+                return (
+                  <div className="space-y-5">
+                    {/* Название + переместить + удалить */}
+                    <div className="flex items-center gap-2">
+                      <button type="button" onClick={() => moveDraftStage(idx, -1)} disabled={idx === 0}
+                        className="rounded p-1 text-slate-300 hover:text-slate-600 disabled:opacity-20" title="Переместить влево">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
+                      </button>
+                      <button type="button" onClick={() => moveDraftStage(idx, 1)} disabled={idx === draftStages.length - 1}
+                        className="rounded p-1 text-slate-300 hover:text-slate-600 disabled:opacity-20" title="Переместить вправо">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                      </button>
+                      <input
+                        type="text"
+                        value={s.name}
+                        onChange={(e) => updateDraftStage(idx, 'name', e.target.value)}
+                        className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                        placeholder="Название стадии"
+                      />
+                      <button type="button" onClick={() => removeDraftStage(idx)}
+                        className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-400 transition-colors" title="Удалить стадию">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                      </button>
+                    </div>
+                    {/* Исполнитель */}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-slate-400">Исполнитель</label>
+                      <select
+                        value={s.partner_account_id ?? ''}
+                        onChange={(e) => updateDraftStage(idx, 'partner_account_id', e.target.value || null)}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="">{accountName || 'Моя компания'}</option>
+                        {executorOptions.map((o) => (
+                          <option key={o.account_id} value={o.account_id}>
+                            {o.account_name} (C-{o.account_short_id})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {/* Этапы */}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-slate-400">Этапы этой стадии</label>
+                      <div className="flex flex-wrap gap-2">
+                        <StepToggle label="ОТК" value={s.stage_otk} onChange={(v) => updateDraftStage(idx, 'stage_otk', v)} />
+                        <StepToggle label="Упаковка" value={s.stage_packaging} onChange={(v) => updateDraftStage(idx, 'stage_packaging', v)} />
+                        <StepToggle label="Маркировка" value={s.stage_marking} onChange={(v) => updateDraftStage(idx, 'stage_marking', v)} />
+                        <StepToggle label="Коробы" value={s.stage_packing} onChange={(v) => updateDraftStage(idx, 'stage_packing', v)} />
+                        <StepToggle label="Логистика" value={s.stage_logistics} onChange={(v) => updateDraftStage(idx, 'stage_logistics', v)} />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
+              {pipelineError && (
+                <div className="mt-3 rounded-xl bg-red-50 px-4 py-2.5 text-sm text-red-600">{pipelineError}</div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+              <button type="button" onClick={handleClose} className="rounded-2xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50">
+                Отмена
+              </button>
+              <button type="button" onClick={() => void handleSavePipeline()} disabled={pipelineSaving || pipelineLoading}
+                className="rounded-2xl bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                {pipelineSaving ? 'Сохранение…' : 'Сохранить пайплайн'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Confirm-диалог при закрытии с несохранёнными изменениями */}
+        {confirmClose && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-3xl bg-black/30">
+            <div className="w-80 rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <p className="mb-1 text-sm font-semibold text-slate-800">Несохранённые изменения</p>
+              <p className="mb-5 text-xs text-slate-400">Вы изменили настройки. Что хотите сделать?</p>
+              <div className="flex flex-col gap-2">
+                <button type="button" onClick={() => setConfirmClose(false)}
+                  className="rounded-2xl border border-slate-200 py-2 text-sm text-slate-600 hover:bg-slate-50">
+                  Отмена
+                </button>
+                <button type="button" onClick={onClose}
+                  className="rounded-2xl border border-red-100 py-2 text-sm text-red-500 hover:bg-red-50">
+                  Выйти без сохранения
+                </button>
+                <button type="button" onClick={() => void handleSaveAndExit()}
+                  className="rounded-2xl bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                  Сохранить и выйти
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -7036,7 +7497,7 @@ const SettingsModal = ({ settings, onClose, onSave }: SettingsModalProps) => {
 // ══════════════════════════════════════════════════════════════
 // FulfillmentPage
 // ══════════════════════════════════════════════════════════════
-export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, warehouses, onEditTripLine, onAddTripLine, onTripCreated, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
+export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', stores, trips, warehouses, onEditTripLine, onAddTripLine, onTripCreated, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
   const navigate = useNavigate()
   const [batches, setBatches] = useState<FulfillmentBatch[]>([])
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null)
@@ -7050,8 +7511,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
   const [deleteTarget, setDeleteTarget] = useState<FulfillmentBatch | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [editTarget, setEditTarget] = useState<FulfillmentBatch | null>(null)
-  const [outsourceModalBatch, setOutsourceModalBatch] = useState<FulfillmentBatch | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
+  const [filterOwner, setFilterOwner] = useState<'mine' | 'outsource' | 'all'>('all')
   const [archivedBatches, setArchivedBatches] = useState<FulfillmentBatch[]>([])
   const [isArchiveLoading, setIsArchiveLoading] = useState(false)
   const [isRestoring, setIsRestoring] = useState<string | null>(null)
@@ -7062,6 +7523,12 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
   const [linkCopiedId, setLinkCopiedId] = useState<string | null>(null)
   const [batchSearch, setBatchSearch] = useState('')
+  // Pipeline
+  const [hasPipeline, setHasPipeline] = useState(false)
+  const [accountPipelineStages, setAccountPipelineStages] = useState<AccountPipelineStage[]>([])
+  const [partnerBatches, setPartnerBatches] = useState<PartnerBatchInfo[]>([])
+  const [partnerBatchesFull, setPartnerBatchesFull] = useState<FulfillmentBatch[]>([])
+  const [batchPipelineMap, setBatchPipelineMap] = useState<Map<string, BatchPipelineStage[]>>(new Map())
 
   useEffect(() => {
     if (!shareMenuPos) return
@@ -7075,9 +7542,34 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
     setIsLoading(true)
     setLoadError(null)
     try {
-      const [bs, s] = await Promise.all([fetchBatches(accountId), fetchFulfillmentSettings(accountId)])
+      const [bs, s, pipelineStgs, partnerBs] = await Promise.all([
+        fetchBatches(accountId),
+        fetchFulfillmentSettings(accountId),
+        fetchAccountPipeline(accountId).catch(() => []),
+        fetchPartnerBatches(accountId).catch(() => []),
+      ])
       setBatches(bs)
       setSettings(s)
+      setHasPipeline(pipelineStgs.length > 0)
+      setAccountPipelineStages(pipelineStgs)
+      setPartnerBatches(partnerBs)
+      // Загружаем полные данные партнёрских партий (если они есть)
+      if (partnerBs.length > 0) {
+        const batchIds = partnerBs.map((pb) => pb.batch_id)
+        const fullBatches = await fetchPartnerBatchesFull(batchIds).catch(() => [])
+        setPartnerBatchesFull(fullBatches)
+      } else {
+        setPartnerBatchesFull([])
+      }
+      if (pipelineStgs.length > 0 && bs.length > 0) {
+        const allStages = await fetchAllBatchPipelineStages(bs.map((b) => b.id)).catch(() => [])
+        const map = new Map<string, BatchPipelineStage[]>()
+        for (const stage of allStages) {
+          if (!map.has(stage.batch_id)) map.set(stage.batch_id, [])
+          map.get(stage.batch_id)!.push(stage)
+        }
+        setBatchPipelineMap(map)
+      }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Ошибка загрузки')
     } finally {
@@ -7110,8 +7602,22 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
     finally { setIsOpeningDetail(null) }
   }
 
-  const handleCreate = async (values: Parameters<typeof createBatch>[1], closeOnly?: boolean) => {
-    const batch = await createBatch(accountId, values)
+  const handleCreate = async (values: Parameters<typeof createBatch>[1] & { use_pipeline?: boolean }, closeOnly?: boolean) => {
+    const { use_pipeline, ...batchValues } = values
+    const batch = await createBatch(accountId, batchValues)
+    if (use_pipeline) {
+      try {
+        await initBatchPipeline(batch.id, accountId)
+        const stages = await fetchAllBatchPipelineStages([batch.id]).catch(() => [])
+        if (stages.length > 0) {
+          setBatchPipelineMap((prev) => {
+            const next = new Map(prev)
+            next.set(batch.id, stages)
+            return next
+          })
+        }
+      } catch { /* не блокируем */ }
+    }
     setBatches((prev) => [batch, ...prev])
     setCreateOpen(false)
     if (!closeOnly) void handleOpenDetail(batch.id)
@@ -7119,6 +7625,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
 
   const handleBatchUpdated = (updated: FulfillmentBatch) => {
     setBatches((prev) => prev.map((b) => (b.id === updated.id ? { ...b, ...updated } : b)))
+    setPartnerBatchesFull((prev) => prev.map((b) => (b.id === updated.id ? { ...b, ...updated } : b)))
     setDetailData((prev) => prev ? { ...prev, ...updated } : prev)
   }
 
@@ -7177,7 +7684,6 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
   const handleSaveSettings = async (s: Partial<FulfillmentSettings>) => {
     const updated = await upsertFulfillmentSettings(accountId, s)
     setSettings(updated)
-    setSettingsOpen(false)
   }
 
   const isArchiveTab = filterStatus === 'archived'
@@ -7205,6 +7711,22 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
     })
   }, [filtered, batchSearch, stores])
 
+  const filteredPartnerBatches = useMemo(() => {
+    const statusFiltered = filterStatus === 'archived'
+      ? []
+      : filterStatus === 'all'
+      ? partnerBatchesFull
+      : partnerBatchesFull.filter((pb) => pb.status === filterStatus)
+    const q = batchSearch.trim().toLowerCase()
+    if (!q) return statusFiltered
+    return statusFiltered.filter((pb) => {
+      const haystack = [pb.name, pb.short_id != null ? `p-${pb.short_id}` : '', STATUS_LABELS[pb.status] ?? ''].join(' ').toLowerCase()
+      return haystack.includes(q)
+    })
+  }, [partnerBatchesFull, filterStatus, batchSearch])
+
+  const partnerBatchIds = useMemo(() => new Set(partnerBatches.map((pb) => pb.batch_id)), [partnerBatches])
+
   const stageLabel = (b: FulfillmentBatch) => {
     if (b.status === 'done') return 'Завершена'
     if (b.status === 'cancelled') return 'Отменена'
@@ -7214,13 +7736,14 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
   return (
     <div className="space-y-4">
       {/* Модалки */}
-      {createOpen && <CreateBatchModal stores={stores} accountId={accountId} settings={settings} onClose={() => setCreateOpen(false)} onSubmit={handleCreate} onStoreCreated={(s) => onStoreCreated?.(s)} />}
+      {createOpen && <CreateBatchModal stores={stores} accountId={accountId} settings={settings} hasPipeline={hasPipeline} pipelineStages={accountPipelineStages} onClose={() => setCreateOpen(false)} onSubmit={handleCreate} onStoreCreated={(s) => onStoreCreated?.(s)} />}
       {editTarget && <EditBatchModal batch={editTarget} stores={stores} onClose={() => setEditTarget(null)} onSave={async (values) => { const updated = await updateBatch(editTarget.id, values); handleBatchUpdated(updated); setEditTarget(null) }} />}
-      {settingsOpen && <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
+      {settingsOpen && <SettingsModal settings={settings} accountId={accountId} accountName={accountName} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
       {detailData && (
         <BatchDetailModal
           batch={detailData} accountId={accountId} accountShortId={accountShortId} stores={stores} trips={trips} warehouses={warehouses}
           canManage={canManage} canOtkAssign={canOtkAssign} canStageJump={canStageJump} canPackingAutoAdd={canPackingAutoAdd} canSupplyDeleteLocked={canSupplyDeleteLocked} userId={userId} userEmail={userEmail} userName={userName}
+          isPartnerBatch={detailData.account_id !== accountId}
           onClose={() => { setDetailData(null); setDetailFromArchive(false); navigate('/fulfillment', { replace: true }) }}
           onBatchUpdated={handleBatchUpdated} onItemsChanged={handleItemsChanged}
           onEditTripLine={onEditTripLine}
@@ -7338,6 +7861,20 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
               </span>
             )}
           </div>
+          {partnerBatchesFull.length > 0 && (
+            <div className="flex items-center gap-1 rounded-2xl bg-violet-50 p-0.5">
+              {(['all', 'mine', 'outsource'] as const).map((o) => (
+                <button key={o} type="button" onClick={() => setFilterOwner(o)}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                    filterOwner === o
+                      ? 'bg-violet-600 text-white shadow-sm'
+                      : 'text-slate-700 hover:text-slate-900'
+                  }`}>
+                  {o === 'mine' ? 'Мои' : o === 'all' ? 'Все' : 'Аутсорс'}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
             {(['all', 'active', 'done', 'cancelled'] as const).map((s) => (
               <button key={s} type="button" onClick={() => setFilterStatus(s)}
@@ -7376,7 +7913,124 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
       <Card className="overflow-hidden rounded-3xl p-0">
         {isLoading ? (
           <div className="flex items-center justify-center py-16 text-sm text-slate-400">Загрузка…</div>
-        ) : filteredBatches.length === 0 ? (
+        ) : filterOwner === 'outsource' ? (
+          filteredPartnerBatches.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+              <p className="font-medium text-slate-700">Нет аутсорс-партий</p>
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="w-8 px-3 py-3" />
+                  <th className="px-4 py-3 text-left">ID</th>
+                  <th className="px-4 py-3 text-left">Партия</th>
+                  <th className="px-4 py-3 text-left">Магазин</th>
+                  <th className="px-4 py-3 text-left">Этап</th>
+                  <th className="px-4 py-3 text-left">Аутсорс</th>
+                  <th className="px-4 py-3 text-left">Статус</th>
+                  <th className="px-4 py-3 text-left">Создана</th>
+                  <th className="px-4 py-3 text-right" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredPartnerBatches.map((pb) => {
+                  const info = partnerBatches.find((p) => p.batch_id === pb.id)
+                  const isOpening = isOpeningDetail === pb.id
+                  const miniLabels: Record<string, string> = { reception: 'Приём', otk: 'ОТК', packaging: 'Упак.', marking: 'Марк.', packing: 'Короба', logistics: 'Лог.' }
+                  const stageQty: Record<string, number | undefined> = { reception: pb.qty_received_sum, otk: pb.qty_otk_sum, packaging: pb.qty_packaging_sum, marking: pb.qty_marked_sum, packing: pb.qty_packed_sum, logistics: pb.qty_packed_sum }
+                  const effectiveSrc = info ? { ...pb, stage_otk: info.my_stage_otk, stage_packaging: info.my_stage_packaging, stage_marking: info.my_stage_marking, stage_packing: info.my_stage_packing, stage_logistics: info.my_stage_logistics } : pb
+                  const visibleStages = getEnabledStages(effectiveSrc).filter((s) => s !== 'done')
+                  const currentSubStage = info?.my_current_stage ?? pb.current_stage
+                  const visibleCurrentIdx = pb.status === 'done' || currentSubStage === 'done' ? visibleStages.length : visibleStages.indexOf(currentSubStage)
+                  return (
+                    <tr key={pb.id} onClick={() => void handleOpenDetail(pb.id)} className="cursor-pointer hover:bg-slate-50/80 transition-colors">
+                      <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0" disabled />
+                      </td>
+                      <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex flex-col leading-tight">
+                          {info?.owner_short_id != null && (
+                            <span className="text-[10px] text-violet-400 font-semibold">C-{info.owner_short_id}</span>
+                          )}
+                          <span>{pb.short_id != null ? `P-${pb.short_id}` : '—'}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="font-medium text-slate-800">{pb.name}</p>
+                          {info && <p className="text-xs text-slate-400 leading-tight">{info.owner_name}</p>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3"><span className="text-slate-300">—</span></td>
+                      <td className="px-4 py-3">
+                        {info && (
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-start">
+                              <div className="flex w-10 flex-col items-center">
+                                <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${info.my_stage_status === 'done' ? 'bg-emerald-500' : info.my_stage_status === 'active' ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                                  {info.my_stage_status === 'done' && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                  {info.my_stage_status === 'active' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                </div>
+                                <span className={`mt-0.5 text-[9px] leading-tight max-w-[40px] truncate ${info.my_stage_status === 'done' ? 'text-emerald-600' : info.my_stage_status === 'active' ? 'text-violet-600 font-semibold' : 'text-slate-400'}`}>{info.my_stage_name}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-start">
+                              {visibleStages.map((st, i) => {
+                                const isPast = i < visibleCurrentIdx
+                                const isCurrent = i === visibleCurrentIdx
+                                const qty = stageQty[st]
+                                const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
+                                const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
+                                let qtyColor = 'text-slate-400'
+                                if (showQty && prevQty !== undefined) {
+                                  if (qty === prevQty) qtyColor = 'text-emerald-600'
+                                  else if (qty > prevQty) qtyColor = 'text-blue-500'
+                                  else qtyColor = 'text-red-500'
+                                } else if (showQty && i === 0) { qtyColor = 'text-emerald-600' }
+                                return (
+                                  <div key={st} className="flex items-start">
+                                    <div className="flex w-10 flex-col items-center">
+                                      <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
+                                        {isPast && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                        {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                      </div>
+                                      <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{miniLabels[st] ?? st}</span>
+                                      <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>{showQty ? qty : '0'}</span>
+                                    </div>
+                                    {i < visibleStages.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col items-start">
+                          {pb.status === 'active' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>)}
+                          {pb.status === 'done' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)}
+                          {pb.status === 'cancelled' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>)}
+                          <span className={`mt-0.5 text-[10px] leading-tight font-medium ${pb.status === 'active' ? 'text-orange-600' : pb.status === 'done' ? 'text-emerald-600' : 'text-slate-400'}`}>{STATUS_LABELS[pb.status]}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-400">
+                        {new Date(pb.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                      </td>
+                      <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                        {isOpening ? (
+                          <svg className="h-4 w-4 animate-spin text-violet-400" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )
+        ) : filteredBatches.length === 0 && (filterOwner !== 'all' || filteredPartnerBatches.length === 0) ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
               <svg viewBox="0 0 24 24" className="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -7390,6 +8044,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
             </div>
           </div>
         ) : (
+          <>
+          {filteredBatches.length > 0 && (
           <table className="w-full text-sm">
             <thead className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
               <tr>
@@ -7483,7 +8139,12 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <p className="font-medium text-slate-800">{b.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-slate-800">{b.name}</p>
+                        {partnerBatchIds.has(b.id) && (
+                          <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-600">Аутсорс</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       {s ? (
@@ -7505,14 +8166,47 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
                           logistics: b.qty_packed_sum,
                         }
                         const stages = getEnabledStages(b).filter((s) => s !== 'done')
-                        const currentIdx = b.status === 'done' || b.current_stage === 'done' ? stages.length : stages.indexOf(b.current_stage)
+                        const pipelineStgs = batchPipelineMap.get(b.id)
+                        const activePipelineStg = pipelineStgs?.find((ps) => ps.status === 'active')
+                        const currentSubStage = activePipelineStg?.current_stage ?? b.current_stage
+                        // Когда активна стадия пайплайна — показываем шаги, настроенные ДЛЯ НЕЁ
+                        const visibleStages = activePipelineStg
+                          ? getEnabledStages({ ...b, stage_otk: activePipelineStg.stage_otk, stage_packaging: activePipelineStg.stage_packaging, stage_marking: activePipelineStg.stage_marking, stage_packing: activePipelineStg.stage_packing, stage_logistics: activePipelineStg.stage_logistics }).filter((s) => s !== 'done')
+                          : stages
+                        const visibleCurrentIdx = b.status === 'done' || currentSubStage === 'done' ? visibleStages.length : visibleStages.indexOf(currentSubStage)
                         return (
-                          <div className="flex items-start">
-                            {stages.map((st, i) => {
-                              const isPast = i < currentIdx
-                              const isCurrent = i === currentIdx
+                          <div className="flex flex-col gap-2">
+                            {pipelineStgs && pipelineStgs.length > 0 && (() => {
+                              const activeIdx = pipelineStgs.findIndex((ps) => ps.status === 'active')
+                              return (
+                                <div className="flex items-start">
+                                  {pipelineStgs.map((ps, pi) => (
+                                    <div key={ps.id} className="flex items-start">
+                                      <div className="flex w-10 flex-col items-center">
+                                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${ps.status === 'done' ? 'bg-emerald-500' : ps.status === 'active' ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                                          {ps.status === 'done' && (
+                                            <svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none">
+                                              <path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                            </svg>
+                                          )}
+                                          {ps.status === 'active' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                        </div>
+                                        <span className={`mt-0.5 text-[9px] leading-tight max-w-[40px] truncate ${ps.status === 'done' ? 'text-emerald-600' : ps.status === 'active' ? 'text-violet-600 font-semibold' : 'text-slate-400'}`}>{ps.name}</span>
+                                      </div>
+                                      {pi < pipelineStgs.length - 1 && (
+                                        <div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${pi < activeIdx || activeIdx === -1 ? 'bg-emerald-300' : 'bg-slate-300'}`} />
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )
+                            })()}
+                            <div className="flex items-start">
+                            {visibleStages.map((st, i) => {
+                              const isPast = i < visibleCurrentIdx
+                              const isCurrent = i === visibleCurrentIdx
                               const qty = stageQty[st]
-                              const prevQty = i > 0 ? stageQty[stages[i - 1]] : undefined
+                              const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
                               const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
                               let qtyColor = 'text-slate-400'
                               if (showQty && prevQty !== undefined) {
@@ -7540,30 +8234,16 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
                                       {showQty ? qty : '0'}
                                     </span>
                                   </div>
-                                  {i < stages.length - 1 && (
-                                    <div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < currentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />
+                                  {i < visibleStages.length - 1 && (
+                                    <div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />
                                   )}
                                 </div>
                               )
                             })}
+                            </div>
                           </div>
                         )
                       })()}
-                    </td>
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      {!isArchived && (
-                        <button
-                          type="button"
-                          title="Аутсорс-этапы"
-                          onClick={() => setOutsourceModalBatch(b)}
-                          className="rounded-xl p-1.5 text-violet-400 hover:bg-violet-50 hover:text-violet-600"
-                        >
-                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                          </svg>
-                        </button>
-                      )}
                     </td>
                     <td className="px-4 py-3">
                       {isArchived ? (
@@ -7626,19 +8306,127 @@ export const FulfillmentPage = ({ accountId, accountShortId, stores, trips, ware
               })}
             </tbody>
           </table>
+          )}
+          {filterOwner === 'all' && filteredPartnerBatches.length > 0 && (
+            <>
+              {filteredBatches.length > 0 && (
+                <div className="border-t border-slate-100 px-4 py-2 bg-violet-50 text-[11px] font-semibold uppercase tracking-wide text-violet-500">Аутсорс</div>
+              )}
+              <table className="w-full text-sm">
+                <thead className="border-b border-slate-100 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="w-8 px-3 py-3" />
+                    <th className="px-4 py-3 text-left">ID</th>
+                    <th className="px-4 py-3 text-left">Партия</th>
+                    <th className="px-4 py-3 text-left">Магазин</th>
+                    <th className="px-4 py-3 text-left">Этап</th>
+                    <th className="px-4 py-3 text-left">Аутсорс</th>
+                    <th className="px-4 py-3 text-left">Статус</th>
+                    <th className="px-4 py-3 text-left">Создана</th>
+                    <th className="px-4 py-3 text-right" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredPartnerBatches.map((pb) => {
+                    const info = partnerBatches.find((p) => p.batch_id === pb.id)
+                    const isOpening = isOpeningDetail === pb.id
+                    const miniLabels: Record<string, string> = { reception: 'Приём', otk: 'ОТК', packaging: 'Упак.', marking: 'Марк.', packing: 'Короба', logistics: 'Лог.' }
+                    const stageQty: Record<string, number | undefined> = { reception: pb.qty_received_sum, otk: pb.qty_otk_sum, packaging: pb.qty_packaging_sum, marking: pb.qty_marked_sum, packing: pb.qty_packed_sum, logistics: pb.qty_packed_sum }
+                    const effectiveSrc = info ? { ...pb, stage_otk: info.my_stage_otk, stage_packaging: info.my_stage_packaging, stage_marking: info.my_stage_marking, stage_packing: info.my_stage_packing, stage_logistics: info.my_stage_logistics } : pb
+                    const visibleStages = getEnabledStages(effectiveSrc).filter((s) => s !== 'done')
+                    const currentSubStage = info?.my_current_stage ?? pb.current_stage
+                    const visibleCurrentIdx = pb.status === 'done' || currentSubStage === 'done' ? visibleStages.length : visibleStages.indexOf(currentSubStage)
+                    return (
+                      <tr key={pb.id} onClick={() => void handleOpenDetail(pb.id)} className="cursor-pointer hover:bg-slate-50/80 transition-colors">
+                        <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                          <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0" disabled />
+                        </td>
+                        <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-col leading-tight">
+                            {info?.owner_short_id != null && (
+                              <span className="text-[10px] text-violet-400 font-semibold">C-{info.owner_short_id}</span>
+                            )}
+                            <span>{pb.short_id != null ? `P-${pb.short_id}` : '—'}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div>
+                            <p className="font-medium text-slate-800">{pb.name}</p>
+                            {info && <p className="text-xs text-slate-400 leading-tight">{info.owner_name}</p>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3"><span className="text-slate-300">—</span></td>
+                        <td className="px-4 py-3">
+                          {info && (
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-start">
+                                <div className="flex w-10 flex-col items-center">
+                                  <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${info.my_stage_status === 'done' ? 'bg-emerald-500' : info.my_stage_status === 'active' ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                                    {info.my_stage_status === 'done' && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                    {info.my_stage_status === 'active' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                  </div>
+                                  <span className={`mt-0.5 text-[9px] leading-tight max-w-[40px] truncate ${info.my_stage_status === 'done' ? 'text-emerald-600' : info.my_stage_status === 'active' ? 'text-violet-600 font-semibold' : 'text-slate-400'}`}>{info.my_stage_name}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-start">
+                                {visibleStages.map((st, i) => {
+                                  const isPast = i < visibleCurrentIdx
+                                  const isCurrent = i === visibleCurrentIdx
+                                  const qty = stageQty[st]
+                                  const prevQty = i > 0 ? stageQty[visibleStages[i - 1]] : undefined
+                                  const showQty = (isPast || isCurrent) && qty !== undefined && qty > 0
+                                  let qtyColor = 'text-slate-400'
+                                  if (showQty && prevQty !== undefined) {
+                                    if (qty === prevQty) qtyColor = 'text-emerald-600'
+                                    else if (qty > prevQty) qtyColor = 'text-blue-500'
+                                    else qtyColor = 'text-red-500'
+                                  } else if (showQty && i === 0) { qtyColor = 'text-emerald-600' }
+                                  return (
+                                    <div key={st} className="flex items-start">
+                                      <div className="flex w-10 flex-col items-center">
+                                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${isPast ? 'bg-emerald-500' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`}>
+                                          {isPast && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                          {isCurrent && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                        </div>
+                                        <span className={`mt-0.5 text-[9px] leading-tight whitespace-nowrap ${isPast ? 'text-emerald-600' : isCurrent ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{miniLabels[st] ?? st}</span>
+                                        <span className={`text-[9px] font-semibold leading-tight h-3 ${showQty ? qtyColor : 'invisible'}`}>{showQty ? qty : '0'}</span>
+                                      </div>
+                                      {i < visibleStages.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${i < visibleCurrentIdx ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col items-start">
+                            {pb.status === 'active' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-orange-500" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>)}
+                            {pb.status === 'done' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)}
+                            {pb.status === 'cancelled' && (<svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>)}
+                            <span className={`mt-0.5 text-[10px] leading-tight font-medium ${pb.status === 'active' ? 'text-orange-600' : pb.status === 'done' ? 'text-emerald-600' : 'text-slate-400'}`}>{STATUS_LABELS[pb.status]}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-slate-400">
+                          {new Date(pb.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                        </td>
+                        <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                          {isOpening ? (
+                            <svg className="h-4 w-4 animate-spin text-violet-400" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </>
+          )}
+          </>
         )}
       </Card>
-
-      {outsourceModalBatch && (
-        <OutsourceStagesModal
-          open={!!outsourceModalBatch}
-          batch={outsourceModalBatch}
-          accountId={accountId}
-          accountShortId={accountShortId}
-          isOwner={canManage}
-          onClose={() => setOutsourceModalBatch(null)}
-        />
-      )}
 
     </div>
   )

@@ -18,12 +18,12 @@ import { useAuth } from './hooks/useAuth'
 import { useMyPermissions } from './hooks/useMyPermissions'
 import { useRoles } from './hooks/useRoles'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
+import { getLogoUrl, convertToWebP } from './lib/companyLogo'
 import { AuthPage } from './pages/AuthPage'
 import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
 import { ProductsPage } from './pages/ProductsPage'
 import { RolesPage } from './pages/RolesPage'
-import AddOutsourceModal from './components/outsource/AddOutsourceModal'
 import { ShipmentsPage } from './pages/ShipmentsPage'
 import { StoresPage } from './pages/StoresPage'
 import { DirectoriesPage } from './pages/DirectoriesPage'
@@ -71,7 +71,7 @@ interface EditAccountModalProps {
   open: boolean
   account: import('./types').Account | null
   onClose: () => void
-  onSubmit: (name: string) => Promise<void>
+  onSubmit: (name: string, logoUrl?: string | null) => Promise<void>
 }
 
 const EditAccountModal = ({ open, account, onClose, onSubmit }: EditAccountModalProps) => {
@@ -79,9 +79,42 @@ const EditAccountModal = ({ open, account, onClose, onSubmit }: EditAccountModal
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [logoAction, setLogoAction] = useState<'keep' | 'upload' | 'remove'>('keep')
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [logoPreview, setLogoPreview] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
-    if (open) { setName(account?.name ?? ''); setError(null) }
+    if (open) {
+      setName(account?.name ?? '')
+      setError(null)
+      setLogoAction('keep')
+      setLogoFile(null)
+      setLogoPreview(null)
+    }
   }, [open, account])
+
+  const currentLogoUrl = account ? getLogoUrl(account) : null
+  const displayLogo = logoAction === 'upload' ? logoPreview : logoAction === 'remove' ? null : currentLogoUrl
+  const initial = (account?.name?.charAt(0) ?? '?').toUpperCase()
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 2 * 1024 * 1024) { setError('Файл слишком большой. Максимум 2 МБ.'); return }
+    if (logoPreview) URL.revokeObjectURL(logoPreview)
+    setLogoFile(file)
+    setLogoAction('upload')
+    setLogoPreview(URL.createObjectURL(file))
+    setError(null)
+  }
+
+  const handleRemoveLogo = () => {
+    setLogoAction('remove')
+    setLogoFile(null)
+    if (logoPreview) URL.revokeObjectURL(logoPreview)
+    setLogoPreview(null)
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -89,7 +122,32 @@ const EditAccountModal = ({ open, account, onClose, onSubmit }: EditAccountModal
     setIsSubmitting(true)
     setError(null)
     try {
-      await onSubmit(name.trim())
+      let logoUrl: string | null | undefined = undefined
+      if (logoAction === 'remove') {
+        logoUrl = null
+      } else if (logoAction === 'upload' && logoFile && account && supabase) {
+        const isSvg = logoFile.type === 'image/svg+xml'
+        let uploadBlob: Blob
+        let fileName: string
+        let contentType: string
+        if (isSvg) {
+          uploadBlob = logoFile
+          fileName = 'logo.svg'
+          contentType = 'image/svg+xml'
+        } else {
+          uploadBlob = await convertToWebP(logoFile)
+          fileName = 'logo.webp'
+          contentType = 'image/webp'
+        }
+        const path = `${account.id}/${fileName}`
+        const { error: uploadError } = await supabase.storage
+          .from('company-logos')
+          .upload(path, uploadBlob, { upsert: true, contentType })
+        if (uploadError) throw uploadError
+        const { data } = supabase.storage.from('company-logos').getPublicUrl(path)
+        logoUrl = data.publicUrl
+      }
+      await onSubmit(name.trim(), logoUrl)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка')
@@ -101,6 +159,46 @@ const EditAccountModal = ({ open, account, onClose, onSubmit }: EditAccountModal
   return (
     <Modal open={open} onClose={onClose} title="Редактировать компанию">
       <form className="grid gap-4" onSubmit={(e) => void handleSubmit(e)}>
+        {/* Логотип */}
+        <div>
+          <p className="mb-2 text-xs font-medium text-slate-500">Логотип компании</p>
+          <div className="flex items-center gap-4">
+            <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-violet-100">
+              {displayLogo ? (
+                <img src={displayLogo} alt="logo" className="h-full w-full object-cover" />
+              ) : (
+                <span className="text-2xl font-bold text-violet-600">{initial}</span>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-blue-50 hover:text-blue-600"
+              >
+                {displayLogo ? 'Изменить' : 'Загрузить'}
+              </button>
+              {displayLogo && (
+                <button
+                  type="button"
+                  onClick={handleRemoveLogo}
+                  className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-rose-50 hover:text-rose-600"
+                >
+                  Удалить
+                </button>
+              )}
+              <p className="text-[11px] text-slate-400">PNG, JPG, WebP, SVG · макс. 2 МБ</p>
+            </div>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/svg+xml"
+            className="hidden"
+            onChange={handleFileChange}
+          />
+        </div>
+
         <Input
           label="Название компании"
           value={name}
@@ -192,7 +290,6 @@ function App() {
   const [shipmentModalOpen, setShipmentModalOpen] = useState(false)
   const [tripModalOpen, setTripModalOpen] = useState(false)
   const [storeModalOpen, setStoreModalOpen] = useState(false)
-  const [addOutsourceOpen, setAddOutsourceOpen] = useState(false)
   const [editingStore, setEditingStore] = useState<import('./types').Store | null>(null)
   const [editingAccount, setEditingAccount] = useState<import('./types').Account | null>(null)
   const [editAccountModalOpen, setEditAccountModalOpen] = useState(false)
@@ -599,6 +696,7 @@ function App() {
                   userId={session?.user?.id ?? ''}
                   userEmail={session?.user?.email ?? ''}
                   userName={profileUserName || (session?.user?.email ?? '')}
+                  accountName={activeAccount?.name ?? ''}
                   initialBatchShortId={initialBatchShortId}
                   onBatchUrlConsumed={() => setInitialBatchShortId(null)}
                 />
@@ -677,7 +775,6 @@ function App() {
                   onDelete={removeRole}
                   onClone={cloneRoleToAccount}
                   canManage={permissions.roles_manage}
-                  onAddOutsource={() => setAddOutsourceOpen(true)}
                 />
               ) : effectivePage === 'stickers' ? (
                 <StickersPage
@@ -787,7 +884,7 @@ function App() {
         open={editAccountModalOpen}
         account={editingAccount}
         onClose={() => { setEditAccountModalOpen(false); setEditingAccount(null) }}
-        onSubmit={async (name) => { if (editingAccount) await updateAccount(editingAccount.id, name) }}
+        onSubmit={async (name, logoUrl) => { if (editingAccount) await updateAccount(editingAccount.id, name, logoUrl) }}
       />
 
       <ProfileModal
@@ -798,14 +895,6 @@ function App() {
         userId={session?.user?.id ?? ''}
         onNameChange={(name) => setProfileUserName(name)}
       />
-
-      {addOutsourceOpen && activeAccount && (
-        <AddOutsourceModal
-          accountId={activeAccount.id}
-          onClose={() => setAddOutsourceOpen(false)}
-          onSuccess={() => setAddOutsourceOpen(false)}
-        />
-      )}
     </div>
   )
 }

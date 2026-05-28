@@ -121,7 +121,7 @@ BEGIN
   SELECT am.account_id,
          'partner_request',
          'Запрос на партнёрство',
-         (SELECT name FROM public.accounts WHERE id = p_my_account_id) || ' хочет добавить вас как аутсорс-партнёра'
+         'Компания ' || (SELECT name FROM public.accounts WHERE id = p_my_account_id) || ' хочет добавить вас как аутсорс-партнёра'
   FROM public.account_members am
   WHERE am.account_id = v_partner_id
   ON CONFLICT DO NOTHING;

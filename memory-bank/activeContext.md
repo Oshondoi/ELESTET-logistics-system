@@ -1,6 +1,129 @@
 # Active Context
 
-## Current Focus (26.05.2026) — InvoicesPage: реструктуризация секции Логистика — ЗАВЕРШЕНО
+## Current Focus (28.05.2026) — FulfillmentPage: контроль доступа к pipeline + UI партнёрских партий — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### 1. canCompletePipelineStage — только исполнитель (не владелец)
+- **Было:** `owner_account_id === accountId || partner_account_id === accountId` → владелец всегда мог завершить стадию
+- **Стало:** если `partner_account_id` задан → только партнёр; иначе → только владелец:
+```tsx
+const canCompletePipelineStage = !isPipelineLoading && activePipelineStage !== null && (
+  activePipelineStage.partner_account_id !== null
+    ? activePipelineStage.partner_account_id === accountId
+    : activePipelineStage.owner_account_id === accountId
+)
+```
+
+#### 2. isPipelineLoading — защита от race condition
+- **Проблема:** при открытии модалки `pipelineStgs = []`, `activePipelineStage = null` → `stagePartnerLocked = false` → `canManageStageData = true` до загрузки данных
+- **Фикс:** `isPipelineLoading = true` инициально → все action-контролы заблокированы до получения данных:
+```tsx
+const [isPipelineLoading, setIsPipelineLoading] = useState(true)
+// Все canManageStageData / canCompletePipelineStage / stagePartnerLocked проверяют !isPipelineLoading
+```
+
+#### 3. Дефолтный таб фильтра — «Все»
+- `const [filterOwner, setFilterOwner] = useState<'mine' | 'outsource' | 'all'>('all')`
+- Было `'mine'`, стало `'all'`
+
+#### 4. Таблица партнёрских партий — идентична таблице владельца
+Оба вхождения (таб «Аутсорс» и секция «Все») переписаны с 5 колонок на 9, идентичных таблице владельца:
+| Колонка | Что показывает |
+|---------|---------------|
+| checkbox | disabled (нет bulk-операций) |
+| ID | `C-{owner_short_id}` + `P-{batch_short_id}` |
+| Партия | `pb.name` + `info.owner_name` subtitle |
+| Магазин | «—» (нет доступа к данным владельца) |
+| Этап | Pipeline pill (bubble из `info.my_stage_name/status`) + sub-stage dots с qty-цветами |
+| Статус | Иконка + текст (В работе / Завершена / Отменена) |
+| Создана | дата |
+| chevron/spinner | действия (без edit/delete для партнёрских партий) |
+- Header: `bg-slate-50` (совпадает со стилем таблицы владельца)
+
+### Ключевые файлы
+- `src/pages/FulfillmentPage.tsx` — все изменения
+
+### Ничего не применялось в Supabase в эту сессию
+
+---
+
+## Previous Focus (28.05.2026) — Аутсорс B2B v2: кросс-компанийный пайплайн — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### SQL-патч `supabase/patch_outsource_b2b_v2.sql` ⚠️ (применить)
+- `get_executor_options(p_account_id)` — только `status='accepted'` партнёры
+- `_is_batch_partner(p_batch_id)` — RLS helper
+- Партнёрский SELECT на `fulfillment_items`, `fulfillment_otk_logs`, `fulfillment_marking_logs`, `fulfillment_packaging_logs`
+
+#### fetchPartnerBatchesFull — новый сервис
+- `src/services/fulfillmentService.ts` — загружает полные батчи через `.in('id', batchIds)` с qty-суммами
+- Работает через RLS `fulfillment_batches_pipeline_partner_select`
+
+#### RolesPage — 3 суб-вкладки в «Аутсорс»
+| Вкладка | Содержимое |
+|---------|-----------|
+| Аутсорс | Мой C-ID + форма приглашения + список принятых партнёров (только ID) |
+| Мои услуги | Партии где я — исполнитель (имя, владелец, этап, статус) |
+| Приглашения | «Приглашён» (входящие: имя+ID, Accept/Decline) + «Пригласили» (исходящие: только ID+статус) |
+
+#### Парсинг C-ID — только цифры
+- `inviteInput.replace(/\D/g, '')` — принимает `С-14`, `c14`, `С 14`, `c 14` в любом формате
+
+#### FulfillmentPage — секция «Партии на аутсорс»
+- `partnerBatchesFull: FulfillmentBatch[]` + `fetchPartnerBatchesFull` в `load()`
+- `isPartnerBatch={detailData.account_id !== accountId}` → `canManage = false` в BatchDetailModal
+
+### Ключевые файлы
+- `src/pages/FulfillmentPage.tsx`, `src/pages/RolesPage.tsx`, `src/services/fulfillmentService.ts`
+- `supabase/patch_outsource_b2b_v2.sql` ⚠️ применить
+
+---
+
+## Previous Focus (27.05.2026) — FulfillmentPage: Pipeline система в батч-листе — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### 1. Pipeline pills (Variant A) в колонке ЭТАП
+- Над step dots отображаются pills стадий пайплайна: dot (emerald/violet/slate) + название
+- Коннектор между pills — emerald если прошедшая, slate если будущая
+- `batchPipelineMap: Map<string, BatchPipelineStage[]>` — стейт в FulfillmentPage
+- Загружается в `load()` через `fetchAllBatchPipelineStages(bs.map(b => b.id))`
+
+#### 2. Step dots отражают флаги АКТИВНОЙ стадии пайплайна
+- **Проблема:** `getEnabledStages(b)` использовал флаги батча (union всех стадий), а не активной
+- **Фикс:** добавлены `visibleStages` и `visibleCurrentIdx`:
+  - Если есть активная стадия (`status === 'active'`) → берём её флаги `stage_otk`, `stage_packaging`, `stage_marking`, `stage_packing`, `stage_logistics`
+  - Если нет → fallback на флаги батча
+- Результат: Цех (все шаги выкл.) → только «Приём» dot; Фулфилмент (все вкл.) → полная цепочка
+
+#### 3. handleCreate — обновление batchPipelineMap после init
+- После `initBatchPipeline(batch.id, accountId)` вызывается `fetchAllBatchPipelineStages([batch.id])`
+- `setBatchPipelineMap(prev => new Map(prev).set(batch.id, stages))` — оптимистичное обновление
+
+#### 4. CreateBatchModal — union pipeline stages для batch flags
+- `accountPipelineStages` передаётся из FulfillmentPage в CreateBatchModal
+- При `usePipeline=true`: `stage_otk = pipelineStages.some(s => s.stage_otk)` (union)
+- Это нужно для `getEnabledStages(b)` пока batch только что создан (до загрузки map)
+
+#### 5. Исполнитель в настройках пайплайна
+- Select в SettingsModal Pipeline: показывает только `p.partner_name` без `#p.partner_short_id`
+
+#### 6. fetchAllBatchPipelineStages
+- Новая функция в `src/services/pipelineService.ts`
+- Загружает все `batch_pipeline_stages` для списка batch_id одним запросом
+- Используется в `load()` и в `handleCreate`
+
+### Ключевые файлы
+- `src/pages/FulfillmentPage.tsx` — все изменения
+- `src/services/pipelineService.ts` — `fetchAllBatchPipelineStages`
+
+### Ничего не применялось в Supabase в эту сессию
+
+---
+
+## Previous Focus (26.05.2026) — InvoicesPage: реструктуризация секции Логистика — ЗАВЕРШЕНО
 
 ### Что реализовано
 
