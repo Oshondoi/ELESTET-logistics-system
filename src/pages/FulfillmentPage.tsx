@@ -7927,7 +7927,6 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                   <th className="px-4 py-3 text-left">Партия</th>
                   <th className="px-4 py-3 text-left">Магазин</th>
                   <th className="px-4 py-3 text-left">Этап</th>
-                  <th className="px-4 py-3 text-left">Аутсорс</th>
                   <th className="px-4 py-3 text-left">Статус</th>
                   <th className="px-4 py-3 text-left">Создана</th>
                   <th className="px-4 py-3 text-right" />
@@ -8063,7 +8062,6 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                 <th className="px-4 py-3 text-left">Партия</th>
                 <th className="px-4 py-3 text-left">Магазин</th>
                 <th className="px-4 py-3 text-left">Этап</th>
-                <th className="px-4 py-3 text-left">Аутсорс</th>
                 <th className="px-4 py-3 text-left">Статус</th>
                 <th className="px-4 py-3 text-left">Создана</th>
                 <th className="px-4 py-3 text-right">
@@ -8320,7 +8318,6 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                     <th className="px-4 py-3 text-left">Партия</th>
                     <th className="px-4 py-3 text-left">Магазин</th>
                     <th className="px-4 py-3 text-left">Этап</th>
-                    <th className="px-4 py-3 text-left">Аутсорс</th>
                     <th className="px-4 py-3 text-left">Статус</th>
                     <th className="px-4 py-3 text-left">Создана</th>
                     <th className="px-4 py-3 text-right" />
