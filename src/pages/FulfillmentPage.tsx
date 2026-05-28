@@ -7727,6 +7727,17 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
 
   const partnerBatchIds = useMemo(() => new Set(partnerBatches.map((pb) => pb.batch_id)), [partnerBatches])
 
+  const partnerBatchPipelineMap = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; status: 'pending' | 'active' | 'done'; order: number }[]>()
+    for (const pb of partnerBatches) {
+      const existing = map.get(pb.batch_id) ?? []
+      existing.push({ id: pb.my_stage_id, name: pb.my_stage_name, status: pb.my_stage_status, order: pb.my_stage_order })
+      map.set(pb.batch_id, existing)
+    }
+    map.forEach((arr) => arr.sort((a, b) => a.order - b.order))
+    return map
+  }, [partnerBatches])
+
   const stageLabel = (b: FulfillmentBatch) => {
     if (b.status === 'done') return 'Завершена'
     if (b.status === 'cancelled') return 'Отменена'
@@ -7942,6 +7953,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                   const visibleStages = getEnabledStages(effectiveSrc).filter((s) => s !== 'done')
                   const currentSubStage = info?.my_current_stage ?? pb.current_stage
                   const visibleCurrentIdx = pb.status === 'done' || currentSubStage === 'done' ? visibleStages.length : visibleStages.indexOf(currentSubStage)
+                  const partnerPipelineStgs = partnerBatchPipelineMap.get(pb.id)
                   return (
                     <tr key={pb.id} onClick={() => void handleOpenDetail(pb.id)} className="cursor-pointer hover:bg-slate-50/80 transition-colors">
                       <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
@@ -7989,7 +8001,27 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                       </td>
                       <td className="px-4 py-3"><span className="text-slate-300">—</span></td>
                       <td className="px-4 py-3">
-                        <div className="flex items-start">
+                        <div className="flex flex-col gap-2">
+                          {partnerPipelineStgs && partnerPipelineStgs.length > 0 && (() => {
+                            const activeIdx = partnerPipelineStgs.findIndex((ps) => ps.status === 'active')
+                            return (
+                              <div className="flex items-start">
+                                {partnerPipelineStgs.map((ps, pi) => (
+                                  <div key={ps.id} className="flex items-start">
+                                    <div className="flex w-10 flex-col items-center">
+                                      <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${ps.status === 'done' ? 'bg-emerald-500' : ps.status === 'active' ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                                        {ps.status === 'done' && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                        {ps.status === 'active' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                      </div>
+                                      <span className={`mt-0.5 text-[9px] leading-tight max-w-[40px] truncate ${ps.status === 'done' ? 'text-emerald-600' : ps.status === 'active' ? 'text-violet-600 font-semibold' : 'text-slate-400'}`}>{ps.name}</span>
+                                    </div>
+                                    {pi < partnerPipelineStgs.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${pi < activeIdx || activeIdx === -1 ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                                  </div>
+                                ))}
+                              </div>
+                            )
+                          })()}
+                          <div className="flex items-start">
                           {visibleStages.map((st, i) => {
                             const isPast = i < visibleCurrentIdx
                             const isCurrent = i === visibleCurrentIdx
@@ -8016,6 +8048,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                               </div>
                             )
                           })}
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -8369,6 +8402,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                       const visibleStages = getEnabledStages(effectiveSrc).filter((s) => s !== 'done')
                       const currentSubStage = info?.my_current_stage ?? pb.current_stage
                       const visibleCurrentIdx = pb.status === 'done' || currentSubStage === 'done' ? visibleStages.length : visibleStages.indexOf(currentSubStage)
+                      const partnerPipelineStgs = partnerBatchPipelineMap.get(pb.id)
                       return (
                         <tr key={`partner-${pb.id}`} onClick={() => void handleOpenDetail(pb.id)} className="cursor-pointer hover:bg-slate-50/80 transition-colors">
                           <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
@@ -8416,7 +8450,27 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                           </td>
                           <td className="px-4 py-3"><span className="text-slate-300">—</span></td>
                           <td className="px-4 py-3">
-                            <div className="flex items-start">
+                            <div className="flex flex-col gap-2">
+                              {partnerPipelineStgs && partnerPipelineStgs.length > 0 && (() => {
+                                const activeIdx = partnerPipelineStgs.findIndex((ps) => ps.status === 'active')
+                                return (
+                                  <div className="flex items-start">
+                                    {partnerPipelineStgs.map((ps, pi) => (
+                                      <div key={ps.id} className="flex items-start">
+                                        <div className="flex w-10 flex-col items-center">
+                                          <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${ps.status === 'done' ? 'bg-emerald-500' : ps.status === 'active' ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                                            {ps.status === 'done' && (<svg className="w-2 h-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>)}
+                                            {ps.status === 'active' && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                          </div>
+                                          <span className={`mt-0.5 text-[9px] leading-tight max-w-[40px] truncate ${ps.status === 'done' ? 'text-emerald-600' : ps.status === 'active' ? 'text-violet-600 font-semibold' : 'text-slate-400'}`}>{ps.name}</span>
+                                        </div>
+                                        {pi < partnerPipelineStgs.length - 1 && (<div className={`mt-[7px] h-0.5 w-4 flex-shrink-0 -mx-1 ${pi < activeIdx || activeIdx === -1 ? 'bg-emerald-300' : 'bg-slate-300'}`} />)}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )
+                              })()}
+                              <div className="flex items-start">
                               {visibleStages.map((st, i) => {
                                 const isPast = i < visibleCurrentIdx
                                 const isCurrent = i === visibleCurrentIdx
@@ -8443,6 +8497,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                                   </div>
                                 )
                               })}
+                              </div>
                             </div>
                           </td>
                           <td className="px-4 py-3">
