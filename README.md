@@ -46,6 +46,18 @@ DB: `accounts.logo_url`, `accounts.logo_subscription_until`.
 - Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / Роли
 - **Sidebar**: ID компании отображается как `ID: C-1` (с префиксом)
 
+## Система коротких ID (short_id)
+
+В проекте все ключевые сущности имеют числовой `short_id` (автоинкремент) для удобного отображения на фронте. UUID используется только внутри БД/API.
+
+| Сущность | Таблица | Формат отображения | Поле |
+|---|---|---|---|
+| Пользователь | `profiles` | `U1`, `U2`, ... | `profiles.short_id` |
+| Компания (аккаунт) | `accounts` | `C-1`, `C-2`, ... | `accounts.short_id` |
+| Партия (фулфилмент) | `fulfillment_batches` | `P-1`, `P-2`, ... | `fulfillment_batches.short_id` |
+
+**Правило:** На фронте всегда показываем `short_id` с префиксом (`U`, `C-`, `P-`), не UUID. UUID — только для внутренней логики (запросы к БД, foreign keys).
+
 ### Android-совместимость (11.05.2026)
 - `src/styles.css`: `@media (pointer: coarse) { :root { -webkit-font-smoothing: auto; -moz-osx-font-smoothing: auto } }`
 
@@ -870,6 +882,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 50. patch_reply_source.sql              ← wb_feedbacks.reply_source text ('auto'|'manual') ✅ применён
 51. patch_supply_logistics_tariff_type.sql ← logistics_tariff_type в fulfillment_supplies (⚠️ применить)
 52. patch_outsource_b2b_v2.sql           ← Кросс-компанийный пайплайн: get_executor_options (только принятые партнёры), _is_batch_partner RLS helper, партнёрские права на fulfillment_items/otk/marking/packaging logs (⚠️ применить)
+53. patch_platform_roles.sql             ← platform_role в profiles, get_my_platform_role(), admin_set_platform_role() ✅ применён
+54. patch_platform_roles_team.sql        ← admin_get_platform_roles(), admin_find_user_by_short_id() ✅ применён
+55. patch_admin_stats_rpc.sql            ← SQL RPC admin_get_stats() вместо Edge Function admin-stats ✅ применён
 
 4. `npm run dev`
 
@@ -918,6 +933,9 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 | **Уведомления** | ✅ Готово | NotificationsPanel в Topbar: badge непрочитанных, mark read/all, violet тема |
 | **Pipeline система (батч-лист)** | ✅ Готово | Pills стадий + step dots активной стадии в колонке ЭТАП; batchPipelineMap; fetchAllBatchPipelineStages |
 | **Аутсорс B2B v2 (кросс-компания)** | ✅ Готово | RolesPage 3 суб-вкладки (Аутсорс/Мои услуги/Приглашения); FulfillmentPage «Партии на аутсорс»; BatchDetailModal read-only для партнёра; гибкий парсинг C-ID (любой формат) |
+| **Platform Roles (команда платформы)** | ✅ Готово | profiles.platform_role (user/support/admin/superadmin); usePlatformRole; AdminPage: вкладка Команда, управление ролями |
+| **AdminPage: производительность** | ✅ Готово | admin_get_stats() RPC (без cold start), Promise.all в loadSubscriptions, кеш adminStats в App.tsx |
+| **useAppData: 2-волновая загрузка** | ✅ Готово | stickers+bundles перенесены в волну 2 с trips/carriers/warehouses → 2 волны вместо 4 |
 | 5. Поиск и фильтры | 🔲 Следующий | Текстовый поиск, фильтр по статусу (Логистика) |
 | Участники компании | 🔲 Следующий | Пригласить / удалить |
 | Будущее | 🔲 | Мобильное приложение React Native + Expo |
@@ -973,6 +991,34 @@ useEffect(() => {
   if (key !== null && !permissions[key]) setActivePage('home')
 }, [permissions, activePage, isPermissionsLoading])
 ```
+
+### Platform Roles — роли платформы (31.05.2026)
+
+Поверх SaaS RBAC существуют **платформенные роли** для команды сервиса ELESTET.
+
+| Роль | profiles.platform_role | Описание |
+|------|------------------------|---------|
+| `user` | (по умолчанию) | Обычный клиент |
+| `support` | `support` | Видит AdminPage (только чтение), имеет `operational` тариф без оплаты |
+| `admin` | `admin` | Видит AdminPage + вкладку «Команда», может менять роли команды |
+| `superadmin` | `superadmin` | Все права admin + может повышать до superadmin |
+
+SQL-патчи применены:
+- `supabase/patch_platform_roles.sql` — `platform_role` в `profiles`, `get_my_platform_role()`, `admin_set_platform_role()`
+- `supabase/patch_platform_roles_team.sql` — `admin_get_platform_roles()`, `admin_find_user_by_short_id()`
+- `supabase/patch_admin_stats_rpc.sql` — SQL RPC `admin_get_stats()` (вместо Edge Function `admin-stats`)
+
+Хуки / сервисы: `src/hooks/usePlatformRole.ts`, `src/services/platformRoleService.ts`
+
+AdminPage кеш в App.tsx: `adminStats` + `adminAccounts` — повторный вход мгновенный.
+
+### useAppData — 2-волновая параллельная загрузка (31.05.2026)
+
+Данные загружаются в 2 волны (было 4 последовательных):
+- **Волна 1**: `stores` + `shipments` (legacy)
+- **Волна 2**: `trips` + `carriers` + `warehouses` + `stickers` + `bundles` — все параллельно через `Promise.all`
+
+Экономия: ~400-800ms на холодном старте (убраны 2 лишних round-trip к Supabase).
 
 ## Что уже есть
 

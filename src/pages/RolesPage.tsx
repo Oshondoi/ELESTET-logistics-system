@@ -11,8 +11,7 @@ import {
   respondToPartnerRequest,
   removePartner,
 } from '../services/outsourceService'
-import { fetchPartnerBatches } from '../services/pipelineService'
-import type { Account, Role, RoleFormValues, OutsourcePartner, PartnerBatchInfo } from '../types'
+import type { Account, Role, RoleFormValues, OutsourcePartner } from '../types'
 
 // ─── Иконка щита ─────────────────────────────────────────────
 
@@ -205,9 +204,6 @@ export const RolesPage = ({
   const [partnersLoading, setPartnersLoading] = useState(false)
   const [partnersError, setPartnersError] = useState<string | null>(null)
 
-  // Аутсорс: мои услуги
-  const [myServices, setMyServices] = useState<PartnerBatchInfo[]>([])
-  const [servicesLoading, setServicesLoading] = useState(false)
 
   // Аутсорс: отправить приглашение
   const [inviteInput, setInviteInput] = useState('')
@@ -232,25 +228,11 @@ export const RolesPage = ({
     }
   }, [activeAccountId])
 
-  const loadServices = useCallback(async () => {
-    if (!activeAccountId) return
-    setServicesLoading(true)
-    try {
-      const data = await fetchPartnerBatches(activeAccountId)
-      setMyServices(data)
-    } catch {
-      // ignore
-    } finally {
-      setServicesLoading(false)
-    }
-  }, [activeAccountId])
-
   useEffect(() => {
     if (mainTab === 'outsource') {
-      if (outsourceTab === 'partners' || outsourceTab === 'invites') void loadPartners()
-      if (outsourceTab === 'services') void loadServices()
+      void loadPartners()
     }
-  }, [mainTab, outsourceTab, loadPartners, loadServices])
+  }, [mainTab, outsourceTab, loadPartners])
 
   const handleSendInvite = async () => {
     // Принимаем любой формат: С-45, C45, с 45, С - 14, c-14 и т.д. — берём только цифры
@@ -569,75 +551,52 @@ export const RolesPage = ({
           )}
 
           {/* ── Подвкладка: Мои услуги ── */}
-          {outsourceTab === 'services' && (
-            <div>
-              {servicesLoading ? (
-                <div className="py-6 text-center text-sm text-slate-400">Загрузка...</div>
-              ) : myServices.length === 0 ? (
-                <Card className="rounded-3xl">
-                  <div className="flex flex-col items-center gap-3 px-4 py-12 text-center">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-300">
-                      <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
-                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                        <line x1="8" y1="21" x2="16" y2="21" />
-                        <line x1="12" y1="17" x2="12" y2="21" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-700">Нет активных услуг</p>
-                      <p className="mt-0.5 text-xs text-slate-400">
-                        Здесь будут отображаться партии, в которых вы выполняете этап
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-              ) : (
-                <Card className="overflow-hidden rounded-3xl">
-                  {myServices.map((svc) => (
-                    <div
-                      key={svc.my_stage_id}
-                      className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-3.5 last:border-0"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate text-sm font-semibold text-slate-900">
-                            {svc.batch_name}
-                          </p>
-                          <span className="font-mono text-[10px] text-slate-400">
-                            #{svc.batch_short_id}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs text-slate-500">
-                          {svc.owner_name}
-                          {svc.owner_short_id != null && (
-                            <span className="ml-1 font-mono text-slate-400">C{svc.owner_short_id}</span>
-                          )}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Этап: <span className="font-medium">{svc.my_stage_name}</span>
+          {outsourceTab === 'services' && (() => {
+            const myClients = partners.filter((p) => p.status === 'accepted' && !p.is_requester)
+            return (
+              <div>
+                {partnersLoading ? (
+                  <div className="py-6 text-center text-sm text-slate-400">Загрузка...</div>
+                ) : myClients.length === 0 ? (
+                  <Card className="rounded-3xl">
+                    <div className="flex flex-col items-center gap-3 px-4 py-12 text-center">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-300">
+                        <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                          <circle cx="9" cy="7" r="4" />
+                          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-slate-700">Нет компаний-клиентов</p>
+                        <p className="mt-0.5 text-xs text-slate-400">
+                          Здесь будут компании, которые пригласили вас как исполнителя
                         </p>
                       </div>
-                      <span
-                        className={`mt-0.5 flex-shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                          svc.my_stage_status === 'done'
-                            ? 'bg-emerald-50 text-emerald-600'
-                            : svc.my_stage_status === 'active'
-                            ? 'bg-blue-50 text-blue-600'
-                            : 'bg-slate-100 text-slate-500'
-                        }`}
-                      >
-                        {svc.my_stage_status === 'done'
-                          ? 'Выполнено'
-                          : svc.my_stage_status === 'active'
-                          ? 'В работе'
-                          : 'Ожидает'}
-                      </span>
                     </div>
-                  ))}
-                </Card>
-              )}
-            </div>
-          )}
+                  </Card>
+                ) : (
+                  <Card className="overflow-hidden rounded-3xl">
+                    {myClients.map((p) => (
+                      <div
+                        key={p.connection_id}
+                        className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3.5 last:border-0"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-600 uppercase">
+                            {p.partner_name?.charAt(0) ?? '?'}
+                          </div>
+                          <span className="font-mono text-xs text-slate-400 flex-shrink-0">C{p.partner_short_id}</span>
+                          <span className="text-sm font-semibold text-slate-900 truncate">{p.partner_name}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </Card>
+                )}
+              </div>
+            )
+          })()}
 
           {/* ── Подвкладка: Приглашения ── */}
           {outsourceTab === 'invites' && (

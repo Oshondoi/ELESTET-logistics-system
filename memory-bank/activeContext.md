@@ -1,6 +1,38 @@
 # Active Context
 
-## Current Focus (29.05.2026) — FulfillmentPage: единая таблица + пайплайн у исполнителя — ЗАВЕРШЕНО
+## Current Focus (31.05.2026) — AdminPage: RPC + Promise.all + кеш — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### 1. SQL RPC `admin_get_stats()` вместо Edge Function `admin-stats`
+- Файл: `supabase/patch_admin_stats_rpc.sql` — применён в БД
+- SECURITY DEFINER + проверка `platform_role IN ('admin','superadmin')` в начале функции
+- Нет cold start (EF запускается ~500-1500ms); RPC — мгновенно
+- Поля в ответе: `total_users`, `total_companies` (`deleted_at IS NULL`), `total_stores` (`deleted_at IS NULL`), `users[]`
+- В `users[]` JOIN с `auth.users`, `account_members`, `accounts` (`deleted_at IS NULL`), `stores` (`deleted_at IS NULL`)
+
+#### 2. Замена `supabase.functions.invoke('admin-stats')` на `supabase.rpc('admin_get_stats')`
+- `AdminPage.tsx`: `loadUsers` использует `(supabase as any).rpc('admin_get_stats')` — ответ может быть JSON-строкой (парсим через `typeof data === 'string' ? JSON.parse(data) : data`)
+
+#### 3. Promise.all в `loadSubscriptions`
+- Раньше: `admin_get_billing_overview` → ждать → `fetchAllPlanHistory()` — два последовательных round-trip
+- Теперь: оба запроса параллельно через `Promise.all`
+
+#### 4. Кеш данных AdminPage в App.tsx
+- `adminStats: AdminStats | null` + `adminAccounts: AdminAccountBillingRow[] | null` — стейт в App.tsx
+- `AdminPage` получает пропсы `initialStats`, `initialAccounts`, `onStatsLoaded`, `onAccountsLoaded`
+- Первый вход на страницу: данные грузятся, кешируются через коллбеки
+- Повторный вход: `initialStats !== null` → `isLoading = false`, загрузка пропускается — мгновенно
+- `AdminStats` и `AccountBillingRow` экспортированы из `AdminPage.tsx` (были `interface`, стали `export interface`)
+
+#### 5. `hydrateFromSupabase` в `useAppData` — убраны последовательные await для stickers/bundles
+- **Раньше**: волна 1 (stores+shipments) → волна 2 (trips+carriers+warehouses) → волна 3 (stickers) → волна 4 (bundles) — 4 последовательных round-trip
+- **Теперь**: stickers + bundles добавлены в волну 2 через `Promise.all` → 2 волны вместо 4
+- Экономия: 2 лишних round-trip (~400-800ms для российских регионов)
+
+---
+
+## Previous Focus (29.05.2026) — FulfillmentPage: единая таблица + пайплайн у исполнителя — ЗАВЕРШЕНО
 
 ### Что реализовано
 

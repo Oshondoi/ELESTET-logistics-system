@@ -3,6 +3,32 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 31.05.2026 — AdminPage: RPC + кеш + производительность загрузки
+
+### AdminPage — RPC вместо Edge Function, кеш, Promise.all
+
+#### SQL RPC `admin_get_stats()` (supabase/patch_admin_stats_rpc.sql) — применён в БД
+- Вместо Edge Function `admin-stats` (cold start ~500-1500ms) — SECURITY DEFINER RPC (мгновенно)
+- Проверка `platform_role IN ('admin','superadmin')` — только административные роли
+- Возвращает: `total_users`, `total_companies` (deleted_at IS NULL), `total_stores` (deleted_at IS NULL), `users[]` с JOIN на `auth.users`, `account_members`, `accounts`, `stores`
+- Баг-фикс: вместо `archived_at` (не существует) использует `deleted_at` — оба поля `accounts` и `stores`
+
+#### AdminPage — кеш в App.tsx
+- `AdminStats` и `AccountBillingRow` экспортированы из `AdminPage.tsx`
+- `App.tsx`: стейт `adminStats` + `adminAccounts`, пропсы `initialStats`, `initialAccounts`, `onStatsLoaded`, `onAccountsLoaded`
+- Первый вход: данные грузятся, кешируются → повторный вход — мгновенно
+
+#### Promise.all в loadSubscriptions
+- Было: `admin_get_billing_overview` → ждать → `fetchAllPlanHistory()` — последовательно
+- Стало: оба запроса параллельно через `Promise.all` → экономия одного round-trip
+
+#### hydrateFromSupabase — убраны лишние волны загрузки
+- Было 4 последовательных волны: stores+shipments → trips+carriers+warehouses → stickers → bundles
+- Стало 2 волны: stores+shipments → trips+carriers+warehouses+stickers+bundles (в одном Promise.all)
+- Экономия: ~400-800ms (2 лишних round-trip к Supabase)
+
+---
+
 ## Что сделано за сессию 29.05.2026 — FulfillmentPage: единая таблица + пайплайн у исполнителя
 
 ### Слияние «Мои» и «Аутсорс» партий в единую таблицу на табе «Все» (commit ca88575)

@@ -277,6 +277,12 @@ export interface Account {
   short_id?: number | null
   logo_url?: string | null
   logo_subscription_until?: string | null
+  // billing
+  plan?: string | null
+  plan_until?: string | null
+  trial_ends_at?: string | null
+  grace_until?: string | null
+  plan_features?: Record<string, unknown> | null
 }
 
 export interface AccountMember {

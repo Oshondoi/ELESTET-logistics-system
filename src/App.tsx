@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { AccountFormModal } from './components/accounts/AccountFormModal'
 import { DeleteAccountModal } from './components/accounts/DeleteAccountModal'
@@ -17,8 +17,13 @@ import { useAppData } from './hooks/useAppData'
 import { useAuth } from './hooks/useAuth'
 import { useMyPermissions } from './hooks/useMyPermissions'
 import { useRoles } from './hooks/useRoles'
+import { usePlatformRole } from './hooks/usePlatformRole'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
 import { getLogoUrl, convertToWebP } from './lib/companyLogo'
+import { canWrite, getBillingStatus, trialDaysLeft, graceDaysLeft, canAccessPage, PLAN_PAGE_LABELS } from './lib/plans'
+import type { ActiveOverride } from './lib/plans'
+import { activateGracePeriod } from './services/billingService'
+import { getActiveOverride } from './services/accessOverrideService'
 import { AuthPage } from './pages/AuthPage'
 import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
@@ -31,13 +36,45 @@ import { StickersPage } from './pages/StickersPage'
 import { ReviewsPage } from './pages/ReviewsPage'
 import { InvoicesPage } from './pages/InvoicesPage'
 import { AdminPage } from './pages/AdminPage'
+import type { AdminStats, AccountBillingRow as AdminAccountBillingRow } from './pages/AdminPage'
 import { GlossaryPage } from './pages/GlossaryPage'
 import { DiaryPage } from './pages/DiaryPage'
 import { FinanceReportPage } from './pages/FinanceReportPage'
+import { SubscriptionPage } from './pages/SubscriptionPage'
 import { fetchNotifications, markAllNotificationsRead } from './services/outsourceService'
 import type { Shipment, ShipmentWithStore } from './types'
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report'
+/* ── PlanGatewall ─────────────────────────────────────────────────────────
+ * Простая заставка когда страница недоступна по тарифу
+ * -------------------------------------------------------------------------*/
+const PlanGatewall = ({ page, onUpgrade }: { page: string; onUpgrade: () => void }) => {
+  const info = PLAN_PAGE_LABELS[page] ?? { title: page, desc: '' }
+  return (
+    <div className="flex h-full flex-col items-center justify-center px-4 py-24 text-center">
+      <div className="max-w-sm rounded-3xl border border-blue-100 bg-blue-50 px-10 py-10">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-2xl">
+          🔒
+        </div>
+        <h2 className="mb-2 text-lg font-black text-slate-800">{info.title}</h2>
+        {info.desc && (
+          <p className="mb-1 text-sm text-slate-500">{info.desc}</p>
+        )}
+        <p className="mb-6 text-sm text-slate-500">
+          Доступно в тарифе <strong>«Операционный»</strong>.
+        </p>
+        <button
+          type="button"
+          onClick={onUpgrade}
+          className="rounded-xl bg-blue-500 px-6 py-2 text-sm font-semibold text-white transition hover:bg-blue-600"
+        >
+          Посмотреть тарифы
+        </button>
+      </div>
+    </div>
+  )
+}
+
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription'
 
 const PAGE_ROUTES: Record<PageKey, string> = {
   home: '/',
@@ -54,6 +91,7 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   glossary: '/glossary',
   diary: '/diary',
   finance_report: '/finance-report',
+  subscription: '/subscription',
 }
 
 const ROUTE_PAGES: Record<string, PageKey> = Object.fromEntries(
@@ -230,6 +268,7 @@ const pageTitles: Record<PageKey, string> = {
   glossary: 'Словарь',
   diary: 'Дневник ELESTET',
   finance_report: 'Фин-отчет',
+  subscription: 'Подписка',
 }
 
 function App() {
@@ -301,10 +340,47 @@ function App() {
   useEffect(() => {
     setProfileUserName((session?.user?.user_metadata?.full_name as string) ?? '')
   }, [session?.user?.id])
-  const { accounts, archivedAccounts, isLoading: isAccountsLoading, hasFetched: hasAccountsFetched, createAccount, deleteAccount, restoreAccount, updateAccount } = useAccounts(Boolean(session))
+  const { accounts, archivedAccounts, isLoading: isAccountsLoading, hasFetched: hasAccountsFetched, createAccount, deleteAccount, restoreAccount, updateAccount, reload: reloadAccounts } = useAccounts(Boolean(session))
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
   const { roles, isLoading: isRolesLoading, addRole, updateRole, removeRole, cloneRoleToAccount } = useRoles(activeAccount?.id ?? null)
   const { permissions, isLoading: isPermissionsLoading, isOwnerOrAdmin } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
+  const [activeOverride, setActiveOverride] = useState<ActiveOverride | null>(null)
+
+  const fetchOverride = useCallback(() => {
+    if (!activeAccount?.id) { setActiveOverride(null); return }
+    void getActiveOverride(activeAccount.id).then(setActiveOverride)
+  }, [activeAccount?.id])
+
+  // Первая загрузка при смене аккаунта
+  useEffect(() => { fetchOverride() }, [fetchOverride])
+
+  // Поллинг каждую минуту — override аптейтся автоматически
+  useEffect(() => {
+    if (!activeAccount?.id) return
+    const id = setInterval(fetchOverride, 60_000)
+    return () => clearInterval(id)
+  }, [activeAccount?.id, fetchOverride])
+
+  // Обновление при возврате на вкладку
+  useEffect(() => {
+    const handler = () => { if (!document.hidden) fetchOverride() }
+    document.addEventListener('visibilitychange', handler)
+    return () => document.removeEventListener('visibilitychange', handler)
+  }, [fetchOverride])
+
+  const { platformRole, isSuperAdmin, isAdmin, isSupport } = usePlatformRole(session?.user?.id)
+
+  // Кэш данных AdminPage между переходами на другие страницы
+  const [adminStats, setAdminStats] = useState<AdminStats | null>(null)
+  const [adminAccounts, setAdminAccounts] = useState<AdminAccountBillingRow[] | null>(null)
+
+  // Суперадмин / админ / саппорт — вечный operational override (биллинг не мешает)
+  const effectiveOverride: ActiveOverride | null = isSupport
+    ? { type: 'plan', plan: 'operational', free_until: '2099-12-31' }
+    : activeOverride
+
+  const isReadOnly = activeAccount ? !canWrite(activeAccount, effectiveOverride) : false
+  const isPageGated = (page: string) => activeAccount ? !canAccessPage(page, activeAccount, effectiveOverride) : false
 
   useEffect(() => {
     if (!isAccountsLoading && accounts.length > 0) {
@@ -416,17 +492,16 @@ function App() {
     glossary: null,
     diary: null,
     finance_report: null,
+    subscription: null,
   }
-
-  const isAdmin = session?.user?.email === 'sydykovsam@gmail.com'
 
   // Если текущая страница недоступна по правам — показываем home.
   // Используем вычисляемое значение (не useEffect), чтобы избежать race condition:
   // useEffect читает stale state из той же фазы рендера и не видит обновлений permissions.
   const effectivePage: PageKey = (() => {
     if (isAccountsLoading || isPermissionsLoading) return activePage
-    if ((activePage === 'admin' || activePage === 'glossary') && !isAdmin) return 'home'
-    if ((activePage === 'diary' || activePage === 'finance_report') && !isAdmin) return 'home'
+    if ((activePage === 'admin' || activePage === 'glossary') && !isSupport) return 'home'
+    if ((activePage === 'diary' || activePage === 'finance_report') && !isSupport) return 'home'
     const key = pagePermKey[activePage]
     if (key !== null && !permissions[key]) return 'home'
     return activePage
@@ -651,7 +726,7 @@ function App() {
             onRestoreAccount={restoreAccount}
             archivedAccounts={archivedAccounts}
             permissions={permissions}
-            isAdmin={isAdmin}
+            isAdmin={isSupport}
           />
         )}
 
@@ -660,8 +735,7 @@ function App() {
             title={pageTitles[effectivePage]}
             userName={profileUserName}
             userEmail={session?.user?.email ?? ''}
-            isAdmin={isAdmin}
-            activeAccountId={activeAccount?.id}
+            isAdmin={isSupport}
             unreadCount={unreadNotifCount}
             onNotificationClick={undefined}
             onAdminClick={() => setActivePage('admin')}
@@ -673,11 +747,79 @@ function App() {
             onSignOut={() => void signOut()}
           />
 
+          {/* ── Billing баннер ── */}
+          {activeAccount && (() => {
+            const status = getBillingStatus(activeAccount, effectiveOverride)
+            if (status === 'active') return null
+            if (status === 'trial') {
+              const days = trialDaysLeft(activeAccount, effectiveOverride)
+              if (days > 3) return null // не мешаем пока далеко
+              return (
+                <div className="flex items-center justify-between gap-3 bg-amber-50 px-4 py-2.5 text-xs border-b border-amber-100">
+                  <span className="text-amber-800">
+                    ⏳ Пробный период истекает через <strong>{days} {days === 1 ? 'день' : days < 5 ? 'дня' : 'дней'}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActivePage('subscription' as PageKey)}
+                    className="rounded-lg bg-amber-500 px-3 py-1 font-semibold text-white transition hover:bg-amber-600"
+                  >
+                    Выбрать тариф
+                  </button>
+                </div>
+              )
+            }
+            if (status === 'grace') {
+              const days = graceDaysLeft(activeAccount)
+              return (
+                <div className="flex items-center justify-between gap-3 bg-orange-50 px-4 py-2.5 text-xs border-b border-orange-100">
+                  <span className="text-orange-800">
+                    ⚠️ Режим продления. Осталось <strong>{days} {days === 1 ? 'день' : days < 5 ? 'дня' : 'дней'}</strong>. Оплатите подписку.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActivePage('subscription' as PageKey)}
+                    className="rounded-lg bg-orange-500 px-3 py-1 font-semibold text-white transition hover:bg-orange-600"
+                  >
+                    Оплатить
+                  </button>
+                </div>
+              )
+            }
+            // expired
+            return (
+              <div className="flex items-center justify-between gap-3 bg-rose-50 px-4 py-2.5 text-xs border-b border-rose-100">
+                <span className="text-rose-800">
+                  🔒 Пробный период истёк. Создание и редактирование заблокированы. Данные сохранены.
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void activateGracePeriod(activeAccount.id).then(() => void reloadAccounts())}
+                    className="rounded-lg bg-rose-100 px-3 py-1 font-semibold text-rose-700 transition hover:bg-rose-200"
+                  >
+                    +3 дня в долг
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivePage('subscription' as PageKey)}
+                    className="rounded-lg bg-rose-500 px-3 py-1 font-semibold text-white transition hover:bg-rose-600"
+                  >
+                    Оплатить
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
+
           <div className="flex-1 overflow-y-scroll p-3 lg:p-4">
             {!isLoading && !error ? (
               effectivePage === 'home' ? (
                 <HomePage shipments={shipments} rawShipments={rawShipments} stores={stores} hasAccount={accounts.length > 0} onCreateCompany={() => setAccountModalOpen(true)} />
               ) : effectivePage === 'fulfillment' ? (
+                isPageGated('fulfillment') ? (
+                  <PlanGatewall page="fulfillment" onUpgrade={() => setActivePage('subscription')} />
+                ) : (
                 <FulfillmentPage
                   accountId={activeAccount?.id ?? ''}
                   accountShortId={activeAccount?.short_id ?? null}
@@ -688,11 +830,11 @@ function App() {
                   onAddTripLine={addTripLine}
                   onTripCreated={appendTrip}
                   onStoreCreated={appendStore}
-                  canManage={isOwnerOrAdmin || permissions.fulfillment_manage}
-                  canOtkAssign={isOwnerOrAdmin || permissions.fulfillment_otk_assign}
-                  canStageJump={isOwnerOrAdmin || permissions.fulfillment_stage_jump}
-                  canPackingAutoAdd={isOwnerOrAdmin || permissions.fulfillment_packing_autoadd}
-                  canSupplyDeleteLocked={isOwnerOrAdmin || permissions.fulfillment_supply_delete_locked}
+                  canManage={(isOwnerOrAdmin || permissions.fulfillment_manage) && !isReadOnly}
+                  canOtkAssign={(isOwnerOrAdmin || permissions.fulfillment_otk_assign) && !isReadOnly}
+                  canStageJump={(isOwnerOrAdmin || permissions.fulfillment_stage_jump) && !isReadOnly}
+                  canPackingAutoAdd={(isOwnerOrAdmin || permissions.fulfillment_packing_autoadd) && !isReadOnly}
+                  canSupplyDeleteLocked={(isOwnerOrAdmin || permissions.fulfillment_supply_delete_locked) && !isReadOnly}
                   userId={session?.user?.id ?? ''}
                   userEmail={session?.user?.email ?? ''}
                   userName={profileUserName || (session?.user?.email ?? '')}
@@ -700,7 +842,11 @@ function App() {
                   initialBatchShortId={initialBatchShortId}
                   onBatchUrlConsumed={() => setInitialBatchShortId(null)}
                 />
+                )
               ) : effectivePage === 'shipments' ? (
+                isPageGated('shipments') ? (
+                  <PlanGatewall page="shipments" onUpgrade={() => setActivePage('subscription')} />
+                ) : (
                 <ShipmentsPage
                   trips={trips}
                   archivedTripLines={archivedTripLines}
@@ -732,9 +878,9 @@ function App() {
                   onRefreshMarketplaceDate={refreshMarketplaceDate}
                   onUploadWbPass={uploadWbPass}
                   onRemoveWbPass={removeWbPass}
-                  canManage={permissions.shipments_manage}
-                  canDeleteAny={isOwnerOrAdmin || permissions.shipments_delete_any}
-                  canDeleteTrip={isOwnerOrAdmin || permissions.shipments_delete_trip}
+                  canManage={permissions.shipments_manage && !isReadOnly}
+                  canDeleteAny={(isOwnerOrAdmin || permissions.shipments_delete_any) && !isReadOnly}
+                  canDeleteTrip={(isOwnerOrAdmin || permissions.shipments_delete_trip) && !isReadOnly}
                   isOwnerOrAdmin={isOwnerOrAdmin}
                   accountId={activeAccount?.id ?? ''}
                   userId={session?.user?.id ?? ''}
@@ -742,9 +888,13 @@ function App() {
                   onUpdateLineCustomFields={updateLineCustomFields}
                   onBulkMoveLinesToTrip={bulkMoveLinesToTrip}
                 />
+                )
               ) : effectivePage === 'stores' ? (
-                <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} canManage={permissions.stores_manage} canDelete={isOwnerOrAdmin || permissions.stores_delete} canSync={permissions.stores_manage || isOwnerOrAdmin || permissions.stores_sync} />
+                <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} canManage={permissions.stores_manage && !isReadOnly} canDelete={(isOwnerOrAdmin || permissions.stores_delete) && !isReadOnly} canSync={(permissions.stores_manage || isOwnerOrAdmin || permissions.stores_sync) && !isReadOnly} />
               ) : effectivePage === 'directories' ? (
+                isPageGated('directories') ? (
+                  <PlanGatewall page="directories" onUpgrade={() => setActivePage('subscription')} />
+                ) : (
                 <DirectoriesPage
                   carriers={carriers}
                   warehouses={warehouses}
@@ -757,10 +907,11 @@ function App() {
                   onAddWarehouse={addWarehouse}
                   onDeleteWarehouse={removeWarehouse}
                   onRenameWarehouse={renameWarehouse}
-                  canManage={permissions.directories_manage}
-                  canDelete={isOwnerOrAdmin || permissions.directories_delete}
-                  canManageTariffs={isOwnerOrAdmin || permissions.directories_tariff_manage}
+                  canManage={permissions.directories_manage && !isReadOnly}
+                  canDelete={(isOwnerOrAdmin || permissions.directories_delete) && !isReadOnly}
+                  canManageTariffs={(isOwnerOrAdmin || permissions.directories_tariff_manage) && !isReadOnly}
                 />
+                )
               ) : effectivePage === 'products' ? (
                 <ProductsPage stores={stores} activeAccountId={activeAccount?.id ?? ''} selectedStoreId={activeStoreId} onStoreChange={setActiveStoreId} />
               ) : effectivePage === 'roles' ? (
@@ -774,7 +925,7 @@ function App() {
                   onUpdate={updateRole}
                   onDelete={removeRole}
                   onClone={cloneRoleToAccount}
-                  canManage={permissions.roles_manage}
+                  canManage={permissions.roles_manage && !isReadOnly}
                 />
               ) : effectivePage === 'stickers' ? (
                 <StickersPage
@@ -789,9 +940,9 @@ function App() {
                   onAddBundle={addBundle}
                   onEditBundle={editBundle}
                   onDeleteBundle={removeBundle}
-                  canManage={permissions.stickers_manage}
-                  canDelete={isOwnerOrAdmin || permissions.stickers_delete}
-                  canImport={isOwnerOrAdmin || permissions.stickers_manage || permissions.stickers_import}
+                  canManage={permissions.stickers_manage && !isReadOnly}
+                  canDelete={(isOwnerOrAdmin || permissions.stickers_delete) && !isReadOnly}
+                  canImport={(isOwnerOrAdmin || permissions.stickers_manage || permissions.stickers_import) && !isReadOnly}
                   isAdmin={isAdmin}
                 />
               ) : effectivePage === 'reviews' ? (
@@ -800,11 +951,14 @@ function App() {
                   activeAccountId={activeAccount?.id ?? ''}
                   selectedStoreId={activeStoreId}
                   onStoreChange={setActiveStoreId}
-                  canManage={isOwnerOrAdmin || permissions.reviews_manage}
-                  canUseAi={isOwnerOrAdmin || permissions.reviews_ai}
-                  canManageAutomation={isOwnerOrAdmin || permissions.reviews_automation}
+                  canManage={(isOwnerOrAdmin || permissions.reviews_manage) && !isReadOnly}
+                  canUseAi={(isOwnerOrAdmin || permissions.reviews_ai) && !isReadOnly}
+                  canManageAutomation={(isOwnerOrAdmin || permissions.reviews_automation) && !isReadOnly}
                 />
               ) : effectivePage === 'invoices' ? (
+                isPageGated('invoices') ? (
+                  <PlanGatewall page="invoices" onUpgrade={() => setActivePage('subscription')} />
+                ) : (
                 <InvoicesPage
                   accountId={activeAccount?.id ?? ''}
                   accountShortId={activeAccount?.short_id ?? null}
@@ -812,8 +966,15 @@ function App() {
                   initialInvoiceShortId={initialInvoiceShortId}
                   onInvoiceUrlConsumed={() => setInitialInvoiceShortId(null)}
                 />
+                )
               ) : effectivePage === 'admin' ? (
-                <AdminPage />
+                <AdminPage
+                  platformRole={platformRole}
+                  initialStats={adminStats}
+                  initialAccounts={adminAccounts}
+                  onStatsLoaded={setAdminStats}
+                  onAccountsLoaded={setAdminAccounts}
+                />
               ) : effectivePage === 'glossary' ? (
                 <GlossaryPage />
               ) : effectivePage === 'diary' ? (
@@ -827,8 +988,14 @@ function App() {
                   accountId={activeAccount?.id ?? ''}
                   stores={stores}
                 />
+              ) : effectivePage === 'subscription' ? (
+                <SubscriptionPage
+                  activeAccount={activeAccount}
+                  activeOverride={effectiveOverride}
+                  onAccountRefresh={() => void reloadAccounts()}
+                />
               ) : (
-                <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} />
+                <StoresPage stores={stores} archivedStores={archivedStores} onOpenCreate={handleOpenStoreCreate} onEdit={handleOpenStoreEdit} onDelete={removeStore} onSync={handleSyncStore} onRestore={restoreStore} canManage={permissions.stores_manage && !isReadOnly} canDelete={(isOwnerOrAdmin || permissions.stores_delete) && !isReadOnly} canSync={(permissions.stores_manage || isOwnerOrAdmin || permissions.stores_sync) && !isReadOnly} />
               )
             ) : null}
           </div>

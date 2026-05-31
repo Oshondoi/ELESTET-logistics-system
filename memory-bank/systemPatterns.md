@@ -160,6 +160,92 @@ Deletion is intentionally conservative; FK use restrict.
 6. `supabase/patch_trip_functions.sql`
 7. `supabase/carriers_warehouses.sql`
 
+## Platform Roles — надстройка над RBAC (31.05.2026)
+
+Платформенные роли — отдельный уровень прав, независимый от RBAC компаний. Хранится в `profiles.platform_role`.
+
+```
+user < support < admin < superadmin
+```
+
+- `support`: только чтение AdminPage; `effectiveOverride = operational` (видит всё как платный)
+- `admin`/`superadmin`: могут изменять роли команды; вкладка «Команда» в AdminPage
+- `canEdit = platformRole === 'admin' || platformRole === 'superadmin'`
+- `isSuperAdmin = platformRole === 'superadmin'` (может повышать до superadmin)
+
+### AdminPage Performance Pattern
+
+**Правило:** Тяжёлые данные страницы → кешировать в App.tsx, передавать через `initialX`/`onXLoaded`.
+
+```tsx
+// App.tsx — стейт кеша
+const [adminStats, setAdminStats] = useState<AdminStats | null>(null)
+const [adminAccounts, setAdminAccounts] = useState<AdminAccountBillingRow[] | null>(null)
+
+// Admin page usage
+<AdminPage
+  platformRole={platformRole}
+  initialStats={adminStats}
+  initialAccounts={adminAccounts}
+  onStatsLoaded={setAdminStats}
+  onAccountsLoaded={setAdminAccounts}
+/>
+```
+
+```tsx
+// AdminPage.tsx — начальный стейт + conditional load
+const [stats, setStats] = useState<AdminStats | null>(initialStats)
+const [isLoading, setIsLoading] = useState(initialStats === null)
+
+useEffect(() => {
+  if (initialStats === null) void loadUsers()
+}, [])
+```
+
+**Правило:** Вместо Edge Function (cold start 500-1500ms) → SQL RPC с SECURITY DEFINER (мгновенно).
+- Edge Function `admin-stats` → заменена на `admin_get_stats()` RPC
+- SECURITY DEFINER с явной проверкой `platform_role IN ('admin','superadmin')`
+- Поля используют `deleted_at IS NULL` (не `archived_at` — такой колонки не существует)
+
+**Правило:** Параллельные запросы через Promise.all — не последовательные await.
+```ts
+// Плохо:
+const billing = await supabase.rpc('admin_get_billing_overview')
+const history = await fetchAllPlanHistory()
+
+// Хорошо:
+const [billingResult, history] = await Promise.all([
+  supabase.rpc('admin_get_billing_overview'),
+  fetchAllPlanHistory()
+])
+```
+
+## useAppData — Loading Waves Pattern
+
+Данные загружаются в 2 параллельных волны (а не 4 последовательных):
+
+```ts
+// Волна 1
+const [supabaseStores, supabaseShipments] = await Promise.all([
+  fetchStores(accountId),
+  fetchShipments(accountId)
+])
+// ... установить stores, shipments
+
+// Волна 2 (5 запросов параллельно!)
+const [supabaseTrips, supabaseCarriers, supabaseWarehouses, supabaseStickers, supabaseBundles] =
+  await Promise.all([
+    fetchTrips(accountId, storesRef.current),
+    fetchCarriers(accountId),
+    fetchWarehouses(accountId),
+    fetchStickers(accountId),
+    fetchBundles(accountId)
+  ])
+```
+
+Было: 4 волны (stores+shipments → trips+carriers+warehouses → stickers → bundles)
+Стало: 2 волны (~400-800ms экономии)
+
 ## Important Boundaries
 - Generation logic lives in DB / RPC; frontend previews only
 - Minimal localized changes only; no opportunistic refactor

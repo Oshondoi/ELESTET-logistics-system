@@ -147,10 +147,12 @@ export const useAppData = (accountId: string | null) => {
         .then((archived) => setArchivedStores(archived))
         .catch(() => { /* RPC ещё не применена — игнорируем */ })
 
-      const [supabaseTrips, supabaseCarriers, supabaseWarehouses] = await Promise.all([
+      const [supabaseTrips, supabaseCarriers, supabaseWarehouses, supabaseStickers, supabaseBundles] = await Promise.all([
         fetchTrips(accountId, supabaseStores),
         fetchCarriers(accountId),
         fetchWarehouses(accountId),
+        fetchStickers(accountId),
+        fetchBundles(accountId),
       ])
       setTrips(supabaseTrips)
       setCarriers(supabaseCarriers)
@@ -188,10 +190,8 @@ export const useAppData = (accountId: string | null) => {
         ).catch(() => {})
       }
 
-      const supabaseStickers = await fetchStickers(accountId)
+      // stickers и bundles уже загружены в Promise.all выше
       setStickers(supabaseStickers)
-
-      const supabaseBundles = await fetchBundles(accountId)
       setBundles(supabaseBundles)
 
       setIsUsingSupabase(true)

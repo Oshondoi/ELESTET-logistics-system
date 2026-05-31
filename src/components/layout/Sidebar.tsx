@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../../lib/utils'
+import { getWhitelabelLogoUrl } from '../../lib/companyLogo'
 import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -215,16 +216,37 @@ export const Sidebar = ({
   return (
     <aside className="flex h-full w-[200px] shrink-0 flex-col border-r border-slate-200 bg-white/95">
       <div className="border-b border-slate-200 px-5 py-4">
-        <button type="button" className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-xs font-bold text-white">
-            E
-          </div>
-          <div className="text-left">
-            <div className="text-[28px] font-black uppercase leading-none tracking-tight text-slate-900">
-              ELESTET
-            </div>
-          </div>
-        </button>
+        {(() => {
+          const whitelabelUrl = activeAccount ? getWhitelabelLogoUrl(activeAccount) : null
+          if (whitelabelUrl) {
+            return (
+              <button type="button" className="flex items-center gap-3">
+                <img
+                  src={whitelabelUrl}
+                  alt={activeAccount?.name ?? ''}
+                  className="h-9 w-9 rounded-xl object-cover"
+                />
+                <div className="text-left">
+                  <div className="text-[15px] font-black leading-tight tracking-tight text-slate-900 truncate max-w-[110px]">
+                    {activeAccount?.name ?? 'ELESTET'}
+                  </div>
+                </div>
+              </button>
+            )
+          }
+          return (
+            <button type="button" className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-xs font-bold text-white">
+                E
+              </div>
+              <div className="text-left">
+                <div className="text-[28px] font-black uppercase leading-none tracking-tight text-slate-900">
+                  ELESTET
+                </div>
+              </div>
+            </button>
+          )
+        })()}
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-4">
@@ -495,7 +517,29 @@ export const Sidebar = ({
         </nav>
       </div>
 
-      <div className="mt-auto border-t border-slate-200 px-4 py-4">
+      <div className="mt-auto border-t border-slate-200 px-4 py-4 flex flex-col gap-1">
+        <button
+          type="button"
+          onClick={() => onSelectPage('subscription')}
+          className={cn(
+            'flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left font-medium transition',
+            activePage === 'subscription'
+              ? 'bg-blue-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+          )}
+        >
+          <span className={cn(
+            'flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-md',
+            activePage === 'subscription' ? 'bg-white/15' : 'bg-slate-100 text-slate-500',
+          )}>
+            <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <rect x="2" y="6" width="20" height="14" rx="2" />
+              <path d="M2 10h20" />
+              <path d="M6 14h4" />
+            </svg>
+          </span>
+          <span className="text-[15px]">Подписка</span>
+        </button>
         <a
           href="https://t.me/+4e0mYW-2Bjw3NTYy"
           target="_blank"

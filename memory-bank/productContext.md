@@ -62,7 +62,22 @@ The product is being created to manage logistics operations for shipments going 
 - Хранится в таблице `ai_prompts` (поля: `account_id`, `store_id` nullable, `type`: `'system'|'store'`).
 - Каждого типа может быть несколько промптов (список). Все активны одновременно — конкатенируются.
 
-## Important Semantic Rules
+## Platform Roles — роли платформы (31.05.2026)
+
+Поверх SaaS RBAC существуют **платформенные роли** — для сотрудников сервиса ELESTET.
+
+| Роль | Описание |
+|------|----------|
+| `user` | Обычный клиент (по умолчанию) |
+| `support` | Саппорт: видит AdminPage, не меняет роли, имеет оперативный тариф без платы |
+| `admin` | Администратор: видит команду, может менять роли команды |
+| `superadmin` | Суперадмин: полные права, включая повышение до superadmin |
+
+- В сайдбаре: кнопка «Админ» видна всем у кого `platformRole !== 'user'`
+- AdminPage вкладка «Команда» — только `canEdit` (admin/superadmin)
+- `isSupport` → `effectiveOverride = { plan: 'operational', free_until: '2099-12-31' }` — саппорт видит всё как платный пользователь
+
+
 - `Прибыл` means cargo reached the required city/country and is ready for next dispatch step
 - `planned_marketplace_delivery_date` is the expected date for marketplace delivery
 - `arrived_box_qty` means actual boxes received in fact
