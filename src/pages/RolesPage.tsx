@@ -1,19 +1,18 @@
-import { useState, useEffect, useCallback } from 'react'
+﻿import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { getLogoUrl } from '../lib/companyLogo'
 import { RoleFormModal } from '../components/roles/RoleFormModal'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
-import type { Account, Role, RoleFormValues, IncomingInvite, OutgoingInvite, OutsourceBatch, OutsourcePartner } from '../types'
 import {
-  fetchIncomingInvites,
-  fetchOutgoingInvites,
-  fetchOutsourceBatches,
-  respondToInvite,
   fetchMyPartners,
+  sendPartnerRequest,
   respondToPartnerRequest,
   removePartner,
 } from '../services/outsourceService'
+import { fetchPartnerBatches } from '../services/pipelineService'
+import type { Account, Role, RoleFormValues, OutsourcePartner, PartnerBatchInfo } from '../types'
 
 // ─── Иконка щита ─────────────────────────────────────────────
 
@@ -144,21 +143,6 @@ const RoleRow = ({ role, onEdit, onDelete, canManage = true }: RoleRowProps) => 
 
 // ─── Страница ─────────────────────────────────────────────────
 
-type MainTab = 'employees' | 'outsource'
-type OutsourceTab = 'partners' | 'services'
-
-const INVITE_STATUS_LABELS: Record<string, string> = {
-  pending: 'Ожидает',
-  accepted: 'Принято',
-  declined: 'Отклонено',
-}
-
-const INVITE_STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-amber-50 text-amber-700',
-  accepted: 'bg-emerald-50 text-emerald-700',
-  declined: 'bg-slate-100 text-slate-500',
-}
-
 interface RolesPageProps {
   roles: Role[]
   accounts: Account[]
@@ -170,7 +154,6 @@ interface RolesPageProps {
   onDelete: (roleId: string) => Promise<void>
   onClone: (role: Role, targetAccountId: string) => Promise<void>
   canManage?: boolean
-  onAddOutsource?: () => void
 }
 
 export const RolesPage = ({
@@ -184,118 +167,143 @@ export const RolesPage = ({
   onDelete,
   onClone,
   canManage = true,
-  onAddOutsource,
 }: RolesPageProps) => {
-  const [mainTab, setMainTabRaw] = useState<MainTab>(
-    () => (localStorage.getItem('roles_main_tab') as MainTab) ?? 'employees'
+  // Главные вкладки (с запоминанием в localStorage)
+  const [mainTab, setMainTab] = useState<'employees' | 'outsource'>(
+    () => (localStorage.getItem('rolesMainTab') as 'employees' | 'outsource' | null) ?? 'employees'
   )
-  const [outsourceTab, setOutsourceTabRaw] = useState<OutsourceTab>(
-    () => (localStorage.getItem('roles_outsource_tab') as OutsourceTab) ?? 'partners'
+  const [outsourceTab, setOutsourceTab] = useState<'partners' | 'services' | 'invites'>(
+    () => (localStorage.getItem('rolesOutsourceTab') as 'partners' | 'services' | 'invites' | null) ?? 'partners'
   )
-  const setMainTab = (tab: MainTab) => {
-    setMainTabRaw(tab)
-    localStorage.setItem('roles_main_tab', tab)
+  const [invitesSubTab, setInvitesSubTab] = useState<'incoming' | 'outgoing'>(
+    () => (localStorage.getItem('rolesInvitesSubTab') as 'incoming' | 'outgoing' | null) ?? 'incoming'
+  )
+
+  const handleSetMainTab = (tab: 'employees' | 'outsource') => {
+    setMainTab(tab)
+    localStorage.setItem('rolesMainTab', tab)
   }
-  const setOutsourceTab = (tab: OutsourceTab) => {
-    setOutsourceTabRaw(tab)
-    localStorage.setItem('roles_outsource_tab', tab)
+  const handleSetOutsourceTab = (tab: 'partners' | 'services' | 'invites') => {
+    setOutsourceTab(tab)
+    localStorage.setItem('rolesOutsourceTab', tab)
   }
+  const handleSetInvitesSubTab = (tab: 'incoming' | 'outgoing') => {
+    setInvitesSubTab(tab)
+    localStorage.setItem('rolesInvitesSubTab', tab)
+  }
+
+  // Стейт роли / удаления
   const [modalOpen, setModalOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<Role | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Role | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
-
-  // Аутсорс данные
-  const [partners, setPartners] = useState<OutsourcePartner[]>([])
-  const [incomingInvites, setIncomingInvites] = useState<IncomingInvite[]>([])
-  const [outgoingInvites, setOutgoingInvites] = useState<OutgoingInvite[]>([])
-  const [outsourceBatches, setOutsourceBatches] = useState<OutsourceBatch[]>([])
-  const [isLoadingOutsource, setIsLoadingOutsource] = useState(false)
-  const [respondingId, setRespondingId] = useState<string | null>(null)
   const [roleSearch, setRoleSearch] = useState('')
-  const [outsourceSearch, setOutsourceSearch] = useState('')
 
-  // Подтверждение удаления партнёра (для is_requester, без пароля)
-  const [removeConfirmTarget, setRemoveConfirmTarget] = useState<string | null>(null)
+  // Аутсорс: партнёры
+  const [partners, setPartners] = useState<OutsourcePartner[]>([])
+  const [partnersLoading, setPartnersLoading] = useState(false)
+  const [partnersError, setPartnersError] = useState<string | null>(null)
 
-  // Подтверждение отключения от партнёра (для !is_requester)
-  const [disconnectTarget, setDisconnectTarget] = useState<string | null>(null)
-  const [disconnectLoading, setDisconnectLoading] = useState(false)
+  // Аутсорс: мои услуги
+  const [myServices, setMyServices] = useState<PartnerBatchInfo[]>([])
+  const [servicesLoading, setServicesLoading] = useState(false)
 
-  const loadOutsourceData = useCallback(async () => {
-    setIsLoadingOutsource(true)
+  // Аутсорс: отправить приглашение
+  const [inviteInput, setInviteInput] = useState('')
+  const [isSendingInvite, setIsSendingInvite] = useState(false)
+  const [inviteMsg, setInviteMsg] = useState<{ text: string; ok: boolean } | null>(null)
+
+  // Аутсорс: ответ на приглашение (по id → состояние)
+  const [respondingId, setRespondingId] = useState<string | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
+
+  const loadPartners = useCallback(async () => {
+    if (!activeAccountId) return
+    setPartnersLoading(true)
+    setPartnersError(null)
     try {
-      const [partners, inc, out, batches] = await Promise.all([
-        fetchMyPartners(activeAccountId),
-        fetchIncomingInvites(),
-        fetchOutgoingInvites(),
-        fetchOutsourceBatches(),
-      ])
-      setPartners(partners)
-      setIncomingInvites(inc)
-      setOutgoingInvites(out)
-      setOutsourceBatches(batches)
+      const data = await fetchMyPartners(activeAccountId)
+      setPartners(data)
+    } catch (e) {
+      setPartnersError(e instanceof Error ? e.message : 'Ошибка загрузки')
+    } finally {
+      setPartnersLoading(false)
+    }
+  }, [activeAccountId])
+
+  const loadServices = useCallback(async () => {
+    if (!activeAccountId) return
+    setServicesLoading(true)
+    try {
+      const data = await fetchPartnerBatches(activeAccountId)
+      setMyServices(data)
     } catch {
       // ignore
     } finally {
-      setIsLoadingOutsource(false)
+      setServicesLoading(false)
     }
   }, [activeAccountId])
 
   useEffect(() => {
-    if (mainTab === 'outsource') void loadOutsourceData()
-  }, [mainTab, loadOutsourceData])
+    if (mainTab === 'outsource') {
+      if (outsourceTab === 'partners' || outsourceTab === 'invites') void loadPartners()
+      if (outsourceTab === 'services') void loadServices()
+    }
+  }, [mainTab, outsourceTab, loadPartners, loadServices])
 
-  const handleRespondInvite = async (inviteId: string, accept: boolean) => {
-    setRespondingId(inviteId)
+  const handleSendInvite = async () => {
+    // Принимаем любой формат: С-45, C45, с 45, С - 14, c-14 и т.д. — берём только цифры
+    const digits = inviteInput.replace(/\D/g, '')
+    const shortId = parseInt(digits, 10)
+    if (!digits || isNaN(shortId) || shortId <= 0) {
+      setInviteMsg({ text: 'Введите корректный ID компании (например C1234)', ok: false })
+      return
+    }
+    setIsSendingInvite(true)
+    setInviteMsg(null)
     try {
-      const result = await respondToInvite(inviteId, accept)
-      if (result.error) { alert(result.error); return }
-      await loadOutsourceData()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Ошибка')
+      const result = await sendPartnerRequest(activeAccountId, shortId)
+      if (result?.error) {
+        setInviteMsg({ text: result.error, ok: false })
+      } else {
+        setInviteMsg({ text: 'Приглашение отправлено', ok: true })
+        setInviteInput('')
+        await loadPartners()
+      }
+    } catch (e) {
+      setInviteMsg({ text: e instanceof Error ? e.message : 'Ошибка', ok: false })
     } finally {
-      setRespondingId(null)
+      setIsSendingInvite(false)
     }
   }
 
-  const handleRespondPartner = async (connectionId: string, accept: boolean) => {
+  const handleRespond = async (connectionId: string, accept: boolean) => {
     setRespondingId(connectionId)
     try {
       const result = await respondToPartnerRequest(connectionId, accept)
-      if (result.error) { alert(result.error); return }
-      await loadOutsourceData()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Ошибка')
+      if (result?.error) {
+        alert(result.error)
+      } else {
+        await loadPartners()
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Ошибка')
     } finally {
       setRespondingId(null)
     }
   }
 
   const handleRemovePartner = async (connectionId: string) => {
-    setRespondingId(connectionId)
+    if (!confirm('Удалить партнёра? Это действие нельзя отменить.')) return
+    setRemovingId(connectionId)
     try {
       await removePartner(connectionId)
-      await loadOutsourceData()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Ошибка')
+      await loadPartners()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Ошибка')
     } finally {
-      setRespondingId(null)
-    }
-  }
-
-  const handleDisconnectConfirm = async () => {
-    if (!disconnectTarget) return
-    setDisconnectLoading(true)
-    try {
-      await removePartner(disconnectTarget)
-      await loadOutsourceData()
-      setDisconnectTarget(null)
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Ошибка')
-    } finally {
-      setDisconnectLoading(false)
+      setRemovingId(null)
     }
   }
 
@@ -334,582 +342,415 @@ export const RolesPage = ({
   const filteredRoles = roleSearch.trim()
     ? roles.filter((r) => r.name.toLowerCase().includes(roleSearch.toLowerCase()))
     : roles
-  const _q = outsourceSearch.toLowerCase().trim()
-  const filteredPartners = _q
-    ? partners.filter((p) =>
-        p.partner_name.toLowerCase().includes(_q) ||
-        String(p.partner_short_id).includes(_q)
-      )
-    : partners
-  const filteredIncoming = _q
-    ? incomingInvites.filter((i) =>
-        (i.inviting_company_name ?? '').toLowerCase().includes(_q) ||
-        (i.stage_name ?? '').toLowerCase().includes(_q) ||
-        String(i.batch_short_id ?? '').includes(_q) ||
-        (i.batch_name ?? '').toLowerCase().includes(_q)
-      )
-    : incomingInvites
-  const filteredOutgoing = _q
-    ? outgoingInvites.filter((i) =>
-        (i.invited_company_name ?? '').toLowerCase().includes(_q) ||
-        (i.stage_name ?? '').toLowerCase().includes(_q) ||
-        String(i.batch_short_id ?? '').includes(_q) ||
-        (i.batch_name ?? '').toLowerCase().includes(_q)
-      )
-    : outgoingInvites
-  const filteredBatches = _q
-    ? outsourceBatches.filter((b) =>
-        (b.owner_company_name ?? '').toLowerCase().includes(_q) ||
-        (b.stage_name ?? '').toLowerCase().includes(_q) ||
-        String(b.batch_short_id ?? '').includes(_q) ||
-        (b.batch_name ?? '').toLowerCase().includes(_q)
-      )
-    : outsourceBatches
-
-  const pendingIncomingCount = incomingInvites.filter((i) => i.status === 'pending').length
-  const pendingPartnerCount = partners.filter((p) => p.status === 'pending' && !p.is_requester).length
-  const totalPendingCount = pendingIncomingCount + pendingPartnerCount
 
   return (
     <>
-      <div className="space-y-4">
-        {/* Главные табы */}
-        <Card className="overflow-hidden rounded-3xl p-0">
-          <div className="flex border-b border-slate-100">
-            <button
-              type="button"
-              onClick={() => setMainTab('employees')}
-              className={`flex items-center gap-2 px-6 py-3.5 text-sm font-medium transition-colors ${
-                mainTab === 'employees'
-                  ? 'border-b-2 border-blue-500 text-blue-600'
-                  : 'text-slate-400 hover:text-slate-700'
-              }`}
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                <circle cx="9" cy="7" r="4"/>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-              </svg>
-              Сотрудники
-            </button>
-            <button
-              type="button"
-              onClick={() => setMainTab('outsource')}
-              className={`relative flex items-center gap-2 px-6 py-3.5 text-sm font-medium transition-colors ${
-                mainTab === 'outsource'
-                  ? 'border-b-2 border-violet-500 text-violet-600'
-                  : 'text-slate-400 hover:text-slate-700'
-              }`}
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <rect x="2" y="7" width="20" height="14" rx="2"/>
-                <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-                <line x1="12" y1="12" x2="12" y2="16"/>
-                <line x1="10" y1="14" x2="14" y2="14"/>
-              </svg>
-              Аутсорс
-              {pendingIncomingCount > 0 && (
-                <span className="ml-1 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-violet-500 px-1 text-[10px] font-bold text-white">
-                  {totalPendingCount}
-                </span>
-              )}
-            </button>
+      {/* Главная навигация */}
+      <div className="mb-4 flex gap-1 rounded-2xl bg-slate-100 p-1 w-fit">
+        {([
+          { key: 'employees', label: 'Сотрудники' },
+          { key: 'outsource', label: 'Аутсорс' },
+        ] as const).map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => handleSetMainTab(tab.key)}
+            className={`rounded-xl px-4 py-1.5 text-sm font-medium transition ${
+              mainTab === tab.key
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Вкладка: Сотрудники ── */}
+      {mainTab === 'employees' && (
+        <div className="space-y-4">
+          <Card className="rounded-3xl p-2.5">
+            <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
+              <input
+                type="text"
+                value={roleSearch}
+                onChange={(e) => setRoleSearch(e.target.value)}
+                placeholder={
+                  isLoading
+                    ? 'Загрузка...'
+                    : roles.length === 0
+                    ? 'Ролей ещё нет'
+                    : `Поиск среди ${roles.length} ${roles.length === 1 ? 'роли' : roles.length < 5 ? 'ролей' : 'ролей'}...`
+                }
+                autoComplete="off"
+                className="h-10 min-w-[260px] rounded-2xl bg-slate-100 px-4 text-sm text-slate-600 placeholder:text-slate-400 focus:outline-none focus:bg-slate-50 focus:ring-2 focus:ring-blue-100"
+              />
+              <div className="flex items-center gap-2.5">
+                {canManage && (
+                  <Button className="h-10 rounded-2xl px-5" onClick={handleOpenCreate}>
+                    + Создать роль
+                  </Button>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          <Card className="overflow-hidden rounded-3xl">
+            {isLoading ? (
+              <div className="px-4 py-8 text-center text-sm text-slate-400">Загрузка...</div>
+            ) : filteredRoles.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 px-4 py-12 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-300">
+                  <ShieldIcon />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-slate-700">
+                    {roleSearch ? `Нет ролей по запросу «${roleSearch}»` : 'Нет ролей'}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    {roleSearch ? 'Попробуйте изменить запрос' : 'Создайте роль и настройте доступы для участников компании'}
+                  </p>
+                </div>
+                {canManage && !roleSearch && (
+                  <Button className="mt-1 h-10 rounded-2xl px-5" onClick={handleOpenCreate}>
+                    + Создать роль
+                  </Button>
+                )}
+              </div>
+            ) : (
+              filteredRoles.map((role) => (
+                <RoleRow
+                  key={role.id}
+                  role={role}
+                  onEdit={handleOpenEdit}
+                  onDelete={setDeleteTarget}
+                  canManage={canManage}
+                />
+              ))
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* ── Вкладка: Аутсорс ── */}
+      {mainTab === 'outsource' && (
+        <div className="space-y-4">
+          {/* Подвкладки */}
+          <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 w-fit">
+            {([
+              { key: 'partners', label: 'Аутсорс' },
+              { key: 'services', label: 'Мои услуги' },
+              { key: 'invites', label: 'Приглашения' },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => handleSetOutsourceTab(tab.key)}
+                className={`rounded-xl px-4 py-1.5 text-sm font-medium transition ${
+                  outsourceTab === tab.key
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
-        </Card>
 
-        {/* ── ТАБ: СОТРУДНИКИ ───────────────────────────────── */}
-        {mainTab === 'employees' && (
-          <>
-            <Card className="rounded-3xl p-2.5">
-              <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
-                <input
-                  type="text"
-                  value={roleSearch}
-                  onChange={(e) => setRoleSearch(e.target.value)}
-                  placeholder={
-                    isLoading
-                      ? 'Загрузка...'
-                      : roles.length === 0
-                      ? 'Ролей ещё нет'
-                      : `Поиск среди ${roles.length} ${roles.length === 1 ? 'роли' : roles.length < 5 ? 'ролей' : 'ролей'}...`
-                  }
-                  autoComplete="off"
-                  className="h-10 min-w-[260px] rounded-2xl bg-slate-100 px-4 text-sm text-slate-600 placeholder:text-slate-400 focus:outline-none focus:bg-slate-50 focus:ring-2 focus:ring-blue-100"
-                />
-                <div className="flex items-center gap-2.5">
-                  {canManage && (
-                    <Button className="h-10 rounded-2xl px-5" onClick={handleOpenCreate}>
-                      + Создать роль
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </Card>
+          {/* ── Подвкладка: Аутсорс (партнёры + форма приглашения) ── */}
+          {outsourceTab === 'partners' && (
+            <div className="space-y-4">
+              {/* Мой ID */}
+              {activeAccountShortId != null && (() => {
+                const myAccount = accounts.find(a => a.id === activeAccountId)
+                const myLogo = myAccount ? getLogoUrl(myAccount) : null
+                const myInitial = (myAccount?.name?.charAt(0) ?? '?').toUpperCase()
+                return (
+                  <Card className="rounded-3xl p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-violet-100">
+                        {myLogo ? (
+                          <img src={myLogo} alt="logo" className="h-full w-full object-cover" />
+                        ) : (
+                          <span className="text-xl font-bold text-violet-600">{myInitial}</span>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-400">Ваш ID компании (для приглашений)</p>
+                        <p className="font-mono text-lg font-bold text-slate-800">C{activeAccountShortId}</p>
+                      </div>
+                    </div>
+                  </Card>
+                )
+              })()}
 
-            <Card className="overflow-hidden rounded-3xl">
-              {isLoading ? (
-                <div className="px-4 py-8 text-center text-sm text-slate-400">Загрузка...</div>
-              ) : filteredRoles.length === 0 ? (
-                <div className="flex flex-col items-center gap-3 px-4 py-12 text-center">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-300">
-                    <ShieldIcon />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">
-                      {roleSearch ? `Нет ролей по запросу «${roleSearch}»` : 'Нет ролей'}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-400">
-                      {roleSearch ? 'Попробуйте изменить запрос' : 'Создайте роль и настройте доступы для участников компании'}
-                    </p>
-                  </div>
-                  {canManage && !roleSearch && (
-                    <Button className="mt-1 h-10 rounded-2xl px-5" onClick={handleOpenCreate}>
-                      + Создать роль
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                filteredRoles.map((role) => (
-                  <RoleRow
-                    key={role.id}
-                    role={role}
-                    onEdit={handleOpenEdit}
-                    onDelete={setDeleteTarget}
-                    canManage={canManage}
+              {/* Форма: отправить приглашение */}
+              <Card className="rounded-3xl p-4">
+                <p className="mb-3 text-sm font-semibold text-slate-700">Пригласить компанию</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={inviteInput}
+                    onChange={(e) => { setInviteInput(e.target.value); setInviteMsg(null) }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleSendInvite() }}
+                    placeholder="ID компании (например C1234)"
+                    className="h-10 flex-1 rounded-2xl bg-slate-100 px-4 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    disabled={isSendingInvite}
                   />
-                ))
-              )}
-            </Card>
-          </>
-        )}
-
-        {/* ── ТАБ: АУТСОРС ────────────────────────────────── */}
-        {mainTab === 'outsource' && (
-          <div className="space-y-4">
-            {/* Тулбар: поиск + добавить */}
-            <Card className="rounded-3xl p-2.5">
-              <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
-                <input
-                  type="text"
-                  value={outsourceSearch}
-                  onChange={(e) => setOutsourceSearch(e.target.value)}
-                  placeholder="Поиск по компании, этапу, партии..."
-                  autoComplete="off"
-                  className="h-10 min-w-[260px] rounded-2xl bg-slate-100 px-4 text-sm text-slate-600 placeholder:text-slate-400 focus:outline-none focus:bg-slate-50 focus:ring-2 focus:ring-violet-100"
-                />
-                <div className="flex items-center gap-2.5">
-                  {activeAccountShortId != null && (
-                    <span className="flex h-10 items-center rounded-2xl bg-violet-50 px-3 font-mono text-xs font-semibold text-violet-600">
-                      C-{activeAccountShortId}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => onAddOutsource?.()}
-                    className="flex h-10 items-center gap-1.5 rounded-2xl bg-violet-500 px-5 text-sm font-medium text-white hover:bg-violet-600"
+                  <Button
+                    className="h-10 rounded-2xl px-5"
+                    onClick={() => void handleSendInvite()}
+                    disabled={isSendingInvite || !inviteInput.trim()}
                   >
-                    + Добавить аутсорс
-                  </button>
+                    {isSendingInvite ? 'Отправка...' : 'Пригласить'}
+                  </Button>
                 </div>
-              </div>
-            </Card>
+                {inviteMsg && (
+                  <p className={`mt-2 text-xs ${inviteMsg.ok ? 'text-emerald-600' : 'text-rose-500'}`}>
+                    {inviteMsg.text}
+                  </p>
+                )}
+              </Card>
 
-            {/* Суб-табы */}
-            <Card className="overflow-hidden rounded-3xl p-0">
-              <div className="flex border-b border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setOutsourceTab('partners')}
-                  className={`relative flex items-center gap-2 px-6 py-3.5 text-sm font-medium transition-colors ${
-                    outsourceTab === 'partners'
-                      ? 'border-b-2 border-violet-500 text-violet-600'
-                      : 'text-slate-400 hover:text-slate-700'
-                  }`}
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                    <circle cx="9" cy="7" r="4"/>
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                  </svg>
-                  Партнёры
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOutsourceTab('services')}
-                  className={`relative flex items-center gap-2 px-6 py-3.5 text-sm font-medium transition-colors ${
-                    outsourceTab === 'services'
-                      ? 'border-b-2 border-violet-500 text-violet-600'
-                      : 'text-slate-400 hover:text-slate-700'
-                  }`}
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <rect x="2" y="7" width="20" height="14" rx="2"/>
-                    <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-                    <line x1="12" y1="12" x2="12" y2="16"/>
-                    <line x1="10" y1="14" x2="14" y2="14"/>
-                  </svg>
-                  Мои услуги
-                  {(pendingIncomingCount + pendingPartnerCount) > 0 && (
-                    <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white">
-                      {pendingIncomingCount + pendingPartnerCount}
-                    </span>
-                  )}
-                </button>
-              </div>
-
-              {isLoadingOutsource ? (
-                <div className="px-4 py-8 text-center text-sm text-slate-400">Загрузка...</div>
+              {/* Принятые партнёры */}
+              {partnersLoading ? (
+                <div className="py-6 text-center text-sm text-slate-400">Загрузка...</div>
+              ) : partnersError ? (
+                <div className="py-4 text-center text-sm text-rose-500">{partnersError}</div>
+              ) : partners.filter((p) => p.status === 'accepted').length > 0 ? (
+                <Card className="overflow-hidden rounded-3xl">
+                  {partners
+                    .filter((p) => p.status === 'accepted')
+                    .map((p) => (
+                      <div
+                        key={p.connection_id}
+                        className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3.5 last:border-0"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {/* Аватар-логотип */}
+                          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-600 uppercase">
+                            {p.partner_name?.charAt(0) ?? '?'}
+                          </div>
+                          <span className="font-mono text-xs text-slate-400 flex-shrink-0">C{p.partner_short_id}</span>
+                          <span className="text-sm font-semibold text-slate-900 truncate">{p.partner_name}</span>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={removingId === p.connection_id}
+                          onClick={() => void handleRemovePartner(p.connection_id)}
+                          className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                        >
+                          {removingId === p.connection_id ? 'Удаление...' : 'Удалить'}
+                        </button>
+                      </div>
+                    ))}
+                </Card>
               ) : (
-                <>
-                  {/* ── ПАРТНЁРЫ ─────────────────────────────── */}
-                  {outsourceTab === 'partners' && (
+                <Card className="rounded-3xl">
+                  <div className="flex flex-col items-center gap-3 px-4 py-12 text-center">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-300">
+                      <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                        <circle cx="9" cy="7" r="4" />
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                      </svg>
+                    </div>
                     <div>
-                      {/* Принятые партнёры (ты пригласил) */}
-                      {filteredPartners.filter((p) => p.status === 'accepted' && p.is_requester).length > 0 && (
-                        <div>
-                          <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                            Подключены
-                          </p>
-                          {filteredPartners
-                            .filter((p) => p.status === 'accepted' && p.is_requester)
-                            .map((p) => (
-                              <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 font-mono text-xs font-bold text-emerald-600">
-                                    C-{p.partner_short_id}
-                                  </div>
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-semibold text-slate-800 truncate">{p.partner_name}</p>
-                                    <p className="text-xs text-slate-400">Аутсорс-партнёр</p>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setRemoveConfirmTarget(p.connection_id)}
-                                  disabled={respondingId === p.connection_id}
-                                  className="shrink-0 rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50 transition-colors"
-                                >
-                                  Удалить
-                                </button>
-                              </div>
-                            ))}
-                        </div>
-                      )}
+                      <p className="text-sm font-medium text-slate-700">Партнёров пока нет</p>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        Пригласите компанию-партнёра по её ID
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+              )}
+            </div>
+          )}
 
-                      {/* Отправленные запросы (ожидают ответа) */}
-                      {filteredPartners.filter((p) => p.status === 'pending' && p.is_requester).length > 0 && (
-                        <div>
-                          <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                            Отправленные запросы
+          {/* ── Подвкладка: Мои услуги ── */}
+          {outsourceTab === 'services' && (
+            <div>
+              {servicesLoading ? (
+                <div className="py-6 text-center text-sm text-slate-400">Загрузка...</div>
+              ) : myServices.length === 0 ? (
+                <Card className="rounded-3xl">
+                  <div className="flex flex-col items-center gap-3 px-4 py-12 text-center">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-300">
+                      <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                        <line x1="8" y1="21" x2="16" y2="21" />
+                        <line x1="12" y1="17" x2="12" y2="21" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">Нет активных услуг</p>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        Здесь будут отображаться партии, в которых вы выполняете этап
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+              ) : (
+                <Card className="overflow-hidden rounded-3xl">
+                  {myServices.map((svc) => (
+                    <div
+                      key={svc.my_stage_id}
+                      className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-3.5 last:border-0"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-sm font-semibold text-slate-900">
+                            {svc.batch_name}
                           </p>
-                          {filteredPartners
-                            .filter((p) => p.status === 'pending' && p.is_requester)
-                            .map((p) => (
-                              <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0 opacity-80">
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 font-mono text-xs font-bold text-amber-600">
-                                    C-{p.partner_short_id}
-                                  </div>
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-semibold text-slate-800 truncate">{p.partner_name}</p>
-                                    <p className="text-xs text-slate-400">Ожидает ответа</p>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setRemoveConfirmTarget(p.connection_id)}
-                                  disabled={respondingId === p.connection_id}
-                                  className="shrink-0 rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-rose-50 hover:text-rose-500 disabled:opacity-50 transition-colors"
-                                >
-                                  Отменить
-                                </button>
-                              </div>
-                            ))}
+                          <span className="font-mono text-[10px] text-slate-400">
+                            #{svc.batch_short_id}
+                          </span>
                         </div>
-                      )}
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {svc.owner_name}
+                          {svc.owner_short_id != null && (
+                            <span className="ml-1 font-mono text-slate-400">C{svc.owner_short_id}</span>
+                          )}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Этап: <span className="font-medium">{svc.my_stage_name}</span>
+                        </p>
+                      </div>
+                      <span
+                        className={`mt-0.5 flex-shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                          svc.my_stage_status === 'done'
+                            ? 'bg-emerald-50 text-emerald-600'
+                            : svc.my_stage_status === 'active'
+                            ? 'bg-blue-50 text-blue-600'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {svc.my_stage_status === 'done'
+                          ? 'Выполнено'
+                          : svc.my_stage_status === 'active'
+                          ? 'В работе'
+                          : 'Ожидает'}
+                      </span>
+                    </div>
+                  ))}
+                </Card>
+              )}
+            </div>
+          )}
 
-                      {/* Отклонённые (только исходящие) */}
-                      {filteredPartners.filter((p) => p.status === 'declined' && p.is_requester).length > 0 && (
-                        <div>
-                          <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                            Отклонены
-                          </p>
-                          {filteredPartners
-                            .filter((p) => p.status === 'declined' && p.is_requester)
-                            .map((p) => (
-                              <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0 opacity-50">
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 font-mono text-xs font-bold text-slate-400">
-                                    C-{p.partner_short_id}
-                                  </div>
-                                  <div className="min-w-0">
-                                    <p className="text-sm text-slate-600 truncate">{p.partner_name}</p>
-                                    <p className="text-xs text-slate-400">
-                                      {p.is_requester ? 'Запрос отклонён' : 'Вы отклонили запрос'}
-                                    </p>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setRemoveConfirmTarget(p.connection_id)}
-                                  disabled={respondingId === p.connection_id}
-                                  className="shrink-0 rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-slate-100 disabled:opacity-50 transition-colors"
-                                >
-                                  Убрать
-                                </button>
-                              </div>
-                            ))}
-                        </div>
-                      )}
+          {/* ── Подвкладка: Приглашения ── */}
+          {outsourceTab === 'invites' && (
+            <div className="space-y-4">
+              {/* Суб-табы */}
+              <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 w-fit">
+                {([
+                  { key: 'incoming', label: 'Приглашён' },
+                  { key: 'outgoing', label: 'Пригласили' },
+                ] as const).map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => handleSetInvitesSubTab(tab.key)}
+                    className={`rounded-xl px-4 py-1.5 text-sm font-medium transition ${
+                      invitesSubTab === tab.key
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
 
-                      {/* Пустое состояние */}
-                      {filteredPartners.filter((p) => p.is_requester).length === 0 && (
-                        <div className="flex flex-col items-center gap-3 py-12 text-center">
-                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-50 text-violet-300">
-                            <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.5">
-                              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                              <circle cx="9" cy="7" r="4"/>
-                              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                            </svg>
+              {partnersLoading ? (
+                <div className="py-6 text-center text-sm text-slate-400">Загрузка...</div>
+              ) : partnersError ? (
+                <div className="py-4 text-center text-sm text-rose-500">{partnersError}</div>
+              ) : invitesSubTab === 'incoming' ? (
+                /* Входящие (Приглашён) */
+                partners.filter((p) => !p.is_requester && p.status === 'pending').length > 0 ? (
+                  <Card className="overflow-hidden rounded-3xl">
+                    {partners
+                      .filter((p) => !p.is_requester && p.status === 'pending')
+                      .map((p) => (
+                        <div
+                          key={p.connection_id}
+                          className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3.5 last:border-0"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-600 uppercase">
+                              {p.partner_name?.charAt(0) ?? '?'}
+                            </div>
+                            <span className="font-mono text-xs text-slate-400 flex-shrink-0">C{p.partner_short_id}</span>
+                            <span className="text-sm font-semibold text-slate-900 truncate">{p.partner_name}</span>
                           </div>
-                          <div>
-                            <p className="text-sm font-medium text-slate-700">
-                              {outsourceSearch ? `Нет партнёров по запросу «${outsourceSearch}»` : 'Нет аутсорс-партнёров'}
-                            </p>
-                            <p className="mt-0.5 text-xs text-slate-400">
-                              {outsourceSearch
-                                ? 'Попробуйте изменить запрос'
-                                : 'Нажмите «+ Добавить партнёра» чтобы подключить аутсорс-компанию по C-ID'}
-                            </p>
-                          </div>
-                          {!outsourceSearch && (
+                          <div className="flex gap-2">
                             <button
                               type="button"
-                              onClick={() => onAddOutsource?.()}
-                              className="mt-1 flex items-center gap-1.5 rounded-2xl bg-violet-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-violet-600"
+                              disabled={respondingId === p.connection_id}
+                              onClick={() => void handleRespond(p.connection_id, true)}
+                              className="rounded-xl bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-600 transition hover:bg-emerald-100 disabled:opacity-50"
                             >
-                              + Добавить партнёра
+                              Принять
                             </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* ── МОИ УСЛУГИ ──────────────────────────── */}
-                  {outsourceTab === 'services' && (
-                    <div>
-                      {filteredIncoming.length === 0 && filteredBatches.length === 0 && filteredPartners.filter((p) => !p.is_requester).length === 0 ? (
-                        <div className="flex flex-col items-center gap-3 py-12 text-center">
-                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-300">
-                            <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.5">
-                              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                            </svg>
+                            <button
+                              type="button"
+                              disabled={respondingId === p.connection_id}
+                              onClick={() => void handleRespond(p.connection_id, false)}
+                              className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                            >
+                              Отклонить
+                            </button>
                           </div>
-                          <p className="text-sm text-slate-500">
-                            {outsourceSearch ? `Нет результатов по запросу «${outsourceSearch}»` : 'Нет входящих приглашений'}
-                          </p>
-                          {!outsourceSearch && (
-                            <p className="text-xs text-slate-400">
-                              Когда другие компании пригласят вас на этап партии — они появятся здесь
-                            </p>
-                          )}
                         </div>
-                      ) : (
-                        <>
-                          {/* Входящие запросы на партнёрство */}
-                          {filteredPartners.filter((p) => p.status === 'pending' && !p.is_requester).length > 0 && (
-                            <div>
-                              <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                Запросы на партнёрство
-                              </p>
-                              {filteredPartners
-                                .filter((p) => p.status === 'pending' && !p.is_requester)
-                                .map((p) => (
-                                  <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
-                                    <div className="flex items-center gap-3 min-w-0">
-                                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 font-mono text-xs font-bold text-violet-600">
-                                        C-{p.partner_short_id}
-                                      </div>
-                                      <div className="min-w-0">
-                                        <p className="text-sm font-semibold text-slate-800 truncate">{p.partner_name}</p>
-                                        <p className="text-xs text-slate-400">Хочет добавить вас как партнёра</p>
-                                      </div>
-                                    </div>
-                                    <div className="flex shrink-0 items-center gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleRespondPartner(p.connection_id, true)}
-                                        disabled={respondingId === p.connection_id}
-                                        className="rounded-xl bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 disabled:opacity-50"
-                                      >
-                                        Принять
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleRespondPartner(p.connection_id, false)}
-                                        disabled={respondingId === p.connection_id}
-                                        className="rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-50"
-                                      >
-                                        Отклонить
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
+                      ))}
+                  </Card>
+                ) : (
+                  <Card className="rounded-3xl px-4 py-4 text-sm text-slate-400">
+                    Нет входящих приглашений
+                  </Card>
+                )
+              ) : (
+                /* Исходящие (Пригласили) */
+                partners.filter((p) => p.is_requester && p.status !== 'accepted').length > 0 ? (
+                  <Card className="overflow-hidden rounded-3xl">
+                    {partners
+                      .filter((p) => p.is_requester && p.status !== 'accepted')
+                      .map((p) => (
+                        <div
+                          key={p.connection_id}
+                          className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3.5 last:border-0"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-600 uppercase">
+                              {p.partner_name?.charAt(0) ?? '?'}
                             </div>
-                          )}
-
-                          {/* Подключены как исполнитель */}
-                          {filteredPartners.filter((p) => p.status === 'accepted' && !p.is_requester).length > 0 && (
-                            <div>
-                              <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                Подключены как партнёр
-                              </p>
-                              {filteredPartners
-                                .filter((p) => p.status === 'accepted' && !p.is_requester)
-                                .map((p) => (
-                                  <div key={p.connection_id} className="flex items-center justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
-                                    <div className="flex items-center gap-3 min-w-0">
-                                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 font-mono text-xs font-bold text-emerald-600">
-                                        C-{p.partner_short_id}
-                                      </div>
-                                      <div className="min-w-0">
-                                        <p className="text-sm font-semibold text-slate-800 truncate">{p.partner_name}</p>
-                                        <p className="text-xs text-slate-400">Вы — аутсорс-исполнитель</p>
-                                      </div>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => { setDisconnectTarget(p.connection_id) }}
-                                      className="shrink-0 rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition-colors"
-                                    >
-                                      Отключиться
-                                    </button>
-                                  </div>
-                                ))}
-                            </div>
-                          )}
-
-                          {/* Ожидающие приглашения на этап */}
-                          {filteredIncoming.filter((i) => i.status === 'pending').length > 0 && (
-                            <div>
-                              <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                Ожидают ответа
-                              </p>
-                              {filteredIncoming
-                                .filter((i) => i.status === 'pending')
-                                .map((invite) => (
-                                  <div key={invite.invite_id} className="flex items-start justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-mono text-xs font-semibold text-violet-600">
-                                          C-{invite.inviting_company_short_id}
-                                        </span>
-                                        <span className="text-sm font-medium text-slate-800">{invite.inviting_company_name}</span>
-                                      </div>
-                                      <p className="mt-0.5 text-xs text-slate-500">
-                                        Партия <span className="font-mono font-semibold">P-{invite.batch_short_id}</span>{' '}
-                                        {invite.batch_name} · Этап: <strong>{invite.stage_name}</strong>
-                                      </p>
-                                      <p className="mt-0.5 text-[10px] text-slate-400">
-                                        {new Date(invite.created_at).toLocaleString('ru-RU')}
-                                      </p>
-                                    </div>
-                                    <div className="flex shrink-0 items-center gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleRespondInvite(invite.invite_id, true)}
-                                        disabled={respondingId === invite.invite_id}
-                                        className="rounded-xl bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-                                      >
-                                        Принять
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleRespondInvite(invite.invite_id, false)}
-                                        disabled={respondingId === invite.invite_id}
-                                        className="rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-50"
-                                      >
-                                        Отклонить
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                            </div>
-                          )}
-
-                          {/* Принятые партии */}
-                          {filteredBatches.length > 0 && (
-                            <div>
-                              <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                Активные партии
-                              </p>
-                              {filteredBatches.map((b) => (
-                                <div key={b.stage_id} className="flex items-start justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0">
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-mono text-xs font-semibold text-violet-600">
-                                        C-{b.owner_company_short_id}
-                                      </span>
-                                      <span className="text-sm font-medium text-slate-800">{b.owner_company_name}</span>
-                                    </div>
-                                    <p className="mt-0.5 text-xs text-slate-500">
-                                      Партия <span className="font-mono font-semibold">P-{b.batch_short_id}</span>{' '}
-                                      {b.batch_name} · Этап: <strong>{b.stage_name}</strong>
-                                    </p>
-                                  </div>
-                                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
-                                    b.stage_status === 'done' ? 'bg-emerald-50 text-emerald-700' :
-                                    b.stage_status === 'in_progress' ? 'bg-amber-50 text-amber-700' :
-                                    'bg-blue-50 text-blue-600'
-                                  }`}>
-                                    {b.stage_status === 'done' ? 'Выполнено' :
-                                     b.stage_status === 'in_progress' ? 'В работе' : 'Принято'}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* История приглашений */}
-                          {filteredIncoming.filter((i) => i.status !== 'pending').length > 0 && (
-                            <div>
-                              <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                История
-                              </p>
-                              {filteredIncoming
-                                .filter((i) => i.status !== 'pending')
-                                .map((invite) => (
-                                  <div key={invite.invite_id} className="flex items-start justify-between gap-4 border-b border-slate-50 px-4 py-3.5 last:border-0 opacity-60">
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-mono text-xs text-violet-500">C-{invite.inviting_company_short_id}</span>
-                                        <span className="text-sm text-slate-600">{invite.inviting_company_name}</span>
-                                      </div>
-                                      <p className="mt-0.5 text-xs text-slate-400">
-                                        P-{invite.batch_short_id} · {invite.stage_name}
-                                      </p>
-                                    </div>
-                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${INVITE_STATUS_COLORS[invite.status] ?? ''}`}>
-                                      {INVITE_STATUS_LABELS[invite.status] ?? invite.status}
-                                    </span>
-                                  </div>
-                                ))}
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </>
+                            <span className="font-mono text-xs text-slate-400 flex-shrink-0">C{p.partner_short_id}</span>
+                            <span className="text-sm font-semibold text-slate-900 truncate">{p.partner_name}</span>
+                          </div>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                              p.status === 'pending'
+                                ? 'bg-amber-50 text-amber-600'
+                                : 'bg-rose-50 text-rose-600'
+                            }`}
+                          >
+                            {p.status === 'pending' ? 'Ожидает ответа' : 'Отклонено'}
+                          </span>
+                        </div>
+                      ))}
+                  </Card>
+                ) : (
+                  <Card className="rounded-3xl px-4 py-4 text-sm text-slate-400">
+                    Нет отправленных приглашений
+                  </Card>
+                )
               )}
-            </Card>
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <RoleFormModal
         open={modalOpen}
@@ -930,62 +771,6 @@ export const RolesPage = ({
         onClose={() => { if (!isDeleting) { setDeleteTarget(null); setDeleteError(null) } }}
         onConfirm={() => void handleConfirmDelete()}
       />
-
-      {/* Подтверждение удаления партнёра (is_requester, без пароля) */}
-      {removeConfirmTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
-            <h2 className="text-base font-semibold text-slate-800">Подтвердите действие</h2>
-            <p className="mt-1 text-sm text-slate-500">Партнёр будет удалён из вашего списка. Вы уверены?</p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setRemoveConfirmTarget(null)}
-                className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={() => { void handleRemovePartner(removeConfirmTarget); setRemoveConfirmTarget(null) }}
-                className="rounded-2xl bg-rose-500 px-4 py-2 text-sm font-medium text-white hover:bg-rose-600"
-              >
-                Удалить
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Модальное окно подтверждения отключения */}
-      {disconnectTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
-            <h2 className="text-base font-semibold text-slate-800">Подтвердите отключение</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Вы уверены, что хотите отключиться от этого партнёра?
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setDisconnectTarget(null)}
-                disabled={disconnectLoading}
-                className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 disabled:opacity-50"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleDisconnectConfirm()}
-                disabled={disconnectLoading}
-                className="rounded-2xl bg-rose-500 px-4 py-2 text-sm font-medium text-white hover:bg-rose-600 disabled:opacity-50"
-              >
-                {disconnectLoading ? 'Отключение...' : 'Отключиться'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   )
 }

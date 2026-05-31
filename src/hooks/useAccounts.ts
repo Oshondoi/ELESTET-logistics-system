@@ -81,9 +81,15 @@ export const useAccounts = (enabled: boolean) => {
     setArchivedAccounts(archived)
   }
 
-  const updateAccount = async (accountId: string, name: string) => {
-    const updated = await updateAccountInSupabase(accountId, name)
-    setAccounts((current) => current.map((a) => (a.id === accountId ? updated : a)))
+  const updateAccount = async (accountId: string, name: string, logoUrl?: string | null) => {
+    const updated = await updateAccountInSupabase(accountId, name, logoUrl)
+    setAccounts((current) =>
+      current.map((a) => {
+        if (a.id !== accountId) return a
+        // my_role не возвращается из прямого .update().select() — берём из существующего объекта
+        return { ...updated, my_role: a.my_role }
+      }),
+    )
     return updated
   }
 

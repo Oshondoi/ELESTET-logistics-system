@@ -3,6 +3,129 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен.
 
+## Что сделано за сессию 29.05.2026 — FulfillmentPage: единая таблица + пайплайн у исполнителя
+
+### Слияние «Мои» и «Аутсорс» партий в единую таблицу на табе «Все» (commit ca88575)
+- Таб **«Все»**: одна таблица вместо двух, свои и партнёрские вперемешку, сортировка по `created_at` desc
+- IIFE: `const allItems = [...filteredBatches.map(b=>({batch:b, isPartner:false})), ...filteredPartnerBatches.map(b=>({batch:b, isPartner:true}))].sort(...)`
+- `isBatchPartner === true` → логика партнёрской строки; `false` → логика собственной
+- Таб **«Мои»** (`filterOwner !== 'all'`): только свои партии (без изменений)
+
+### Пайплайн-стадии у исполнителя (commit 8fa3505)
+- **Проблема:** исполнитель не видел верхний ряд pipeline-pills в колонке Этап (видел только нижний ряд sub-stage dots)
+- **Причина:** `batchPipelineMap` содержит стадии только СВОИХ партий; batch_id партнёрских партий в него не попадают
+- **Решение:** `partnerBatchPipelineMap = useMemo(...)` — строится из `partnerBatches[]` (уже загруженных), содержащих `my_stage_id/name/status/order`
+- Оба места (Аутсорс-таб + merged «Все») обновлены — теперь `partnerPipelineStgs` используется для верхнего ряда
+- TypeScript: 0 ошибок
+
+### Подтверждена межсессионная персистентность настроек фулфилмента
+- `fulfillment_settings` → Supabase, привязка к `account_id`, `upsert onConflict: 'account_id'`
+- Любой сотрудник под любой компанией с любого устройства получает одни настройки
+
+---
+
+## Что сделано за сессию 28.05.2026 (часть 2) — FulfillmentPage: access control + partner batch UI
+
+### Баг-фикс: владелец мог завершить стадию за партнёра
+- **Корень:** `canCompletePipelineStage` использовал `owner_account_id === accountId || partner_account_id === accountId` — когда назначен партнёр, владелец всё равно видел «Завершить стадию»
+- **Фикс:** если `partner_account_id` задан → только партнёр; иначе → только владелец
+
+### Баг-фикс: race condition — данные открывались без прав до загрузки pipeline
+- **Корень:** `pipelineStgs = []` изначально → `activePipelineStage = null` → `stagePartnerLocked = false` → `canManageStageData = true` на первый рендер до async fetch
+- **Фикс:** `isPipelineLoading = true` (инициально) + `setIsPipelineLoading(false)` в `.finally()`. Все access-контролы (`canManageStageData`, `canCompletePipelineStage`, `stagePartnerLocked`) проверяют `!isPipelineLoading`
+
+### Дефолтный таб — «Все»
+- `useState<'mine'|'outsource'|'all'>('all')` вместо `('mine')`
+
+### Таблица партнёрских партий — redesign до уровня таблицы владельца
+- Оба вхождения (таб «Аутсорс» и секция таба «Все») переписаны с 5 → 9 колонок
+- Структура: checkbox (disabled) / ID (C-{owner}/P-{batch}) / Партия+владелец / Магазин «—» / Этап (pipeline pill + sub-dots) / Статус / Создана / chevron
+- Header: `bg-slate-50` (идентично таблице владельца)
+- TypeScript: 0 ошибок
+
+---
+
+## Что сделано за сессию 28.05.2026 — Аутсорс B2B v2: кросс-компанийный пайплайн
+
+### Система аутсорса — полный цикл (RolesPage + FulfillmentPage)
+
+**Концепция:** Компания A создаёт пайплайн для партии → назначает компанию B (из принятых партнёров) исполнителем этапа → компания B видит эту партию в своей секции «Партии на аутсорс» → открывает только свой этап (read-only на чужой контент).
+
+#### SQL-патч `supabase/patch_outsource_b2b_v2.sql` ⚠️ (применить в Supabase Dashboard)
+- `get_executor_options(p_account_id)` — обновлён: возвращает только принятые партнёры (`status='accepted'`)
+- `_is_batch_partner(p_batch_id)` — helper-функция для RLS (true если auth.uid() — участник партии)
+- RLS `*_partner_all` FOR ALL на: `fulfillment_items`, `fulfillment_otk_logs`, `fulfillment_marking_logs`, `fulfillment_packaging_logs`
+- `fulfillment_packing_logs` и `fulfillment_stage_logs` — в `DO $$ IF EXISTS` блоках (таблицы могут не существовать)
+
+#### `src/services/fulfillmentService.ts`
+- `fetchPartnerBatchesFull(batchIds)` — загружает полные батчи (с qty-суммами) по списку ID через `.in('id', batchIds)`; работает через RLS `fulfillment_batches_pipeline_partner_select`
+
+#### `src/pages/RolesPage.tsx` — 3 суб-вкладки в табе «Аутсорс»
+- **«Аутсорс»** (`outsourceTab === 'partners'`): ID компании + форма приглашения + список принятых партнёров (только C{id}, без названия — конфиденциальность)
+- **«Мои услуги»** (`outsourceTab === 'services'`): `PartnerBatchInfo[]` — партии где текущая компания исполнитель (название батча, владелец, этап, статус)
+- **«Приглашения»** (`outsourceTab === 'invites'`): секция «Приглашён» (входящие pending — название+ID, Accept/Decline) + секция «Пригласили» (исходящие — только ID + статус-бейдж)
+
+#### `src/pages/FulfillmentPage.tsx` — секция «Партии на аутсорс»
+- Новый стейт `partnerBatchesFull: FulfillmentBatch[]` — отдельно от основного списка
+- В `load()`: после загрузки `partnerBatches` (ID-шники) → `fetchPartnerBatchesFull(batchIds)` → `setPartnerBatchesFull`
+- Таблица «Партии на аутсорс»: имя партии + бейдж «Аутсорс», владелец (C{short_id}), статус, мой этап + его статус
+- Клик → `handleOpenDetail(pb.id)` → открывает BatchDetailModal
+
+#### `BatchDetailModal` — ограничение для партнёра
+- `isPartnerBatch?: boolean` добавлен в `DetailModalProps`
+- Если `isPartnerBatch=true` → `canManage = false` независимо от исходного `canManage`
+- JSX-вызов: `isPartnerBatch={detailData.account_id !== accountId}`
+
+#### `src/App.tsx`
+- `activeAccountShortId={activeAccount?.short_id ?? null}` передаётся в `<RolesPage>`
+
+### Парсинг ID компании в форме приглашения (UX-фикс)
+
+**Было:** `.replace(/^C/, '')` + `parseInt` — не работало с кириллической С, дефисами, пробелами.
+
+**Стало:** `inviteInput.replace(/\D/g, '')` — берём только цифры. Принимает любой формат:
+- `С-45`, `C45`, `с 45`, `С - 14`, `c14` — всё работает
+- Обе буквы: кириллическая С + латинская C, любой регистр
+
+**Конфиденциальность в UI:**
+- Принятые партнёры в «Аутсорс» → только `C{id}`
+- Исходящие приглашения в «Пригласили» → только `C{id}`
+- Входящие приглашения в «Приглашён» → полные данные (название + ID): компания сама инициировала контакт
+
+---
+
+## Что сделано за сессию 27.05.2026 — FulfillmentPage: Pipeline система в батч-листе
+
+### Pipeline pills (Variant A) в колонке ЭТАП
+- Над step dots показываются pills стадий пайплайна (dot + название)
+- Цвета: `bg-emerald-500` (done) / `bg-violet-500` (active) / `bg-slate-200` (pending)
+- Коннекторные линии: emerald для прошедших, slate для будущих
+- `batchPipelineMap: Map<string, BatchPipelineStage[]>` стейт добавлен в FulfillmentPage
+- Загрузка: в `load()` — `fetchAllBatchPipelineStages(allBatchIds)` одним запросом
+
+### Step dots = флаги АКТИВНОЙ стадии пайплайна
+- `visibleStages` / `visibleCurrentIdx` вместо `stages` / `currentIdx` при рендере dots
+- Когда активна pipeline-стадия → используем её `stage_otk, stage_packaging, stage_marking, stage_packing, stage_logistics`
+- Цех (все шаги off) → только «Приём»; Фулфилмент (все on) → полная цепочка
+
+### handleCreate + batchPipelineMap
+- После `initBatchPipeline` → `fetchAllBatchPipelineStages([batch.id])` → обновить Map оптимистично
+- Pills появляются в списке сразу после создания батча с pipeline
+
+### CreateBatchModal — batch flags = union pipeline stages
+- `accountPipelineStages` передаётся из FulfillmentPage
+- При `use_pipeline=true`: `stage_otk = pipelineStages.some(s => s.stage_otk)` (union всех стадий)
+- Нужно для `getEnabledStages(b)` до загрузки `batchPipelineMap`
+
+### Исполнитель в настройках пайплайна
+- Option показывает только `p.partner_name` (убран `#p.partner_short_id`)
+
+### fetchAllBatchPipelineStages
+- Добавлена в `src/services/pipelineService.ts`
+- `.in('batch_id', batchIds)` + `.order('order_index')` — один запрос для всех партий
+
+---
+
 ## Что сделано за сессию 26.05.2026 — InvoicesPage: реструктуризация секции Логистика
 
 ### Баг-фиксы

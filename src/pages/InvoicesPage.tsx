@@ -651,13 +651,7 @@ const InvoiceModal = ({ batch, store, invoiceUrl, onClose }: InvoiceModalProps) 
                               </div>
                             )
                           })}
-                          {/* Метаданные рейса */}
-                          {group.trip && (
-                            <div className="mt-3 border-t border-slate-100 pt-2">
-                              <InfoRow label="Дата отправки" value={formatDate(group.trip.departure_date)} />
-                              <InfoRow label="Дата прибытия" value={formatDate(group.trip.arrived_at)} />
-                            </div>
-                          )}
+
                         </div>
                       ))
                     })()}

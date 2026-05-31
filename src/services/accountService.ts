@@ -47,14 +47,22 @@ export const deleteAccountWithOwnerInSupabase = async (accountId: string) => {
   return Boolean(data)
 }
 
-export const updateAccountInSupabase = async (accountId: string, name: string) => {
+export const updateAccountInSupabase = async (
+  accountId: string,
+  name: string,
+  logoUrl?: string | null,
+) => {
   if (!supabase) {
     throw new Error('Supabase client is not configured')
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const payload: any = { name: name.trim() }
+  if (logoUrl !== undefined) payload.logo_url = logoUrl
+
   const { data, error } = await supabase
     .from('accounts')
-    .update({ name: name.trim() })
+    .update(payload)
     .eq('id', accountId)
     .select()
     .single()
