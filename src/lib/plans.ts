@@ -6,11 +6,11 @@
 export type PlanKey = 'none' | 'seller' | 'operational' | 'trial'
 
 export interface AccountBillingInfo {
-  plan: PlanKey
+  plan?: string | null
   plan_until?: string | null
   trial_ends_at?: string | null
   grace_until?: string | null
-  plan_features?: Record<string, unknown>
+  plan_features?: Record<string, unknown> | null
 }
 
 // ── Статус аккаунта ──────────────────────────────────────────
