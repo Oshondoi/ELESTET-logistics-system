@@ -271,6 +271,7 @@ const pageTitles: Record<PageKey, string> = {
   diary: 'Дневник ELESTET',
   finance_report: 'Фин-отчет',
   subscription: 'Подписка',
+  payment_result: 'Результат оплаты',
 }
 
 function App() {
