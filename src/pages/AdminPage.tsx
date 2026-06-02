@@ -187,11 +187,11 @@ export const AdminPage = ({
 }) => {
   const canEdit = platformRole === 'admin' || platformRole === 'superadmin'
   const isSuperAdmin = platformRole === 'superadmin'
-  const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'access' | 'team'>(
-    () => (sessionStorage.getItem(ADMIN_TAB_KEY) as 'users' | 'subscriptions' | 'access' | 'team' | null) ?? 'users'
+  const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'access' | 'team' | 'payment'>(
+    () => (sessionStorage.getItem(ADMIN_TAB_KEY) as 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | null) ?? 'users'
   )
 
-  const handleSetTab = (tab: 'users' | 'subscriptions' | 'access' | 'team') => {
+  const handleSetTab = (tab: 'users' | 'subscriptions' | 'access' | 'team' | 'payment') => {
     sessionStorage.setItem(ADMIN_TAB_KEY, tab)
     setActiveTab(tab)
   }
@@ -352,7 +352,120 @@ export const AdminPage = ({
     { key: 'subscriptions' as const, label: 'Подписки' },
     { key: 'access' as const, label: 'Доступ' },
     ...(canEdit ? [{ key: 'team' as const, label: 'Команда' }] : []),
+    ...(isSuperAdmin ? [{ key: 'payment' as const, label: 'Интеграция оплаты' }] : []),
   ]
+
+  const downloadPaymentDoc = () => {
+    const html = `
+<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<title>Интеграция онлайн-оплаты MBusiness — ELESTET</title>
+<style>
+  body { font-family: Arial, sans-serif; font-size: 12pt; margin: 2cm; }
+  h1 { font-size: 16pt; font-weight: bold; }
+  h2 { font-size: 13pt; font-weight: bold; margin-top: 18pt; }
+  h3 { font-size: 12pt; font-weight: bold; margin-top: 12pt; }
+  table { border-collapse: collapse; width: 100%; margin: 8pt 0; }
+  th, td { border: 1px solid #999; padding: 6px 10px; font-size: 11pt; }
+  th { background: #f0f0f0; font-weight: bold; }
+  code { font-family: Courier New, monospace; background: #f5f5f5; padding: 1px 4px; }
+  .label { color: #555; font-size: 10pt; }
+  .note { background: #fff8e1; border-left: 4px solid #f9a825; padding: 8px 12px; margin: 8pt 0; }
+</style>
+</head>
+<body>
+<h1>Техническое задание: Интеграция онлайн-оплаты MBusiness</h1>
+<p class="label">Платформа: ELESTET &nbsp;|&nbsp; Дата: ${new Date().toLocaleDateString('ru-RU')} &nbsp;|&nbsp; Версия: 1.0</p>
+
+<h2>1. Назначение</h2>
+<p>Настоящее ТЗ описывает требования к интеграции платёжного шлюза MBusiness
+с платформой ELESTET для приёма онлайн-платежей по подписке.</p>
+
+<h2>2. Системные данные ELESTET</h2>
+<table>
+  <tr><th>Параметр</th><th>Значение</th></tr>
+  <tr><td>Webhook URL (POST)</td><td><code>https://jzucxqakvgzpgtvagsnq.supabase.co/functions/v1/payment-webhook</code></td></tr>
+  <tr><td>URL возврата после оплаты</td><td><code>https://elestet.net/payment/result?order_id={ORDER_ID}</code></td></tr>
+  <tr><td>URL отмены / ошибки</td><td><code>https://elestet.net/payment/result?order_id={ORDER_ID}</code></td></tr>
+  <tr><td>Валюта</td><td>KGS (кыргызский сом)</td></tr>
+</table>
+<p class="note"><b>Важно:</b> <code>{ORDER_ID}</code> — UUID заказа, который мы передаём в запросе создания платежа. Его нужно подставить в redirect URL.</p>
+
+<h2>3. Создание платежа (ELESTET → MBusiness)</h2>
+<p>Когда пользователь нажимает «Оплатить», наш сервер отправляет запрос к вашему API:</p>
+<h3>3.1 Поля запроса</h3>
+<table>
+  <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
+  <tr><td>amount</td><td>integer</td><td>Сумма в тиынах (сом × 100). Пример: 2000 сом = 200000</td></tr>
+  <tr><td>currency</td><td>string</td><td>«KGS»</td></tr>
+  <tr><td>order_id</td><td>string (UUID)</td><td>Уникальный ID заказа ELESTET</td></tr>
+  <tr><td>description</td><td>string</td><td>Пример: «Тариф Селлер на 3 мес.»</td></tr>
+  <tr><td>return_url</td><td>string</td><td>URL для редиректа после оплаты</td></tr>
+</table>
+<h3>3.2 Ожидаемый ответ</h3>
+<table>
+  <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
+  <tr><td>payment_url</td><td>string</td><td>URL страницы оплаты, на который редиректим пользователя</td></tr>
+  <tr><td>provider_order_id</td><td>string</td><td>ID заказа на вашей стороне (для сверки)</td></tr>
+</table>
+
+<h2>4. Webhook уведомление (MBusiness → ELESTET)</h2>
+<p>После завершения оплаты (успешной или нет) ваш сервер должен отправить POST-запрос на наш webhook URL.</p>
+<h3>4.1 Поля тела запроса (JSON)</h3>
+<table>
+  <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
+  <tr><td>order_id</td><td>string (UUID)</td><td>ID заказа ELESTET (тот, что мы передали)</td></tr>
+  <tr><td>status</td><td>string</td><td>«paid» — успешно, «failed» — неуспешно</td></tr>
+  <tr><td>provider_order_id</td><td>string</td><td>ID заказа на стороне MBusiness</td></tr>
+  <tr><td>transaction_id</td><td>string</td><td>ID транзакции банка / MBusiness</td></tr>
+  <tr><td>amount</td><td>integer</td><td>Фактически оплаченная сумма в тиынах</td></tr>
+</table>
+<h3>4.2 Подпись (безопасность)</h3>
+<p>Для верификации подлинности webhook мы принимаем HMAC-SHA256 подпись тела запроса.
+Подпись должна быть передана в заголовке:</p>
+<p><code>X-MBusiness-Signature: sha256={HMAC_HEX}</code></p>
+<p>Секретный ключ для подписи согласовывается отдельно при настройке интеграции.</p>
+<h3>4.3 Требования к webhook</h3>
+<ul>
+  <li>Ожидаем HTTP 200 OK в ответ. При других кодах — повторная отправка.</li>
+  <li>Таймаут ожидания ответа: не менее 30 секунд.</li>
+  <li>Повторные попытки при недоступности: не менее 3 раз с интервалом 5 мин.</li>
+</ul>
+
+<h2>5. Тарифы и суммы</h2>
+<table>
+  <tr><th>Тариф</th><th>Цена за 1 мес.</th></tr>
+  <tr><td>Селлер</td><td>2 000 сом</td></tr>
+  <tr><td>Операционный</td><td>17 000 сом</td></tr>
+</table>
+<p>Возможные периоды: 1, 2, 3, 6, 12 месяцев. Скидки — по согласованию.</p>
+
+<h2>6. Тестовый режим</h2>
+<p>Просьба предоставить:</p>
+<ul>
+  <li>Тестовые API-ключи (sandbox)</li>
+  <li>Тестовые карточные данные для проверки успешной и неуспешной оплаты</li>
+  <li>Адрес тестового API endpoint</li>
+</ul>
+
+<h2>7. Контактное лицо со стороны ELESTET</h2>
+<p>По техническим вопросам: <b>Telegram @elestet</b></p>
+</body>
+</html>`
+    const blob = new Blob(['\uFEFF', html], { type: 'application/msword' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'MBusiness_Integration_TZ.doc'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="space-y-4">
@@ -1000,6 +1113,7 @@ export const AdminPage = ({
           {isSuperAdmin && (
             <Card className="rounded-3xl p-5">
               <p className="mb-4 text-sm font-semibold text-slate-700">Добавить сотрудника</p>
+
               <div className="flex flex-wrap items-end gap-3">
                 <div>
                   <label className="mb-1 block text-xs text-slate-500">ID пользователя</label>
@@ -1057,6 +1171,83 @@ export const AdminPage = ({
               </p>
             </Card>
           )}
+        </div>
+      )}
+
+      {/* ═══ TAB: Интеграция оплаты ══════════════════════════════════ */}
+      {activeTab === 'payment' && (
+        <div className="space-y-4">
+          {/* Статус */}
+          <Card className="rounded-3xl p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-xl">⚠</div>
+              <div>
+                <p className="text-sm font-semibold text-slate-800">Интеграция не настроена</p>
+                <p className="text-xs text-slate-500">Ожидает NDA и API-ключей от MBusiness. Кнопка «Оплатить» отображается, но пока ведёт на заглушку.</p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Данные для разработчиков */}
+          <Card className="rounded-3xl p-5">
+            <p className="mb-4 text-sm font-semibold text-slate-700">Системные данные для MBusiness</p>
+            <div className="space-y-3">
+              {[
+                { label: 'Webhook URL (POST)', value: 'https://jzucxqakvgzpgtvagsnq.supabase.co/functions/v1/payment-webhook' },
+                { label: 'Redirect после оплаты', value: 'https://elestet.net/payment/result?order_id={ORDER_ID}' },
+                { label: 'Валюта', value: 'KGS (кыргызский сом)' },
+              ].map((row) => (
+                <div key={row.label} className="flex flex-col gap-0.5">
+                  <span className="text-xs text-slate-400">{row.label}</span>
+                  <code className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs text-slate-700 break-all">{row.value}</code>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* Шаги */}
+          <Card className="rounded-3xl p-5">
+            <p className="mb-4 text-sm font-semibold text-slate-700">Шаги настройки</p>
+            <ol className="space-y-2.5">
+              {[
+                { done: false, text: 'Подписать NDA с MBusiness' },
+                { done: false, text: 'Получить API-ключи (sandbox + production) от MBusiness' },
+                { done: false, text: 'Заполнить TODO-блок в supabase/functions/create-payment/index.ts — вызов MBusiness API + получение payment_url' },
+                { done: false, text: 'Заполнить TODO-блок в supabase/functions/payment-webhook/index.ts — верификация HMAC-подписи + маппинг полей' },
+                { done: false, text: 'Провести тест с тестовой картой (sandbox)' },
+                { done: false, text: 'Переключить ключи на production + задеплоить функции' },
+              ].map((step, i) => (
+                <li key={i} className="flex items-start gap-2.5 text-sm text-slate-700">
+                  <span className={`mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${step.done ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+                    {step.done ? '✓' : i + 1}
+                  </span>
+                  {step.text}
+                </li>
+              ))}
+            </ol>
+          </Card>
+
+          {/* Скачать ТЗ */}
+          <Card className="rounded-3xl p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-700">Техническое задание для разработчиков MBusiness</p>
+                <p className="mt-0.5 text-xs text-slate-400">Полный документ: webhook, поля запроса/ответа, подпись, тарифы</p>
+              </div>
+              <button
+                type="button"
+                onClick={downloadPaymentDoc}
+                className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-600"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Скачать .doc
+              </button>
+            </div>
+          </Card>
         </div>
       )}
     </div>
