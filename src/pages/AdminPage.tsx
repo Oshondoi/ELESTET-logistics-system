@@ -356,9 +356,7 @@ export const AdminPage = ({
   ]
 
   const downloadPaymentDoc = () => {
-    const html = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns:o="urn:schemas-microsoft-com:office:office"
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
       xmlns:w="urn:schemas-microsoft-com:office:word"
       xmlns="http://www.w3.org/TR/REC-html40">
 <head>
