@@ -356,93 +356,160 @@ export const AdminPage = ({
   ]
 
   const downloadPaymentDoc = () => {
-    const html = `
-<!DOCTYPE html>
+    const html = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
       xmlns:w="urn:schemas-microsoft-com:office:word"
       xmlns="http://www.w3.org/TR/REC-html40">
 <head>
-<meta charset="utf-8">
-<title>Интеграция онлайн-оплаты MBusiness — ELESTET</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<title>ТЗ MBusiness — ELESTET</title>
+<!--[if gte mso 9]>
+<xml>
+  <w:WordDocument>
+    <w:View>Print</w:View>
+    <w:Zoom>100</w:Zoom>
+    <w:DoNotOptimizeForBrowser/>
+  </w:WordDocument>
+</xml>
+<![endif]-->
 <style>
-  body { font-family: Arial, sans-serif; font-size: 12pt; margin: 2cm; }
-  h1 { font-size: 16pt; font-weight: bold; }
-  h2 { font-size: 13pt; font-weight: bold; margin-top: 18pt; }
-  h3 { font-size: 12pt; font-weight: bold; margin-top: 12pt; }
-  table { border-collapse: collapse; width: 100%; margin: 8pt 0; }
-  th, td { border: 1px solid #999; padding: 6px 10px; font-size: 11pt; }
-  th { background: #f0f0f0; font-weight: bold; }
-  code { font-family: Courier New, monospace; background: #f5f5f5; padding: 1px 4px; }
-  .label { color: #555; font-size: 10pt; }
-  .note { background: #fff8e1; border-left: 4px solid #f9a825; padding: 8px 12px; margin: 8pt 0; }
+  @page { size: A4; margin: 2cm 2.5cm 2cm 2.5cm; mso-page-orientation: portrait; }
+  body { font-family: Arial, sans-serif; font-size: 11pt; line-height: 1.4; }
+  h1 { font-size: 16pt; font-weight: bold; margin: 0 0 6pt 0; page-break-after: avoid; }
+  h2 { font-size: 13pt; font-weight: bold; margin: 18pt 0 6pt 0; page-break-after: avoid; }
+  h3 { font-size: 11pt; font-weight: bold; margin: 12pt 0 4pt 0; page-break-after: avoid; }
+  p  { margin: 4pt 0; }
+  ul { margin: 4pt 0 4pt 16pt; padding: 0; }
+  li { margin: 2pt 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8pt 0;
+    table-layout: fixed;
+    mso-table-layout-alt: fixed;
+  }
+  th {
+    background: #e8e8e8;
+    font-weight: bold;
+    font-size: 10pt;
+    text-align: left;
+    padding: 5pt 6pt;
+    border: 1pt solid #888;
+    word-wrap: break-word;
+  }
+  td {
+    font-size: 10pt;
+    padding: 5pt 6pt;
+    border: 1pt solid #bbb;
+    vertical-align: top;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+  .mono {
+    font-family: Courier New, monospace;
+    font-size: 9pt;
+    word-break: break-all;
+    word-wrap: break-word;
+  }
+  .meta { color: #555; font-size: 9.5pt; margin: 2pt 0 12pt 0; }
+  .note {
+    border-left: 4pt solid #f9a825;
+    background: #fffde7;
+    padding: 6pt 10pt;
+    margin: 8pt 0;
+    font-size: 10pt;
+  }
+  /* Ширины колонок для таблицы параметров (2 колонки) */
+  .tbl2 col.c1 { width: 35%; }
+  .tbl2 col.c2 { width: 65%; }
+  /* Ширины колонок для таблицы полей (3 колонки) */
+  .tbl3 col.c1 { width: 22%; }
+  .tbl3 col.c2 { width: 18%; }
+  .tbl3 col.c3 { width: 60%; }
+  /* Ширины колонок для таблицы тарифов (2 колонки) */
+  .tbl2sm col.c1 { width: 60%; }
+  .tbl2sm col.c2 { width: 40%; }
 </style>
 </head>
 <body>
 <h1>Техническое задание: Интеграция онлайн-оплаты MBusiness</h1>
-<p class="label">Платформа: ELESTET &nbsp;|&nbsp; Дата: ${new Date().toLocaleDateString('ru-RU')} &nbsp;|&nbsp; Версия: 1.0</p>
+<p class="meta">Платформа: ELESTET&#160;&#160;|&#160;&#160;Дата: ${new Date().toLocaleDateString('ru-RU')}&#160;&#160;|&#160;&#160;Версия: 1.0</p>
 
 <h2>1. Назначение</h2>
-<p>Настоящее ТЗ описывает требования к интеграции платёжного шлюза MBusiness
-с платформой ELESTET для приёма онлайн-платежей по подписке.</p>
+<p>Настоящее ТЗ описывает требования к интеграции платёжного шлюза MBusiness с платформой ELESTET для приёма онлайн-платежей по подписке.</p>
 
 <h2>2. Системные данные ELESTET</h2>
-<table>
+<table class="tbl2">
+  <colgroup><col class="c1"/><col class="c2"/></colgroup>
   <tr><th>Параметр</th><th>Значение</th></tr>
-  <tr><td>Webhook URL (POST)</td><td><code>https://jzucxqakvgzpgtvagsnq.supabase.co/functions/v1/payment-webhook</code></td></tr>
-  <tr><td>URL возврата после оплаты</td><td><code>https://elestet.net/payment/result?order_id={ORDER_ID}</code></td></tr>
-  <tr><td>URL отмены / ошибки</td><td><code>https://elestet.net/payment/result?order_id={ORDER_ID}</code></td></tr>
+  <tr>
+    <td>Webhook URL (POST)</td>
+    <td class="mono">https://jzucxqakvgzpgtvagsnq.supabase.co&#8203;/functions/v1/payment-webhook</td>
+  </tr>
+  <tr>
+    <td>URL возврата после оплаты</td>
+    <td class="mono">https://elestet.net/payment/result&#8203;?order_id={ORDER_ID}</td>
+  </tr>
+  <tr>
+    <td>URL отмены / ошибки</td>
+    <td class="mono">https://elestet.net/payment/result&#8203;?order_id={ORDER_ID}</td>
+  </tr>
   <tr><td>Валюта</td><td>KGS (кыргызский сом)</td></tr>
 </table>
-<p class="note"><b>Важно:</b> <code>{ORDER_ID}</code> — UUID заказа, который мы передаём в запросе создания платежа. Его нужно подставить в redirect URL.</p>
+<div class="note"><b>Важно:</b> <span class="mono">{ORDER_ID}</span> — UUID заказа, который мы передаём при создании платежа. Его нужно подставить в redirect URL.</div>
 
-<h2>3. Создание платежа (ELESTET → MBusiness)</h2>
+<h2>3. Создание платежа (ELESTET &#8594; MBusiness)</h2>
 <p>Когда пользователь нажимает «Оплатить», наш сервер отправляет запрос к вашему API:</p>
 <h3>3.1 Поля запроса</h3>
-<table>
+<table class="tbl3">
+  <colgroup><col class="c1"/><col class="c2"/><col class="c3"/></colgroup>
   <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
-  <tr><td>amount</td><td>integer</td><td>Сумма в тиынах (сом × 100). Пример: 2000 сом = 200000</td></tr>
-  <tr><td>currency</td><td>string</td><td>«KGS»</td></tr>
-  <tr><td>order_id</td><td>string (UUID)</td><td>Уникальный ID заказа ELESTET</td></tr>
-  <tr><td>description</td><td>string</td><td>Пример: «Тариф Селлер на 3 мес.»</td></tr>
-  <tr><td>return_url</td><td>string</td><td>URL для редиректа после оплаты</td></tr>
+  <tr><td class="mono">amount</td><td>integer</td><td>Сумма в тиынах (сом &#215; 100). Пример: 2&#160;000 сом = 200&#160;000</td></tr>
+  <tr><td class="mono">currency</td><td>string</td><td>«KGS»</td></tr>
+  <tr><td class="mono">order_id</td><td>string (UUID)</td><td>Уникальный ID заказа ELESTET</td></tr>
+  <tr><td class="mono">description</td><td>string</td><td>Пример: «Тариф Селлер на 3 мес.»</td></tr>
+  <tr><td class="mono">return_url</td><td>string</td><td>URL для редиректа после оплаты</td></tr>
 </table>
 <h3>3.2 Ожидаемый ответ</h3>
-<table>
+<table class="tbl3">
+  <colgroup><col class="c1"/><col class="c2"/><col class="c3"/></colgroup>
   <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
-  <tr><td>payment_url</td><td>string</td><td>URL страницы оплаты, на который редиректим пользователя</td></tr>
-  <tr><td>provider_order_id</td><td>string</td><td>ID заказа на вашей стороне (для сверки)</td></tr>
+  <tr><td class="mono">payment_url</td><td>string</td><td>URL страницы оплаты, на который редиректим пользователя</td></tr>
+  <tr><td class="mono">provider_order_id</td><td>string</td><td>ID заказа на вашей стороне (для сверки)</td></tr>
 </table>
 
-<h2>4. Webhook уведомление (MBusiness → ELESTET)</h2>
-<p>После завершения оплаты (успешной или нет) ваш сервер должен отправить POST-запрос на наш webhook URL.</p>
+<h2>4. Webhook уведомление (MBusiness &#8594; ELESTET)</h2>
+<p>После завершения оплаты ваш сервер должен отправить POST-запрос на наш webhook URL.</p>
 <h3>4.1 Поля тела запроса (JSON)</h3>
-<table>
+<table class="tbl3">
+  <colgroup><col class="c1"/><col class="c2"/><col class="c3"/></colgroup>
   <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
-  <tr><td>order_id</td><td>string (UUID)</td><td>ID заказа ELESTET (тот, что мы передали)</td></tr>
-  <tr><td>status</td><td>string</td><td>«paid» — успешно, «failed» — неуспешно</td></tr>
-  <tr><td>provider_order_id</td><td>string</td><td>ID заказа на стороне MBusiness</td></tr>
-  <tr><td>transaction_id</td><td>string</td><td>ID транзакции банка / MBusiness</td></tr>
-  <tr><td>amount</td><td>integer</td><td>Фактически оплаченная сумма в тиынах</td></tr>
+  <tr><td class="mono">order_id</td><td>string (UUID)</td><td>ID заказа ELESTET (тот, что мы передали)</td></tr>
+  <tr><td class="mono">status</td><td>string</td><td>«paid» — успешно, «failed» — неуспешно</td></tr>
+  <tr><td class="mono">provider_order_id</td><td>string</td><td>ID заказа на стороне MBusiness</td></tr>
+  <tr><td class="mono">transaction_id</td><td>string</td><td>ID транзакции банка / MBusiness</td></tr>
+  <tr><td class="mono">amount</td><td>integer</td><td>Фактически оплаченная сумма в тиынах</td></tr>
 </table>
 <h3>4.2 Подпись (безопасность)</h3>
-<p>Для верификации подлинности webhook мы принимаем HMAC-SHA256 подпись тела запроса.
-Подпись должна быть передана в заголовке:</p>
-<p><code>X-MBusiness-Signature: sha256={HMAC_HEX}</code></p>
+<p>Для верификации подлинности webhook мы принимаем HMAC-SHA256 подпись тела запроса. Подпись передаётся в заголовке:</p>
+<p><span class="mono">X-MBusiness-Signature: sha256={HMAC_HEX}</span></p>
 <p>Секретный ключ для подписи согласовывается отдельно при настройке интеграции.</p>
 <h3>4.3 Требования к webhook</h3>
 <ul>
   <li>Ожидаем HTTP 200 OK в ответ. При других кодах — повторная отправка.</li>
   <li>Таймаут ожидания ответа: не менее 30 секунд.</li>
-  <li>Повторные попытки при недоступности: не менее 3 раз с интервалом 5 мин.</li>
+  <li>Повторные попытки при недоступности: не менее 3 раз с интервалом 5 минут.</li>
 </ul>
 
 <h2>5. Тарифы и суммы</h2>
-<table>
-  <tr><th>Тариф</th><th>Цена за 1 мес.</th></tr>
-  <tr><td>Селлер</td><td>2 000 сом</td></tr>
-  <tr><td>Операционный</td><td>17 000 сом</td></tr>
+<table class="tbl2sm">
+  <colgroup><col class="c1"/><col class="c2"/></colgroup>
+  <tr><th>Тариф</th><th>Цена за 1 месяц</th></tr>
+  <tr><td>Селлер</td><td>2&#160;000 сом</td></tr>
+  <tr><td>Операционный</td><td>17&#160;000 сом</td></tr>
 </table>
-<p>Возможные периоды: 1, 2, 3, 6, 12 месяцев. Скидки — по согласованию.</p>
+<p>Возможные периоды оплаты: 1, 2, 3, 6, 12 месяцев. Скидки — по согласованию.</p>
 
 <h2>6. Тестовый режим</h2>
 <p>Просьба предоставить:</p>
