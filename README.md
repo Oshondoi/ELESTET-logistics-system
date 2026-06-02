@@ -29,6 +29,32 @@ MVP веб-приложения для логистики поставок на 
 - Supabase Auth: регистрация (Имя + Email + Пароль обязательны), вход, выход
 - Company flow: создание, список, switcher, сохранение в localStorage, **архивное удаление** (только владелец + пароль, 15 дней в архиве → жёсткое удаление через pg_cron), редактирование названия + логотипа
 
+### Платёжная система — скелет (02.06.2026)
+
+Полный платёжный поток готов к подключению MBusiness:
+- **Таблица `payment_orders`** + 3 RPC: `create_payment_order`, `activate_plan_by_payment` (идемпотентная), `get_payment_order_status`
+- **Edge Function `create-payment`**: JWT валидация → owner проверка → create_payment_order → TODO-блок MBusiness API
+- **Edge Function `payment-webhook`**: POST → TODO-блок HMAC верификации → activate_plan_by_payment (всегда 200)
+- **`src/services/paymentService.ts`**: `createPaymentOrder` + `getPaymentOrderStatus`
+- **`src/pages/PaymentResultPage.tsx`**: polling каждые 3с, 4 UI-состояния (loading/pending/paid/failed)
+- **`src/pages/SubscriptionPage.tsx`**: калькулятор периода (1/2/3/6/12 мес), кнопка «Оплатить»
+
+Тарифы: `seller` = 2 000 сом/мес, `operational` = 17 000 сом/мес.
+
+**Pending**: заполнить TODO-блоки после NDA + получения MBusiness API-документации.
+
+### AdminPage — 5 табов (02.06.2026)
+
+- `users` / `subscriptions` / `access` / `team` / **`payment`** (только `isSuperAdmin`)
+- **Таб «Интеграция оплаты»**: статус системы, системные URL (webhook/redirect), чеклист 6 шагов
+- **Кнопка «Скачать .doc»**: генерирует ТЗ для разработчиков MBusiness прямо в браузере (HTML→Blob→download), Word-совместимый
+
+### Биллинг — блокировка 2-й компании (01.06.2026)
+
+- `create_account_with_owner` блокирует создание 2-й компании без активного платного плана
+- `access_overrides` + `include_trial_accounts boolean` — применять ли глобальный оверрайд к компаниям в триале
+- AdminPage: чекбокс «Распространять на компании с активным триалом»
+
 ## Логотип компании (logo_url)
 
 Загрузить логотип может любой пользователь бесплатно (EditAccountModal → карандаш).

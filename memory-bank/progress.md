@@ -1,9 +1,75 @@
 ﻿# Progress
 
 ## Current Status
-MVP в активной разработке. Деплой на Vercel активен.
+MVP в активной разработке. Деплой на Vercel активен (elestet.net).
 
-## Что сделано за сессию 31.05.2026 — AdminPage: RPC + кеш + производительность загрузки
+## Что сделано за сессию 02.06.2026 — Платёжная система (скелет) + AdminPage таб
+
+### Биллинг — блокировка 2-й компании + include_trial_accounts (patch_billing_extra.sql — APPLIED)
+- `create_account_with_owner` блокирует 2-ю компанию без активного платного плана
+- `access_overrides` + `include_trial_accounts boolean` + обновлены get/create RPC
+- AdminPage: чекбокс «Распространять на компании с триалом» (только `scope='global'`)
+- SubscriptionPage: цены обновлены — seller 2 000 сом, operational 17 000 сом
+
+### payment_orders таблица + 3 RPC (patch_payment_orders.sql — APPLIED)
+- Таблица `payment_orders` с полным набором полей (статусы, provider, суммы)
+- `create_payment_order` / `activate_plan_by_payment` (идемпотентная, FOR UPDATE) / `get_payment_order_status`
+
+### Edge Functions (задеплоены через Management API — POST /v1/projects/{id}/functions)
+- `create-payment`: JWT валидация, owner проверка, create_payment_order RPC, TODO-блок MBusiness API
+- `payment-webhook`: POST only, TODO-блок HMAC подписи, TODO-блок маппинга полей, activate_plan_by_payment
+
+### Frontend (все файлы без TypeScript ошибок)
+- `src/services/paymentService.ts` — createPaymentOrder + getPaymentOrderStatus
+- `src/pages/PaymentResultPage.tsx` — polling каждые 3с, 4 UI-состояния, onAccountRefresh при paid
+- `src/pages/SubscriptionPage.tsx` — калькулятор периода, скидки (все 0, настраивается в PERIOD_OPTIONS), кнопка «Оплатить»
+- `src/App.tsx` — PageKey + PAGE_ROUTES + pagePermKey (null!) + рендеринг payment_result
+
+### AdminPage таб «Интеграция оплаты» (только isSuperAdmin)
+- Статус «не настроена», системные данные (webhook/redirect URL)
+- Чеклист 6 шагов до production
+- Кнопка «Скачать .doc» — генерирует ТЗ для MBusiness-разработчиков в браузере (HTML→Blob→download)
+- Word-совместимый: без XML/DOCTYPE деклараций, фиксированные ширины колонок, word-break для URL
+
+### Git (master branch)
+- `f1f7073` — billing: block 2nd company, include_trial_accounts, subscription prices
+- `626cce7` — feat: online payment skeleton (все файлы)
+- `769b1ce` — feat: AdminPage Интеграция оплаты tab
+- `29607f0` — fix: Word doc column widths
+- `24cee91` — fix: Word doc remove DTD declarations
+
+---
+
+## Что сделано за сессию 31.05.2026 — AdminPage: RPC + кеш + производительность
+
+### AdminPage — RPC вместо Edge Function, кеш, Promise.all
+- `admin_get_stats()` RPC (patch_admin_stats_rpc.sql — APPLIED) вместо Edge Function admin-stats
+- Кеш `adminStats` / `adminAccounts` в App.tsx — повторный вход мгновенный
+- `Promise.all` в `loadSubscriptions` — параллельные запросы
+- `hydrateFromSupabase` — 2 волны вместо 4 (экономия ~400-800ms)
+
+---
+
+## Что сделано за сессию 29.05.2026 — FulfillmentPage: единая таблица + пайплайн у исполнителя
+
+### Слияние «Мои» и «Аутсорс» в единую таблицу на табе «Все» (commit ca88575)
+### Пайплайн-стадии у исполнителя — partnerBatchPipelineMap (commit 8fa3505)
+
+---
+
+## Что сделано за сессию 28.05.2026 — Аутсорс B2B v2, access control, FulfillmentPage redesign
+
+### patch_outsource_b2b_v2.sql, canCompletePipelineStage фикс, race condition фикс
+### партнёрская таблица redesign до 9 колонок
+
+---
+
+## Pending (следующие шаги)
+- ❌ MBusiness API интеграция — после NDA + получения API-документации
+  - Заполнить TODO-блок в `create-payment/index.ts`
+  - Заполнить TODO-блок в `payment-webhook/index.ts`
+- ❌ Авто-продление / токенизация карты — уточнить поддержку у MBusiness
+- ❌ Протестировать оплату в sandbox
 
 ### AdminPage — RPC вместо Edge Function, кеш, Promise.all
 

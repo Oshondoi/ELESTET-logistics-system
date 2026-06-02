@@ -4,7 +4,103 @@
 - Frontend: React + TypeScript
 - Bundler: Vite
 - Styling: Tailwind CSS
-- Backend: Supabase (Postgres)
+- Backend: Supabase (Postgres + Edge Functions + pg_cron)
+
+## Current Packages
+- `react`, `react-dom`
+- `vite`, `typescript`
+- `tailwindcss`, `@tailwindcss/postcss`
+- `@vitejs/plugin-react`
+- `@supabase/supabase-js`
+
+## Important Files
+- `src/App.tsx` — app shell, routing by activePage/effectivePage state; кеш `adminStats`/`adminAccounts`; рендеринг `PaymentResultPage`
+- `src/hooks/useAuth.ts` — auth session
+- `src/hooks/useAccounts.ts` — company list, create, delete
+- `src/hooks/useAppData.ts` — stores, trips, stickers, bundles; 2-волновая загрузка (Promise.all)
+- `src/hooks/usePlatformRole.ts` — платформенная роль (`user`/`support`/`admin`/`superadmin`)
+- `src/services/tripService.ts` — fetchTrips, createTrip, addTripLine
+- `src/services/shipmentService.ts` — legacy
+- `src/services/storeService.ts` — stores CRUD
+- `src/services/platformRoleService.ts` — adminGetPlatformRoles, adminSetPlatformRole, adminFindUserByShortId
+- `src/services/billingService.ts` — activateGracePeriod, getBillingStatus
+- `src/services/accessOverrideService.ts` — adminGetOverrides, adminCreateOverride (include_trial_accounts)
+- `src/services/paymentService.ts` — createPaymentOrder (→ Edge Function), getPaymentOrderStatus (→ RPC)
+- `src/pages/AdminPage.tsx` — 5 табов: users/subscriptions/access/team/payment; экспортирует `AdminStats`, `AccountBillingRow`
+- `src/pages/SubscriptionPage.tsx` — тарифы + калькулятор периода + кнопка «Оплатить»
+- `src/pages/PaymentResultPage.tsx` — polling + UI-состояния pending/paid/failed/expired
+- `src/types/index.ts` — все domain types
+- `src/lib/supabase.ts` — Supabase client
+- `src/lib/plans.ts` — getBillingStatus, trialDaysLeft, graceDaysLeft
+- `src/lib/constants.ts` — shipmentStatuses, paymentStatuses, tripStatuses, carrierOptions, warehouseOptions
+
+## Supabase SQL-патчи (применённые)
+- `supabase/bootstrap.sql` — начальная схема
+- `supabase/patch_platform_roles.sql` — platform_role на profiles, get_my_platform_role()
+- `supabase/patch_platform_roles_team.sql` — admin_get_platform_roles(), admin_find_user_by_short_id()
+- `supabase/patch_admin_stats_rpc.sql` — admin_get_stats() RPC (вместо Edge Function)
+- `supabase/patch_billing.sql`, `patch_billing_v4.sql` — таблицы биллинга (plan, plan_until, trial_ends_at, grace_until)
+- `supabase/patch_billing_extra.sql` — блокировка 2-й компании, include_trial_accounts в access_overrides
+- `supabase/patch_billing_security.sql` — защита admin_ RPC, фикс grace period
+- `supabase/patch_billing_cron.sql` — cron job `expire-outdated-plans` (03:00 UTC ежедневно)
+- `supabase/patch_billing_get_my_accounts.sql` — billing-поля в get_my_accounts RPC
+- `supabase/patch_payment_orders.sql` — таблица payment_orders + 3 RPC (create/activate/get_status)
+- `supabase/patch_access_overrides.sql` — access_overrides таблица + RPC
+
+## Edge Functions (задеплоены)
+- `supabase/functions/create-payment/index.ts` — создание платёжного заказа (TODO: MBusiness API call)
+- `supabase/functions/payment-webhook/index.ts` — получение webhook от MBusiness (TODO: HMAC verify + field mapping)
+- Деплой: через Management API `POST /v1/projects/{id}/functions` (Supabase CLI не принимает формат токена)
+
+## Платёжный поток
+```
+SubscriptionPage
+  → handlePay → createPaymentOrder (paymentService)
+    → POST Edge Function create-payment
+      → create_payment_order RPC → uuid
+      → [TODO] MBusiness API → payment_url
+      → вернуть {order_id, payment_url}
+  → window.location.href = payment_url
+    → Пользователь оплачивает на странице MBusiness
+    → MBusiness POST /payment-webhook (Edge Function)
+      → [TODO] verify HMAC
+      → activate_plan_by_payment RPC
+      → plan активирован
+    → MBusiness redirect → /payment/result?order_id=...
+  PaymentResultPage
+    → polling getPaymentOrderStatus каждые 3с
+    → статус paid → onAccountRefresh
+```
+
+## Environment
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+## Deploy
+- Хостинг: Vercel (elestet.net = production, master branch)
+- CI/CD: автодеплой при push в `main` (production) или `master` (preview → production)
+- **ВАЖНО:** текущая рабочая ветка — `master`. В `main` НЕ мержить.
+- `vercel.json`: `"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]` — SPA routing
+- Supabase Project: `jzucxqakvgzpgtvagsnq.supabase.co`
+
+## Домен
+- Домен `elestet.net` зарегистрирован на **Namecheap**
+- DNS: `A @ → 76.76.21.21`, `CNAME www → cname.vercel-dns.com`
+
+## DB API Pattern (для скриптов)
+```js
+// _something.cjs (CommonJS — ESM проект, нужен .cjs)
+const fs = require('fs')
+const https = require('https')
+// node -e "..." — однострочники через require()
+// Запрос: POST api.supabase.com/v1/projects/{id}/database/query
+// Body: JSON.stringify({ query: sql })
+// Auth: Bearer sbp_v0_...
+```
+
+## Future Technical Direction
+- Мобильное приложение: React Native (Expo) + TypeScript, та же Supabase БД
+- При росте сложности: React Router, TanStack Query, Supabase generated types
 
 ## Current Packages
 - `react`, `react-dom`

@@ -246,6 +246,80 @@ const [supabaseTrips, supabaseCarriers, supabaseWarehouses, supabaseStickers, su
 Было: 4 волны (stores+shipments → trips+carriers+warehouses → stickers → bundles)
 Стало: 2 волны (~400-800ms экономии)
 
+## Word Document Generation Pattern (без сервера)
+
+Генерация `.doc` для скачивания прямо в браузере без серверных зависимостей:
+
+```ts
+function downloadWordDoc() {
+  const html = `
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<style>
+  /* Фиксированные ширины колонок */
+  table { table-layout: fixed; width: 100%; border-collapse: collapse; }
+  .tbl2 colgroup col:nth-child(1) { width: 35%; }
+  .tbl2 colgroup col:nth-child(2) { width: 65%; }
+  .mono { font-family: Courier New, monospace; word-break: break-all; font-size: 10pt; }
+</style>
+</head>
+<body>
+<table class="tbl2">
+  <colgroup><col /><col /></colgroup>
+  <tr><td>Заголовок</td><td class="mono">https://long-url.example.com/path</td></tr>
+</table>
+</body>
+</html>
+`
+  const blob = new Blob([html], { type: 'application/msword' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = 'Document.doc'; a.click()
+  URL.revokeObjectURL(url)
+}
+```
+
+**КРИТИЧНЫЕ правила:**
+- **НЕ** добавлять `<?xml version="1.0"?>` в начало — Word выдаёт «DTD запрещен»
+- **НЕ** добавлять `<!DOCTYPE html PUBLIC ...>` — то же самое
+- Только `<html xmlns:o=... xmlns:w=... xmlns=...>` открывает файл без ошибок
+- `colgroup + table-layout: fixed` — единственный способ задать ширины колонок
+- `word-break: break-all` на ячейках с URL — предотвращает выход за рамки
+- Zero-width space `&#8203;` можно вставлять в URL как подсказки переноса
+
+## Edge Function Deploy Pattern (Supabase CLI не работает с sbp_v0_ токеном)
+
+Supabase CLI (`npx supabase functions deploy`) **отклоняет** формат токена `sbp_v0_...` с ошибкой «Invalid access token format». Решение — Management API напрямую:
+
+```js
+// _deploy_functions.cjs
+const https = require('https')
+const fs = require('fs')
+const path = require('path')
+
+const PAT = 'sbp_v0_...'
+const PROJECT = 'jzucxqakvgzpgtvagsnq'
+
+function deployFunction(slug, entrypointFilePath) {
+  const source = fs.readFileSync(path.resolve(entrypointFilePath), 'utf-8')
+  const body = JSON.stringify({ slug, name: slug, verify_jwt: true, body: source })
+  
+  // Сначала попробовать PATCH (обновить), при 404 — POST (создать)
+  const reqOptions = {
+    hostname: 'api.supabase.com',
+    path: `/v1/projects/${PROJECT}/functions/${slug}`,
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${PAT}`, 'Content-Type': 'application/json' }
+  }
+  // ... makeRequest с fallback POST
+}
+```
+
+**ВАЖНО:** Никогда не коммитить `PAT` в репо. `.cjs` хелперы должны читать токен из env или параметра.
+
 ## Important Boundaries
 - Generation logic lives in DB / RPC; frontend previews only
 - Minimal localized changes only; no opportunistic refactor

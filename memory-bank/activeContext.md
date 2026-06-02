@@ -1,6 +1,80 @@
 # Active Context
 
-## Current Focus (31.05.2026) — AdminPage: RPC + Promise.all + кеш — ЗАВЕРШЕНО
+## Current Focus (02.06.2026) — Скелет платёжной системы + AdminPage таб — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### 1. Таблица `payment_orders` + 3 RPC (`supabase/patch_payment_orders.sql`) — ПРИМЕНЕНА в БД
+- Поля: `id` (uuid PK), `account_id`, `user_id`, `plan ('seller'|'operational')`, `months (1-12)`, `amount_som`, `discount_pct`, `status ('pending'|'paid'|'failed'|'expired'|'cancelled')`, `provider ('mbusiness')`, `provider_order_id`, `provider_transaction_id`, `payment_url`, `webhook_payload (jsonb)`, `created_at`, `paid_at`, `expires_at (now()+1h)`
+- RLS: пользователи читают только свои заказы; платформенные admins читают все; INSERT только через Edge Function (service role)
+- `create_payment_order(...)` → uuid — вызывается из Edge Function
+- `activate_plan_by_payment(p_order_id, ...)` — идемпотентна (повторный вызов = no-op), `FOR UPDATE` лок, расширяет `plan_until` от `GREATEST(now(), current plan_until)`, логирует в `account_plan_history` с `event_type='payment'`
+- `get_payment_order_status(p_order_id)` → TABLE(status, plan, months, amount_som, paid_at) — только владелец или платформенный admin
+
+#### 2. Edge Functions (задеплоены через Management API)
+- **`supabase/functions/create-payment/index.ts`**: JWT валидация → проверка owner → `create_payment_order` RPC → TODO-блок для MBusiness API → placeholder payment_url → возврат `{order_id, payment_url}`
+- **`supabase/functions/payment-webhook/index.ts`**: POST only → TODO-блок для HMAC верификации → TODO-блок маппинга полей → `activate_plan_by_payment` RPC → всегда 200 (не дать MBusiness ретраить)
+
+#### 3. Frontend (`src/services/paymentService.ts`)
+- `createPaymentOrder(params)` → `{order_id, payment_url}` — POST к Edge Function с JWT пользователя
+- `getPaymentOrderStatus(orderId)` → `PaymentOrderStatus | null` — RPC `get_payment_order_status`
+
+#### 4. `src/pages/PaymentResultPage.tsx`
+- Props: `{ onAccountRefresh: () => void }`
+- `useSearchParams()` → `order_id`
+- Polling каждые 3 секунды пока `status === 'pending'`, автостоп через 2 минуты
+- UI-состояния: loading spinner / pending (синий спиннер) / paid (зелёная карточка) / failed|expired|cancelled (оранжевая карточка)
+- При `paid` → вызывает `onAccountRefresh()`
+
+#### 5. `src/pages/SubscriptionPage.tsx` — калькулятор периода
+- `PLAN_PRICES`: `{ seller: 2000, operational: 17000 }`
+- `PERIOD_OPTIONS`: 1/2/3/6/12 месяцев, `discount: 0` (настраивается в константе)
+- Состояние: `selectedMonths`, `payLoading`, `payError`
+- Кнопка «Оплатить» → `handlePay(planKey)` → `createPaymentOrder(...)` → `window.location.href = payment_url`
+- Кнопка «Оплатить» активна, но пока ведёт на placeholder URL (до получения MBusiness API)
+
+#### 6. `src/App.tsx` — роутинг `payment_result`
+- `PageKey` расширен: добавлен `'payment_result'`
+- `PAGE_ROUTES`: `payment_result: '/payment/result'`
+- `pagePermKey`: `payment_result: null` (КРИТИЧНО — иначе `effectivePage` редиректит на 'home')
+- Рендеринг: `effectivePage === 'payment_result' ? <PaymentResultPage onAccountRefresh={...} /> : ...`
+
+#### 7. `src/pages/AdminPage.tsx` — таб «Интеграция оплаты»
+- Виден только `isSuperAdmin`
+- Карточка статуса «не настроена»
+- Системные данные (webhook URL, redirect URL) в копируемых блоках
+- Чеклист 6 шагов (NDA → API-ключи → TODO create-payment → TODO payment-webhook → тест → прод)
+- Кнопка **«Скачать .doc»** — генерирует Word-документ без серверных зависимостей:
+  - HTML → Blob с MIME `application/msword` → скачивается как `MBusiness_Integration_TZ.doc`
+  - Фиксированные ширины колонок (`colgroup + table-layout: fixed`), `word-break: break-all` для URL
+  - Без `<?xml?>` и `<!DOCTYPE>` декларации (Word блокирует DTD)
+
+---
+
+## Previous Focus (31.05.2026) — Биллинг: блокировка 2-й компании + include_trial_accounts + цены — ЗАВЕРШЕНО
+
+### Что реализовано
+
+#### SQL-патч `patch_billing_extra.sql` (ПРИМЕНЁН)
+- `create_account_with_owner` блокирует создание 2-й компании без активного платного плана
+- `access_overrides` получил колонку `include_trial_accounts boolean NOT NULL DEFAULT true`
+- `get_active_override` учитывает `include_trial_accounts` при применении глобального оверрайда
+- `admin_get_access_overrides` + `admin_create_override` обновлены
+
+#### Frontend (AdminPage + accessOverrideService)
+- `AdminPage.tsx`: чекбокс «Распространять на компании с активным триалом» (только при `formScope === 'global'`)
+- `accessOverrideService.ts`: `AccessOverrideRow.include_trial_accounts: boolean`, `adminCreateOverride` передаёт параметр
+
+#### SubscriptionPage — цены обновлены: seller = 2 000 сом, operational = 17 000 сом
+
+---
+
+## Previous Focus (31.05.2026) — AdminPage: RPC + Promise.all + кеш — ЗАВЕРШЕНО
+
+- `admin_get_stats()` RPC вместо Edge Function `admin-stats` (cold start eliminated)
+- Кеш `adminStats` / `adminAccounts` в App.tsx — повторный вход мгновенный
+- `Promise.all` в `loadSubscriptions` — параллельные запросы
+- `useAppData` — 2 волны вместо 4 (stickers + bundles добавлены в волну 2)
 
 ### Что реализовано
 
