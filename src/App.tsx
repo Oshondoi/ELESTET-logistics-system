@@ -747,8 +747,8 @@ function App() {
             onSignOut={() => void signOut()}
           />
 
-          {/* ── Billing баннер ── */}
-          {activeAccount && (() => {
+          {/* ── Billing баннер — только для owner компании ── */}
+          {activeAccount && activeAccount.my_role === 'owner' && (() => {
             const status = getBillingStatus(activeAccount, effectiveOverride)
             if (status === 'active') return null
             if (status === 'trial') {
