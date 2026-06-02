@@ -14,6 +14,7 @@ export interface AccessOverrideRow {
   reason: string | null
   created_at: string
   is_active: boolean
+  include_trial_accounts: boolean
 }
 
 /** Получить активное переопределение для аккаунта (user-facing RPC) */
@@ -40,15 +41,17 @@ export async function adminCreateOverride(params: {
   plan?: 'seller' | 'operational' | null
   free_until: string // ISO date
   reason?: string | null
+  include_trial_accounts?: boolean
 }): Promise<string> {
   if (!supabase) throw new Error('No supabase')
   const { data, error } = await (supabase as any).rpc('admin_create_override', {
-    p_scope:      params.scope,
-    p_account_id: params.account_id ?? null,
-    p_type:       params.type,
-    p_plan:       params.plan ?? null,
-    p_free_until: params.free_until,
-    p_reason:     params.reason ?? null,
+    p_scope:                    params.scope,
+    p_account_id:               params.account_id ?? null,
+    p_type:                     params.type,
+    p_plan:                     params.plan ?? null,
+    p_free_until:               params.free_until,
+    p_reason:                   params.reason ?? null,
+    p_include_trial_accounts:   params.include_trial_accounts ?? true,
   })
   if (error) throw new Error(error.message)
   return data as string

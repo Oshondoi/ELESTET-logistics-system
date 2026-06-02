@@ -222,6 +222,7 @@ export const AdminPage = ({
   const [formPlan, setFormPlan] = useState<'seller' | 'operational'>('seller')
   const [formFreeUntil, setFormFreeUntil] = useState('')
   const [formReason, setFormReason] = useState('')
+  const [formIncludeTrialAccounts, setFormIncludeTrialAccounts] = useState(true)
   const [formSubmitting, setFormSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -742,6 +743,18 @@ export const AdminPage = ({
                 />
               </div>
             </div>
+            {/* include_trial_accounts — только для глобального скопа */}
+            {formScope === 'global' && (
+              <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={formIncludeTrialAccounts}
+                  onChange={(e) => setFormIncludeTrialAccounts(e.target.checked)}
+                  className="h-4 w-4 rounded accent-blue-500"
+                />
+                Распространять на компании с активным триалом
+              </label>
+            )}
             {formError && <p className="mt-2 text-xs text-rose-600">{formError}</p>}
             <button
               type="button"
@@ -758,6 +771,7 @@ export const AdminPage = ({
                     plan: formType === 'plan' ? formPlan : null,
                     free_until: formFreeUntil,
                     reason: formReason || null,
+                    include_trial_accounts: formScope === 'global' ? formIncludeTrialAccounts : true,
                   })
                   setFormFreeUntil('')
                   setFormReason('')
