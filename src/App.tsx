@@ -41,6 +41,7 @@ import { GlossaryPage } from './pages/GlossaryPage'
 import { DiaryPage } from './pages/DiaryPage'
 import { FinanceReportPage } from './pages/FinanceReportPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
+import { PaymentResultPage } from './pages/PaymentResultPage'
 import { fetchNotifications, markAllNotificationsRead } from './services/outsourceService'
 import type { Shipment, ShipmentWithStore } from './types'
 
@@ -74,7 +75,7 @@ const PlanGatewall = ({ page, onUpgrade }: { page: string; onUpgrade: () => void
   )
 }
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription' | 'payment_result'
 
 const PAGE_ROUTES: Record<PageKey, string> = {
   home: '/',
@@ -92,6 +93,7 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   diary: '/diary',
   finance_report: '/finance-report',
   subscription: '/subscription',
+  payment_result: '/payment/result',
 }
 
 const ROUTE_PAGES: Record<string, PageKey> = Object.fromEntries(
@@ -493,6 +495,7 @@ function App() {
     diary: null,
     finance_report: null,
     subscription: null,
+    payment_result: null,
   }
 
   // Если текущая страница недоступна по правам — показываем home.
@@ -992,6 +995,10 @@ function App() {
                 <SubscriptionPage
                   activeAccount={activeAccount}
                   activeOverride={effectiveOverride}
+                  onAccountRefresh={() => void reloadAccounts()}
+                />
+              ) : effectivePage === 'payment_result' ? (
+                <PaymentResultPage
                   onAccountRefresh={() => void reloadAccounts()}
                 />
               ) : (

@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Card } from '../components/ui/Card'
 import { getBillingStatus, trialDaysLeft, graceDaysLeft } from '../lib/plans'
 import type { ActiveOverride } from '../lib/plans'
 import { activateGracePeriod } from '../services/billingService'
+import { createPaymentOrder } from '../services/paymentService'
 import type { Account } from '../types'
 
 interface SubscriptionPageProps {
@@ -15,6 +17,23 @@ function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—'
   return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
+
+// ──────────────────────────────────────────────────────────────
+// НАСТРОЙКА СКИДОК — менять здесь когда утвердишь цифры:
+const PERIOD_OPTIONS = [
+  { months: 1,  label: '1 мес',     discount: 0 },
+  { months: 2,  label: '2 мес',     discount: 0 },
+  { months: 3,  label: '3 мес',     discount: 0 },
+  { months: 6,  label: '6 мес',     discount: 0 },
+  { months: 12, label: '12 мес',    discount: 0 },
+]
+
+// Базовые цены в сомах за 1 месяц — менять здесь:
+const PLAN_PRICES: Record<string, number> = {
+  seller:      2000,
+  operational: 17000,
+}
+// ──────────────────────────────────────────────────────────────
 
 const PLANS = [
   {
@@ -36,8 +55,13 @@ const PLANS = [
 ]
 
 export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverride }: SubscriptionPageProps) => {
+  const navigate = useNavigate()
   const [graceLoading, setGraceLoading] = useState(false)
   const [graceError, setGraceError] = useState<string | null>(null)
+  // Выбранный период (месяцев) для каждого тарифа
+  const [selectedMonths, setSelectedMonths] = useState<Record<string, number>>({ seller: 1, operational: 1 })
+  const [payLoading, setPayLoading] = useState<string | null>(null)
+  const [payError, setPayError] = useState<string | null>(null)
 
   if (!activeAccount) {
     return (
@@ -63,6 +87,30 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
       setGraceError(e instanceof Error ? e.message : 'Ошибка')
     } finally {
       setGraceLoading(false)
+    }
+  }
+
+  const handlePay = async (planKey: string) => {
+    if (!activeAccount) return
+    setPayLoading(planKey)
+    setPayError(null)
+    try {
+      const months = selectedMonths[planKey] ?? 1
+      const base = PLAN_PRICES[planKey] ?? 0
+      const discount = PERIOD_OPTIONS.find((o) => o.months === months)?.discount ?? 0
+      const amount = Math.round(base * months * (1 - discount / 100))
+      const result = await createPaymentOrder({
+        account_id:   activeAccount.id,
+        plan:         planKey as 'seller' | 'operational',
+        months,
+        amount_som:   amount,
+        discount_pct: discount,
+      })
+      window.location.href = result.payment_url
+    } catch (e) {
+      setPayError(e instanceof Error ? e.message : 'Ошибка создания платежа')
+    } finally {
+      setPayLoading(null)
     }
   }
 
@@ -167,9 +215,67 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
                 ))}
               </ul>
               <div className="mt-5">
-                <div className="rounded-xl bg-slate-100 px-4 py-2.5 text-center text-sm text-slate-500">
-                  Скоро — свяжитесь с нами для оформления
+                {/* Калькулятор периода */}
+                <p className="mb-2 text-xs text-slate-500">Период</p>
+                <div className="mb-3 flex flex-wrap gap-1.5">
+                  {PERIOD_OPTIONS.map((opt) => {
+                    const isSelected = (selectedMonths[plan.key] ?? 1) === opt.months
+                    return (
+                      <button
+                        key={opt.months}
+                        type="button"
+                        onClick={() => setSelectedMonths((prev) => ({ ...prev, [plan.key]: opt.months }))}
+                        className={`rounded-xl px-3 py-1 text-xs font-semibold transition ${
+                          isSelected
+                            ? 'bg-blue-500 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {opt.label}
+                        {opt.discount > 0 && (
+                          <span className={`ml-1 ${isSelected ? 'text-blue-200' : 'text-emerald-600'}`}>
+                            −{opt.discount}%
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
+                {/* Итоговая сумма */}
+                {(() => {
+                  const months = selectedMonths[plan.key] ?? 1
+                  const base = PLAN_PRICES[plan.key] ?? 0
+                  const discount = PERIOD_OPTIONS.find((o) => o.months === months)?.discount ?? 0
+                  const total = Math.round(base * months * (1 - discount / 100))
+                  return (
+                    <div className="mb-3 flex items-baseline gap-2">
+                      <span className="text-xl font-black text-slate-800">
+                        {total.toLocaleString('ru-RU')} сом
+                      </span>
+                      {discount > 0 && (
+                        <span className="text-xs text-slate-400 line-through">
+                          {(base * months).toLocaleString('ru-RU')} сом
+                        </span>
+                      )}
+                      <span className="text-xs text-slate-400">/ {months} мес.</span>
+                    </div>
+                  )
+                })()}
+                {payError && payLoading === null && (
+                  <p className="mb-2 text-xs text-rose-500">{payError}</p>
+                )}
+                <button
+                  type="button"
+                  disabled={payLoading === plan.key}
+                  onClick={() => void handlePay(plan.key)}
+                  className={`w-full rounded-xl py-2.5 text-sm font-semibold transition ${
+                    plan.highlight
+                      ? 'bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50'
+                      : 'bg-slate-800 text-white hover:bg-slate-900 disabled:opacity-50'
+                  }`}
+                >
+                  {payLoading === plan.key ? 'Обработка...' : 'Оплатить'}
+                </button>
               </div>
             </Card>
           ))}
@@ -179,7 +285,7 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
       {/* Контакт */}
       <Card className="rounded-3xl p-5 text-center">
         <p className="text-sm text-slate-600">
-          Для активации тарифа свяжитесь с нами в{' '}
+          Вопросы по оплате? Пишите в{' '}
           <a href="https://t.me/elestet" target="_blank" rel="noreferrer" className="font-semibold text-blue-600 hover:underline">
             Telegram
           </a>
