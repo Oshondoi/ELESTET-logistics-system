@@ -518,6 +518,7 @@ export const Sidebar = ({
       </div>
 
       <div className="mt-auto border-t border-slate-200 px-4 py-4 flex flex-col gap-1">
+        {activeAccount?.my_role === 'owner' && (
         <button
           type="button"
           onClick={() => onSelectPage('subscription')}
@@ -540,6 +541,7 @@ export const Sidebar = ({
           </span>
           <span className="text-[15px]">Подписка</span>
         </button>
+        )}
         <a
           href="https://t.me/+4e0mYW-2Bjw3NTYy"
           target="_blank"
