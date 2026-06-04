@@ -80,7 +80,7 @@ import {
   uploadPackagingPhoto,
 } from '../services/fulfillmentService'
 import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
-import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, initBatchPipeline, completeBatchPipelineStage, fetchPartnerBatches, fetchAllBatchPipelineStages } from '../services/pipelineService'
+import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, initBatchPipeline, completeBatchPipelineStage, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo } from '../types'
 import { fetchExecutorOptions } from '../services/outsourceService'
 import { findProductByBarcode } from '../services/fulfillmentService'
@@ -6817,6 +6817,7 @@ interface CreateBatchModalProps {
     stage_packing: boolean
     stage_logistics: boolean
     use_pipeline: boolean
+    pipelineStageOverrides?: Record<number, { stage_otk: boolean; stage_packaging: boolean; stage_marking: boolean; stage_packing: boolean; stage_logistics: boolean }>
   }, closeOnly?: boolean) => Promise<void>
 }
 
@@ -6884,6 +6885,13 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
   const [stageMarking, setStageMarking] = useState(settings?.stage_marking ?? false)
   const [stagePacking, setStagePacking] = useState(settings?.stage_packing ?? false)
   const [stageLogistics, setStageLogistics] = useState(settings?.stage_logistics ?? false)
+
+  // Per-pipeline-stage overrides (key = order_index), prefilled from account pipeline settings
+  type StageFlagsLocal = { otk: boolean; packaging: boolean; marking: boolean; packing: boolean; logistics: boolean }
+  const [stageOverrides, setStageOverrides] = useState<Record<number, StageFlagsLocal>>(() =>
+    Object.fromEntries(pipelineStages.map((s) => [s.order_index, { otk: s.stage_otk, packaging: s.stage_packaging, marking: s.stage_marking, packing: s.stage_packing, logistics: s.stage_logistics }])))
+  const [activePipelineTab, setActivePipelineTab] = useState(pipelineStages[0]?.order_index ?? 0)
+
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const closeOnlyRef = useRef(false)
@@ -6896,13 +6904,16 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
     const effectiveStoreId = storeIdOverride !== undefined ? storeIdOverride : storeId
     // Когда включён пайплайн — флаги этапов = объединение всех стадий пайплайна
     const usePipelineFlags = usePipeline && pipelineStages.length > 0
-    const effectiveOtk = usePipelineFlags ? pipelineStages.some((s) => s.stage_otk) : stageOtk
-    const effectivePackaging = usePipelineFlags ? pipelineStages.some((s) => s.stage_packaging) : stagePackaging
-    const effectiveMarking = usePipelineFlags ? pipelineStages.some((s) => s.stage_marking) : stageMarking
-    const effectivePacking = usePipelineFlags ? pipelineStages.some((s) => s.stage_packing) : stagePacking
-    const effectiveLogistics = usePipelineFlags ? pipelineStages.some((s) => s.stage_logistics) : stageLogistics
+    const effectiveOtk = usePipelineFlags ? Object.values(stageOverrides).some((s) => s.otk) : stageOtk
+    const effectivePackaging = usePipelineFlags ? Object.values(stageOverrides).some((s) => s.packaging) : stagePackaging
+    const effectiveMarking = usePipelineFlags ? Object.values(stageOverrides).some((s) => s.marking) : stageMarking
+    const effectivePacking = usePipelineFlags ? Object.values(stageOverrides).some((s) => s.packing) : stagePacking
+    const effectiveLogistics = usePipelineFlags ? Object.values(stageOverrides).some((s) => s.logistics) : stageLogistics
+    const pipelineStageOverrides = usePipelineFlags
+      ? Object.fromEntries(Object.entries(stageOverrides).map(([oi, f]) => [Number(oi), { stage_otk: f.otk, stage_packaging: f.packaging, stage_marking: f.marking, stage_packing: f.packing, stage_logistics: f.logistics }]))
+      : undefined
     try {
-      await onSubmit({ name: name.trim(), store_id: effectiveStoreId || null, stage_otk: effectiveOtk, stage_packaging: effectivePackaging, stage_marking: effectiveMarking, stage_packing: effectivePacking, stage_logistics: effectiveLogistics, use_pipeline: usePipeline }, closeOnlyRef.current)
+      await onSubmit({ name: name.trim(), store_id: effectiveStoreId || null, stage_otk: effectiveOtk, stage_packaging: effectivePackaging, stage_marking: effectiveMarking, stage_packing: effectivePacking, stage_logistics: effectiveLogistics, use_pipeline: usePipeline, pipelineStageOverrides }, closeOnlyRef.current)
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
       setIsSaving(false)
@@ -6961,22 +6972,53 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
               <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
             </button>
           </div>
-          <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Этапы этой партии</p>
-            <div className="rounded-2xl bg-slate-50 p-4 space-y-3">
-              <div className="flex items-center gap-3 opacity-40">
-                <div className="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full bg-blue-500">
-                  <span className="inline-block h-5 w-5 translate-x-[22px] rounded-full bg-white shadow" />
-                </div>
-                <span className="text-sm text-slate-700">Приёмка (всегда включена)</span>
+          {usePipeline && pipelineStages.length > 0 ? (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Этапы по стадиям</p>
+              <div className="flex gap-1 flex-wrap">
+                {pipelineStages.map((stage) => (
+                  <button key={stage.id} type="button"
+                    onClick={() => setActivePipelineTab(stage.order_index)}
+                    className={`rounded-xl px-3 py-1.5 text-sm font-medium transition ${activePipelineTab === stage.order_index ? 'bg-violet-600 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:text-slate-700'}`}
+                  >
+                    {stage.name}
+                  </button>
+                ))}
               </div>
-              <StageToggle label="ОТК" value={stageOtk} onChange={setStageOtk} />
-              <StageToggle label="Упаковка" value={stagePackaging} onChange={setStagePackaging} />
-              <StageToggle label="Маркировка" value={stageMarking} onChange={setStageMarking} />
-              <StageToggle label="Формирование коробов" value={stagePacking} onChange={setStagePacking} />
-              <StageToggle label="Передача на логистику" value={stageLogistics} onChange={setStageLogistics} />
+              {pipelineStages.filter((s) => s.order_index === activePipelineTab).map((stage) => (
+                <div key={stage.id} className="rounded-2xl bg-slate-50 p-4 space-y-3">
+                  <div className="flex items-center gap-3 opacity-40">
+                    <div className="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full bg-blue-500">
+                      <span className="inline-block h-5 w-5 translate-x-[22px] rounded-full bg-white shadow" />
+                    </div>
+                    <span className="text-sm text-slate-700">Приёмка (всегда включена)</span>
+                  </div>
+                  <StageToggle label="ОТК" value={stageOverrides[stage.order_index]?.otk ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], otk: v } }))} />
+                  <StageToggle label="Упаковка" value={stageOverrides[stage.order_index]?.packaging ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], packaging: v } }))} />
+                  <StageToggle label="Маркировка" value={stageOverrides[stage.order_index]?.marking ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], marking: v } }))} />
+                  <StageToggle label="Формирование коробов" value={stageOverrides[stage.order_index]?.packing ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], packing: v } }))} />
+                  <StageToggle label="Передача на логистику" value={stageOverrides[stage.order_index]?.logistics ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], logistics: v } }))} />
+                </div>
+              ))}
             </div>
-          </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Этапы этой партии</p>
+              <div className="rounded-2xl bg-slate-50 p-4 space-y-3">
+                <div className="flex items-center gap-3 opacity-40">
+                  <div className="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full bg-blue-500">
+                    <span className="inline-block h-5 w-5 translate-x-[22px] rounded-full bg-white shadow" />
+                  </div>
+                  <span className="text-sm text-slate-700">Приёмка (всегда включена)</span>
+                </div>
+                <StageToggle label="ОТК" value={stageOtk} onChange={setStageOtk} />
+                <StageToggle label="Упаковка" value={stagePackaging} onChange={setStagePackaging} />
+                <StageToggle label="Маркировка" value={stageMarking} onChange={setStageMarking} />
+                <StageToggle label="Формирование коробов" value={stagePacking} onChange={setStagePacking} />
+                <StageToggle label="Передача на логистику" value={stageLogistics} onChange={setStageLogistics} />
+              </div>
+            </div>
+          )}
           {hasPipeline && (
             <div className="flex cursor-pointer items-center gap-3 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3"
               onClick={() => setUsePipeline((v) => !v)}>
@@ -7602,13 +7644,21 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     finally { setIsOpeningDetail(null) }
   }
 
-  const handleCreate = async (values: Parameters<typeof createBatch>[1] & { use_pipeline?: boolean }, closeOnly?: boolean) => {
-    const { use_pipeline, ...batchValues } = values
+  const handleCreate = async (values: Parameters<typeof createBatch>[1] & { use_pipeline?: boolean; pipelineStageOverrides?: Record<number, { stage_otk: boolean; stage_packaging: boolean; stage_marking: boolean; stage_packing: boolean; stage_logistics: boolean }> }, closeOnly?: boolean) => {
+    const { use_pipeline, pipelineStageOverrides, ...batchValues } = values
     const batch = await createBatch(accountId, batchValues)
     if (use_pipeline) {
       try {
         await initBatchPipeline(batch.id, accountId)
-        const stages = await fetchAllBatchPipelineStages([batch.id]).catch(() => [])
+        let stages = await fetchAllBatchPipelineStages([batch.id]).catch(() => [])
+        if (pipelineStageOverrides && stages.length > 0) {
+          await Promise.all(stages.map((s) => {
+            const ovr = pipelineStageOverrides[s.order_index]
+            if (!ovr) return Promise.resolve()
+            return updateBatchPipelineStageFlags(s.id, ovr).catch(() => {})
+          }))
+          stages = await fetchAllBatchPipelineStages([batch.id]).catch(() => stages)
+        }
         if (stages.length > 0) {
           setBatchPipelineMap((prev) => {
             const next = new Map(prev)

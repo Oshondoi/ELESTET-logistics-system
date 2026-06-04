@@ -98,6 +98,14 @@ export async function advanceBatchPipelineStep(stageId: string, newStep: Fulfill
   if (error) throw error
 }
 
+export async function updateBatchPipelineStageFlags(stageId: string, flags: { stage_otk: boolean; stage_packaging: boolean; stage_marking: boolean; stage_packing: boolean; stage_logistics: boolean }): Promise<void> {
+  const { error } = await db
+    .from('batch_pipeline_stages')
+    .update({ ...flags, updated_at: new Date().toISOString() })
+    .eq('id', stageId)
+  if (error) throw error
+}
+
 // ── Партнёрские партии ───────────────────────────────────────
 
 export async function fetchPartnerBatches(accountId: string): Promise<PartnerBatchInfo[]> {
