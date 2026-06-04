@@ -30,7 +30,7 @@ export const createAccountWithOwnerInSupabase = async (name: string) => {
     p_account_name: name.trim(),
   })
 
-  if (error) throw error
+  if (error) throw new Error(error.message)
   return data as Account
 }
 

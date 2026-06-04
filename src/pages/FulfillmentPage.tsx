@@ -6993,11 +6993,19 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
                     </div>
                     <span className="text-sm text-slate-700">Приёмка (всегда включена)</span>
                   </div>
-                  <StageToggle label="ОТК" value={stageOverrides[stage.order_index]?.otk ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], otk: v } }))} />
-                  <StageToggle label="Упаковка" value={stageOverrides[stage.order_index]?.packaging ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], packaging: v } }))} />
-                  <StageToggle label="Маркировка" value={stageOverrides[stage.order_index]?.marking ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], marking: v } }))} />
-                  <StageToggle label="Формирование коробов" value={stageOverrides[stage.order_index]?.packing ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], packing: v } }))} />
-                  <StageToggle label="Передача на логистику" value={stageOverrides[stage.order_index]?.logistics ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], logistics: v } }))} />
+                  {(() => {
+                    const maxIndex = Math.max(...pipelineStages.map((s) => s.order_index))
+                    const isFinalStage = stage.order_index === maxIndex
+                    return (
+                      <>
+                        <StageToggle label="ОТК" value={stageOverrides[stage.order_index]?.otk ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], otk: v } }))} />
+                        <StageToggle label="Упаковка" value={stageOverrides[stage.order_index]?.packaging ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], packaging: v } }))} />
+                        <StageToggle label="Маркировка" value={stageOverrides[stage.order_index]?.marking ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], marking: v } }))} />
+                        <StageToggle label="Формирование коробов" value={stageOverrides[stage.order_index]?.packing ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], packing: v } }))} />
+                        {isFinalStage && <StageToggle label="Передача на логистику" value={stageOverrides[stage.order_index]?.logistics ?? false} onChange={(v) => setStageOverrides((prev) => ({ ...prev, [stage.order_index]: { ...prev[stage.order_index], logistics: v } }))} />}
+                      </>
+                    )
+                  })()}
                 </div>
               ))}
             </div>
