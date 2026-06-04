@@ -305,14 +305,16 @@ export const Sidebar = ({
                   const isOwner = account.my_role === 'owner'
 
                   return (
-                    <button
-                      type="button"
+                    <div
                       key={account.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         onSelectAccount(account.id)
                         setIsCompanyOpen(false)
                       }}
-                      className="group flex w-full items-center justify-between gap-3 rounded-[12px] px-3 py-2 text-left transition hover:bg-[#F8FAFF]"
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { onSelectAccount(account.id); setIsCompanyOpen(false) } }}
+                      className="group flex w-full items-center justify-between gap-3 rounded-[12px] px-3 py-2 text-left transition hover:bg-[#F8FAFF] cursor-pointer"
                     >
                       <span className="min-w-0">
                         <span className="block text-[15px] font-bold text-slate-900">{account.name}</span>
@@ -376,7 +378,7 @@ export const Sidebar = ({
                         </span>
                       ) : null}
                       </span>
-                    </button>
+                    </div>
                   )
                 })}
 
