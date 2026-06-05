@@ -3,6 +3,78 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен (elestet.net).
 
+## Что сделано за сессию 05.06.2026
+
+### Pipeline tabs в CreateBatchModal (commit f3a8c00)
+- `usePipeline=true` → табы по стадиям вместо единого списка этапов
+- "Передача на логистику" — только в финальной стадии (`order_index === maxIndex`)
+- `pipelineService.ts` + `updateBatchPipelineStageFlags`
+
+### Фиксы (commits 6f3267f, 2fe32b0)
+- `accountService.ts`: `throw new Error(error.message)` — сообщение из PostgrestError теперь видно
+- `Sidebar.tsx`: nested `<button>` → `<div role="button">` — убран React hydration error
+
+### Тариф Premium (05.06.2026)
+- `src/lib/plans.ts`: `PlanKey` расширен до `'seller' | 'operational' | 'premium'`, `canAccessPage` premium = полный доступ
+- `src/services/paymentService.ts`: `plan` расширен до `'seller' | 'operational' | 'premium'`
+- `src/pages/PaymentResultPage.tsx`: добавлен `premium: 'Премиум'` в `PLAN_LABELS`
+- `src/lib/companyLogo.ts`: `plan === 'premium'` → white-label без проверки `logo_subscription_until`
+- `supabase/patch_premium_plan.sql`: CHECK constraints на `payment_orders.plan` + `access_overrides.plan`, обновлён `create_account_with_owner`
+
+### User-scope access overrides (05.06.2026)
+- `supabase/patch_user_scope_override.sql` — ПРИМЕНЁН в БД:
+  - Колонка `user_id uuid` в `access_overrides`
+  - scope CHECK расширен до `'global' | 'account' | 'user'`
+  - Новая RPC `admin_get_users_list()`
+  - Обновлены: `admin_get_access_overrides`, `admin_create_override`, `get_active_override` (приоритет: account > user > global)
+  - Обновлён `admin_get_billing_overview` (фильтр `deleted_at IS NULL`)
+  - Обновлён `create_account_with_owner` — проверяет user-level override
+- `src/services/accessOverrideService.ts`: `scope` расширен до `'user'`, `user_id`/`user_email` в row, `adminGetUsersList()`
+- AdminPage: 3 радио-переключателя scope (Компания/Пользователь/Глобально), `SearchableSelect` для пользователей
+
+### Plan configs — динамические тарифы из БД (05.06.2026)
+- `supabase/patch_plan_configs.sql` — ПРИМЕНЁН в БД:
+  - Таблица `plan_configs`: `key`, `label`, `description`, `features (jsonb)`, `price_sale`, `price_full`, `is_active`, `sort_order`
+  - RPC: `get_plan_configs()` (публичный), `admin_get_plan_configs()`, `admin_upsert_plan_config()`
+  - Начальные данные для seller/operational/premium
+- `src/services/planConfigService.ts` — СОЗДАН: `getPlanConfigs`, `adminGetPlanConfigs`, `adminUpsertPlanConfig`
+- `src/pages/SubscriptionPage.tsx` — полностью переписан:
+  - Данные тарифов — из `getPlanConfigs()`, fallback на `FALLBACK_PLANS`
+  - Динамическая сетка: 1/2/3 колонки по количеству тарифов
+  - Цена: `price_sale > 0 ? price_sale : price_full`, зачёркнутая `price_full` если акция
+  - Статус — одна строка flex, без badge/label оверхеда
+  - Удалены: захардкоженные `PLAN_PRICES`, `PLANS`, заголовок «ТАРИФНЫЕ ПЛАНЫ», бейджи «Популярный»/«Максимум»
+
+### SearchableSelect компонент (05.06.2026)
+- `src/components/ui/SearchableSelect.tsx` — СОЗДАН
+- Custom dropdown с поиском, нечёткий поиск (ignore spaces/dashes), auto-focus, viewport detection (открывается вверх если мало места), закрытие по Escape/click outside
+
+### AdminPage — таб «Тарифы» (05.06.2026)
+- Вкладка `plans` (только `canEdit`)
+- `PlanConfigsTab` — отдельный компонент в конце файла
+- Суб-табы по каждому тарифу
+- Чекбоксы фич с SVG-иконками (13 фич в `ALL_FEATURES`)
+- Кнопка «Сохранить» в хедере — активна только при `isEditing && hasChanges`
+- `hasChanges` через `JSON.stringify` comparison
+
+### AdminPage — таб «Интеграция оплаты» (переработан 05.06.2026)
+- Статус изменён: «Ожидаем API-ключи от MBusiness» (было «не настроена»)
+- Два блока: ✅ Готово / ⏳ Ожидаем — наглядный статус
+- Таблица тарифов с Premium
+- Кнопка «Скачать .doc» — документ версии 1.1: добавлен Premium, идемпотентность webhook, раздел «Что нужно от MBusiness»
+
+### SQL-патчи применены в БД (05.06.2026)
+- `patch_plan_configs.sql` ✅
+- `patch_user_scope_override.sql` ✅
+- `patch_premium_plan.sql` ✅
+
+## Pending (не реализовано, ждёт решения)
+- ❌ MBusiness API интеграция — ждём API-ключи (TODO-блоки в обоих Edge Functions)
+- ❌ Superadmin bypass в `create_account_with_owner` (SQL-патч готов в логике `patch_premium_plan.sql`, но superadmin проверка pending)
+- ❌ Разрешение создания доп. компании для конкретного user (механизм: scope='user' в `access_overrides` уже готов — можно использовать)
+
+---
+
 ## Что сделано за сессию 02.06.2026 — Платёжная система (скелет) + AdminPage таб
 
 ### Биллинг — блокировка 2-й компании + include_trial_accounts (patch_billing_extra.sql — APPLIED)

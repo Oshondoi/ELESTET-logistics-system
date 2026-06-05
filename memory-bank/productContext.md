@@ -40,34 +40,44 @@ The product is being created to manage logistics operations for shipments going 
 - Nav: Главная / Фулфилмент / Логистика / Магазины / Товары / Справочники / Стикеры / **Отзывы** / Роли
 - Отзывы WB: загрузка через WB Feedbacks API (лимит 1 запрос/мин), шаблоны ответов, авто-ответ
 
-## Billing / Subscription System (02.06.2026)
+## Billing / Subscription System (обновлено 05.06.2026)
 
 ### Тарифные планы
-| Тариф | Цена/мес | Возможности |
-|---|---|---|
-| `free` | 0 | ограниченный доступ |
-| `seller` | 2 000 сом | базовый |
-| `operational` | 17 000 сом | полный |
+| Тариф | Ключ | Цена/мес | Возможности |
+|---|---|---|---|
+| Бесплатно | `free` | 0 | ограниченный доступ |
+| Селлер | `seller` | 2 000 сом | магазины, товары, стикеры, отзывы, роли |
+| Операционный | `operational` | 17 000 сом | всё + фулфилмент, логистика, справочники, счета, аутсорс |
+| Премиум | `premium` | 20 000 сом | всё включено + white-label без доп. подписки |
 
-- **Trial**: 14 дней бесплатно при регистрации (trial_ends_at)
-- **Grace period**: 7 дней после истечения (grace_until) — возможность продлить
-- **access_overrides**: платформенные оверрайды (глобальные или для конкретного account_id); `include_trial_accounts` — применять ли глобальный оверрайд к компаниям с активным триалом
+- **Trial**: 14 дней бесплатно при регистрации (`trial_ends_at`)
+- **Grace period**: 3 дня после истечения (`grace_until`) — возможность продлить
+- **`access_overrides`**: платформенные оверрайды; scope: `global | account | user`
+  - `user` scope — привязан к `user_id`, применяется к конкретному пользователю
+  - Приоритет: `account > user > global`
+  - `include_trial_accounts` — применять ли глобальный оверрайд к компаниям с активным триалом
+- **`plan_configs`** таблица в БД: хранит метаданные тарифов (label, description, features, price_sale, price_full)
+  - SubscriptionPage загружает тарифы из БД (fallback на FALLBACK_PLANS если БД недоступна)
+  - AdminPage → таб «Тарифы» — редактирование через `PlanConfigsTab`
 
 ### Создание 2-й компании
 - Заблокировано без активного платного плана (`create_account_with_owner` в БД)
 - 1 компания всегда бесплатно; 2-я и далее — только платный тариф
+- Superadmin bypass реализован в `patch_premium_plan.sql` (ПРИМЕНЁН)
+- Разрешение конкретному user: scope='user' в access_overrides уже готов — можно выдать через AdminPage → Доступ
 
-### Платёжный поток (скелет готов, MBusiness интеграция pending)
-1. SubscriptionPage → выбор тарифа + периода → «Оплатить»
-2. Edge Function `create-payment` → создаёт `payment_orders` запись → [TODO: MBusiness API] → возвращает `payment_url`
+### Платёжный поток (инфраструктура готова, MBusiness интеграция pending)
+1. SubscriptionPage → выбор тарифа (seller/operational/premium) + периода → «Оплатить»
+2. Edge Function `create-payment` → JWT валидация → owner проверка → `create_payment_order` RPC → [TODO: MBusiness API] → возвращает `{order_id, payment_url}`
 3. Пользователь оплачивает на странице MBusiness
-4. MBusiness → webhook → Edge Function `payment-webhook` → `activate_plan_by_payment` RPC
+4. MBusiness → webhook → Edge Function `payment-webhook` → HMAC верификация [TODO] → `activate_plan_by_payment` RPC
 5. Redirect → `/payment/result?order_id=...` → PaymentResultPage polling → показывает результат
 
 ### Провайдер оплаты: MBusiness (KG)
-- Требует NDA перед получением API-документации
+- NDA подписан 04.06.2026
+- Ждём API-ключи (sandbox + production)
+- ТЗ v1.1 для разработчиков MBusiness скачивается из AdminPage → «Интеграция оплаты» (кнопка «Скачать .doc»)
 - TODO-блоки в обоих Edge Functions ждут заполнения после получения ключей
-- ТЗ для разработчиков MBusiness скачивается из AdminPage → «Интеграция оплаты»
 
 **Концепция:** Компания A создаёт пайплайн для партии → назначает партнёрскую компанию (Компанию B) исполнителем этапа → B видит партию у себя в Фулфилменте и может работать только со своим этапом.
 

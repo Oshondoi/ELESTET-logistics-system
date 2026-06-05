@@ -29,25 +29,63 @@ MVP веб-приложения для логистики поставок на 
 - Supabase Auth: регистрация (Имя + Email + Пароль обязательны), вход, выход
 - Company flow: создание, список, switcher, сохранение в localStorage, **архивное удаление** (только владелец + пароль, 15 дней в архиве → жёсткое удаление через pg_cron), редактирование названия + логотипа
 
-### Платёжная система — скелет (02.06.2026)
+### Pipeline tabs в CreateBatchModal (05.06.2026)
+- При `usePipeline=true` вместо "Этапы этой партии" показываются **табы по стадиям** (Цех, Фулфилмент и т.д.)
+- Каждый таб — свои тоггли этапов, предзаполненные из настроек стадии
+- "Передача на логистику" — только у финальной стадии (`order_index === maxIndex`)
+- `updateBatchPipelineStageFlags` применяет переопределения после `initBatchPipeline`
 
-Полный платёжный поток готов к подключению MBusiness:
+### Создание 2-й компании (05.06.2026)
+- `create_account_with_owner` RPC выдаёт понятную ошибку на фронте (фикс `throw new Error(error.message)`)
+- Superadmin bypass реализован (`patch_premium_plan.sql` — ПРИМЕНЁН)
+- Разрешение конкретному user: scope='user' в `access_overrides` — выдаётся через AdminPage → Доступ
+
+### Sidebar company switcher (05.06.2026)
+- Строка компании в dropdown: `<button>` → `<div role="button">` — устранён React hydration error
+
+### Тариф Premium (05.06.2026)
+- Новый тариф `premium` — всё включено + white-label без доп. подписки на `logo_subscription_until`
+- `src/lib/plans.ts`: `PlanKey` расширен, `canAccessPage` premium = полный доступ
+- `patch_premium_plan.sql` — ПРИМЕНЁН в БД
+
+### User-scope access overrides (05.06.2026)
+- `access_overrides.scope` расширен до `'global' | 'account' | 'user'`
+- `user_id` колонка в таблице; приоритет: `account > user > global`
+- AdminPage: форма с 3 радио-переключателями scope, `SearchableSelect` для выбора пользователя
+- `patch_user_scope_override.sql` — ПРИМЕНЁН в БД
+
+### Plan configs — динамические тарифы из БД (05.06.2026)
+- Таблица `plan_configs`: `key, label, description, features(jsonb), price_sale, price_full, is_active, sort_order`
+- `src/services/planConfigService.ts`: `getPlanConfigs`, `adminGetPlanConfigs`, `adminUpsertPlanConfig`
+- `SubscriptionPage`: загружает тарифы из БД, динамическая сетка (1/2/3 колонки), price_sale/price_full логика
+- `patch_plan_configs.sql` — ПРИМЕНЁН в БД
+
+### SearchableSelect компонент (05.06.2026)
+- `src/components/ui/SearchableSelect.tsx`: нечёткий поиск, viewport detection, Escape/click-outside
+
+### AdminPage — 6 табов (05.06.2026)
+
+- `users` / `subscriptions` / `access` / `team` / **`payment`** / **`plans`** (только `canEdit`)
+- **Таб «Интеграция оплаты»**: статус «Ожидаем API-ключи», блоки ✅Готово / ⏳Ожидаем, таблица тарифов с Premium
+- **Кнопка «Скачать .doc»** v1.1: ТЗ для MBusiness с Premium, идемпотентностью webhook, разделом «Что нужно от MBusiness»
+- **Таб «Тарифы»** (`PlanConfigsTab`): суб-табы по тарифам, чекбоксы фич с иконками, кнопка «Сохранить» в хедере
+
+### Платёжная система (инфраструктура готова, MBusiness интеграция pending)
+
 - **Таблица `payment_orders`** + 3 RPC: `create_payment_order`, `activate_plan_by_payment` (идемпотентная), `get_payment_order_status`
 - **Edge Function `create-payment`**: JWT валидация → owner проверка → create_payment_order → TODO-блок MBusiness API
 - **Edge Function `payment-webhook`**: POST → TODO-блок HMAC верификации → activate_plan_by_payment (всегда 200)
 - **`src/services/paymentService.ts`**: `createPaymentOrder` + `getPaymentOrderStatus`
 - **`src/pages/PaymentResultPage.tsx`**: polling каждые 3с, 4 UI-состояния (loading/pending/paid/failed)
-- **`src/pages/SubscriptionPage.tsx`**: калькулятор периода (1/2/3/6/12 мес), кнопка «Оплатить»
+- **`src/pages/SubscriptionPage.tsx`**: динамические тарифы из БД, калькулятор периода (1/2/3/6/12 мес), кнопка «Оплатить»
 
-Тарифы: `seller` = 2 000 сом/мес, `operational` = 17 000 сом/мес.
+| Тариф | Ключ | Цена/мес |
+|---|---|---|
+| Селлер | `seller` | 2 000 сом |
+| Операционный | `operational` | 17 000 сом |
+| Премиум | `premium` | 20 000 сом |
 
-**Pending**: заполнить TODO-блоки после NDA + получения MBusiness API-документации.
-
-### AdminPage — 5 табов (02.06.2026)
-
-- `users` / `subscriptions` / `access` / `team` / **`payment`** (только `isSuperAdmin`)
-- **Таб «Интеграция оплаты»**: статус системы, системные URL (webhook/redirect), чеклист 6 шагов
-- **Кнопка «Скачать .doc»**: генерирует ТЗ для разработчиков MBusiness прямо в браузере (HTML→Blob→download), Word-совместимый
+**NDA подписан 04.06.2026.** Ожидаем API-ключи MBusiness для финального подключения.
 
 ### Биллинг — блокировка 2-й компании (01.06.2026)
 

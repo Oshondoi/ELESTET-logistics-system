@@ -3,7 +3,7 @@
 // Добавить новую платную фичу = одна строка в FEATURES
 // ──────────────────────────────────────────────────────────────
 
-export type PlanKey = 'none' | 'seller' | 'operational' | 'trial'
+export type PlanKey = 'none' | 'seller' | 'operational' | 'premium' | 'trial'
 
 export interface AccountBillingInfo {
   plan?: string | null
@@ -24,7 +24,7 @@ export type BillingStatus =
 /** Активное переопределение из access_overrides (ручной триал/план) */
 export interface ActiveOverride {
   type: 'trial' | 'plan'
-  plan: 'seller' | 'operational' | null
+  plan: 'seller' | 'operational' | 'premium' | null
   free_until: string // ISO date, e.g. "2026-12-31"
 }
 
@@ -94,6 +94,7 @@ export function canAccessPage(page: string, account: AccountBillingInfo, overrid
   if (status !== 'active') return true
   // активная подписка — эффективный план (override.plan приоритетнее)
   const effectivePlan = (override?.type === 'plan' && override.plan) ? override.plan : account.plan
+  if (effectivePlan === 'premium') return true
   if (effectivePlan === 'operational') return true
   if (effectivePlan === 'seller') {
     return !(OPERATIONAL_ONLY_PAGES as readonly string[]).includes(page)

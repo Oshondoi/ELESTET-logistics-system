@@ -1,53 +1,73 @@
 # Active Context
 
-## Current Focus (02.06.2026) — Скелет платёжной системы + AdminPage таб — ЗАВЕРШЕНО
+## Current Focus (05.06.2026) — Premium + User overrides + Plan configs + AdminPage — ЗАВЕРШЕНО
 
-### Что реализовано
+### 1. Тариф Premium
+- `PlanKey` → `'seller' | 'operational' | 'premium'`
+- `canAccessPage`: premium = полный доступ (как operational)
+- `companyLogo.ts`: premium обходит проверку `logo_subscription_until` → white-label без доп. подписки
+- `paymentService.ts`: тип `plan` расширен
+- `PaymentResultPage.tsx`: `PLAN_LABELS` дополнен `premium: 'Премиум'`
+- `patch_premium_plan.sql` — ПРИМЕНЁН: CHECK на `payment_orders.plan` + `access_overrides.plan`
 
-#### 1. Таблица `payment_orders` + 3 RPC (`supabase/patch_payment_orders.sql`) — ПРИМЕНЕНА в БД
-- Поля: `id` (uuid PK), `account_id`, `user_id`, `plan ('seller'|'operational')`, `months (1-12)`, `amount_som`, `discount_pct`, `status ('pending'|'paid'|'failed'|'expired'|'cancelled')`, `provider ('mbusiness')`, `provider_order_id`, `provider_transaction_id`, `payment_url`, `webhook_payload (jsonb)`, `created_at`, `paid_at`, `expires_at (now()+1h)`
-- RLS: пользователи читают только свои заказы; платформенные admins читают все; INSERT только через Edge Function (service role)
-- `create_payment_order(...)` → uuid — вызывается из Edge Function
-- `activate_plan_by_payment(p_order_id, ...)` — идемпотентна (повторный вызов = no-op), `FOR UPDATE` лок, расширяет `plan_until` от `GREATEST(now(), current plan_until)`, логирует в `account_plan_history` с `event_type='payment'`
-- `get_payment_order_status(p_order_id)` → TABLE(status, plan, months, amount_som, paid_at) — только владелец или платформенный admin
+### 2. User-scope access overrides
+- `access_overrides` получил колонку `user_id uuid`, scope `'user'` добавлен в CHECK
+- Приоритет оверрайдов в `get_active_override`: `account > user > global`
+- AdminPage: радио scope (Компания/Пользователь/Глобально), при scope='user' показывается `SearchableSelect` со списком пользователей
+- `accessOverrideService.ts`: `adminGetUsersList()`, `user_id`/`user_email` в row
+- `patch_user_scope_override.sql` — ПРИМЕНЁН
 
-#### 2. Edge Functions (задеплоены через Management API)
-- **`supabase/functions/create-payment/index.ts`**: JWT валидация → проверка owner → `create_payment_order` RPC → TODO-блок для MBusiness API → placeholder payment_url → возврат `{order_id, payment_url}`
-- **`supabase/functions/payment-webhook/index.ts`**: POST only → TODO-блок для HMAC верификации → TODO-блок маппинга полей → `activate_plan_by_payment` RPC → всегда 200 (не дать MBusiness ретраить)
+### 3. Plan configs (динамические тарифы)
+- Таблица `plan_configs` в БД: `key, label, description, features(jsonb), price_sale, price_full, is_active, sort_order`
+- RPC: `get_plan_configs()`, `admin_get_plan_configs()`, `admin_upsert_plan_config()`
+- `planConfigService.ts` — СОЗДАН
+- `SubscriptionPage` теперь загружает тарифы из БД (fallback на `FALLBACK_PLANS`)
+- `patch_plan_configs.sql` — ПРИМЕНЁН
 
-#### 3. Frontend (`src/services/paymentService.ts`)
-- `createPaymentOrder(params)` → `{order_id, payment_url}` — POST к Edge Function с JWT пользователя
-- `getPaymentOrderStatus(orderId)` → `PaymentOrderStatus | null` — RPC `get_payment_order_status`
+### 4. SearchableSelect компонент
+- `src/components/ui/SearchableSelect.tsx`
+- Нечёткий поиск (ignore spaces/dashes), viewport detection, Escape/click-outside close
+- Используется в AdminPage: дропдаун аккаунтов + дропдаун пользователей в форме override
 
-#### 4. `src/pages/PaymentResultPage.tsx`
-- Props: `{ onAccountRefresh: () => void }`
-- `useSearchParams()` → `order_id`
-- Polling каждые 3 секунды пока `status === 'pending'`, автостоп через 2 минуты
-- UI-состояния: loading spinner / pending (синий спиннер) / paid (зелёная карточка) / failed|expired|cancelled (оранжевая карточка)
-- При `paid` → вызывает `onAccountRefresh()`
+### 5. AdminPage — таб «Тарифы»
+- `PlanConfigsTab` компонент (конец файла)
+- Суб-табы по каждому тарифу, чекбоксы фич с SVG-иконками (13 фич в `ALL_FEATURES`)
+- Сохранить активно только при `isEditing && hasChanges` (JSON.stringify сравнение)
 
-#### 5. `src/pages/SubscriptionPage.tsx` — калькулятор периода
-- `PLAN_PRICES`: `{ seller: 2000, operational: 17000 }`
-- `PERIOD_OPTIONS`: 1/2/3/6/12 месяцев, `discount: 0` (настраивается в константе)
-- Состояние: `selectedMonths`, `payLoading`, `payError`
-- Кнопка «Оплатить» → `handlePay(planKey)` → `createPaymentOrder(...)` → `window.location.href = payment_url`
-- Кнопка «Оплатить» активна, но пока ведёт на placeholder URL (до получения MBusiness API)
+### 6. AdminPage — таб «Интеграция оплаты» (переработан)
+- Статус: «Ожидаем API-ключи от MBusiness»
+- Два блока: ✅ Готово / ⏳ Ожидаем
+- Таблица тарифов с Premium
+- .doc версии 1.1
 
-#### 6. `src/App.tsx` — роутинг `payment_result`
-- `PageKey` расширен: добавлен `'payment_result'`
-- `PAGE_ROUTES`: `payment_result: '/payment/result'`
-- `pagePermKey`: `payment_result: null` (КРИТИЧНО — иначе `effectivePage` редиректит на 'home')
-- Рендеринг: `effectivePage === 'payment_result' ? <PaymentResultPage onAccountRefresh={...} /> : ...`
+### 7. SQL-патчи применены в БД
+1. `patch_plan_configs.sql` ✅
+2. `patch_user_scope_override.sql` ✅
+3. `patch_premium_plan.sql` ✅
 
-#### 7. `src/pages/AdminPage.tsx` — таб «Интеграция оплаты»
-- Виден только `isSuperAdmin`
-- Карточка статуса «не настроена»
-- Системные данные (webhook URL, redirect URL) в копируемых блоках
-- Чеклист 6 шагов (NDA → API-ключи → TODO create-payment → TODO payment-webhook → тест → прод)
-- Кнопка **«Скачать .doc»** — генерирует Word-документ без серверных зависимостей:
-  - HTML → Blob с MIME `application/msword` → скачивается как `MBusiness_Integration_TZ.doc`
-  - Фиксированные ширины колонок (`colgroup + table-layout: fixed`), `word-break: break-all` для URL
-  - Без `<?xml?>` и `<!DOCTYPE>` декларации (Word блокирует DTD)
+---
+
+## Previous Focus (05.06.2026) — Pipeline tabs + фиксы — ЗАВЕРШЕНО
+
+### 1. CreateBatchModal — табы по стадиям пайплайна
+- При `usePipeline=true` + есть стадии → вместо "Этапы этой партии" показываются фиолетовые **табы** по каждой стадии
+- Каждый таб имеет свои тоггли этапов, предзаполненные из настроек стадии
+- "Передача на логистику" — только у стадии с `order_index === maxIndex`
+- `pipelineService.ts`: `updateBatchPipelineStageFlags(stageId, flags)`
+
+### 2. Фикс: ошибка создания компании
+- `accountService.ts`: `throw new Error(error.message)` — `PostgrestError` теперь показывает сообщение из БД
+
+### 3. Фикс: nested button в company switcher
+- `Sidebar.tsx`: `<button>` → `<div role="button">` — устранён React hydration error
+
+---
+
+## Pending
+
+- ❌ MBusiness API — TODO-блоки в `create-payment/index.ts` + `payment-webhook/index.ts` ждут ключей
+- ❌ Superadmin bypass для создания 2-й компании (логика уже в `create_account_with_owner` частично, но patch pending)
+- ❌ Разрешение создания доп. компании для конкретного user — scope='user' в access_overrides уже есть, можно использовать через AdminPage
 
 ---
 

@@ -2,7 +2,7 @@ import { supabase } from '../lib/supabase'
 
 export interface CreatePaymentParams {
   account_id: string
-  plan: 'seller' | 'operational'
+  plan: 'seller' | 'operational' | 'premium'
   months: number
   amount_som: number
   discount_pct: number

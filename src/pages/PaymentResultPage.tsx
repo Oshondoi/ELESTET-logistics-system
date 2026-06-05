@@ -6,6 +6,7 @@ import type { PaymentOrderStatus } from '../services/paymentService'
 const PLAN_LABELS: Record<string, string> = {
   seller: 'Селлер',
   operational: 'Операционный',
+  premium: 'Премиум',
 }
 
 interface PaymentResultPageProps {

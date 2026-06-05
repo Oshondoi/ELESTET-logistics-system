@@ -10,8 +10,12 @@ export function getLogoUrl(account: {
 export function getWhitelabelLogoUrl(account: {
   logo_url?: string | null
   logo_subscription_until?: string | null
+  plan?: string | null
 }): string | null {
-  if (!account.logo_url || !account.logo_subscription_until) return null
+  if (!account.logo_url) return null
+  // Тариф premium включает white-label автоматически
+  if (account.plan === 'premium') return account.logo_url
+  if (!account.logo_subscription_until) return null
   if (new Date(account.logo_subscription_until) < new Date()) return null
   return account.logo_url
 }

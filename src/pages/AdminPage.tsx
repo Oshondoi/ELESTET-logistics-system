@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { Card } from '../components/ui/Card'
+import { SearchableSelect } from '../components/ui/SearchableSelect'
 import { getBillingStatus, trialDaysLeft, graceDaysLeft } from '../lib/plans'
 import { adminSetPlan, fetchAllPlanHistory } from '../services/billingService'
 import type { PlanHistoryEntry } from '../services/billingService'
@@ -14,6 +15,8 @@ import {
   adminGetPlatformRoles, adminSetPlatformRole, adminFindUserByShortId,
 } from '../services/platformRoleService'
 import type { StaffMember } from '../services/platformRoleService'
+import { adminGetPlanConfigs, adminUpsertPlanConfig } from '../services/planConfigService'
+import type { PlanConfig } from '../services/planConfigService'
 
 interface AdminUser {
   id: string
@@ -187,11 +190,11 @@ export const AdminPage = ({
 }) => {
   const canEdit = platformRole === 'admin' || platformRole === 'superadmin'
   const isSuperAdmin = platformRole === 'superadmin'
-  const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'access' | 'team' | 'payment'>(
-    () => (sessionStorage.getItem(ADMIN_TAB_KEY) as 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | null) ?? 'users'
+  const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans'>(
+    () => (sessionStorage.getItem(ADMIN_TAB_KEY) as 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | null) ?? 'users'
   )
 
-  const handleSetTab = (tab: 'users' | 'subscriptions' | 'access' | 'team' | 'payment') => {
+  const handleSetTab = (tab: 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans') => {
     sessionStorage.setItem(ADMIN_TAB_KEY, tab)
     setActiveTab(tab)
   }
@@ -216,8 +219,9 @@ export const AdminPage = ({
   const [trialDaysInput, setTrialDaysInput] = useState('14')
   const [trialDaysSaving, setTrialDaysSaving] = useState(false)
   const [trialDaysSaved, setTrialDaysSaved] = useState(false)
-  const [formScope, setFormScope] = useState<'global' | 'account'>('account')
+  const [formScope, setFormScope] = useState<'global' | 'account' | 'user'>('account')
   const [formAccountId, setFormAccountId] = useState('')
+  const [formUserId, setFormUserId] = useState('')
   const [formType, setFormType] = useState<'trial' | 'plan'>('trial')
   const [formPlan, setFormPlan] = useState<'seller' | 'operational'>('seller')
   const [formFreeUntil, setFormFreeUntil] = useState('')
@@ -225,6 +229,15 @@ export const AdminPage = ({
   const [formIncludeTrialAccounts, setFormIncludeTrialAccounts] = useState(true)
   const [formSubmitting, setFormSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+
+  // ── Plans tab state
+  const [planConfigs, setPlanConfigs] = useState<PlanConfig[]>([])
+  const [plansLoading, setPlansLoading] = useState(false)
+  const [plansError, setPlansError] = useState<string | null>(null)
+  const [editingPlan, setEditingPlan] = useState<PlanConfig | null>(null)
+  const [planSaving, setPlanSaving] = useState(false)
+  const [planSaveError, setPlanSaveError] = useState<string | null>(null)
+  const [planSaveOk, setPlanSaveOk] = useState(false)
 
   // ── Team tab state
   const [staffList, setStaffList] = useState<StaffMember[]>([])
@@ -293,6 +306,18 @@ export const AdminPage = ({
     } catch { /* silent */ }
   }, [accounts.length, onAccountsLoaded])
 
+  const loadUsersOnly = useCallback(async () => {
+    if (!supabase || stats !== null) return
+    try {
+      const { data, error: fnErr } = await (supabase as any).rpc('admin_get_stats')
+      if (!fnErr && data) {
+        const parsed: AdminStats = typeof data === 'string' ? JSON.parse(data) : data
+        setStats(parsed)
+        onStatsLoaded?.(parsed)
+      }
+    } catch { /* silent */ }
+  }, [stats, onStatsLoaded])
+
   const loadOverrides = useCallback(async () => {
     if (!supabase) return
     setOverridesLoading(true)
@@ -320,9 +345,10 @@ export const AdminPage = ({
   useEffect(() => {
     if (activeTab === 'access') {
       void loadAccountsOnly()
+      void loadUsersOnly()
       void loadOverrides()
     }
-  }, [activeTab, loadAccountsOnly, loadOverrides])
+  }, [activeTab, loadAccountsOnly, loadUsersOnly, loadOverrides])
 
   const loadStaff = useCallback(async () => {
     setStaffLoading(true)
@@ -341,6 +367,24 @@ export const AdminPage = ({
     if (activeTab === 'team') void loadStaff()
   }, [activeTab, loadStaff])
 
+  const loadPlans = useCallback(async () => {
+    setPlansLoading(true)
+    setPlansError(null)
+    try {
+      const list = await adminGetPlanConfigs()
+      setPlanConfigs(list)
+      setEditingPlan(null)
+    } catch (e) {
+      setPlansError(e instanceof Error ? e.message : 'Ошибка')
+    } finally {
+      setPlansLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'plans') void loadPlans()
+  }, [activeTab, loadPlans])
+
   const filtered = stats?.users.filter((u) => {
     if (!search.trim()) return true
     const q = search.toLowerCase()
@@ -352,6 +396,7 @@ export const AdminPage = ({
     { key: 'subscriptions' as const, label: 'Подписки' },
     { key: 'access' as const, label: 'Доступ' },
     ...(canEdit ? [{ key: 'team' as const, label: 'Команда' }] : []),
+    ...(canEdit ? [{ key: 'plans' as const, label: 'Тарифы' }] : []),
     ...(isSuperAdmin ? [{ key: 'payment' as const, label: 'Интеграция оплаты' }] : []),
   ]
 
@@ -418,24 +463,22 @@ export const AdminPage = ({
     margin: 8pt 0;
     font-size: 10pt;
   }
-  /* Ширины колонок для таблицы параметров (2 колонки) */
   .tbl2 col.c1 { width: 35%; }
   .tbl2 col.c2 { width: 65%; }
-  /* Ширины колонок для таблицы полей (3 колонки) */
   .tbl3 col.c1 { width: 22%; }
   .tbl3 col.c2 { width: 18%; }
   .tbl3 col.c3 { width: 60%; }
-  /* Ширины колонок для таблицы тарифов (2 колонки) */
   .tbl2sm col.c1 { width: 60%; }
   .tbl2sm col.c2 { width: 40%; }
 </style>
 </head>
 <body>
 <h1>Техническое задание: Интеграция онлайн-оплаты MBusiness</h1>
-<p class="meta">Платформа: ELESTET&#160;&#160;|&#160;&#160;Дата: ${new Date().toLocaleDateString('ru-RU')}&#160;&#160;|&#160;&#160;Версия: 1.0</p>
+<p class="meta">Платформа: ELESTET&#160;&#160;|&#160;&#160;Дата: ${new Date().toLocaleDateString('ru-RU')}&#160;&#160;|&#160;&#160;Версия: 1.1</p>
 
 <h2>1. Назначение</h2>
 <p>Настоящее ТЗ описывает требования к интеграции платёжного шлюза MBusiness с платформой ELESTET для приёма онлайн-платежей по подписке.</p>
+<p>Со стороны ELESTET интеграция полностью готова: база данных, страница оплаты, страница результата, серверные функции (Edge Functions). Ожидаем API-ключи от MBusiness для финального подключения.</p>
 
 <h2>2. Системные данные ELESTET</h2>
 <table class="tbl2">
@@ -455,35 +498,35 @@ export const AdminPage = ({
   </tr>
   <tr><td>Валюта</td><td>KGS (кыргызский сом)</td></tr>
 </table>
-<div class="note"><b>Важно:</b> <span class="mono">{ORDER_ID}</span> — UUID заказа, который мы передаём при создании платежа. Его нужно подставить в redirect URL.</div>
+<div class="note"><b>Важно:</b> <span class="mono">{ORDER_ID}</span> — UUID заказа, который мы передаём при создании платежа. Его нужно подставить в redirect URL при настройке на стороне MBusiness.</div>
 
 <h2>3. Создание платежа (ELESTET &#8594; MBusiness)</h2>
-<p>Когда пользователь нажимает «Оплатить», наш сервер отправляет запрос к вашему API:</p>
+<p>Когда пользователь нажимает «Оплатить», наш Edge Function отправляет запрос к вашему API для создания платёжной сессии.</p>
 <h3>3.1 Поля запроса</h3>
 <table class="tbl3">
   <colgroup><col class="c1"/><col class="c2"/><col class="c3"/></colgroup>
   <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
   <tr><td class="mono">amount</td><td>integer</td><td>Сумма в тиынах (сом &#215; 100). Пример: 2&#160;000 сом = 200&#160;000</td></tr>
   <tr><td class="mono">currency</td><td>string</td><td>«KGS»</td></tr>
-  <tr><td class="mono">order_id</td><td>string (UUID)</td><td>Уникальный ID заказа ELESTET</td></tr>
-  <tr><td class="mono">description</td><td>string</td><td>Пример: «Тариф Селлер на 3 мес.»</td></tr>
-  <tr><td class="mono">return_url</td><td>string</td><td>URL для редиректа после оплаты</td></tr>
+  <tr><td class="mono">order_id</td><td>string (UUID)</td><td>Уникальный ID заказа ELESTET — нужно сохранить и вернуть в webhook</td></tr>
+  <tr><td class="mono">description</td><td>string</td><td>Пример: «Тариф Операционный на 3 мес.»</td></tr>
+  <tr><td class="mono">return_url</td><td>string</td><td>URL редиректа пользователя после оплаты (с order_id)</td></tr>
 </table>
 <h3>3.2 Ожидаемый ответ</h3>
 <table class="tbl3">
   <colgroup><col class="c1"/><col class="c2"/><col class="c3"/></colgroup>
   <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
-  <tr><td class="mono">payment_url</td><td>string</td><td>URL страницы оплаты, на который редиректим пользователя</td></tr>
+  <tr><td class="mono">payment_url</td><td>string</td><td>URL страницы оплаты, на который мы редиректим пользователя</td></tr>
   <tr><td class="mono">provider_order_id</td><td>string</td><td>ID заказа на вашей стороне (для сверки)</td></tr>
 </table>
 
 <h2>4. Webhook уведомление (MBusiness &#8594; ELESTET)</h2>
-<p>После завершения оплаты ваш сервер должен отправить POST-запрос на наш webhook URL.</p>
+<p>После завершения оплаты ваш сервер отправляет POST-запрос на наш webhook URL. Наш сервер активирует подписку по этому уведомлению.</p>
 <h3>4.1 Поля тела запроса (JSON)</h3>
 <table class="tbl3">
   <colgroup><col class="c1"/><col class="c2"/><col class="c3"/></colgroup>
   <tr><th>Поле</th><th>Тип</th><th>Описание</th></tr>
-  <tr><td class="mono">order_id</td><td>string (UUID)</td><td>ID заказа ELESTET (тот, что мы передали)</td></tr>
+  <tr><td class="mono">order_id</td><td>string (UUID)</td><td>ID заказа ELESTET (тот, что мы передали при создании)</td></tr>
   <tr><td class="mono">status</td><td>string</td><td>«paid» — успешно, «failed» — неуспешно</td></tr>
   <tr><td class="mono">provider_order_id</td><td>string</td><td>ID заказа на стороне MBusiness</td></tr>
   <tr><td class="mono">transaction_id</td><td>string</td><td>ID транзакции банка / MBusiness</td></tr>
@@ -498,23 +541,27 @@ export const AdminPage = ({
   <li>Ожидаем HTTP 200 OK в ответ. При других кодах — повторная отправка.</li>
   <li>Таймаут ожидания ответа: не менее 30 секунд.</li>
   <li>Повторные попытки при недоступности: не менее 3 раз с интервалом 5 минут.</li>
+  <li>Webhook должен быть идемпотентным — повторная отправка с тем же order_id не должна дублировать активацию.</li>
 </ul>
 
 <h2>5. Тарифы и суммы</h2>
 <table class="tbl2sm">
   <colgroup><col class="c1"/><col class="c2"/></colgroup>
   <tr><th>Тариф</th><th>Цена за 1 месяц</th></tr>
-  <tr><td>Селлер</td><td>2&#160;000 сом</td></tr>
-  <tr><td>Операционный</td><td>17&#160;000 сом</td></tr>
+  <tr><td>Селлер (seller)</td><td>2&#160;000 сом</td></tr>
+  <tr><td>Операционный (operational)</td><td>17&#160;000 сом</td></tr>
+  <tr><td>Премиум (premium)</td><td>20&#160;000 сом</td></tr>
 </table>
-<p>Возможные периоды оплаты: 1, 2, 3, 6, 12 месяцев. Скидки — по согласованию.</p>
+<p>Возможные периоды оплаты: 1, 2, 3, 6, 12 месяцев. Итоговая сумма = цена × кол-во месяцев (± скидка по акции).</p>
 
-<h2>6. Тестовый режим</h2>
-<p>Просьба предоставить:</p>
+<h2>6. Что нужно от MBusiness</h2>
 <ul>
-  <li>Тестовые API-ключи (sandbox)</li>
-  <li>Тестовые карточные данные для проверки успешной и неуспешной оплаты</li>
-  <li>Адрес тестового API endpoint</li>
+  <li>API-ключи sandbox (тестовая среда)</li>
+  <li>API-ключи production</li>
+  <li>Адреса API endpoint для создания платежа (sandbox и production)</li>
+  <li>Тестовые карточные данные для успешной и неуспешной оплаты</li>
+  <li>Секретный ключ для HMAC-SHA256 подписи webhook</li>
+  <li>Документация по формату запросов (если отличается от описанного выше)</li>
 </ul>
 
 <h2>7. Контактное лицо со стороны ELESTET</h2>
@@ -849,10 +896,10 @@ export const AdminPage = ({
               <div>
                 <label className="mb-1 block text-xs text-slate-500">Скоп</label>
                 <div className="flex gap-3">
-                  {(['account', 'global'] as const).map((s) => (
+                  {(['account', 'user', 'global'] as const).map((s) => (
                     <label key={s} className="flex cursor-pointer items-center gap-1.5 text-sm">
                       <input type="radio" name="scope" value={s} checked={formScope === s} onChange={() => setFormScope(s)} className="accent-blue-500" />
-                      {s === 'account' ? 'Компания' : 'Глобально'}
+                      {s === 'account' ? 'Компания' : s === 'user' ? 'Аккаунт' : 'Глобально'}
                     </label>
                   ))}
                 </div>
@@ -861,16 +908,32 @@ export const AdminPage = ({
               {formScope === 'account' && (
                 <div>
                   <label className="mb-1 block text-xs text-slate-500">Компания</label>
-                  <select
+                  <SearchableSelect
                     value={formAccountId}
-                    onChange={(e) => setFormAccountId(e.target.value)}
-                    className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  >
-                    <option value="">— выберите —</option>
-                    {accounts.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name} (C-{a.short_id})</option>
-                    ))}
-                  </select>
+                    onChange={setFormAccountId}
+                    placeholder="— выберите —"
+                    options={accounts.map((a) => ({
+                      value: a.id,
+                      label: `${a.name} (C-${a.short_id})`,
+                      searchExtra: `C-${a.short_id} ${a.short_id}`,
+                    }))}
+                  />
+                </div>
+              )}
+              {/* Пользователь */}
+              {formScope === 'user' && (
+                <div>
+                  <label className="mb-1 block text-xs text-slate-500">Пользователь</label>
+                  <SearchableSelect
+                    value={formUserId}
+                    onChange={setFormUserId}
+                    placeholder="— выберите —"
+                    options={(stats?.users ?? []).map((u) => ({
+                      value: u.id,
+                      label: `${u.email}${u.short_id ? ` (U-${u.short_id})` : ''}`,
+                      searchExtra: `U-${u.short_id} ${u.short_id}`,
+                    }))}
+                  />
                 </div>
               )}
               {/* Тип */}
@@ -896,6 +959,7 @@ export const AdminPage = ({
                   >
                     <option value="seller">Seller</option>
                     <option value="operational">Operational</option>
+                    <option value="premium">Premium</option>
                   </select>
                 </div>
               )}
@@ -940,11 +1004,13 @@ export const AdminPage = ({
               onClick={async () => {
                 if (!formFreeUntil) { setFormError('Укажите дату'); return }
                 if (formScope === 'account' && !formAccountId) { setFormError('Выберите компанию'); return }
+                if (formScope === 'user' && !formUserId) { setFormError('Выберите пользователя'); return }
                 setFormSubmitting(true); setFormError(null)
                 try {
                   await adminCreateOverride({
                     scope: formScope,
                     account_id: formScope === 'account' ? formAccountId : null,
+                    user_id: formScope === 'user' ? formUserId : null,
                     type: formType,
                     plan: formType === 'plan' ? formPlan : null,
                     free_until: formFreeUntil,
@@ -953,6 +1019,7 @@ export const AdminPage = ({
                   })
                   setFormFreeUntil('')
                   setFormReason('')
+                  setFormUserId('')
                   void loadOverrides()
                 } catch (e) {
                   setFormError(e instanceof Error ? e.message : 'Ошибка')
@@ -995,7 +1062,7 @@ export const AdminPage = ({
                   <thead className="border-b border-slate-100 text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
                     <tr>
                       <th className="px-4 py-3">Скоп</th>
-                      <th className="px-4 py-3">Компания</th>
+                      <th className="px-4 py-3">Компания / Пользователь</th>
                       <th className="px-4 py-3">Тип</th>
                       <th className="px-4 py-3">Тариф</th>
                       <th className="px-4 py-3">До</th>
@@ -1010,12 +1077,19 @@ export const AdminPage = ({
                       <tr key={ov.id} className={`align-middle hover:bg-slate-50 ${!ov.is_active ? 'opacity-50' : ''}`}>
                         <td className="px-4 py-3">
                           <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                            ov.scope === 'global' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'
+                            ov.scope === 'global' ? 'bg-violet-100 text-violet-700'
+                            : ov.scope === 'user' ? 'bg-amber-100 text-amber-700'
+                            : 'bg-slate-100 text-slate-600'
                           }`}>
-                            {ov.scope === 'global' ? 'Глобально' : 'Компания'}
+                            {ov.scope === 'global' ? 'Глобально' : ov.scope === 'user' ? 'Аккаунт' : 'Компания'}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-slate-700">{ov.account_name ?? <span className="text-slate-300">—</span>}</td>
+                        <td className="px-4 py-3 text-slate-700">
+                          {ov.scope === 'user'
+                            ? (ov.user_email ?? <span className="text-slate-300">—</span>)
+                            : (ov.account_name ?? <span className="text-slate-300">—</span>)
+                          }
+                        </td>
                         <td className="px-4 py-3">
                           <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
                             ov.type === 'trial' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
@@ -1245,15 +1319,55 @@ export const AdminPage = ({
           {/* Статус */}
           <Card className="rounded-3xl p-5">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-xl">⚠</div>
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-xl">⏳</div>
               <div>
-                <p className="text-sm font-semibold text-slate-800">Интеграция не настроена</p>
-                <p className="text-xs text-slate-500">Ожидает NDA и API-ключей от MBusiness. Кнопка «Оплатить» отображается, но пока ведёт на заглушку.</p>
+                <p className="text-sm font-semibold text-slate-800">Ожидаем API-ключи от MBusiness</p>
+                <p className="text-xs text-slate-500">Вся инфраструктура ELESTET готова. Кнопка «Оплатить» отображается на странице тарифов — подключение активируется после получения ключей.</p>
               </div>
             </div>
           </Card>
 
-          {/* Данные для разработчиков */}
+          {/* Готовность */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Card className="rounded-3xl p-5">
+              <p className="mb-3 text-sm font-semibold text-emerald-700">✅ Готово со стороны ELESTET</p>
+              <ul className="space-y-2">
+                {[
+                  'Таблица payment_orders в БД',
+                  'RPC create_payment_order, activate_plan_by_payment',
+                  'Edge Function create-payment (ждёт ключей)',
+                  'Edge Function payment-webhook (ждёт ключей)',
+                  'Страница тарифов с выбором периода',
+                  'Страница результата с поллингом статуса',
+                  'Тариф Premium добавлен',
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2 text-xs text-slate-700">
+                    <span className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-600">✓</span>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+            <Card className="rounded-3xl p-5">
+              <p className="mb-3 text-sm font-semibold text-amber-700">⏳ Ожидаем от MBusiness</p>
+              <ul className="space-y-2">
+                {[
+                  'API-ключи sandbox (тест)',
+                  'API-ключи production',
+                  'Адреса endpoint sandbox и production',
+                  'Тестовые карточные данные',
+                  'Секретный ключ для HMAC-подписи webhook',
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2 text-xs text-slate-700">
+                    <span className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-600">!</span>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </div>
+
+          {/* Системные данные */}
           <Card className="rounded-3xl p-5">
             <p className="mb-4 text-sm font-semibold text-slate-700">Системные данные для MBusiness</p>
             <div className="space-y-3">
@@ -1270,34 +1384,42 @@ export const AdminPage = ({
             </div>
           </Card>
 
-          {/* Шаги */}
+          {/* Тарифы */}
           <Card className="rounded-3xl p-5">
-            <p className="mb-4 text-sm font-semibold text-slate-700">Шаги настройки</p>
-            <ol className="space-y-2.5">
-              {[
-                { done: false, text: 'Подписать NDA с MBusiness' },
-                { done: false, text: 'Получить API-ключи (sandbox + production) от MBusiness' },
-                { done: false, text: 'Заполнить TODO-блок в supabase/functions/create-payment/index.ts — вызов MBusiness API + получение payment_url' },
-                { done: false, text: 'Заполнить TODO-блок в supabase/functions/payment-webhook/index.ts — верификация HMAC-подписи + маппинг полей' },
-                { done: false, text: 'Провести тест с тестовой картой (sandbox)' },
-                { done: false, text: 'Переключить ключи на production + задеплоить функции' },
-              ].map((step, i) => (
-                <li key={i} className="flex items-start gap-2.5 text-sm text-slate-700">
-                  <span className={`mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${step.done ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
-                    {step.done ? '✓' : i + 1}
-                  </span>
-                  {step.text}
-                </li>
-              ))}
-            </ol>
+            <p className="mb-3 text-sm font-semibold text-slate-700">Тарифы</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100">
+                    <th className="pb-2 text-left text-xs font-semibold text-slate-500">Тариф</th>
+                    <th className="pb-2 text-left text-xs font-semibold text-slate-500">Ключ</th>
+                    <th className="pb-2 text-left text-xs font-semibold text-slate-500">Цена / мес</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {[
+                    { label: 'Селлер', key: 'seller', price: '2 000 сом' },
+                    { label: 'Операционный', key: 'operational', price: '17 000 сом' },
+                    { label: 'Премиум', key: 'premium', price: '20 000 сом' },
+                  ].map((row) => (
+                    <tr key={row.key}>
+                      <td className="py-1.5 text-slate-800">{row.label}</td>
+                      <td className="py-1.5"><code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{row.key}</code></td>
+                      <td className="py-1.5 text-slate-700">{row.price}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs text-slate-400">Периоды: 1, 2, 3, 6, 12 месяцев. Сумма = цена × месяцы.</p>
           </Card>
 
           {/* Скачать ТЗ */}
           <Card className="rounded-3xl p-5">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-semibold text-slate-700">Техническое задание для разработчиков MBusiness</p>
-                <p className="mt-0.5 text-xs text-slate-400">Полный документ: webhook, поля запроса/ответа, подпись, тарифы</p>
+                <p className="text-sm font-semibold text-slate-700">Техническое задание для MBusiness</p>
+                <p className="mt-0.5 text-xs text-slate-400">Документ с системными данными, форматом запросов, webhook и тарифами — готов к отправке</p>
               </div>
               <button
                 type="button"
@@ -1315,6 +1437,285 @@ export const AdminPage = ({
           </Card>
         </div>
       )}
+
+      {/* ═══ TAB: Тарифы ════════════════════════════════════════ */}
+      {activeTab === 'plans' && canEdit && (
+        <PlanConfigsTab
+          planConfigs={planConfigs}
+          plansLoading={plansLoading}
+          plansError={plansError}
+          editingPlan={editingPlan}
+          setEditingPlan={setEditingPlan}
+          planSaving={planSaving}
+          setPlanSaving={setPlanSaving}
+          planSaveError={planSaveError}
+          setPlanSaveError={setPlanSaveError}
+          planSaveOk={planSaveOk}
+          setPlanSaveOk={setPlanSaveOk}
+          loadPlans={loadPlans}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Полный список фич системы
+// ─────────────────────────────────────────────────────────────────────────────
+const ALL_FEATURES: { key: string; label: string; icon: React.ReactNode }[] = [
+  { key: 'Магазины',           label: 'Магазины',           icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 9l1-5h16l1 5"/><path d="M3 9v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9"/><path d="M9 9v11"/><path d="M15 9v11"/><path d="M3 9h18"/></svg> },
+  { key: 'Товары',             label: 'Товары',             icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 3H8l-2 4h12l-2-4z"/></svg> },
+  { key: 'Товары и GTIN',      label: 'Товары и GTIN',      icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 3H8l-2 4h12l-2-4z"/></svg> },
+  { key: 'Справочники',        label: 'Справочники',        icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16"/><path d="M4 10h16"/><path d="M4 14h10"/><path d="M4 18h7"/></svg> },
+  { key: 'Стикеры и КИЗы',    label: 'Стикеры и КИЗы',    icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 7h2"/><path d="M7 12h10"/><path d="M7 17h6"/><path d="M13 7h4"/></svg> },
+  { key: 'Отзывы WB',         label: 'Отзывы WB',         icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> },
+  { key: 'Роли',               label: 'Роли',               icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3.5"/><path d="M20 8v6"/><path d="M17 11h6"/></svg> },
+  { key: 'Фулфилмент',        label: 'Фулфилмент',        icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg> },
+  { key: 'Фулфилмент + Пайплайн', label: 'Фулфилмент + Пайплайн', icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg> },
+  { key: 'Логистика',          label: 'Логистика',          icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg> },
+  { key: 'Аутсорс B2B',       label: 'Аутсорс B2B',       icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> },
+  { key: 'Счета',              label: 'Счета',              icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
+  { key: 'White-label (логотип + заголовок вкладки)', label: 'White-label (логотип + заголовок вкладки)', icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg> },
+  { key: 'Всё из Операционного', label: 'Всё из Операционного', icon: <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><polyline points="20 6 9 17 4 12"/></svg> },
+]
+
+interface PlanConfigsTabProps {
+  planConfigs: PlanConfig[]
+  plansLoading: boolean
+  plansError: string | null
+  editingPlan: PlanConfig | null
+  setEditingPlan: React.Dispatch<React.SetStateAction<PlanConfig | null>>
+  planSaving: boolean
+  setPlanSaving: React.Dispatch<React.SetStateAction<boolean>>
+  planSaveError: string | null
+  setPlanSaveError: React.Dispatch<React.SetStateAction<string | null>>
+  planSaveOk: boolean
+  setPlanSaveOk: React.Dispatch<React.SetStateAction<boolean>>
+  loadPlans: () => Promise<void>
+}
+
+function PlanConfigsTab({
+  planConfigs, plansLoading, plansError,
+  editingPlan, setEditingPlan,
+  planSaving, setPlanSaving,
+  planSaveError, setPlanSaveError,
+  planSaveOk, setPlanSaveOk,
+  loadPlans,
+}: PlanConfigsTabProps) {
+  const [activePlanTab, setActivePlanTab] = useState<string | null>(null)
+
+  // При первой загрузке — выбираем первый таб
+  React.useEffect(() => {
+    if (planConfigs.length > 0 && activePlanTab === null) {
+      setActivePlanTab(planConfigs[0].key)
+    }
+  }, [planConfigs, activePlanTab])
+
+  if (plansLoading) return <p className="text-sm text-slate-400">Загрузка...</p>
+  if (plansError) return <p className="text-sm text-rose-500">{plansError}</p>
+  if (planConfigs.length === 0) return <p className="text-sm text-slate-400">Тарифы не найдены. Примените patch_plan_configs.sql в Supabase Dashboard.</p>
+
+  const currentPlan = planConfigs.find((p) => p.key === activePlanTab) ?? planConfigs[0]
+  const isEditing = editingPlan?.key === currentPlan.key
+  const p = isEditing ? editingPlan! : currentPlan
+
+  const toggleFeature = (featureKey: string) => {
+    if (!isEditing) return
+    setEditingPlan((prev) => {
+      if (!prev) return prev
+      const has = prev.features.includes(featureKey)
+      return { ...prev, features: has ? prev.features.filter((f) => f !== featureKey) : [...prev.features, featureKey] }
+    })
+  }
+
+  // Цена для отображения: зачёркнутая обязательна, со скидкой — опциональна
+  const displayPrice = p.price_sale > 0 ? p.price_sale : (p.price_full ?? 0)
+
+  const hasChanges = isEditing && JSON.stringify(editingPlan) !== JSON.stringify(currentPlan)
+
+  const doSave = async () => {
+    if (!editingPlan) return
+    if (!editingPlan.price_full) { setPlanSaveError('Зачёркнутая цена обязательна'); return }
+    setPlanSaving(true); setPlanSaveError(null); setPlanSaveOk(false)
+    try {
+      await adminUpsertPlanConfig(editingPlan)
+      setPlanSaveOk(true)
+      void loadPlans()
+      setTimeout(() => setPlanSaveOk(false), 2000)
+    } catch (e) {
+      setPlanSaveError(e instanceof Error ? e.message : 'Ошибка')
+    } finally {
+      setPlanSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      {/* Табы тарифов */}
+      <div className="mb-4 flex gap-1 rounded-2xl bg-slate-100 p-1 w-fit">
+        {planConfigs.map((plan) => (
+          <button
+            key={plan.key}
+            type="button"
+            onClick={() => { setActivePlanTab(plan.key); setEditingPlan(null); setPlanSaveError(null); setPlanSaveOk(false) }}
+            className={`rounded-xl px-4 py-1.5 text-sm font-medium transition ${
+              activePlanTab === plan.key
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {plan.label}
+            {!plan.is_active && <span className="ml-1 text-xs text-slate-400">(откл.)</span>}
+          </button>
+        ))}
+      </div>
+
+      <Card className="rounded-3xl p-5">
+        {/* Шапка */}
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-xs font-semibold uppercase text-slate-400">{currentPlan.key}</span>
+            {isEditing && (
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={p.is_active ?? true}
+                  onChange={(e) => setEditingPlan((prev) => prev ? { ...prev, is_active: e.target.checked } : prev)}
+                  className="h-3.5 w-3.5 rounded accent-blue-500"
+                />
+                Активен
+              </label>
+            )}
+            {!isEditing && !currentPlan.is_active && (
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-400">Отключён</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {isEditing && (
+              <button
+                type="button"
+                onClick={() => { setEditingPlan(null); setPlanSaveError(null); setPlanSaveOk(false) }}
+                className="rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-400 hover:bg-slate-50 transition"
+              >
+                Отмена
+              </button>
+            )}
+            {!isEditing && (
+              <button
+                type="button"
+                onClick={() => { setEditingPlan({ ...currentPlan }); setPlanSaveError(null); setPlanSaveOk(false) }}
+                className="rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:bg-slate-50 transition"
+              >
+                Редактировать
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={!isEditing || !hasChanges || planSaving}
+              onClick={() => void doSave()}
+              className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {planSaving ? 'Сохранение...' : 'Сохранить'}
+            </button>
+            {planSaveOk && <span className="text-xs text-emerald-600">✓ Сохранено</span>}
+            {planSaveError && <span className="text-xs text-rose-500">{planSaveError}</span>}
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Название */}
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">Название</label>
+            <input type="text" value={p.label} disabled={!isEditing}
+              onChange={(e) => setEditingPlan((prev) => prev ? { ...prev, label: e.target.value } : prev)}
+              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm disabled:bg-slate-50 disabled:text-slate-500 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
+          {/* Описание */}
+          <div className="lg:col-span-2">
+            <label className="mb-1 block text-xs text-slate-500">Описание</label>
+            <input type="text" value={p.description} disabled={!isEditing}
+              onChange={(e) => setEditingPlan((prev) => prev ? { ...prev, description: e.target.value } : prev)}
+              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm disabled:bg-slate-50 disabled:text-slate-500 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
+          {/* Порядок */}
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">Порядок</label>
+            <input type="number" value={p.sort_order} disabled={!isEditing}
+              onChange={(e) => setEditingPlan((prev) => prev ? { ...prev, sort_order: Number(e.target.value) } : prev)}
+              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm disabled:bg-slate-50 disabled:text-slate-500 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
+          {/* Зачёркнутая цена (основная, обязательная) */}
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">
+              Зачёркнутая цена <span className="text-rose-400">*</span>
+              <span className="ml-1 text-slate-300">(обязательно, сом/мес)</span>
+            </label>
+            <input type="number" value={p.price_full ?? ''} disabled={!isEditing}
+              placeholder="напр. 20000"
+              onChange={(e) => setEditingPlan((prev) => prev ? { ...prev, price_full: e.target.value ? Number(e.target.value) : null } : prev)}
+              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm disabled:bg-slate-50 disabled:text-slate-500 placeholder:text-slate-300 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
+          {/* Цена со скидкой (опциональная) */}
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">
+              Цена со скидкой
+              <span className="ml-1 text-slate-300">(пусто = без скидки)</span>
+            </label>
+            <input type="number" value={p.price_sale > 0 ? p.price_sale : ''} disabled={!isEditing}
+              placeholder="если есть скидка"
+              onChange={(e) => setEditingPlan((prev) => prev ? { ...prev, price_sale: e.target.value ? Number(e.target.value) : 0 } : prev)}
+              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm disabled:bg-slate-50 disabled:text-slate-500 placeholder:text-slate-300 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
+          {/* Итоговая цена показа */}
+          <div className="flex items-end gap-2 pb-1">
+            <div>
+              <p className="mb-1 text-xs text-slate-500">Показывается юзеру</p>
+              <div className="flex items-baseline gap-2">
+                <span className="text-lg font-black text-slate-800">{displayPrice.toLocaleString('ru-RU')} сом</span>
+                {p.price_full != null && p.price_sale > 0 && p.price_full > p.price_sale && (
+                  <span className="text-sm text-slate-400 line-through">{p.price_full.toLocaleString('ru-RU')}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Фичи */}
+        <div className="mt-5">
+          <p className="mb-3 text-xs font-semibold text-slate-500">Что входит в тариф</p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {ALL_FEATURES.map((feat) => {
+              const checked = p.features.includes(feat.key)
+              return (
+                <label
+                  key={feat.key}
+                  className={`flex cursor-pointer items-center gap-2.5 rounded-xl border px-3 py-2.5 text-sm transition ${
+                    checked
+                      ? 'border-blue-200 bg-blue-50 text-blue-800'
+                      : 'border-slate-200 bg-white text-slate-500'
+                  } ${!isEditing ? 'cursor-default opacity-80' : 'hover:border-blue-300'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={!isEditing}
+                    onChange={() => toggleFeature(feat.key)}
+                    className="h-4 w-4 rounded accent-blue-500 shrink-0"
+                  />
+                  <span className={`shrink-0 ${checked ? 'text-blue-500' : 'text-slate-400'}`}>{feat.icon}</span>
+                  <span className="leading-tight">{feat.label}</span>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+
+      </Card>
     </div>
   )
 }

@@ -5,11 +5,13 @@ export type { ActiveOverride }
 
 export interface AccessOverrideRow {
   id: string
-  scope: 'global' | 'account'
+  scope: 'global' | 'account' | 'user'
   account_id: string | null
   account_name: string | null
+  user_id: string | null
+  user_email: string | null
   type: 'trial' | 'plan'
-  plan: 'seller' | 'operational' | null
+  plan: 'seller' | 'operational' | 'premium' | null
   free_until: string // ISO date
   reason: string | null
   created_at: string
@@ -35,10 +37,11 @@ export async function adminGetOverrides(): Promise<AccessOverrideRow[]> {
 
 /** Создать переопределение (admin) — возвращает id */
 export async function adminCreateOverride(params: {
-  scope: 'global' | 'account'
+  scope: 'global' | 'account' | 'user'
   account_id?: string | null
+  user_id?: string | null
   type: 'trial' | 'plan'
-  plan?: 'seller' | 'operational' | null
+  plan?: 'seller' | 'operational' | 'premium' | null
   free_until: string // ISO date
   reason?: string | null
   include_trial_accounts?: boolean
@@ -47,6 +50,7 @@ export async function adminCreateOverride(params: {
   const { data, error } = await (supabase as any).rpc('admin_create_override', {
     p_scope:                    params.scope,
     p_account_id:               params.account_id ?? null,
+    p_user_id:                  params.user_id ?? null,
     p_type:                     params.type,
     p_plan:                     params.plan ?? null,
     p_free_until:               params.free_until,
@@ -55,6 +59,14 @@ export async function adminCreateOverride(params: {
   })
   if (error) throw new Error(error.message)
   return data as string
+}
+
+/** Получить список пользователей для дропдауна (admin) */
+export async function adminGetUsersList(): Promise<{ id: string; email: string; short_id: number | null }[]> {
+  if (!supabase) return []
+  const { data, error } = await (supabase as any).rpc('admin_get_users_list')
+  if (error) throw new Error(error.message)
+  return (data ?? []) as { id: string; email: string; short_id: number | null }[]
 }
 
 /** Деактивировать переопределение (admin) */
