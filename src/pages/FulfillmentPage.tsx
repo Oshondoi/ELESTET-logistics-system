@@ -1,6 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
+import { PhotoThumb } from '../components/ui/PhotoThumb'
 import type {
   FulfillmentBatch,
   FulfillmentBatchWithItems,
@@ -111,7 +112,7 @@ const STAGE_LABELS_TO: Partial<Record<FulfillmentStage, string>> = {
   packing: 'Коробам',
   logistics: 'Логистике',
 }
-type AddMode = 'barcode' | 'bulk' | 'subject' | 'catalog' | 'boxes'
+type AddMode = 'barcode' | 'bulk' | 'catalog' | 'boxes'
 
 const STATUS_LABELS: Record<string, string> = {
   active: 'В работе',
@@ -332,6 +333,7 @@ const BatchDetailModal = ({
   const [newName, setNewName] = useState('')
   const [newSize, setNewSize] = useState('')
   const [newColor, setNewColor] = useState('')
+  const [newArticle, setNewArticle] = useState('')
   const [isLooking, setIsLooking] = useState(false)
   const [isAddingSaving, setIsAddingSaving] = useState(false)
   const [receptionCameraOpen, setReceptionCameraOpen] = useState(false)
@@ -342,6 +344,8 @@ const BatchDetailModal = ({
   const receptionStreamRef = useRef<MediaStream | null>(null)
   const receptionDetectRef = useRef(false)
   const barcodeInputRef = useRef<HTMLInputElement>(null)
+  // Актуальная функция-обработчик сканера (ref чтобы useEffect не пересоздавался при каждом рендере)
+  const scannerCaptureRef = useRef<((barcode: string) => void) | null>(null)
   const otkFileInputRef = useRef<HTMLInputElement>(null)
   const markingFileInputRef = useRef<HTMLInputElement>(null)
   const markingBarcodeRef = useRef<HTMLInputElement>(null)
@@ -357,14 +361,13 @@ const BatchDetailModal = ({
   const [bulkQty, setBulkQty] = useState('')
   const [bulkNote, setBulkNote] = useState('')
 
-  // Режим «По предмету»
-  const [subjectName, setSubjectName] = useState('')
-  const [subjectQty, setSubjectQty] = useState('')
+
 
   // Режим «Готовые короба»
   const [boxesName, setBoxesName] = useState('')
   const [boxesQty, setBoxesQty] = useState('')
   const [boxesCount, setBoxesCount] = useState('')
+  const [boxesWarehouse, setBoxesWarehouse] = useState('')
 
   // Режим «Из каталога»
   const [catalogSearch, setCatalogSearch] = useState('')
@@ -563,6 +566,9 @@ const BatchDetailModal = ({
   const [packingCameraTargetBoxId, setPackingCameraTargetBoxId] = useState<string | null>(null)
   const [addBoxModal, setAddBoxModal] = useState<{ supplyId: string; nextNum: number } | null>(null)
   const [addBoxNum, setAddBoxNum] = useState('')
+  const [addBoxMode, setAddBoxMode] = useState<'single' | 'multi'>('single')
+  const [addBoxNumTo, setAddBoxNumTo] = useState('')
+  const [addBoxQty, setAddBoxQty] = useState('')
   const [deleteBoxConfirm, setDeleteBoxConfirm] = useState<{ supplyId: string; boxId: string } | null>(null)
   const [deleteSupplyConfirm, setDeleteSupplyConfirm] = useState<string | null>(null) // supplyId
   // Тип тарифа логистики для каждой поставки (переопределение, NULL = наследует от партии)
@@ -573,6 +579,10 @@ const BatchDetailModal = ({
   const [receptionDraft, setReceptionDraft] = useState<Record<string, number>>(
     Object.fromEntries(initialBatch.items.map((it) => [it.id, it.qty_received]))
   )
+  // Локальные (несохранённые) элементы приёмки — только в памяти до нажатия «Сохранить»
+  const [pendingItemIds, setPendingItemIds] = useState<Set<string>>(new Set())
+  // Элементы помеченные на удаление — удаляются из БД только при «Сохранить»
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set())
   // Трекер несохранённых изменений
   const [isDirty, setIsDirty] = useState(false)
   const [pendingClose, setPendingClose] = useState(false)
@@ -729,7 +739,7 @@ const BatchDetailModal = ({
       else if (batch.current_stage === 'packing') draft[it.id] = { qty: it.qty_packed ?? it.qty_marked ?? it.qty_otk ?? it.qty_received, boxes: it.boxes ?? 0 }
     })
     if (Object.keys(draft).length > 0) setStageDraft(draft)
-    setIsDirty(false)
+    if (pendingItemIds.size === 0) setIsDirty(false)
   }, [viewStage])
 
   // Загрузить OTK-логи при переходе на этап ОТК (реальный или через навигацию)
@@ -1028,6 +1038,7 @@ const BatchDetailModal = ({
     if (!barcode.trim()) {
       setNewName('')
       setNewSize('')
+      setNewArticle('')
       return
     }
     if (barcode.length < 8 || !store?.api_key) return
@@ -1038,6 +1049,7 @@ const BatchDetailModal = ({
         setNewName(found.name ?? '')
         setNewSize(found.size ?? '')
         setNewColor(found.color ?? '')
+        setNewArticle(found.article ?? '')
       }
     } finally {
       setIsLooking(false)
@@ -1048,9 +1060,11 @@ const BatchDetailModal = ({
     setNewBarcode(barcode)
     setNewName('')
     setNewSize('')
+    setNewArticle('')
     let resolvedName = ''
     let resolvedSize = ''
     let resolvedColor = ''
+    let resolvedArticle = ''
     if (barcode.length >= 8 && store?.api_key) {
       setIsLooking(true)
       try {
@@ -1059,9 +1073,11 @@ const BatchDetailModal = ({
           resolvedName = found.name ?? ''
           resolvedSize = found.size ?? ''
           resolvedColor = found.color ?? ''
+          resolvedArticle = found.article ?? ''
           setNewName(resolvedName)
           setNewSize(resolvedSize)
           setNewColor(resolvedColor)
+          setNewArticle(resolvedArticle)
         }
       } finally {
         setIsLooking(false)
@@ -1072,26 +1088,35 @@ const BatchDetailModal = ({
       setIsAddingSaving(true)
       setError(null)
       try {
-        const item = await addItem({
-          batch_id: batch.id,
-          barcode: barcode.trim(),
-          product_name: resolvedName || null,
-          size: resolvedSize || null,
-          color: resolvedColor || null,
-          article: null,
-          qty_received: 1,
-          qty_otk: null,
-          qty_marked: null,
-          qty_packed: null,
-          boxes: null,
-          notes: null,
-          sort_order: items.length,
-        })
-        const next = [...items, item]
-        setItems(next)
-        onItemsChanged(next)
-        void recalcOtkDiscrepancy(next, otkLogs)
-        setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize(''); setNewColor('')
+        const existing = items.find((i) => i.barcode === barcode.trim())
+        if (existing) {
+          if (pendingItemIds.has(existing.id)) {
+            const next = items.map((i) => i.id === existing.id ? { ...i, qty_received: i.qty_received + 1 } : i)
+            setItems(next); onItemsChanged(next); setIsDirty(true)
+            void recalcOtkDiscrepancy(next, otkLogs)
+          } else {
+            const newQty = (receptionDraft[existing.id] ?? existing.qty_received) + 1
+            setReceptionDraft((p) => ({ ...p, [existing.id]: newQty }))
+            setIsDirty(true)
+            void recalcOtkDiscrepancy(items, otkLogs)
+          }
+        } else {
+          const tempId = `_local_${crypto.randomUUID()}`
+          const localItem: FulfillmentItem = {
+            id: tempId, batch_id: batch.id, barcode: barcode.trim(),
+            product_name: resolvedName || null, size: resolvedSize || null,
+            color: resolvedColor || null, article: resolvedArticle || null,
+            qty_received: 1, qty_otk: null, qty_marked: null, qty_packed: null,
+            boxes: null, notes: null, sort_order: items.length,
+            created_at: new Date().toISOString(),
+          }
+          const next = [...items, localItem]
+          setItems(next); onItemsChanged(next)
+          setPendingItemIds((prev) => new Set([...prev, tempId]))
+          setIsDirty(true)
+          void recalcOtkDiscrepancy(next, otkLogs)
+        }
+        setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize(''); setNewColor(''); setNewArticle('')
         // Переканывать следующий скан
         receptionDetectRef.current = true
         setReceptionCameraRescanKey((k) => k + 1)
@@ -1181,32 +1206,135 @@ const BatchDetailModal = ({
     }
   }, [receptionCameraOpen, receptionCameraRescanKey])
 
+  // Обновляем обработчик сканера при каждом рендере чтобы иметь актуальные singleScanMode и колбэки
+  scannerCaptureRef.current = (barcode: string) => {
+    if (singleScanMode) {
+      void handleReceptionCameraScan(barcode)
+      setTimeout(() => barcodeInputRef.current?.focus(), 80)
+    } else {
+      void handleBarcodeChange(barcode)
+      barcodeInputRef.current?.focus()
+    }
+  }
+
+  // Глобальный перехват USB/BT-сканера штрихкодов
+  // Сканер вводит символы очень быстро (< 60ms между ними) — по этому отличаем от ручного ввода.
+  // Перехватываем ввод глобально в capture-фазе: если сканер пишет пока фокус на другом поле —
+  // блокируем дефолтный ввод и направляем баркод в barcodeInputRef.
+  useEffect(() => {
+    if (addMode !== 'barcode' || !canManageStageData) return
+
+    let buf = ''
+    let prevTime = 0
+    let flushId: ReturnType<typeof setTimeout> | null = null
+
+    const flush = () => {
+      flushId = null
+      if (buf.length >= 6) {
+        // Двойной скан: берём последние 13 символов (новый баркод заменяет старый)
+        scannerCaptureRef.current?.(buf.length > 13 ? buf.slice(-13) : buf)
+      }
+      buf = ''
+      prevTime = 0
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Если уже в barcode-поле — пусть оно само обрабатывает
+      if (document.activeElement === barcodeInputRef.current) return
+      // Системные комбинации не трогаем
+      if (e.ctrlKey || e.altKey || e.metaKey) return
+
+      if (e.key === 'Enter') {
+        if (buf.length >= 6) {
+          e.preventDefault()
+          e.stopPropagation()
+          if (flushId) { clearTimeout(flushId); flushId = null }
+          flush()
+        }
+        return
+      }
+
+      if (e.key.length !== 1) return
+
+      const now = Date.now()
+      const delta = now - prevTime
+
+      // Долгая пауза (> 150ms) — начало нового ввода, сбрасываем буфер
+      if (buf.length > 0 && delta > 150) {
+        if (flushId) { clearTimeout(flushId); flushId = null }
+        buf = ''
+      }
+
+      prevTime = now
+      buf += e.key
+
+      // 2+ символа пришли быстро (< 60ms) — это точно сканер, блокируем ввод в другие поля
+      if (buf.length >= 2 && delta < 60) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+
+      if (flushId) clearTimeout(flushId)
+      flushId = setTimeout(flush, 150)
+    }
+
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [addMode, canManageStageData])
+
   // Добавить позицию
   const handleAddItem = async () => {
-    if (!newBarcode.trim() || Number(newQty) < 1) return
+    const effectiveQty = singleScanMode ? 1 : Number(newQty)
+    if (!newBarcode.trim() || effectiveQty < 1) return
     setIsAddingSaving(true)
     setError(null)
+
+    let resolvedName = newName.trim()
+    let resolvedSize = newSize.trim()
+    let resolvedColor = newColor.trim()
+    let resolvedArticle = newArticle.trim()
+    if (!resolvedName && newBarcode.trim().length >= 8) {
+      try {
+        const found = await lookupProductByBarcode(accountId, batch.store_id, newBarcode.trim())
+        if (found) {
+          resolvedName = found.name ?? ''
+          resolvedSize = found.size ?? ''
+          resolvedColor = found.color ?? ''
+          resolvedArticle = found.article ?? ''
+        }
+      } catch { /* ignore */ }
+    }
+
     try {
-      const item = await addItem({
-        batch_id: batch.id,
-        barcode: newBarcode.trim(),
-        product_name: newName.trim() || null,
-        size: newSize.trim() || null,
-        color: newColor.trim() || null,
-        article: null,
-        qty_received: Number(newQty),
-        qty_otk: null,
-        qty_marked: null,
-        qty_packed: null,
-        boxes: null,
-        notes: null,
-        sort_order: items.length,
-      })
-      const next = [...items, item]
-      setItems(next)
-      onItemsChanged(next)
-      void recalcOtkDiscrepancy(next, otkLogs)
-      setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize(''); setNewColor('')
+      const existing = items.find((i) => i.barcode === newBarcode.trim())
+      if (existing) {
+        if (pendingItemIds.has(existing.id)) {
+          const next = items.map((i) => i.id === existing.id ? { ...i, qty_received: i.qty_received + effectiveQty } : i)
+          setItems(next); onItemsChanged(next); setIsDirty(true)
+          void recalcOtkDiscrepancy(next, otkLogs)
+        } else {
+          const newQty = (receptionDraft[existing.id] ?? existing.qty_received) + effectiveQty
+          setReceptionDraft((p) => ({ ...p, [existing.id]: newQty }))
+          setIsDirty(true)
+          void recalcOtkDiscrepancy(items, otkLogs)
+        }
+      } else {
+        const tempId = `_local_${crypto.randomUUID()}`
+        const localItem: FulfillmentItem = {
+          id: tempId, batch_id: batch.id, barcode: newBarcode.trim(),
+          product_name: resolvedName || null, size: resolvedSize || null,
+          color: resolvedColor || null, article: resolvedArticle || null,
+          qty_received: effectiveQty, qty_otk: null, qty_marked: null, qty_packed: null,
+          boxes: null, notes: null, sort_order: items.length,
+          created_at: new Date().toISOString(),
+        }
+        const next = [...items, localItem]
+        setItems(next); onItemsChanged(next)
+        setPendingItemIds((prev) => new Set([...prev, tempId]))
+        setIsDirty(true)
+        void recalcOtkDiscrepancy(next, otkLogs)
+      }
+      setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize(''); setNewColor(''); setNewArticle('')
       barcodeInputRef.current?.focus()
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
@@ -1216,16 +1344,17 @@ const BatchDetailModal = ({
   }
 
   const handleDeleteItem = async (id: string) => {
-    try {
-      await deleteItem(id)
+    if (pendingItemIds.has(id)) {
+      // Ещё не сохранён в БД — просто убираем из state
       const next = items.filter((i) => i.id !== id)
-      setItems(next)
-      onItemsChanged(next)
-      setReceptionDraft((p) => { const n = { ...p }; delete n[id]; return n })
+      setItems(next); onItemsChanged(next)
+      setPendingItemIds((prev) => { const n = new Set(prev); n.delete(id); return n })
       void recalcOtkDiscrepancy(next, otkLogs)
-    } catch (err) {
-      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
+      return
     }
+    // Сохранённый item — помечаем на удаление (не удаляем сразу)
+    setPendingDeleteIds((prev) => new Set([...prev, id]))
+    setIsDirty(true)
   }
 
   // Режим «Навалом»
@@ -1234,24 +1363,20 @@ const BatchDetailModal = ({
     setIsAddingSaving(true)
     setError(null)
     try {
-      const item = await addItem({
-        batch_id: batch.id,
-        barcode: '',
+      const tempId = `_local_${crypto.randomUUID()}`
+      const localItem: FulfillmentItem = {
+        id: tempId, batch_id: batch.id, barcode: '',
         product_name: bulkNote.trim() || 'Общая партия',
-        size: null,
-        color: null,
-        article: null,
+        size: null, color: null, article: null,
         qty_received: Number(bulkQty),
-        qty_otk: null,
-        qty_marked: null,
-        qty_packed: null,
-        boxes: null,
-        notes: null,
-        sort_order: items.length,
-      })
-      const next = [...items, item]
-      setItems(next)
-      onItemsChanged(next)
+        qty_otk: null, qty_marked: null, qty_packed: null,
+        boxes: null, notes: null, sort_order: items.length,
+        created_at: new Date().toISOString(),
+      }
+      const next = [...items, localItem]
+      setItems(next); onItemsChanged(next)
+      setPendingItemIds((prev) => new Set([...prev, tempId]))
+      setIsDirty(true)
       void recalcOtkDiscrepancy(next, otkLogs)
       setBulkQty(''); setBulkNote('')
     } catch (err) {
@@ -1261,65 +1386,32 @@ const BatchDetailModal = ({
     }
   }
 
-  // Режим «По предмету»
-  const handleSubjectAdd = async () => {
-    if (!subjectName.trim() || Number(subjectQty) < 1) return
-    setIsAddingSaving(true)
-    setError(null)
-    try {
-      const item = await addItem({
-        batch_id: batch.id,
-        barcode: '',
-        product_name: subjectName.trim(),
-        size: null,
-        color: null,
-        article: null,
-        qty_received: Number(subjectQty),
-        qty_otk: null,
-        qty_marked: null,
-        qty_packed: null,
-        boxes: null,
-        notes: null,
-        sort_order: items.length,
-      })
-      const next = [...items, item]
-      setItems(next)
-      onItemsChanged(next)
-      void recalcOtkDiscrepancy(next, otkLogs)
-      setSubjectName(''); setSubjectQty('')
-    } catch (err) {
-      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
-    } finally {
-      setIsAddingSaving(false)
-    }
-  }
+
 
   // Режим «Готовые короба»
   const handleBoxesAdd = async () => {
-    if (Number(boxesQty) < 1 || Number(boxesCount) < 1) return
+    if (Number(boxesCount) < 1) return
     setIsAddingSaving(true)
     setError(null)
     try {
-      const qty = Number(boxesQty)
-      const item = await addItem({
-        batch_id: batch.id,
-        barcode: '',
+      const qty = Number(boxesQty) || 0
+      const tempId = `_local_${crypto.randomUUID()}`
+      const localItem: FulfillmentItem = {
+        id: tempId, batch_id: batch.id, barcode: '',
         product_name: 'Готовые короба',
-        size: null,
-        color: null,
-        article: null,
-        qty_received: qty,
-        qty_otk: null,
-        qty_marked: null,
-        qty_packed: qty,
+        size: null, color: null, article: null,
+        qty_received: qty, qty_otk: null, qty_marked: null, qty_packed: qty,
         boxes: Number(boxesCount),
-        notes: null,
+        notes: boxesWarehouse.trim() || null,
         sort_order: items.length,
-      })
-      const next = [...items, item]
+        created_at: new Date().toISOString(),
+      }
+      const next = [...items, localItem]
       setItems(next)
       onItemsChanged(next)
-      setBoxesName(''); setBoxesQty(''); setBoxesCount('')
+      setPendingItemIds((prev) => new Set([...prev, tempId]))
+      setIsDirty(true)
+      setBoxesName(''); setBoxesQty(''); setBoxesCount(''); setBoxesWarehouse('')
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
@@ -1351,16 +1443,89 @@ const BatchDetailModal = ({
     setIsSavingDraft(true)
     setError(null)
     try {
-      const toUpdate = items.filter((it) => receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received)
+      let currentItems = [...items]
+      const currentPending = new Set(pendingItemIds)
+      let newlySavedReadyBoxItems: FulfillmentItem[] = []
+
+      // 1. Сохранить новые (пендинг) позиции в БД
+      if (currentPending.size > 0) {
+        const pendingList = currentItems.filter((it) => currentPending.has(it.id))
+        const savedList = await Promise.all(pendingList.map((it) => addItem({
+          batch_id: it.batch_id, barcode: it.barcode,
+          product_name: it.product_name, size: it.size,
+          color: it.color, article: it.article,
+          qty_received: it.qty_received,
+          qty_otk: null, qty_marked: null, qty_packed: it.qty_packed ?? null,
+          boxes: it.boxes ?? null, notes: it.notes ?? null, sort_order: it.sort_order,
+        })))
+        // Захватываем вновь сохранённые «Готовые короба» по реальным DB-объектам
+        newlySavedReadyBoxItems = savedList.filter(
+          (it) => it.product_name === 'Готовые короба' && (it.boxes ?? 0) > 0
+        )
+        const replacements = new Map(pendingList.map((p, i) => [p.id, savedList[i]]))
+        currentItems = currentItems.map((it) => replacements.get(it.id) ?? it)
+        setPendingItemIds(new Set())
+      }
+
+      // 2. Сохранить изменённые qty существующих позиций
+      const toUpdate = currentItems.filter((it) =>
+        !currentPending.has(it.id) &&
+        receptionDraft[it.id] !== undefined &&
+        receptionDraft[it.id] !== it.qty_received
+      )
       const updated = await Promise.all(toUpdate.map((it) => updateItem(it.id, { qty_received: receptionDraft[it.id] })))
-      const nextItems = items.map((it) => {
-        const upd = updated.find((u) => u.id === it.id)
-        return upd ? upd : it
-      })
-      setItems(nextItems)
-      onItemsChanged(nextItems)
-      // Пересчитать расхождение ОТК с учётом новых qty_received
-      await recalcOtkDiscrepancy(nextItems, otkLogs)
+      const finalItems = currentItems.map((it) => { const u = updated.find((x) => x.id === it.id); return u ?? it })
+
+      // Создать поставки для вновь сохранённых «Готовые короба» items
+      for (const item of newlySavedReadyBoxItems) {
+        const wh = warehouses.find((w) => w.name === item.notes)
+        const supply = await createSupply({
+          batch_id: batch.id,
+          account_id: batch.account_id,
+          warehouse_name: item.notes ?? '',
+          warehouse_id: wh?.id ?? null,
+          trip_id: null, trip_line_id: null,
+          created_by: userId || null,
+        })
+        const boxCount = item.boxes ?? 1
+        for (let i = 1; i <= boxCount; i++) {
+          const box = await createBox({ supply_id: supply.id, account_id: batch.account_id, box_number: i })
+          await closeBox(box.id)
+        }
+      }
+      if (newlySavedReadyBoxItems.length > 0) {
+        const freshSupplies = await fetchSupplies(batch.id)
+        setSupplies(freshSupplies)
+        rebuildSlotsFromSupplies(freshSupplies)
+      }
+
+      // 3. Применить отложенные удаления
+      const currentPendingDelete = new Set(pendingDeleteIds)
+      if (currentPendingDelete.size > 0) {
+        for (const id of currentPendingDelete) {
+          const itemToDelete = finalItems.find((i) => i.id === id)
+          await deleteItem(id)
+          // Если «Готовые короба» — удалить соответствующую поставку
+          if (itemToDelete?.product_name === 'Готовые короба' && itemToDelete.notes) {
+            const matchingSupply = supplies.find((s) =>
+              s.warehouse_name === itemToDelete.notes &&
+              s.boxes.every((b) => b.items.length === 0)
+            )
+            if (matchingSupply) {
+              await deleteSupply(matchingSupply.id)
+              const updatedSupplies = supplies.filter((s) => s.id !== matchingSupply.id)
+              setSupplies(updatedSupplies)
+              rebuildSlotsFromSupplies(updatedSupplies)
+            }
+          }
+        }
+        setPendingDeleteIds(new Set())
+      }
+
+      const finalItemsAfterDelete = finalItems.filter((it) => !currentPendingDelete.has(it.id))
+      setItems(finalItemsAfterDelete)
+      onItemsChanged(finalItemsAfterDelete)
+      await recalcOtkDiscrepancy(finalItemsAfterDelete, otkLogs)
       setIsDirty(false)
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
@@ -1542,24 +1707,21 @@ const BatchDetailModal = ({
     setIsAddingSaving(true)
     setError(null)
     try {
-      const item = await addItem({
-        batch_id: batch.id,
-        barcode,
+      const tempId = `_local_${crypto.randomUUID()}`
+      const localItem: FulfillmentItem = {
+        id: tempId, batch_id: batch.id, barcode,
         product_name: product.name ?? product.vendor_code ?? 'Товар',
-        size,
-        color: null,
+        size, color: null,
         article: product.vendor_code ?? null,
         qty_received: qty,
-        qty_otk: null,
-        qty_marked: null,
-        qty_packed: null,
-        boxes: null,
-        notes: null,
-        sort_order: items.length,
-      })
-      const next = [...items, item]
-      setItems(next)
-      onItemsChanged(next)
+        qty_otk: null, qty_marked: null, qty_packed: null,
+        boxes: null, notes: null, sort_order: items.length,
+        created_at: new Date().toISOString(),
+      }
+      const next = [...items, localItem]
+      setItems(next); onItemsChanged(next)
+      setPendingItemIds((prev) => new Set([...prev, tempId]))
+      setIsDirty(true)
       void recalcOtkDiscrepancy(next, otkLogs)
       setCatalogQties((prev) => { const n = { ...prev }; delete n[key]; return n })
     } catch (err) {
@@ -1594,6 +1756,72 @@ const BatchDetailModal = ({
         if (batch.current_stage === 'packing') await updateItem(id, { qty_packed: val.qty, boxes: val.boxes ?? 0 })
       }
       if (batch.current_stage === 'packing') await persistLocalSupplies()
+
+      // ── Завершение Приёмки: сохранить pending + создать поставки из «Готовых коробов» ──
+      if (batch.current_stage === 'reception') {
+        // 1. Сохранить pending items в БД (inline, как handleSaveReceptionDraft)
+        let savedItems = [...items]
+        const currentPending = new Set(pendingItemIds)
+        if (currentPending.size > 0) {
+          const pendingList = savedItems.filter((it) => currentPending.has(it.id))
+          const sList = await Promise.all(pendingList.map((it) => addItem({
+            batch_id: it.batch_id, barcode: it.barcode, product_name: it.product_name,
+            size: it.size, color: it.color, article: it.article,
+            qty_received: it.qty_received, qty_otk: null, qty_marked: null, qty_packed: it.qty_packed,
+            boxes: it.boxes, notes: it.notes, sort_order: it.sort_order,
+          })))
+          const m = new Map(pendingList.map((p, i) => [p.id, sList[i]]))
+          savedItems = savedItems.map((it) => m.get(it.id) ?? it)
+          setPendingItemIds(new Set())
+        }
+        const toUpd = savedItems.filter((it) => !currentPending.has(it.id) && receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received)
+        if (toUpd.length > 0) {
+          const upd = await Promise.all(toUpd.map((it) => updateItem(it.id, { qty_received: receptionDraft[it.id] })))
+          savedItems = savedItems.map((it) => { const u = upd.find((x) => x.id === it.id); return u ?? it })
+        }
+
+        // 2. Создать поставки для «Готовые короба» items
+        const readyBoxItems = savedItems.filter((it) => it.product_name === 'Готовые короба' && (it.boxes ?? 0) > 0)
+        for (const item of readyBoxItems) {
+          const wh = warehouses.find((w) => w.name === item.notes)
+          const supply = await createSupply({
+            batch_id: batch.id,
+            account_id: batch.account_id,
+            warehouse_name: item.notes ?? '',
+            warehouse_id: wh?.id ?? null,
+            trip_id: null, trip_line_id: null,
+            created_by: userId || null,
+          })
+          const boxCount = item.boxes ?? 1
+          for (let i = 1; i <= boxCount; i++) {
+            const box = await createBox({ supply_id: supply.id, account_id: batch.account_id, box_number: i })
+            await closeBox(box.id)
+          }
+        }
+
+        // 3. Если ВСЕ items — «Готовые короба» → сразу в Логистику
+        if (readyBoxItems.length > 0 && readyBoxItems.length === savedItems.length) {
+          if (supabase) {
+            await (supabase as any).from('fulfillment_stage_logs').insert({ batch_id: batch.id, stage: 'reception' })
+          }
+          const updated = await updateBatch(batch.id, { current_stage: 'logistics', status: 'active' })
+          const newBatch = { ...batch, ...updated }
+          setBatch(newBatch)
+          onBatchUpdated(updated)
+          setItems(savedItems)
+          onItemsChanged(savedItems)
+          setIsDirty(false)
+          const freshSupplies = await fetchSupplies(batch.id)
+          setSupplies(freshSupplies)
+          rebuildSlotsFromSupplies(freshSupplies)
+          return
+        }
+
+        // 4. Смешанная партия → обновляем state и продолжаем обычный advanceStage
+        setItems(savedItems)
+        onItemsChanged(savedItems)
+        setIsDirty(false)
+      }
 
       // При завершении логистики — создаём trip_lines из поставок фулфилмента
       const hasAnyTripSlot = tripSlots.some((s) => s.tripId)
@@ -2272,7 +2500,7 @@ const BatchDetailModal = ({
   const nextStageName = enabledStages[currentIdx + 1]
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black/40" style={{ zIndex }} onClick={() => isDirty ? setPendingClose(true) : onClose()}>
+    <div className="fixed inset-0 bg-black/40" style={{ zIndex }} onClick={() => isDirty ? setPendingClose(true) : onClose()}>
       <div
         className="flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
@@ -2384,8 +2612,8 @@ const BatchDetailModal = ({
         </div>
 
         {/* Stage progress */}
-        <div className="border-b border-slate-100 px-6 py-5">
-          <div className="flex items-start" style={{ minHeight: 96 }}>
+        <div className="border-b border-slate-100 px-6 py-2.5">
+          <div className="flex items-start" style={{ minHeight: 72 }}>
             {(['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics'] as FulfillmentStage[]).map((s, idx, arr) => {
               const stageIdx = STAGE_ORDER.indexOf(s)
               const currentStageIdx = STAGE_ORDER.indexOf(activeSubStage)
@@ -2413,11 +2641,11 @@ const BatchDetailModal = ({
 
               return (
                 <div key={s} className={`flex flex-col ${isLast ? '' : 'flex-1'}`}>
-                  <div className="flex w-full items-center" style={{ height: 64 }}>
-                    <div className="flex w-16 shrink-0 items-center justify-center">
+                  <div className="flex w-full items-center" style={{ height: 52 }}>
+                    <div className="flex w-14 shrink-0 items-center justify-center">
                       <div className="relative flex items-center justify-center">
                         {/* Фоновый шар выбранного этапа */}
-                        <div className={`absolute w-20 h-20 rounded-full pointer-events-none transition-all duration-500 ease-out left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2
+                        <div className={`absolute w-16 h-16 rounded-full pointer-events-none transition-all duration-500 ease-out left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2
                           ${isDone ? 'bg-emerald-200' : isCurrent ? 'bg-blue-200' : 'bg-slate-200'}
                           ${isSelected ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`} />
                       <button
@@ -2432,7 +2660,7 @@ const BatchDetailModal = ({
                               : undefined
                         }
                         className={`relative z-10 flex shrink-0 items-center justify-center rounded-full font-bold transition-all duration-300 ease-in-out
-                          ${isSelected ? 'h-16 w-16' : 'h-12 w-12'}
+                          ${isSelected ? 'h-12 w-12' : 'h-10 w-10'}
                           ${isClickable ? 'cursor-pointer' : 'cursor-default'}
                           ${!isEnabled ? 'border-2 border-dashed border-slate-200 bg-white text-slate-300' :
                             isDone ? 'bg-emerald-500 text-white' :
@@ -2440,15 +2668,15 @@ const BatchDetailModal = ({
                             canToggle ? 'bg-slate-100 text-slate-400 hover:bg-slate-200' :
                             'bg-slate-100 text-slate-400'}`}>
                         {!isEnabled ? (
-                          <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-7 w-7' : 'h-5 w-5'}`} fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-5 w-5' : 'h-4 w-4'}`} fill="none" stroke="currentColor" strokeWidth="2.5">
                             <line x1="5" y1="12" x2="19" y2="12" />
                           </svg>
                         ) : isDone ? (
-                          <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-7 w-7' : 'h-5 w-5'}`} fill="none" stroke="currentColor" strokeWidth="3">
+                          <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-5 w-5' : 'h-4 w-4'}`} fill="none" stroke="currentColor" strokeWidth="3">
                             <path d="M20 6 9 17l-5-5" />
                           </svg>
                         ) : (
-                          <span className={`transition-all duration-300 ease-in-out leading-none ${isSelected ? 'text-2xl' : 'text-sm'}`}>{idx + 1}</span>
+                          <span className={`transition-all duration-300 ease-in-out leading-none ${isSelected ? 'text-xl' : 'text-sm'}`}>{idx + 1}</span>
                         )}
                       </button>
                       </div>
@@ -2500,19 +2728,19 @@ const BatchDetailModal = ({
                       )
                     })()}
                   </div>
-                  <div className="flex w-16 flex-col items-center">
-                    <span className={`mt-2 text-center text-xs font-medium leading-tight
+                  <div className="flex w-14 flex-col items-center">
+                    <span className={`mt-1.5 text-center text-xs font-medium leading-tight
                       ${isDone ? 'text-emerald-600' : isCurrent ? 'text-blue-600' : !isEnabled ? 'text-slate-300 line-through' : 'text-slate-400'}`}>
                       {STAGE_LABELS[s]}
                     </span>
                     {/* Dot — всегда в DOM, анимированно выезжает из-за родителя */}
                     {canStageJump && isEnabled && (isDone || isCurrent) && (
                       <div
-                        className={`mt-1.5 h-3.5 w-3.5 rounded-full transition-all duration-500 ease-out pointer-events-none
+                        className={`mt-1 h-2.5 w-2.5 rounded-full transition-all duration-500 ease-out pointer-events-none
                           ${dotColor}
                           ${isSelected
                             ? 'translate-y-0 scale-100 opacity-100'
-                            : '-translate-y-12 scale-0 opacity-0'}`}
+                            : '-translate-y-10 scale-0 opacity-0'}`}
                       />
                     )}
                   </div>
@@ -2589,7 +2817,7 @@ const BatchDetailModal = ({
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-scroll px-6 py-4 [scrollbar-color:theme(colors.slate.300)_transparent] [scrollbar-width:thin]">
+        <div className={`flex-1 px-6 py-4 [scrollbar-color:theme(colors.slate.300)_transparent] [scrollbar-width:thin] ${viewStage === 'reception' ? 'overflow-hidden flex flex-col' : 'overflow-y-scroll'}`}>
           {error && <div className="mb-4 rounded-2xl bg-red-50 px-4 py-2.5 text-sm text-red-600">{error}</div>}
 
           {/* Сводная статистика — для всех этапов кроме приёмки */}
@@ -2708,19 +2936,21 @@ const BatchDetailModal = ({
 
           {/* ПРИЁМКА */}
           {viewStage === 'reception' && (
-            <div className="space-y-4">
+            <div className="flex-1 flex flex-col gap-4 min-h-0">
 
               {/* Переключатель режимов */}
               {canManageStageData && (
                 <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-0.5 w-fit">
                   {([
                     ['bulk', 'Навалом'],
-                    ['subject', 'По предмету'],
                     ['catalog', 'Из каталога'],
                     ['barcode', 'По баркоду'],
                     ['boxes', 'Готовые короба'],
                   ] as [AddMode, string][]).map(([mode, label]) => (
-                    <button key={mode} type="button" onClick={() => setAddMode(mode)}
+                    <button key={mode} type="button" onClick={() => {
+                      setAddMode(mode)
+                      if (mode === 'barcode') setTimeout(() => barcodeInputRef.current?.focus(), 50)
+                    }}
                       className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${addMode === mode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                       {label}
                     </button>
@@ -2730,21 +2960,25 @@ const BatchDetailModal = ({
 
               {/* Режим: По баркоду */}
               {canManageStageData && addMode === 'barcode' && (
-                <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-3">
+                <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-2">
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Баркод *</span>
                     <div className="flex gap-1">
                       <input ref={barcodeInputRef} type="text" value={newBarcode}
-                        onChange={(e) => void handleBarcodeChange(e.target.value)}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          // Двойной скан: сканер добавляет 2-й баркод в конец — берём последние 13
+                          void handleBarcodeChange(v.length > 13 ? v.slice(-13) : v)
+                        }}
                         onKeyDown={(e) => { if (e.key === 'Enter') void handleAddItem() }}
                         placeholder="Сканируй или введи"
                         className="w-36 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                       />
                       <button
                         type="button"
-                        title="Открыть камеру для сканирования"
+                        title="Открыть камеру для сканирования (только мобильные)"
                         onClick={() => setReceptionCameraOpen((o) => !o)}
-                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${receptionCameraOpen ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-slate-200 bg-white text-slate-400 hover:text-blue-500 hover:border-blue-300'}`}
+                        className={`hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${receptionCameraOpen ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-slate-200 bg-white text-slate-400 hover:text-blue-500 hover:border-blue-300'}`}
                       >
                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
                           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -2835,7 +3069,7 @@ const BatchDetailModal = ({
 
               {/* Режим: Навалом */}
               {canManageStageData && addMode === 'bulk' && (
-                <div className="rounded-2xl bg-slate-50 p-3 space-y-2">
+                <div className="rounded-2xl bg-slate-50 p-2 space-y-2">
                   <div className="flex flex-wrap items-end gap-2">
                     <div className="flex flex-col gap-1">
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Кол-во единиц *</span>
@@ -2863,42 +3097,15 @@ const BatchDetailModal = ({
                 </div>
               )}
 
-              {/* Режим: По предмету */}
-              {canManageStageData && addMode === 'subject' && (
-                <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-3">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Предмет / Категория *</span>
-                    <input type="text" value={subjectName} onChange={(e) => setSubjectName(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void handleSubjectAdd() }}
-                      placeholder="Шорты / Джинсы карго / Футболка"
-                      className="w-64 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Кол-во *</span>
-                    <input type="text" inputMode="numeric" value={subjectQty} onChange={(e) => setSubjectQty(e.target.value)}
-                      placeholder="0"
-                      className="w-24 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-                    />
-                  </div>
-                  <button type="button" onClick={() => void handleSubjectAdd()}
-                    disabled={isAddingSaving || !subjectName.trim() || Number(subjectQty) < 1}
-                    className="flex h-9 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
-                    Добавить
-                  </button>
-                </div>
-              )}
-
               {/* Режим: Готовые короба */}
               {canManageStageData && addMode === 'boxes' && (
-                <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-orange-50 p-3 border border-orange-100">
+                <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-orange-50 p-2">
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Единиц *</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Единиц</span>
                     <input type="text" inputMode="numeric" value={boxesQty} onChange={(e) => setBoxesQty(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') void handleBoxesAdd() }}
                       placeholder="0"
-                      className="w-24 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+                      className="w-20 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
@@ -2906,114 +3113,158 @@ const BatchDetailModal = ({
                     <input type="text" inputMode="numeric" value={boxesCount} onChange={(e) => setBoxesCount(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') void handleBoxesAdd() }}
                       placeholder="0"
-                      className="w-24 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+                      className="w-20 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
                     />
                   </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Склад ВБ *</span>
+                    <select value={boxesWarehouse} onChange={(e) => setBoxesWarehouse(e.target.value)}
+                      className="rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100">
+                      <option value="">— не указан —</option>
+                      {warehouses.map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
+                    </select>
+                  </div>
                   <button type="button" onClick={() => void handleBoxesAdd()}
-                    disabled={isAddingSaving || Number(boxesQty) < 1 || Number(boxesCount) < 1}
+                    disabled={isAddingSaving || Number(boxesCount) < 1 || !boxesWarehouse.trim()}
                     className="flex h-9 items-center gap-1.5 rounded-xl bg-orange-500 px-4 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
                     Добавить
                   </button>
-                  <p className="w-full text-xs text-orange-400">Позиция будет сразу помечена как упакованная — этапы маркировки/упаковки можно пропустить.</p>
                 </div>
               )}
 
               {/* Режим: Из каталога */}
               {canManageStageData && addMode === 'catalog' && (
-                <div className="space-y-3">
-                  {!store?.api_key ? (
-                    <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                      У магазина нет API-ключа — каталог недоступен. Сначала выберите магазин с ключом при создании партии.
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <input type="text" value={catalogSearch}
-                          onChange={(e) => void handleCatalogSearch(e.target.value)}
-                          placeholder="Поиск по названию или артикулу WB..."
-                          className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-                        />
-                        {isSearching && <span className="text-xs text-slate-400">⟳</span>}
+                <div className="relative">
+                  {/* Строка поиска — та же высота что у других режимов */}
+                  <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-2">
+                    {!store?.api_key ? (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Поиск по товару</span>
+                        <span className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-400">Нет API-ключа у магазина</span>
                       </div>
-                      {catalogResults.length > 0 && (
-                        <div className="space-y-2 max-h-72 overflow-y-auto">
-                          {catalogResults.map((product) => (
-                            <div key={product.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-                              <div className="mb-2">
-                                <p className="text-sm font-medium text-slate-800 line-clamp-1">{product.name ?? product.vendor_code ?? 'Товар'}</p>
-                                {product.vendor_code && <p className="text-xs text-slate-400">{product.vendor_code}</p>}
+                    ) : (
+                      <div className="flex flex-col gap-1 flex-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Поиск по товару</span>
+                        <div className="flex items-center gap-2">
+                          <div className="relative flex-1">
+                            <input type="text" value={catalogSearch}
+                              onChange={(e) => void handleCatalogSearch(e.target.value)}
+                              placeholder="Поиск по названию или артикулу WB..."
+                              className="w-full rounded-xl border border-slate-200 px-3 py-1.5 pr-7 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                            />
+                            {catalogSearch && (
+                              <button type="button" onClick={() => { void handleCatalogSearch(''); setCatalogResults([]) }}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                              </button>
+                            )}
+                          </div>
+                          {isSearching && <span className="text-xs text-slate-400">⟳</span>}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Результаты поиска — абсолютный оверлей, не сдвигает контент */}
+                  {store?.api_key && (catalogResults.length > 0 || (catalogSearch.length >= 2 && !isSearching)) && (
+                    <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl [scrollbar-width:thin]">
+                      {catalogResults.length === 0 ? (
+                        <div className="px-4 py-6 text-center text-sm text-slate-400">Товары не найдены</div>
+                      ) : catalogResults.map((product) => (
+                        <div key={product.id} className="border-b border-slate-100 px-4 py-3 last:border-0">
+                          <div className="mb-2 flex items-center gap-2">
+                            <PhotoThumb url={product.photos?.[0]?.c246x328 ?? product.photos?.[0]?.big ?? null} className="h-8 w-8 rounded-lg flex-shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-slate-800 line-clamp-1">{product.name ?? product.vendor_code ?? 'Товар'}</p>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {product.nm_id && <a href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-blue-500 hover:underline">{product.nm_id}</a>}
+                                {product.brand && <span className="text-xs text-slate-400">{product.brand}</span>}
+                                {product.vendor_code && <span className="text-xs text-slate-400">{product.vendor_code}</span>}
                               </div>
-                              <div className="space-y-1">
-                                {product.sizes && product.sizes.length > 0
-                                  ? product.sizes.map((sz, sIdx) => {
-                                      const key = `${product.id}_${sIdx}`
-                                      return (
-                                        <div key={key} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-1.5">
-                                          <span className="w-10 text-xs font-semibold text-slate-600">{sz.techSize ?? '—'}</span>
-                                          <span className="flex-1 font-mono text-[11px] text-slate-400 truncate">{sz.skus?.[0] ?? '—'}</span>
-                                          <input type="number" min={0} value={catalogQties[key] ?? 0}
-                                            onChange={(e) => setCatalogQties((p) => ({ ...p, [key]: Number(e.target.value) }))}
-                                            className="w-14 rounded-lg border border-slate-200 px-2 py-0.5 text-center text-xs outline-none focus:border-blue-300"
-                                          />
-                                          <button type="button" onClick={() => void handleCatalogAdd(product, sIdx)}
-                                            disabled={isAddingSaving || (catalogQties[key] ?? 0) < 1}
-                                            className="rounded-lg bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed">
-                                            + Добавить
-                                          </button>
-                                        </div>
-                                      )
-                                    })
-                                  : (
-                                    <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-1.5">
-                                      <span className="flex-1 font-mono text-[11px] text-slate-400 truncate">{product.barcodes[0] ?? '—'}</span>
-                                      <input type="number" min={0} value={catalogQties[product.id] ?? 0}
-                                        onChange={(e) => setCatalogQties((p) => ({ ...p, [product.id]: Number(e.target.value) }))}
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            {product.sizes && product.sizes.length > 0
+                              ? [...product.sizes].sort((a, b) => {
+                                  const order = ['XXS','XS','S','S/M','M','M/L','L','L/XL','XL','XXL','2XL','3XL','4XL','5XL','6XL']
+                                  const ai = order.indexOf(a.techSize ?? '')
+                                  const bi = order.indexOf(b.techSize ?? '')
+                                  if (ai !== -1 && bi !== -1) return ai - bi
+                                  if (ai !== -1) return -1
+                                  if (bi !== -1) return 1
+                                  const an = parseFloat(a.techSize ?? '')
+                                  const bn = parseFloat(b.techSize ?? '')
+                                  if (!isNaN(an) && !isNaN(bn)) return an - bn
+                                  return (a.techSize ?? '').localeCompare(b.techSize ?? '')
+                                }).map((sz) => {
+                                  const sIdx = product.sizes.indexOf(sz)
+                                  const key = `${product.id}_${sIdx}`
+                                  return (
+                                    <div key={key} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-1.5">
+                                      <span className="w-10 text-xs font-semibold text-slate-600">{sz.techSize ?? '—'}</span>
+                                      <span className="flex-1 font-mono text-[11px] text-slate-400 truncate">{sz.skus?.[0] ?? '—'}</span>
+                                      <input type="number" min={0} value={catalogQties[key] ?? 0}
+                                        onChange={(e) => setCatalogQties((p) => ({ ...p, [key]: Number(e.target.value) }))}
                                         className="w-14 rounded-lg border border-slate-200 px-2 py-0.5 text-center text-xs outline-none focus:border-blue-300"
                                       />
-                                      <button type="button" onClick={() => void handleCatalogAdd(product)}
-                                        disabled={isAddingSaving || (catalogQties[product.id] ?? 0) < 1}
+                                      <button type="button" onClick={() => void handleCatalogAdd(product, sIdx)}
+                                        disabled={isAddingSaving || (catalogQties[key] ?? 0) < 1}
                                         className="rounded-lg bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed">
                                         + Добавить
                                       </button>
                                     </div>
                                   )
-                                }
-                              </div>
-                            </div>
-                          ))}
+                                })
+                              : (
+                                <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-1.5">
+                                  <span className="flex-1 font-mono text-[11px] text-slate-400 truncate">{product.barcodes[0] ?? '—'}</span>
+                                  <input type="number" min={0} value={catalogQties[product.id] ?? 0}
+                                    onChange={(e) => setCatalogQties((p) => ({ ...p, [product.id]: Number(e.target.value) }))}
+                                    className="w-14 rounded-lg border border-slate-200 px-2 py-0.5 text-center text-xs outline-none focus:border-blue-300"
+                                  />
+                                  <button type="button" onClick={() => void handleCatalogAdd(product)}
+                                    disabled={isAddingSaving || (catalogQties[product.id] ?? 0) < 1}
+                                    className="rounded-lg bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    + Добавить
+                                  </button>
+                                </div>
+                              )
+                            }
+                          </div>
                         </div>
-                      )}
-                      {catalogSearch.length >= 2 && !isSearching && catalogResults.length === 0 && (
-                        <div className="rounded-2xl border-2 border-dashed border-slate-200 py-6 text-center text-sm text-slate-400">
-                          Товары не найдены
-                        </div>
-                      )}
-                    </>
+                      ))}
+                    </div>
                   )}
                 </div>
               )}
 
               {/* Таблица добавленных позиций */}
               {items.length > 0 ? (
-                <div className="overflow-hidden rounded-2xl border border-slate-200">
+                <div className="flex-1 min-h-0 overflow-y-auto rounded-2xl border border-slate-200">
                   <table className="w-full text-sm">
-                    <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       <tr>
                         <th className="px-4 py-2.5 text-left">Баркод</th>
                         <th className="px-4 py-2.5 text-left">Наименование</th>
+                        <th className="px-4 py-2.5 text-left">Артикул ВБ</th>
                         <th className="px-4 py-2.5 text-left">Цвет</th>
                         <th className="px-4 py-2.5 text-left">Размер</th>
-                        <th className="px-3 py-2.5 text-center">Принято</th>
+                        <th className="px-3 py-2.5 text-center">Единиц</th>
                         {items.some((i) => i.boxes) && <th className="px-3 py-2.5 text-center">Коробов</th>}
+                        {items.some((i) => i.notes) && <th className="px-4 py-2.5 text-left">Склад</th>}
                         {canManageStageData && <th className="px-3 py-2.5" />}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {items.map((it) => (
-                        <tr key={it.id} className="hover:bg-slate-50/50">
+                      {[...items].sort((a, b) => {
+                        const aBox = a.product_name === 'Готовые короба' ? 1 : 0
+                        const bBox = b.product_name === 'Готовые короба' ? 1 : 0
+                        return aBox - bBox
+                      }).map((it) => (
+                        <tr key={it.id} className={`${pendingDeleteIds.has(it.id) ? 'opacity-40 line-through bg-red-50/60' : it.product_name === 'Готовые короба' ? 'bg-orange-50/60 hover:bg-orange-50' : `hover:bg-slate-50/50 ${pendingItemIds.has(it.id) ? 'bg-blue-50/60' : ''}`}`}>
                           <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{it.barcode || <span className="text-slate-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-slate-700">{it.product_name ?? <span className="text-slate-300">—</span>}</td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{it.article ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-slate-500">{it.color ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-slate-500">{it.size ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-3 py-2.5 text-center">
@@ -3031,6 +3282,9 @@ const BatchDetailModal = ({
                                 : <span className="text-slate-300">—</span>}
                             </td>
                           )}
+                          {items.some((i) => i.notes) && (
+                            <td className="px-4 py-2.5 text-sm text-slate-500">{it.notes ?? <span className="text-slate-300">—</span>}</td>
+                          )}
                           {canManageStageData && (
                             <td className="px-3 py-2.5 text-center">
                               <button type="button" onClick={() => void handleDeleteItem(it.id)} className="text-slate-300 hover:text-red-400">
@@ -3043,7 +3297,7 @@ const BatchDetailModal = ({
                         </tr>
                       ))}
                     </tbody>
-                    <tfoot className="border-t border-slate-200 bg-slate-50 font-semibold">
+                    <tfoot className="sticky bottom-0 z-10 border-t border-slate-200 bg-slate-50 font-semibold">
                       <tr>
                         <td colSpan={5} className="px-4 py-2.5 text-sm text-slate-500">
                           <span>Итого</span>
@@ -3053,8 +3307,9 @@ const BatchDetailModal = ({
                             </span>
                           )}
                         </td>
-                        <td className="px-3 py-2.5 text-center text-slate-800">{tReceived}</td>
+                        <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, it) => s + (receptionDraft[it.id] ?? it.qty_received ?? 0), 0)}</td>
                         {items.some((i) => i.boxes) && <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, i) => s + (i.boxes ?? 0), 0) || '—'}</td>}
+                        {items.some((i) => i.notes) && <td />}
                         {canManageStageData && <td />}
                       </tr>
                     </tfoot>
@@ -5135,7 +5390,7 @@ const BatchDetailModal = ({
                           {canManageStageData && (
                             <div className="border-t border-slate-100 px-5 py-3">
                               <button
-                                onClick={() => { setAddBoxNum(String(nextBoxNum)); setAddBoxModal({ supplyId: supply.id, nextNum: nextBoxNum }) }}
+                                onClick={() => { setAddBoxNum(String(nextBoxNum)); setAddBoxNumTo(''); setAddBoxQty(''); setAddBoxMode('single'); setAddBoxModal({ supplyId: supply.id, nextNum: nextBoxNum }) }}
                                 className="w-full rounded-xl border border-dashed border-blue-300 py-2.5 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors"
                               >
                                 + Добавить короб #{nextBoxNum}
@@ -5153,46 +5408,113 @@ const BatchDetailModal = ({
                     if (!addSup) return null
                     return createPortal(
                       <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40" onClick={() => setAddBoxModal(null)}>
-                        <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl p-6 space-y-5" onClick={(e) => e.stopPropagation()}>
+                        <div className="w-full max-w-md rounded-3xl bg-white shadow-2xl p-6 space-y-5" onClick={(e) => e.stopPropagation()}>
                           <p className="text-base font-semibold text-slate-800">Новый короб</p>
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-slate-500">Номер короба</label>
-                            <input
-                              type="number"
-                              autoFocus
-                              value={addBoxNum}
-                              onChange={(e) => setAddBoxNum(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.form?.requestSubmit?.() }}
-                              className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                            />
+                          {/* Два блока горизонтально */}
+                          <div className="flex gap-3">
+                            {/* Одиночный */}
+                            <div
+                              onClick={() => setAddBoxMode('single')}
+                              className={`flex-1 cursor-pointer rounded-2xl border-2 p-4 transition-all ${addBoxMode === 'single' ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
+                            >
+                              <div className="flex items-center gap-2 mb-3">
+                                <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center ${addBoxMode === 'single' ? 'border-blue-500' : 'border-slate-300'}`}>
+                                  {addBoxMode === 'single' && <div className="h-2 w-2 rounded-full bg-blue-500" />}
+                                </div>
+                                <span className={`text-sm font-medium ${addBoxMode === 'single' ? 'text-blue-700' : 'text-slate-500'}`}>Одиночный</span>
+                              </div>
+                              <div className="space-y-1">
+                                <label className={`text-xs font-medium ${addBoxMode === 'single' ? 'text-slate-500' : 'text-slate-300'}`}>Номер короба</label>
+                                <input
+                                  type="number"
+                                  autoFocus
+                                  value={addBoxNum}
+                                  onChange={(e) => setAddBoxNum(e.target.value)}
+                                  disabled={addBoxMode !== 'single'}
+                                  className={`w-full rounded-xl border px-3 py-2 text-sm font-semibold outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${addBoxMode === 'single' ? 'border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100' : 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed'}`}
+                                />
+                              </div>
+                            </div>
+                            {/* Несколько */}
+                            <div
+                              onClick={() => setAddBoxMode('multi')}
+                              className={`flex-1 cursor-pointer rounded-2xl border-2 p-4 transition-all ${addBoxMode === 'multi' ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
+                            >
+                              <div className="flex items-center gap-2 mb-3">
+                                <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center ${addBoxMode === 'multi' ? 'border-blue-500' : 'border-slate-300'}`}>
+                                  {addBoxMode === 'multi' && <div className="h-2 w-2 rounded-full bg-blue-500" />}
+                                </div>
+                                <span className={`text-sm font-medium ${addBoxMode === 'multi' ? 'text-blue-700' : 'text-slate-500'}`}>Несколько</span>
+                              </div>
+                              <div className="space-y-1 mb-2">
+                                <label className={`text-xs font-medium ${addBoxMode === 'multi' ? 'text-slate-500' : 'text-slate-300'}`}>Кол-во коробов</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={addBoxQty}
+                                  onChange={(e) => {
+                                    setAddBoxQty(e.target.value)
+                                    const q = parseInt(e.target.value) || 1
+                                    const from = parseInt(addBoxNum) || (addBoxModal?.nextNum ?? 1)
+                                    setAddBoxNumTo(String(from + q - 1))
+                                  }}
+                                  disabled={addBoxMode !== 'multi'}
+                                  className={`w-full rounded-xl border px-3 py-2 text-sm font-semibold outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${addBoxMode === 'multi' ? 'border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100' : 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed'}`}
+                                />
+                              </div>
+                              <div className="flex gap-2">
+                                <div className="flex-1 space-y-1">
+                                  <label className={`text-xs font-medium ${addBoxMode === 'multi' ? 'text-slate-500' : 'text-slate-300'}`}>От</label>
+                                  <input
+                                    type="number"
+                                    value={addBoxNum}
+                                    onChange={(e) => setAddBoxNum(e.target.value)}
+                                    disabled={addBoxMode !== 'multi'}
+                                    className={`w-full rounded-xl border px-3 py-2 text-sm font-semibold outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${addBoxMode === 'multi' ? 'border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100' : 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed'}`}
+                                  />
+                                </div>
+                                <div className="flex-1 space-y-1">
+                                  <label className={`text-xs font-medium ${addBoxMode === 'multi' ? 'text-slate-500' : 'text-slate-300'}`}>До</label>
+                                  <input
+                                    type="number"
+                                    value={addBoxNumTo}
+                                    onChange={(e) => setAddBoxNumTo(e.target.value)}
+                                    disabled={addBoxMode !== 'multi'}
+                                    className={`w-full rounded-xl border px-3 py-2 text-sm font-semibold outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${addBoxMode === 'multi' ? 'border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100' : 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed'}`}
+                                  />
+                                </div>
+                              </div>
+                            </div>
                           </div>
                           <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setAddBoxModal(null)}
-                              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
-                            >
+                            <button type="button" onClick={() => setAddBoxModal(null)}
+                              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
                               Отмена
                             </button>
                             <button
                               type="button"
                               onClick={() => {
                                 const now = new Date().toISOString()
-                                const newBoxes = [{
-                                  id: crypto.randomUUID(),
-                                  _local: true,
-                                  supply_id: addBoxModal.supplyId,
-                                  account_id: accountId,
-                                  box_number: parseInt(addBoxNum) || addBoxModal.nextNum,
-                                  status: 'open' as const,
-                                  created_at: now,
-                                  items: [],
-                                }]
+                                let newBoxes: typeof supplies[0]['boxes']
+                                if (addBoxMode === 'single') {
+                                  const num = parseInt(addBoxNum) || addBoxModal.nextNum
+                                  newBoxes = [{ id: crypto.randomUUID(), _local: true, supply_id: addBoxModal.supplyId, account_id: accountId, box_number: num, status: 'open' as const, created_at: now, items: [] }]
+                                } else {
+                                  const from = parseInt(addBoxNum) || addBoxModal.nextNum
+                                  const to = parseInt(addBoxNumTo) || from
+                                  newBoxes = []
+                                  for (let n = from; n <= to; n++) {
+                                    newBoxes.push({ id: crypto.randomUUID(), _local: true, supply_id: addBoxModal.supplyId, account_id: accountId, box_number: n, status: 'open' as const, created_at: now, items: [] })
+                                  }
+                                }
+                                if (newBoxes.length === 0) return
                                 setSupplies((prev) => prev.map((s) => s.id === addBoxModal.supplyId ? { ...s, boxes: [...s.boxes, ...newBoxes] } : s))
                                 setPackingOpenBoxId(newBoxes[0].id)
                                 setIsDirty(true)
                                 setAddBoxModal(null)
                                 setAddBoxNum('')
+                                setAddBoxNumTo('')
+                                setAddBoxQty('')
                               }}
                               className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
                             >
@@ -5577,7 +5899,7 @@ const BatchDetailModal = ({
 
         {/* Footer */}
         {(canManageStageData || (batch.current_stage !== 'done' && batch.current_stage === 'otk')) && (
-          <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
+          <div className="flex items-center justify-between border-t border-slate-100 px-5 py-2.5">
             <span className="text-sm text-slate-400">
               Этап {Math.max(1, currentIdx + 1)} из {enabledStages.filter((s) => s !== 'done').length}
             </span>
@@ -5677,8 +5999,8 @@ const BatchDetailModal = ({
                     }
                   })()}
                   disabled={isSavingDraft || !isDirty}
-                  className="flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-40 transition-opacity">
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                  className="flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-40 transition-opacity">
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                   {isSavingDraft ? 'Сохранение…' : 'Сохранить'}
                 </button>
               )}
@@ -5701,9 +6023,9 @@ const BatchDetailModal = ({
                 return (
                   <button type="button" onClick={() => setPendingAdvance(true)}
                     disabled={isSavingStage || !canAdvance}
-                    className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                    className="flex w-56 items-center justify-between gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                     Завершить ОТК
-                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M5 12h14M12 5l7 7-7 7" />
                     </svg>
                   </button>
@@ -5712,9 +6034,9 @@ const BatchDetailModal = ({
               {(batch.current_stage === 'packaging' || batch.current_stage === 'marking' || batch.current_stage === 'packing' || batch.current_stage === 'logistics') && (
                 <button type="button" onClick={() => setPendingAdvance(true)}
                   disabled={isSavingStage || !canManageStageData}
-                  className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                  className="flex w-56 items-center justify-between gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                   {`Завершить ${STAGE_LABELS[batch.current_stage]}`}
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="M5 12h14M12 5l7 7-7 7" />
                   </svg>
                 </button>
@@ -7808,7 +8130,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
       {createOpen && <CreateBatchModal stores={stores} accountId={accountId} settings={settings} hasPipeline={hasPipeline} pipelineStages={accountPipelineStages} onClose={() => setCreateOpen(false)} onSubmit={handleCreate} onStoreCreated={(s) => onStoreCreated?.(s)} />}
       {editTarget && <EditBatchModal batch={editTarget} stores={stores} onClose={() => setEditTarget(null)} onSave={async (values) => { const updated = await updateBatch(editTarget.id, values); handleBatchUpdated(updated); setEditTarget(null) }} />}
       {settingsOpen && <SettingsModal settings={settings} accountId={accountId} accountName={accountName} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
-      {detailData && (
+      {detailData && createPortal(
         <BatchDetailModal
           batch={detailData} accountId={accountId} accountShortId={accountShortId} stores={stores} trips={trips} warehouses={warehouses}
           canManage={canManage} canOtkAssign={canOtkAssign} canStageJump={canStageJump} canPackingAutoAdd={canPackingAutoAdd} canSupplyDeleteLocked={canSupplyDeleteLocked} userId={userId} userEmail={userEmail} userName={userName}
@@ -7819,7 +8141,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
           onAddTripLine={onAddTripLine}
           onTripCreated={onTripCreated}
           zIndex={detailFromArchive ? 60 : 50}
-        />
+        />,
+        document.body
       )}
       {shareMenuPos && createPortal(
         <div

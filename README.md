@@ -13,15 +13,34 @@ MVP веб-приложения для логистики поставок на 
 
 ## Термины рабочего процесса
 
-### "Обсуждение"
-Когда пользователь говорит **"обсуждение"** или "давай сначала обсудим" — это значит:
+### "Обсуждение" / "Обсуждение!"
+Когда пользователь говорит **"обсуждение"**, **"Обсуждение!"** или "давай сначала обсудим" — это значит:
 - Детально разобрать каждую мелочь, уточнить все детали
 - **НЕ трогать** никакой код / SQL / файлы до явной команды
-- Только после явного сигнала ("делай", "реализуй", "вперёд") — приступать к работе
+- Только после явного сигнала ("делай", "реализуй", "вперёд", "го") — приступать к работе
+- **Восклицательный знак** ("Обсуждение!") = особо строгий запрет — ничего не делать даже если кажется очевидным
 
 ## UI-соглашения
 
 - **Числовые поля** (`input[type="number"]`) — стрелки (spinners) глобально отключены в `src/styles.css`. Никогда не добавлять стрелки при создании или редактировании числовых полей. Исключение только по явному указанию.
+
+## Админ страницы (только для владельца сервиса)
+
+**Термин:** «Админ страницы» — 4 служебные страницы видимые ТОЛЬКО владельцу (`sydykovsam@gmail.com`).  
+Пользователи системы их не видят вообще — ни в сайдбаре, ни в тулбаре.  
+Контроль доступа: `isSuperAdmin` / `isAdmin` из `usePlatformRole(session.user.id)` → App.tsx → Topbar.
+
+| Страница | URL | Компонент | Условие |
+|---|---|---|---|
+| **Фин-отчет** | `/finance-report` | `FinanceReportPage` | `isSuperAdmin` |
+| **Дневник** | `/diary` | `DiaryPage` | `isSuperAdmin` |
+| **Словарь** | `/glossary` | `GlossaryPage` | `isAdmin` |
+| **Админ** | `/admin` | `AdminPage` | `isAdmin` |
+
+- `AdminPage` — 6 табов: users / subscriptions / access / team / plans / payment. SessionStorage ключ: `'admin_tab'`.
+- `GlossaryPage` — внутренняя документация проекта (термины, паттерны, API-справочники). Ключевой инструмент memory management между сессиями.
+- `DiaryPage` — личный рабочий дневник. БД: `diary_entries`, Storage: `diary-media`.
+- `FinanceReportPage` — финансовая аналитика по платежам клиентов.
 
 ## Что уже есть
 
@@ -39,6 +58,70 @@ MVP веб-приложения для логистики поставок на 
 - `create_account_with_owner` RPC выдаёт понятную ошибку на фронте (фикс `throw new Error(error.message)`)
 - Superadmin bypass реализован (`patch_premium_plan.sql` — ПРИМЕНЁН)
 - Разрешение конкретному user: scope='user' в `access_overrides` — выдаётся через AdminPage → Доступ
+
+### WB Реклама — PromotionPage (12.07.2026)
+
+- **Sticky header** таблицы кампаний: `border-separate` + `sticky top-0` на `<th>` — шапка не уезжает при прокрутке
+- **Единый счёт**: баланс WB (`balance/net/bonus`) загружается при открытии страницы, отображается рядом с выбором магазина
+- **Бюджеты кампаний** загружаются батчами по 5 (задержка 300ms, retry на null, fallback-парсинг полей)
+- **Кнопка `+ X у.е.`** в колонке Бюджет → депозит-модалка (мин 1000 у.е., "Обновить счёт")
+- После депозита: обновляется только одна строка (`setCampaigns(prev => prev.map(...))`)
+- Edge Function `wb-advert`: новые actions `balance`, `campaign_budget`, `deposit_budget`, `probe_budget`
+
+### FulfillmentPage — Приёмка (черновая система + рефакторинг, 12-16.07.2026)
+
+#### Черновая система (draft/pending)
+- **Все методы** (Навалом, По баркоду, Из каталога, Готовые короба) → pending/draft, сохраняются по «Сохранить»
+- `pendingItemIds` — temp items (`_local_xxx` ID), `pendingDeleteIds` — отложенные удаления
+- Закрытие с несохранёнными данными → диалог подтверждения
+- `isDirty` не сбрасывается при смене этапа если есть pending items
+
+#### По баркоду
+- `newArticle` state — артикул ВБ (`nm_id`) сохраняется в `article` поле
+- Дублирующийся баркод: pending → qty в state; saved → receptionDraft (не в БД до Сохранить)
+- Lookup при добавлении: если name пустой → повторный `lookupProductByBarcode`
+
+#### Из каталога
+- Dropdown-оверлей (`absolute top-full z-20`) — не сдвигает таблицу
+- `PhotoThumb` + nm_id (синяя ссылка WB) + brand + vendor_code в результатах
+- Сортировка размеров: XXS→XS→S→M→L→XL→2XL→..., числовые, алфавит
+- `CatalogProduct` расширен: `brand`, `photos` поля
+
+#### Готовые короба
+- Поля: Единиц (необяз.) | Коробов * | Склад ВБ * (select из `warehouses`)
+- Склад → `fulfillment_items.notes`; при сохранении → auto-создаёт `fulfillment_supply` + N закрытых коробов
+- При удалении → удаляет поставку (если коробки пустые)
+- Завершение приёмки: если ВСЕ items = «Готовые короба» → прыжок `current_stage = 'logistics'`
+- Смешанная партия: поставки создаются, остальные этапы идут нормально
+
+#### Таблица
+- Sticky `<thead>` + `<tfoot>`; таблица `flex-1 min-h-0 overflow-y-auto`
+- Колонки: Баркод | Наименование | Артикул ВБ | Цвет | Размер | Единиц | Коробов* | Склад* | ×
+- Сортировка: обычные товары сверху, «Готовые короба» снизу
+- Удалён метод «По предмету» (дублировал «Навалом»)
+
+#### Layout
+- `BatchDetailModal` через `createPortal(modal, document.body)` — нет клиппинга
+- При reception: outer div = `overflow-hidden flex flex-col`
+- Шарики прогресс-бара уменьшены (midpoint); `py-2.5 minHeight:72`; footer: `py-2.5 px-5 text-xs`
+
+### Модалка «Новый короб» (16.07.2026)
+- Два горизонтальных блока: **Одиночный** и **Несколько** (Кол-во + От + До)
+- Активный блок: синяя рамка; неактивный: серый + поля disabled
+- Кол-во автоматически пересчитывает «До»
+
+### SQL фиксы (16.07.2026)
+- `patch_fix_admin_get_access_overrides.sql` — ПРИМЕНЁН: `user_id is ambiguous` — квалифицировали `p.user_id`
+
+### FulfillmentPage — USB/BT Scanner UX (12.07.2026)
+
+- **Autofocus**: при переключении на таб "По баркоду" поле получает фокус автоматически
+- **singleScanMode fix**: `effectiveQty = singleScanMode ? 1 : Number(newQty)` — режим одиночного скана работает корректно
+- **Camera button**: `hidden sm:flex` — скрыт на десктопе, показывается только на мобильном
+- **Global USB scanner capture**: `useEffect` перехватывает keydown глобально (capturing phase), буферизует с дельтой < 150ms, flush по Enter/таймауту — работает вне зависимости от фокуса
+- **scannerCaptureRef pattern**: ref обновляется каждый рендер (не stale), `useEffect` deps только `[addMode, canManageStageData]`
+- **Double scan fix**: сканер дважды → 26 символов → `slice(-13)` = новый баркод (применено в `onChange` и в global flush)
+- **`lookupProductByBarcode` фикс**: добавлен `color` в select; fallback-поиск по `sizes JSONB` если `barcodes[]` устарел
 
 ### Sidebar company switcher (05.06.2026)
 - Строка компании в dropdown: `<button>` → `<div role="button">` — устранён React hydration error

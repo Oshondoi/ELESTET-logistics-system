@@ -304,7 +304,15 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   })
   const activeStore = sortedStores.find((s) => s.id === selectedStoreId) ?? sortedStores[0]
 
-  const [tab, setTab] = useState<'main' | 'products' | 'codes' | 'operations'>('main')
+  const [tab, setTab] = useState<'main' | 'products' | 'codes' | 'operations'>(() => {
+    const saved = localStorage.getItem('elestet-kiz-tab')
+    return (saved as 'main' | 'products' | 'codes' | 'operations' | null) ?? 'main'
+  })
+
+  const handleSetTab = (t: 'main' | 'products' | 'codes' | 'operations') => {
+    setTab(t)
+    localStorage.setItem('elestet-kiz-tab', t)
+  }
 
   // Connection / stats
   const [stats, setStats] = useState<TeksherStats | null>(null)
@@ -452,7 +460,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
 
   useEffect(() => {
     if (activeStore?.id) {
-      setTab('main')
       setProducts([])
       setCodes([])
       setOperations([])
@@ -809,7 +816,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
           <button
             key={key}
             type="button"
-            onClick={() => setTab(key)}
+            onClick={() => handleSetTab(key)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               tab === key ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
@@ -996,21 +1003,21 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                   </button>
                   <button
                     type="button"
-                    onClick={() => setTab('products')}
+                    onClick={() => handleSetTab('products')}
                     className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                   >
                     📦 Товары (GTIN)
                   </button>
                   <button
                     type="button"
-                    onClick={() => setTab('codes')}
+                    onClick={() => handleSetTab('codes')}
                     className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                   >
                     🏷️ КИЗ-коды
                   </button>
                   <button
                     type="button"
-                    onClick={() => setTab('operations')}
+                    onClick={() => handleSetTab('operations')}
                     className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                   >
                     📊 Операции
@@ -1025,7 +1032,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
         {tab === 'products' && (
           <div className="space-y-3 max-w-5xl">
             {!isConnected ? (
-              <NotConnectedPlug onGoToMain={() => setTab('main')} />
+              <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1147,7 +1154,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
         {tab === 'codes' && (
           <div className="space-y-3 max-w-5xl">
             {!isConnected ? (
-              <NotConnectedPlug onGoToMain={() => setTab('main')} />
+              <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1222,7 +1229,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
         {tab === 'operations' && (
           <div className="space-y-3 max-w-5xl">
             {!isConnected ? (
-              <NotConnectedPlug onGoToMain={() => setTab('main')} />
+              <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1329,7 +1336,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                 <p className="text-xs text-slate-500">Операция создана. Коды генерируются — обычно 30–60 сек на 100 кодов. Проверьте статус во вкладке «Операции».</p>
                 <button
                   type="button"
-                  onClick={() => { setEmitModal(false); setTab('operations'); void loadOperations() }}
+                  onClick={() => { setEmitModal(false); handleSetTab('operations'); void loadOperations() }}
                   className="w-full rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
                 >
                   Посмотреть операции →

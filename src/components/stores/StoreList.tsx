@@ -73,6 +73,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
                 <th className="px-3 py-2.5">Маркетплейс</th>
                 <th className="px-3 py-2.5">Store Code</th>
                 <th className="px-3 py-2.5">API ключ</th>
+                <th className="px-3 py-2.5">Teksher</th>
                 <th className="px-3 py-2.5">Поставщик</th>
                 <th className="px-3 py-2.5">Наим. для стикера</th>
                 <th className="px-3 py-2.5">Адрес</th>
@@ -96,6 +97,16 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
                         <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600">
                           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                           Есть
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3.5">
+                      {store.teksher_login ? (
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-600">
+                          <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+                          Подключён
                         </span>
                       ) : (
                         <span className="text-xs text-slate-300">—</span>

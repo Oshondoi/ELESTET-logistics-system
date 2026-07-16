@@ -3,6 +3,122 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен (elestet.net).
 
+## Что сделано за сессию 12-16.07.2026
+
+### FulfillmentPage — Приёмка (полный рефактор черновой системы)
+
+#### Черновая система (draft/pending) — все методы
+- Все методы приёмки (Навалом, По баркоду, Из каталога, Готовые короба) переведены на pending/draft
+- `pendingItemIds: Set<string>` — новые items (temp ID `_local_xxx`), сохраняются только по «Сохранить»
+- `pendingDeleteIds: Set<string>` — отложенные удаления (зачёркнуто/красный фон), применяются при сохранении
+- `isDirty` не сбрасывается при смене этапа если есть pending items
+- Закрытие без сохранения → диалог подтверждения (уже работало)
+
+#### По баркоду
+- `newArticle` state — артикул ВБ сохраняется в `article` поле
+- Дублирующийся баркод: pending → qty в state; saved → receptionDraft
+- Lookup при добавлении: если name пустой → повторный `lookupProductByBarcode`
+
+#### Из каталога
+- Dropdown-оверлей (`absolute top-full z-20`) — не сдвигает таблицу
+- PhotoThumb + nm_id (синяя ссылка WB) + brand + vendor_code
+- Сортировка размеров по порядку одежды
+- Крестик очистки поля поиска
+- Pending/draft (не сразу в БД)
+
+#### Метод «По предмету» удалён
+- Аналогичен «Навалом», убран из UI и кода полностью
+
+#### Готовые короба
+- Поля: Единиц (необяз.) | Коробов * | Склад ВБ * (select)
+- Склад → `notes` поле в `fulfillment_items`
+- При сохранении: auto-создаёт `fulfillment_supply` + N закрытых коробов
+- При удалении: удаляет поставку если коробки пустые
+- Завершение приёмки: если ВСЕ items = «Готовые короба» → `current_stage = 'logistics'`
+- Смешанная партия: поставки создаются, этапы идут нормально
+
+#### Таблица приёмки
+- Layout: `flex-1 min-h-0 overflow-y-auto` — таблица заполняет оставшееся место
+- Sticky `<thead>` (`sticky top-0 z-10`) и `<tfoot>` (`sticky bottom-0 z-10`)
+- Колонки: Баркод | Наименование | Артикул ВБ | Цвет | Размер | Единиц | Коробов* | Склад* | ×
+- Сортировка: обычные товары сверху, «Готовые короба» снизу
+- Визуал: pending = голубой, «Готовые короба» = оранжевый, pending delete = красный + зачёркнут
+- Итого в tfoot = `receptionDraft[id] ?? qty_received`
+
+#### Layout модалки
+- `BatchDetailModal` через `createPortal(modal, document.body)` — нет клиппинга
+- При reception: outer div = `overflow-hidden flex flex-col`
+- Размер шариков прогресс-бара уменьшен до midpoint
+- Stage progress bar: `py-2.5`, `minHeight: 72`
+- Footer: `py-2.5 px-5`, кнопки `text-xs rounded-xl w-56`
+
+### Модалка «Новый короб»
+- Два блока горизонтально: **Одиночный** (1 номер) и **Несколько** (Кол-во + От + До)
+- Активный блок: синяя рамка + радио-точка; неактивный: серый, поля disabled
+- Кол-во → автоматически пересчитывает «До»; поля пустые по умолчанию
+
+### SQL фиксы
+- `patch_fix_admin_get_access_overrides.sql` — ПРИМЕНЁН: `user_id` квалифицирован через `p.user_id`
+
+---
+
+## Что сделано за сессию 12.07.2026
+
+### WB Реклама — PromotionPage (баланс + бюджеты + депозит)
+- Edge Function `wb-advert`: новые actions `balance`, `campaign_budget`, `deposit_budget`, `probe_budget`
+- Sticky header таблицы кампаний; единый счёт; кнопка `+ X у.е.`; депозит-модалка
+
+### FulfillmentPage — USB/BT Scanner UX
+- Autofocus при переключении на таб «По баркоду»
+- singleScanMode fix; camera button hidden sm:flex
+- Global USB scanner capture (capturing phase, буферизация < 150ms)
+- Double scan fix (`slice(-13)`); lookupProductByBarcode: color + fallback JSONB
+
+
+
+### WB Реклама — PromotionPage (баланс + бюджеты + депозит)
+
+#### Edge Function `wb-advert` — новые actions (задеплоена)
+- `balance`: GET /adv/v1/balance → `{ balance, net, bonus }`
+- `campaign_budget`: GET /adv/v1/budget?id=X
+- `deposit_budget`: POST /adv/v1/budget/deposit `{id, sum, type:1}` → `{ ok, newBudget }`
+- `probe_budget`: диагностика
+- `batchFetchBudgets` helper: батчи по 5, задержка 300ms, retry на null, fallback (`total ?? balance ?? budget ?? sum`)
+
+#### UI (PromotionPage.tsx)
+- Sticky header таблицы кампаний (`border-separate` + `sticky top-0` на `th`)
+- "Единый счёт" — отображение баланса рядом с выбором магазина
+- Кнопка `+ X у.е.` в колонке Бюджет каждой кампании → депозит-модалка
+- Депозит-модалка: текущий баланс + "Обновить счёт" + мин 1000 у.е.
+- После депозита: только одна строка обновляется, без полной перезагрузки
+- `useEffect`: campaigns + balance грузятся параллельно при смене магазина
+
+### FulfillmentPage — USB/BT Scanner UX
+
+#### Autofocus и UX
+- Таб "По баркоду": `setTimeout(() => barcodeInputRef.current?.focus(), 50)` при переключении
+- Camera button: `hidden sm:flex` — скрыт на десктопе, виден только на мобильном
+
+#### singleScanMode fix
+- `handleAddItem`: `effectiveQty = singleScanMode ? 1 : Number(newQty)` — qty field disabled не мешает
+
+#### Global USB scanner capture (useEffect)
+- Перехват keydown на document (capturing phase)
+- Буферизация с дельтой < 150ms, flush по Enter/таймауту
+- Пропускает если фокус уже на barcode input
+- Знает о singleScanMode через `scannerCaptureRef` pattern (не stale)
+
+#### Double scan fix
+- Два скана подряд → 26 символов → берём `slice(-13)` → новый баркод
+- Применено в `onChange` и в `flush()` глобального перехватчика
+
+#### lookupProductByBarcode фикс (`fulfillmentService.ts`)
+- `color` добавлен в `.select()` — раньше всегда возвращал null
+- Fallback-поиск: если `barcodes[]` не нашёл → ищет по `sizes JSONB` (`.filter('sizes', 'cs', ...)`)
+- Sanitize баркода перед вставкой в JSONB-запрос
+
+---
+
 ## Что сделано за сессию 05.06.2026
 
 ### Pipeline tabs в CreateBatchModal (commit f3a8c00)

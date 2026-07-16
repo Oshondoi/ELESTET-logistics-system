@@ -1,6 +1,117 @@
 # Active Context
 
-## Current Focus (05.06.2026) — Premium + User overrides + Plan configs + AdminPage — ЗАВЕРШЕНО
+## Current Focus (12-16.07.2026) — FulfillmentPage Приёмка — ЗАВЕРШЕНО
+
+### Приёмка — черновая система (draft/pending)
+- **Все методы** (Навалом, По баркоду, Из каталога, Готовые короба) → pending в памяти, сохраняются по кнопке «Сохранить»
+- `pendingItemIds: Set<string>` — новые items с temp ID `_local_xxx`
+- `pendingDeleteIds: Set<string>` — items помечены на удаление (зачёркнуты/красные), удаляются при сохранении
+- `isDirty` — сбрасывается только если `pendingItemIds.size === 0` при смене этапа
+- `handleSaveReceptionDraft`: 1) сохраняет pending в БД, 2) сохраняет qty-изменения, 3) применяет удаления
+
+### Приёмка — таблица
+- Sticky `<thead>` + `<tfoot>` внутри `flex-1 min-h-0 overflow-y-auto` контейнера
+- Колонки: Баркод | Наименование | Артикул ВБ | Цвет | Размер | Единиц | Коробов* | Склад* | ×
+- «Готовые короба» строки — оранжевый фон; pending — голубой; помеченные на удаление — красный + зачёркнутые
+- Сортировка при отображении: обычные товары сверху, «Готовые короба» снизу
+- Итого в `<tfoot>` считается через `receptionDraft[id] ?? qty_received`
+
+### Приёмка — метод «По баркоду»
+- `lookupProductByBarcode` вызывается при добавлении: сначала из state (newName/newSize/newColor/newArticle), если пусто — повторный lookup
+- Дублирующийся баркод: pending → обновляет qty в state; saved → обновляет receptionDraft
+- `newArticle` state — артикул ВБ сохраняется в `fulfillment_items.article`
+
+### Приёмка — метод «Из каталога»
+- Dropdown-оверлей (`absolute top-full z-20`) — не сдвигает контент
+- PhotoThumb + nm_id синяя ссылка WB + brand + vendor_code в результатах
+- Сортировка размеров: XXS→XS→S→M→L→XL→2XL→... затем числовые, затем алфавит
+- Крестик для очистки поля поиска
+
+### Приёмка — метод «Готовые короба»
+- Поля: Единиц (необяз.) | Коробов * | Склад ВБ * (select из warehouses)
+- Склад сохраняется в `fulfillment_items.notes`
+- При сохранении pending «Готовые короба» → auto-создаётся `fulfillment_supply` + N закрытых коробов
+- При удалении saved «Готовые короба» → удаляется соответствующая поставка (если все коробки пустые)
+- При завершении приёмки (`handleSaveStageAndAdvance`): создаются поставки + если ВСЕ items = «Готовые короба» → прыжок сразу в Logistics
+
+### Приёмка — layout
+- `viewStage === 'reception'` → outer div: `overflow-hidden flex flex-col`; reception div: `flex-1 flex flex-col gap-4 min-h-0`
+- Другие этапы → `overflow-y-scroll` как прежде
+- BatchDetailModal через `createPortal(modal, document.body)` — нет клиппинга от overflow:hidden родителей
+
+### Модалка «Новый короб» (Логистика)
+- Два блока горизонтально: **Одиночный** (номер короба) и **Несколько** (Кол-во + От + До)
+- Активный блок: синяя рамка + голубой фон + заполненная радио-точка
+- Кол-во → автоматически обновляет «До» = От + Кол-во - 1
+- Поля пустые по умолчанию при открытии
+
+### SQL фиксы применены в БД
+- `patch_fix_admin_get_access_overrides.sql` — фикс `column reference "user_id" is ambiguous` (квалифицировали `p.user_id`)
+
+### UI улучшения
+- Шарики прогресс-бара этапов уменьшены (~midpoint между старым и новым)
+- Отступы stage progress bar: `py-2.5`, `minHeight: 72`
+- Footer модалки: `py-2.5 px-5`, кнопки `text-xs rounded-xl`
+- Удалён метод «По предмету» (аналогичен «Навалом»)
+
+
+### 1. WB Реклама — PromotionPage
+
+#### Edge Function `wb-advert` (задеплоена)
+- Новые actions: `balance` (GET /adv/v1/balance → `{ balance, net, bonus }`), `campaign_budget` (GET /adv/v1/budget?id=X), `deposit_budget` (POST /adv/v1/budget/deposit `{id, sum, type:1}` → `{ok, newBudget}`), `probe_budget` (диагностика)
+- `batchFetchBudgets`: батчи по 5 кампаний, задержка 300ms, retry на null, fallback-парсинг полей (`total ?? balance ?? budget ?? sum`)
+- Бюджеты загружаются при загрузке страницы (параллельно с campaigns, но не блокируют рендер)
+
+#### UI изменения
+- **Sticky header**: `border-separate` + `sticky top-0` на `<th>` — прокрутка без потери шапки
+- **Balance (Единый счёт)**: `balance` state, `loadBalance` callback, показывается между выбором магазина и date-pickers
+- **Кнопка `+ X у.е.`**: фиолетовая кнопка в колонке Бюджет каждой кампании → открывает депозит-модалку
+- **Депозит-модалку** (`depositCampaign` state): текущий баланс из state, кнопка "Обновить счёт", мин 1000 у.е., после депозита обновляет только одну строку (`setCampaigns(prev => prev.map(...))`)
+- **`useEffect`**: при изменении магазина грузит campaigns + balance параллельно
+
+#### Ключевые состояния
+```tsx
+const [balance, setBalance] = useState<{ balance: number; net: number; bonus: number } | null>(null)
+const [depositCampaign, setDepositCampaign] = useState<WbCampaign | null>(null)
+const [depositAmount, setDepositAmount] = useState('1000')
+```
+
+### 2. FulfillmentPage — USB/BT Scanner UX
+
+#### Autofocus
+- При клике на таб "По баркоду": `setTimeout(() => barcodeInputRef.current?.focus(), 50)`
+
+#### singleScanMode fix
+- `handleAddItem`: `const effectiveQty = singleScanMode ? 1 : Number(newQty)` вместо `Number(newQty)`
+
+#### Camera button — скрыт на десктопе
+- `className="hidden sm:flex h-9 w-9 ..."`
+
+#### Global USB scanner capture (useEffect)
+- Перехватывает `keydown` на `document` (capturing phase)
+- Буферизует символы с дельтой < 150ms, flush по Enter или таймауту 150ms
+- Если фокус УЖЕ на `barcodeInputRef` — пропускает (input сам обрабатывает)
+- Deps: `[addMode, canManageStageData]` — не перерегистрируется лишний раз
+
+#### scannerCaptureRef pattern
+- `scannerCaptureRef.current` обновляется каждый рендер (перед useEffect)
+- Знает о `singleScanMode`: в single — вызывает `handleReceptionCameraScan`, иначе `handleBarcodeChange`
+- Решает проблему stale closure в useEffect
+
+#### Double scan fix
+- Сканер дважды срабатывает → буфер/input получает 26 символов
+- Берём последние 13: `v.length > 13 ? v.slice(-13) : v` (новый баркод вместо старого)
+- Применено в обоих местах: `onChange` input + `flush()` в useEffect
+
+#### lookupProductByBarcode — фикс и fallback
+- Добавлен `color` в `.select()` (раньше не было → цвет всегда null)
+- Fallback: если `barcodes[]` не нашёл → второй запрос `.filter('sizes', 'cs', '[{"skus":["BARCODE"]}]')` по JSONB
+- Sanitize: `barcode.replace(/[^0-9a-zA-Z\-]/g, '')` перед использованием в запросе
+- Актуально когда новые размеры добавлены на WB после последней синхронизации
+
+---
+
+## Previous Focus (05.06.2026) — Premium + User overrides + Plan configs + AdminPage — ЗАВЕРШЕНО
 
 ### 1. Тариф Premium
 - `PlanKey` → `'seller' | 'operational' | 'premium'`

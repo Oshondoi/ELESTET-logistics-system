@@ -224,6 +224,7 @@ export const updateItem = async (
       | 'boxes'
       | 'product_name'
       | 'size'
+      | 'color'
       | 'article'
       | 'notes'
     >
@@ -300,21 +301,45 @@ export const lookupProductByBarcode = async (
   barcode: string,
 ): Promise<{ name: string | null; article: string | null; size: string | null; color: string | null } | null> => {
   if (!supabase || !storeId) return null
-  const { data, error } = await supabase
+
+  // Безопасный баркод для JSONB запроса (только цифры/буквы/дефис)
+  const safeBarcode = barcode.replace(/[^0-9a-zA-Z\-]/g, '')
+  if (!safeBarcode) return null
+
+  // Сначала ищем по денормализованному barcodes[]
+  let product: Product | null = null
+  const { data } = await supabase
     .from('products')
-    .select('nm_id, name, vendor_code, sizes')
+    .select('nm_id, name, vendor_code, color, sizes')
     .eq('account_id', accountId)
     .eq('store_id', storeId)
-    .contains('barcodes', [barcode])
+    .contains('barcodes', [safeBarcode])
     .limit(1)
-  if (error || !data || data.length === 0) return null
+  if (data && data.length > 0) {
+    product = data[0] as Product
+  }
 
-  const product = data[0] as Product
+  // Fallback: ищем по sizes[].skus внутри JSONB (если barcodes[] устарел или пуст)
+  if (!product) {
+    const { data: data2 } = await supabase
+      .from('products')
+      .select('nm_id, name, vendor_code, color, sizes')
+      .eq('account_id', accountId)
+      .eq('store_id', storeId)
+      .filter('sizes', 'cs', `[{"skus":["${safeBarcode}"]}]`)
+      .limit(1)
+    if (data2 && data2.length > 0) {
+      product = data2[0] as Product
+    }
+  }
+
+  if (!product) return null
+
   let size: string | null = null
   if (product.sizes) {
     const sizes = product.sizes as Array<{ techSize?: string; skus?: string[] }>
     for (const s of sizes) {
-      if (s.skus?.includes(barcode)) {
+      if (s.skus?.includes(safeBarcode)) {
         size = s.techSize ?? null
         break
       }
@@ -330,8 +355,10 @@ export interface CatalogProduct {
   nm_id: number
   name: string | null
   vendor_code: string | null
+  brand: string | null
   barcodes: string[]
   sizes: Array<{ techSize?: string; skus?: string[] }>
+  photos: Array<{ c246x328?: string; big?: string }> | null
 }
 
 export interface ProductInfo {
@@ -388,7 +415,7 @@ export const searchProducts = async (
   if (!supabase || !storeId || query.trim().length < 2) return []
   const { data } = await supabase
     .from('products')
-    .select('id, nm_id, name, vendor_code, barcodes, sizes')
+    .select('id, nm_id, name, vendor_code, brand, barcodes, sizes, photos')
     .eq('account_id', accountId)
     .eq('store_id', storeId)
     .or(`name.ilike.%${query}%,vendor_code.ilike.%${query}%`)

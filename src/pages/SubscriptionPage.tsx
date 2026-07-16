@@ -39,6 +39,7 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
   const navigate = useNavigate()
   const [graceLoading, setGraceLoading] = useState(false)
   const [graceError, setGraceError] = useState<string | null>(null)
+  const [showGracePopup, setShowGracePopup] = useState(true)
   const [selectedMonths, setSelectedMonths] = useState<Record<string, number>>({ seller: 1, operational: 1, premium: 1 })
   const [payLoading, setPayLoading] = useState<string | null>(null)
   const [payError, setPayError] = useState<string | null>(null)
@@ -155,21 +156,35 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
           )}
         </div>
 
-        {/* Grace period action */}
-        {status === 'expired' && !activeAccount.grace_until && (
-          <div className="mt-3 rounded-2xl border border-rose-100 bg-rose-50 p-4">
-            <p className="text-sm text-rose-800 mb-3">
-              Нет активной подписки. Вы можете активировать <strong>3 дня в долг</strong> — система продолжит работу, а дни будут учтены при следующей оплате.
-            </p>
-            <button
-              type="button"
-              disabled={graceLoading}
-              onClick={() => void handleActivateGrace()}
-              className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-600 disabled:opacity-50"
-            >
-              {graceLoading ? 'Активация...' : 'Активировать +3 дня в долг'}
-            </button>
-            {graceError && <p className="mt-2 text-xs text-rose-600">{graceError}</p>}
+        {/* Grace period action — floating popup */}
+        {status === 'expired' && !activeAccount.grace_until && showGracePopup && (
+          <div className="fixed bottom-6 right-6 z-50 w-80 rounded-2xl border border-rose-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 p-4 pb-3">
+              <p className="text-sm text-rose-800 leading-snug">
+                Нет активной подписки. Вы можете активировать <strong>3 дня в долг</strong> — система продолжит работу, а дни будут учтены при следующей оплате.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowGracePopup(false)}
+                className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                aria-label="Закрыть"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-4 pb-4">
+              <button
+                type="button"
+                disabled={graceLoading}
+                onClick={() => void handleActivateGrace()}
+                className="w-full rounded-xl bg-rose-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-600 disabled:opacity-50"
+              >
+                {graceLoading ? 'Активация...' : 'Активировать +3 дня в долг'}
+              </button>
+              {graceError && <p className="mt-2 text-xs text-rose-600">{graceError}</p>}
+            </div>
           </div>
         )}
       </Card>

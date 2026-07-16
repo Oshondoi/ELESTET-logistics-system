@@ -14,12 +14,13 @@ interface TopbarProps {
   onGlossaryClick?: () => void
   onDiaryClick?: () => void
   onFinanceReportClick?: () => void
+  onPromotionClick?: () => void
   onHomeClick?: () => void
   onProfileClick: () => void
   onSignOut: () => void
 }
 
-export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onFinanceReportClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
+export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
   const initial = userName ? userName.charAt(0).toUpperCase() : (userEmail ? userEmail.charAt(0).toUpperCase() : '?')
   const displayName = userName || userEmail || 'Профиль'
   const [open, setOpen] = useState(false)
@@ -118,6 +119,18 @@ export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, u
               <path d="M8 7h8M8 11h8M8 15h5" />
             </svg>
             Дневник
+          </button>
+        )}
+        {onPromotionClick && (
+          <button
+            type="button"
+            onClick={onPromotionClick}
+            className="flex h-7 items-center gap-1.5 rounded-xl border border-slate-200 px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M3 11l19-9-9 19-2-8-8-2z" />
+            </svg>
+            Продвижение
           </button>
         )}
         {isAdmin && (

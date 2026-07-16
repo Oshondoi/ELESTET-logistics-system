@@ -40,6 +40,7 @@ import type { AdminStats, AccountBillingRow as AdminAccountBillingRow } from './
 import { GlossaryPage } from './pages/GlossaryPage'
 import { DiaryPage } from './pages/DiaryPage'
 import { FinanceReportPage } from './pages/FinanceReportPage'
+import { PromotionPage } from './pages/PromotionPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
 import { PaymentResultPage } from './pages/PaymentResultPage'
 import { fetchNotifications, markAllNotificationsRead } from './services/outsourceService'
@@ -75,7 +76,7 @@ const PlanGatewall = ({ page, onUpgrade }: { page: string; onUpgrade: () => void
   )
 }
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription' | 'payment_result'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'promotion' | 'subscription' | 'payment_result'
 
 const PAGE_ROUTES: Record<PageKey, string> = {
   home: '/',
@@ -92,6 +93,7 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   glossary: '/glossary',
   diary: '/diary',
   finance_report: '/finance-report',
+  promotion: '/promotion',
   subscription: '/subscription',
   payment_result: '/payment/result',
 }
@@ -270,6 +272,7 @@ const pageTitles: Record<PageKey, string> = {
   glossary: 'Словарь',
   diary: 'Дневник ELESTET',
   finance_report: 'Фин-отчет',
+  promotion: 'Продвижение',
   subscription: 'Подписка',
   payment_result: 'Результат оплаты',
 }
@@ -495,6 +498,7 @@ function App() {
     glossary: null,
     diary: null,
     finance_report: null,
+    promotion: null,
     subscription: null,
     payment_result: null,
   }
@@ -505,7 +509,7 @@ function App() {
   const effectivePage: PageKey = (() => {
     if (isAccountsLoading || isPermissionsLoading) return activePage
     if ((activePage === 'admin' || activePage === 'glossary') && !isSupport) return 'home'
-    if ((activePage === 'diary' || activePage === 'finance_report') && !isSupport) return 'home'
+    if ((activePage === 'diary' || activePage === 'finance_report' || activePage === 'promotion') && !isSupport) return 'home'
     const key = pagePermKey[activePage]
     if (key !== null && !permissions[key]) return 'home'
     return activePage
@@ -716,7 +720,7 @@ function App() {
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-900">
       <ToastContainer />
       <div className="flex h-full">
-        {effectivePage !== 'admin' && effectivePage !== 'glossary' && effectivePage !== 'diary' && effectivePage !== 'finance_report' && (
+        {effectivePage !== 'admin' && effectivePage !== 'glossary' && effectivePage !== 'diary' && effectivePage !== 'finance_report' && effectivePage !== 'promotion' && (
           <Sidebar
             activePage={effectivePage}
             onSelectPage={setActivePage}
@@ -740,13 +744,15 @@ function App() {
             userName={profileUserName}
             userEmail={session?.user?.email ?? ''}
             isAdmin={isSupport}
+            activeAccountId={activeAccount?.id}
             unreadCount={unreadNotifCount}
             onNotificationClick={undefined}
             onAdminClick={() => setActivePage('admin')}
             onGlossaryClick={() => setActivePage('glossary')}
             onDiaryClick={isAdmin ? () => setActivePage('diary') : undefined}
             onFinanceReportClick={isAdmin ? () => setActivePage('finance_report') : undefined}
-            onHomeClick={['admin', 'glossary', 'diary', 'finance_report'].includes(effectivePage) ? () => setActivePage('home') : undefined}
+            onPromotionClick={isAdmin ? () => setActivePage('promotion') : undefined}
+            onHomeClick={['admin', 'glossary', 'diary', 'finance_report', 'promotion'].includes(effectivePage) ? () => setActivePage('home') : undefined}
             onProfileClick={() => setProfileModalOpen(true)}
             onSignOut={() => void signOut()}
           />
@@ -992,6 +998,8 @@ function App() {
                   accountId={activeAccount?.id ?? ''}
                   stores={stores}
                 />
+              ) : effectivePage === 'promotion' ? (
+                <PromotionPage stores={stores} />
               ) : effectivePage === 'subscription' ? (
                 <SubscriptionPage
                   activeAccount={activeAccount}

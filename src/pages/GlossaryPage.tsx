@@ -377,6 +377,51 @@ TripTable получает:
 ФАЙЛЫ: src/pages/ShipmentsPage.tsx, src/components/trips/TripTable.tsx`,
     },
     {
+      name: 'Админ страницы',
+      category: 'Служебные страницы',
+      description: `Коллективное название 4 страниц видимых ТОЛЬКО владельцу сервиса (sydykovsam@gmail.com).
+Контролируется через isSuperAdmin / isAdmin из usePlatformRole(session.user.id).
+В коде: PageKey содержит 'admin' | 'glossary' | 'diary' | 'finance_report'.
+В Topbar: кнопки conditionally rendered — onFinanceReportClick, onDiaryClick только при isSuperAdmin; Словарь+Админ при isAdmin.
+Пользователи системы эти страницы не видят вообще — ни в сайдбаре, ни в тулбаре.`,
+    },
+    {
+      name: 'Фин-отчет (FinanceReportPage)',
+      category: 'Служебные страницы',
+      description: `URL: /finance-report. Компонент: src/pages/FinanceReportPage.tsx.
+Назначение: финансовая аналитика по платежам и подпискам клиентов сервиса. Только для владельца.
+Условие показа: передаётся onFinanceReportClick из App.tsx при isSuperAdmin === true.`,
+    },
+    {
+      name: 'Дневник (DiaryPage)',
+      category: 'Служебные страницы',
+      description: `URL: /diary. Компонент: src/pages/DiaryPage.tsx.
+Назначение: личный рабочий дневник владельца. Заметки, идеи, решения по продукту.
+БД: таблица diary_entries (patch_diary.sql, ПРИМЕНЁН). Storage: bucket diary-media.
+Условие показа: передаётся onDiaryClick из App.tsx при isSuperAdmin === true.`,
+    },
+    {
+      name: 'Словарь (GlossaryPage)',
+      category: 'Служебные страницы',
+      description: `URL: /glossary. Компонент: src/pages/GlossaryPage.tsx — ЭТА СТРАНИЦА.
+Назначение: внутренняя документация проекта. Термины, паттерны, архитектура, API-справочники — всё что нужно помнить между сессиями с ИИ.
+Условие показа: isAdmin === true (email владельца). Ключевой инструмент memory management.`,
+    },
+    {
+      name: 'Админ (AdminPage)',
+      category: 'Служебные страницы',
+      description: `URL: /admin. Компонент: src/pages/AdminPage.tsx.
+Назначение: панель управления сервисом. 6 табов:
+  users        → список всех пользователей
+  subscriptions → управление подписками компаний
+  access       → ручные оверрайды доступа (scope: global / account / user)
+  team         → команда сервиса (platform_roles)
+  plans        → редактирование тарифных планов (PlanConfigsTab)
+  payment      → интеграция MBusiness (статус: ожидаем API-ключи)
+SessionStorage ключ: 'admin_tab' — таб сохраняется между перезагрузками.
+Условие показа: isAdmin === true (email владельца).`,
+    },
+    {
       name: 'Anchored dropdown (привязанный список)',
       category: 'UI паттерны',
       description: `Кастомный SearchableSelect в KizPage.tsx. Список открывается через createPortal в document.body с position:fixed — не расширяет родителя и не обрезается overflow модалки.
