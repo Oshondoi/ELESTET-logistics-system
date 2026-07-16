@@ -90,6 +90,7 @@ import { fetchWorkTariffs, fetchConsumables, fetchConsumableCatalog } from '../s
 import { Card } from '../components/ui/Card'
 import { InvoicePhotoCell } from '../components/ui/InvoicePhotoCell'
 import { createStoreInSupabase } from '../services/storeService'
+import { supabase } from '../lib/supabase'
 
 // ── Вспомогательные константы ─────────────────────────────────
 const STAGE_LABELS: Record<FulfillmentStage, string> = {
