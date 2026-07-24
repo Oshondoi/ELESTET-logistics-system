@@ -273,9 +273,11 @@ export const bulkSetTripLineStatus = async (
   if (error) throw error
   // Проставляем дату (только где ещё нет)
   if (status === 'В пути') {
-    await supabase.from('trip_lines').update({ transit_at: today }).eq('trip_id', tripId).eq('account_id', accountId).is('transit_at', null)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase.from('trip_lines').update({ transit_at: today } as any).eq('trip_id', tripId).eq('account_id', accountId).is('transit_at', null)
   } else if (status === 'Отгружен') {
-    await supabase.from('trip_lines').update({ shipped_date: today }).eq('trip_id', tripId).eq('account_id', accountId).is('shipped_date', null)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase.from('trip_lines').update({ shipped_date: today } as any).eq('trip_id', tripId).eq('account_id', accountId).is('shipped_date', null)
   }
 }
 
