@@ -118,6 +118,44 @@ MVP веб-приложения для логистики поставок на 
 - **Autofocus**: при переключении на таб "По баркоду" поле получает фокус автоматически
 - **singleScanMode fix**: `effectiveQty = singleScanMode ? 1 : Number(newQty)` — режим одиночного скана работает корректно
 - **Camera button**: `hidden sm:flex` — скрыт на десктопе, показывается только на мобильном
+
+### FulfillmentPage — Фото в таблице приёмки (17.07.2026)
+- Первая колонка таблицы приёмки — `<PhotoThumb>` с hover-превью (тот же компонент что на странице Товаров)
+- `fetchPhotosByBarcodes(accountId, storeId, barcodes[])` в `fulfillmentService.ts` — один batch-запрос
+- `photoMap: Record<string, string | null>` state; `useEffect([items.length])` — подгрузка при смене кол-ва
+- `colSpan` в tfoot: 5 → 6
+
+### FulfillmentPage — Защита поставок «Готовые короба» на этапе Короба (17.07.2026)
+- Нельзя удалить поставку + нельзя «Открыть повторно» / удалить короба внутри
+- Идентификация: `items.some(i => i.product_name === 'Готовые короба' && i.notes === supply.warehouse_name)`
+- Удалять поставки «Готовые короба» можно только через этап Приёмки (крестик в строке)
+
+### Система сброса пароля — 4 формы с единой валидацией (19.07.2026)
+- `src/lib/passwordUtils.ts` — shared `validatePassword` (паттерн + 6 символов + 1 цифра) + `normalizePassword` (toLowerCase)
+- Все 4 формы используют одинаковую валидацию: `ProfileModal`, `AdminPage`, `AuthPage`, `ResetPasswordPage`
+- **AdminPage → Пользователи**: колонка «Сброс пароля» → модалка → Edge Function `admin-reset-password`
+- **Edge Function `admin-reset-password`**: только `sydykovsam@gmail.com`, `auth.admin.updateUserById(userId, { password })`
+- **AuthPage**: ссылка «Забыли пароль?» → режим `'forgot'` → `resetPasswordForEmail(email, { redirectTo: origin + '/reset-password' })`
+- **ResetPasswordPage** (`/reset-password`): ловит `PASSWORD_RECOVERY` event → форма → `updateUser({ password: normalizePassword(pw) })` → `signOut()`
+- **useAuth.ts**: `isPasswordRecovery`, `clearPasswordRecovery`, `resetPasswordForEmail`
+- Supabase redirect URLs настроены через Management API
+
+### Логистика — Каскад статусов Рейс → Поставки (20.07.2026)
+| Рейс | Поставки (только вперёд) |
+|---|---|
+| Формируется | Формируется |
+| Отправлен | В пути (transit_at где null) |
+| Прибыл | Прибыл (кроме Отгружен) |
+| Завершён | Отгружен (shipped_date где null) |
+- `bulkSetTripLineStatus(accountId, tripId, status, today)` — новая функция в `tripService.ts`
+- При смене назад (откат) — поставки НЕ следуют, меняется только рейс
+- **Автозавершение**: если все поставки рейса = «Отгружен» → рейс автоматически → «Завершён»
+
+### Логистика — Фильтр по дате (24.07.2026)
+- Кнопка-воронка в тулбаре; подсвечивается синим когда фильтр активен
+- Модалка: выбор поля + диапазон «От» / «До» (оба опциональны) + Применить / Сбросить
+- 5 полей: Дата создания рейса, Дата отправки, Дата прибытия рейса, Запланированная МП, Приёмка ВБ
+- Для полей поставок: рейс проходит если хотя бы одна поставка в диапазоне
 - **Global USB scanner capture**: `useEffect` перехватывает keydown глобально (capturing phase), буферизует с дельтой < 150ms, flush по Enter/таймауту — работает вне зависимости от фокуса
 - **scannerCaptureRef pattern**: ref обновляется каждый рендер (не stale), `useEffect` deps только `[addMode, canManageStageData]`
 - **Double scan fix**: сканер дважды → 26 символов → `slice(-13)` = новый баркод (применено в `onChange` и в global flush)

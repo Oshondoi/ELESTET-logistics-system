@@ -407,6 +407,29 @@ export const findProductByBarcode = async (
   }
 }
 
+export const fetchPhotosByBarcodes = async (
+  accountId: string,
+  storeId: string,
+  barcodes: string[],
+): Promise<Record<string, string | null>> => {
+  if (!supabase || !barcodes.length) return {}
+  const { data } = await supabase
+    .from('products')
+    .select('barcodes, photos')
+    .eq('account_id', accountId)
+    .eq('store_id', storeId)
+    .overlaps('barcodes', barcodes)
+  const map: Record<string, string | null> = {}
+  for (const row of data ?? []) {
+    const photos = row.photos as Array<{ c246x328?: string; big?: string }> | null
+    const url = photos?.[0]?.c246x328 ?? photos?.[0]?.big ?? null
+    for (const bc of (row.barcodes as string[]) ?? []) {
+      if (barcodes.includes(bc)) map[bc] = url
+    }
+  }
+  return map
+}
+
 export const searchProducts = async (
   accountId: string,
   storeId: string | null,

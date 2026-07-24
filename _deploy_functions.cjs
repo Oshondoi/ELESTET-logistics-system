@@ -1,7 +1,7 @@
 const fs = require('fs')
 const https = require('https')
 
-const PAT = 'sbp_v0_0c0c5fba48d5f089e856cd372058071e46d51dda'
+const PAT = process.env.SUPABASE_PAT || 'YOUR_PAT_HERE'
 const PROJECT = 'jzucxqakvgzpgtvagsnq'
 
 function request(method, path, body) {

@@ -25,6 +25,7 @@ import type { ActiveOverride } from './lib/plans'
 import { activateGracePeriod } from './services/billingService'
 import { getActiveOverride } from './services/accessOverrideService'
 import { AuthPage } from './pages/AuthPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
 import { ProductsPage } from './pages/ProductsPage'
@@ -278,7 +279,7 @@ const pageTitles: Record<PageKey, string> = {
 }
 
 function App() {
-  const { session, isLoading: isAuthLoading, signIn, signOut, signUp } = useAuth()
+  const { session, isLoading: isAuthLoading, signIn, signOut, signUp, isPasswordRecovery, clearPasswordRecovery } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -601,6 +602,10 @@ function App() {
 
   if (!session) {
     return <AuthPage isSupabaseConfigured={isSupabaseConfigured} onSignIn={signIn} onSignUp={signUp} />
+  }
+
+  if (isPasswordRecovery) {
+    return <ResetPasswordPage onSuccess={() => { clearPasswordRecovery(); void signOut() }} />
   }
 
   if (isAccountsLoading) {

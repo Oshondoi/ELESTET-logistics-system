@@ -38,6 +38,7 @@ import {
   updateTripLineWbPassUrls as updateTripLineWbPassUrlsInSupabase,
   updateTripLineWbSupplyId as updateTripLineWbSupplyIdInSupabase,
   bulkArriveTripLines as bulkArriveTripLinesInSupabase,
+  bulkSetTripLineStatus as bulkSetTripLineStatusInSupabase,
   archiveTripLine as archiveTripLineInSupabase,
   restoreTripLine as restoreTripLineInSupabase,
   fetchArchivedTripLines as fetchArchivedTripLinesInSupabase,
@@ -382,8 +383,16 @@ export const useAppData = (accountId: string | null) => {
   const changeTripStatus = async (tripId: string, status: TripStatus) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const updatedTrip = await updateTripStatusInSupabase(accountId, tripId, status)
-    if (status === 'Прибыл') {
-      const today = new Date().toISOString().slice(0, 10)
+    const today = new Date().toISOString().slice(0, 10)
+
+    // Порядок статусов рейса (по возрастанию)
+    const TRIP_ORDER: TripStatus[] = ['Формируется', 'Отправлен', 'Прибыл', 'Завершён']
+    const currentTrip = trips.find((t) => t.id === tripId)
+    const currentIdx = TRIP_ORDER.indexOf(currentTrip?.status ?? 'Формируется')
+    const newIdx = TRIP_ORDER.indexOf(status)
+    const isAscending = newIdx > currentIdx
+
+    if (status === 'Прибыл' && isAscending) {
       await bulkArriveTripLinesInSupabase(accountId, tripId, today)
       setTrips((current) =>
         current.map((trip) =>
@@ -402,10 +411,31 @@ export const useAppData = (accountId: string | null) => {
         ),
       )
     } else {
+      const lineStatusMap: Partial<Record<TripStatus, ShipmentStatus>> = {
+        'Формируется': 'Формируется',
+        'Отправлен': 'В пути',
+        'Завершён': 'Отгружен',
+      }
+      const lineStatus = isAscending ? lineStatusMap[status] : undefined
+      if (lineStatus) {
+        await bulkSetTripLineStatusInSupabase(accountId, tripId, lineStatus, today)
+      }
       setTrips((current) =>
         current.map((trip) =>
           trip.id === tripId
-            ? { ...trip, status: updatedTrip.status, trip_number: updatedTrip.trip_number }
+            ? {
+                ...trip,
+                status: updatedTrip.status,
+                trip_number: updatedTrip.trip_number,
+                lines: lineStatus
+                  ? trip.lines.map((line) => ({
+                      ...line,
+                      status: lineStatus,
+                      transit_at: lineStatus === 'В пути' ? (line.transit_at ?? today) : line.transit_at,
+                      shipped_date: lineStatus === 'Отгружен' ? (line.shipped_date ?? today) : line.shipped_date,
+                    }))
+                  : trip.lines,
+              }
             : trip,
         ),
       )
@@ -429,6 +459,22 @@ export const useAppData = (accountId: string | null) => {
           : trip,
       ),
     )
+
+    // Автозавершение рейса: если все поставки стали «Отгружен» → рейс → «Завершён»
+    const parentTrip = trips.find((t) => t.id === tripId)
+    if (parentTrip && parentTrip.status !== 'Завершён' && parentTrip.lines.length > 0) {
+      const updatedLines = parentTrip.lines.map((l) => l.id === lineId ? { ...l, status } : l)
+      if (updatedLines.every((l) => l.status === 'Отгружен')) {
+        const completedTrip = await updateTripStatusInSupabase(accountId, tripId, 'Завершён')
+        setTrips((current) =>
+          current.map((trip) =>
+            trip.id === tripId
+              ? { ...trip, status: completedTrip.status, trip_number: completedTrip.trip_number }
+              : trip,
+          ),
+        )
+      }
+    }
   }
 
   const changeTripLinePaymentStatus = async (tripId: string, lineId: string, payment_status: PaymentStatus) => {

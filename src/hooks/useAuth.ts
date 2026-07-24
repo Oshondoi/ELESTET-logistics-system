@@ -16,6 +16,7 @@ const normalizePassword = (password: string) => password.toLowerCase()
 export const useAuth = () => {
   const [session, setSession] = useState<Session | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false)
 
   useEffect(() => {
     if (!supabase) {
@@ -37,6 +38,9 @@ export const useAuth = () => {
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession)
       setIsLoading(false)
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsPasswordRecovery(true)
+      }
       // Если refresh token протух — перезагружаем страницу чтобы сбросить на экран входа
       if (event === 'SIGNED_OUT' && !nextSession) {
         window.location.reload()
@@ -104,11 +108,23 @@ export const useAuth = () => {
     }
   }
 
+  const resetPasswordForEmail = async (email: string) => {
+    if (!supabase) throw new Error('Supabase не настроен')
+    const redirectTo = `${window.location.origin}/reset-password`
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo })
+    if (error) throw error
+  }
+
+  const clearPasswordRecovery = () => setIsPasswordRecovery(false)
+
   return {
     session,
     isLoading,
+    isPasswordRecovery,
     signIn,
     signUp,
     signOut,
+    resetPasswordForEmail,
+    clearPasswordRecovery,
   }
 }

@@ -3,6 +3,7 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
 import { supabase } from '../../lib/supabase'
+import { validatePassword, normalizePassword } from '../../lib/passwordUtils'
 
 interface ProfileModalProps {
   open: boolean
@@ -79,10 +80,8 @@ export const ProfileModal = ({
       setPasswordError('Введите новый пароль')
       return
     }
-    if (newPassword.length < 6) {
-      setPasswordError('Пароль должен быть не менее 6 символов')
-      return
-    }
+    const validationError = validatePassword(newPassword)
+    if (validationError) { setPasswordError(validationError); return }
     if (newPassword !== confirmPassword) {
       setPasswordError('Пароли не совпадают')
       return
@@ -92,7 +91,7 @@ export const ProfileModal = ({
     setPasswordError(null)
     setPasswordSuccess(false)
     try {
-      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      const { error } = await supabase.auth.updateUser({ password: normalizePassword(newPassword) })
       if (error) throw error
       setNewPassword('')
       setConfirmPassword('')

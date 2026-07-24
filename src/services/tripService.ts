@@ -257,6 +257,28 @@ export const bulkArriveTripLines = async (
   if (e2) throw e2
 }
 
+// Массово переводит все поставки рейса в указанный статус + проставляет дату если нужно
+export const bulkSetTripLineStatus = async (
+  accountId: string,
+  tripId: string,
+  status: ShipmentStatus,
+  today: string,
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('trip_lines')
+    .update({ status })
+    .eq('trip_id', tripId)
+    .eq('account_id', accountId)
+  if (error) throw error
+  // Проставляем дату (только где ещё нет)
+  if (status === 'В пути') {
+    await supabase.from('trip_lines').update({ transit_at: today }).eq('trip_id', tripId).eq('account_id', accountId).is('transit_at', null)
+  } else if (status === 'Отгружен') {
+    await supabase.from('trip_lines').update({ shipped_date: today }).eq('trip_id', tripId).eq('account_id', accountId).is('shipped_date', null)
+  }
+}
+
 export const updateTripLinePaymentStatus = async (
   accountId: string,
   lineId: string,

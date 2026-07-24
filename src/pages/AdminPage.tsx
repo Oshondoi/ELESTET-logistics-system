@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { validatePassword, normalizePassword } from '../lib/passwordUtils'
 import { Card } from '../components/ui/Card'
 import { SearchableSelect } from '../components/ui/SearchableSelect'
 import { getBillingStatus, trialDaysLeft, graceDaysLeft } from '../lib/plans'
@@ -204,6 +205,37 @@ export const AdminPage = ({
   const [isLoading, setIsLoading] = useState(initialStats === null)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+
+  // ── Reset password modal state
+  const [resetPwdUser, setResetPwdUser] = useState<{ id: string; email: string } | null>(null)
+  const [resetPwdValue, setResetPwdValue] = useState('')
+  const [resetPwdConfirm, setResetPwdConfirm] = useState('')
+  const [resetPwdError, setResetPwdError] = useState<string | null>(null)
+  const [resetPwdSuccess, setResetPwdSuccess] = useState(false)
+  const [isResettingPwd, setIsResettingPwd] = useState(false)
+
+  const handleResetPassword = async () => {
+    if (!resetPwdUser || !supabase) return
+    setResetPwdError(null)
+    const validationError = validatePassword(resetPwdValue)
+    if (validationError) { setResetPwdError(validationError); return }
+    if (resetPwdValue !== resetPwdConfirm) { setResetPwdError('Пароли не совпадают'); return }
+    setIsResettingPwd(true)
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke('admin-reset-password', {
+        body: { userId: resetPwdUser.id, newPassword: normalizePassword(resetPwdValue) },
+      })
+      if (fnErr) throw fnErr
+      if (data?.error) throw new Error(data.error)
+      setResetPwdSuccess(true)
+      setResetPwdValue('')
+      setResetPwdConfirm('')
+    } catch (e) {
+      setResetPwdError(e instanceof Error ? e.message : 'Ошибка')
+    } finally {
+      setIsResettingPwd(false)
+    }
+  }
 
   // ── Subscriptions tab state
   const [accounts, setAccounts] = useState<AccountBillingRow[]>(initialAccounts ?? [])
@@ -660,6 +692,7 @@ export const AdminPage = ({
                     <th className="px-4 py-3 text-center">Компаний</th>
                     <th className="px-4 py-3 text-center">Магазинов</th>
                     <th className="px-4 py-3">Компании</th>
+                    <th className="px-4 py-3" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -690,10 +723,19 @@ export const AdminPage = ({
                           {u.company_names.length === 0 && <span className="text-xs text-slate-300">—</span>}
                         </div>
                       </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => { setResetPwdUser({ id: u.id, email: u.email }); setResetPwdValue(''); setResetPwdConfirm(''); setResetPwdError(null); setResetPwdSuccess(false) }}
+                          className="rounded-lg px-2.5 py-1 text-xs text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
+                        >
+                          Сброс пароля
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {filtered.length === 0 && !isLoading && (
-                    <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-slate-400">Ничего не найдено</td></tr>
+                    <tr><td colSpan={9} className="px-5 py-10 text-center text-sm text-slate-400">Ничего не найдено</td></tr>
                   )}
                 </tbody>
               </table>
@@ -701,6 +743,67 @@ export const AdminPage = ({
           )}
         </Card>
       )}
+
+      {/* ═══ MODAL: Сброс пароля ════════════════════════════════════════ */}
+      {resetPwdUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setResetPwdUser(null)}>
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-1 text-base font-semibold text-slate-800">Сброс пароля</h3>
+            <p className="mb-5 text-xs text-slate-400">{resetPwdUser.email}</p>
+
+            {resetPwdSuccess ? (
+              <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                Пароль успешно изменён
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-500">Новый пароль</label>
+                  <input
+                    type="password"
+                    value={resetPwdValue}
+                    onChange={(e) => setResetPwdValue(e.target.value)}
+                    placeholder="Минимум 6 символов"
+                    className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-500">Повторите пароль</label>
+                  <input
+                    type="password"
+                    value={resetPwdConfirm}
+                    onChange={(e) => setResetPwdConfirm(e.target.value)}
+                    placeholder=""
+                    className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                  />
+                </div>
+                {resetPwdError && <p className="text-xs text-rose-500">{resetPwdError}</p>}
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setResetPwdUser(null)}
+                className="rounded-xl px-4 py-2 text-sm text-slate-500 hover:bg-slate-100"
+              >
+                {resetPwdSuccess ? 'Закрыть' : 'Отмена'}
+              </button>
+              {!resetPwdSuccess && (
+                <button
+                  type="button"
+                  onClick={() => void handleResetPassword()}
+                  disabled={isResettingPwd}
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isResettingPwd ? 'Сохранение...' : 'Сохранить'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* ═══ TAB: Подписки ═══════════════════════════════════════════ */}
       {activeTab === 'subscriptions' && (

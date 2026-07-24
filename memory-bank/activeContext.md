@@ -1,6 +1,47 @@
 # Active Context
 
-## Current Focus (12-16.07.2026) — FulfillmentPage Приёмка — ЗАВЕРШЕНО
+## Current Focus (17-24.07.2026) — Сессия завершена
+
+### FulfillmentPage — Фото в таблице приёмки
+- Добавлена первая колонка «Фото» в таблицу добавленных позиций на этапе Приёмки
+- `fetchPhotosByBarcodes(accountId, storeId, barcodes[])` — новая функция в `fulfillmentService.ts`, batch-запрос `products.overlaps('barcodes', ...)`
+- `photoMap: Record<string, string | null>` state; `useEffect([items.length])` — подгружает фото при изменении кол-ва позиций
+- `<PhotoThumb url={photoMap[it.barcode] ?? null} />` — первая `<td>` в строке; `colSpan` в tfoot: 5→6
+
+### FulfillmentPage — Защита поставок «Готовые короба» на этапе Короба
+- **Удаление поставки**: `isReadyBoxSupply = items.some(i => i.product_name === 'Готовые короба' && i.notes === supply.warehouse_name)` — блокирует кнопку корзины на карточке и «Удалить» в шапке модалки
+- **Короба внутри поставки**: «Открыть повторно» и «Удалить» короб — скрыты если `isReadyBoxSupply`
+- `isReadyBoxSupply` вычисляется один раз при открытии модалки поставки
+- Удалять можно только через этап Приёмки (крестик у строки «Готовые короба»)
+
+### Система сброса пароля (17-19.07.2026)
+- `src/lib/passwordUtils.ts` — shared: `validatePassword` (паттерн + 6 символов + 1 цифра), `normalizePassword` (toLowerCase)
+- **Все 4 формы** используют единую валидацию: `ProfileModal`, `AdminPage`, `AuthPage`, `ResetPasswordPage`
+- **AdminPage → Пользователи**: колонка «Сброс пароля» → модалка → Edge Function `admin-reset-password`
+- **Edge Function `admin-reset-password`**: проверяет caller = `sydykovsam@gmail.com`, `auth.admin.updateUserById(userId, { password: normalizePassword(newPassword) })`
+- **AuthPage**: режим `'forgot'` — email → `resetPasswordForEmail(email, { redirectTo: origin + '/reset-password' })`
+- **ResetPasswordPage** (`/reset-password`): ловит `PASSWORD_RECOVERY` event → форма нового пароля → `updateUser({ password: normalizePassword(pw) })` → `signOut()`
+- **useAuth.ts**: `isPasswordRecovery` state, `PASSWORD_RECOVERY` event → `setIsPasswordRecovery(true)`, `clearPasswordRecovery()`
+- **App.tsx**: `if (isPasswordRecovery) return <ResetPasswordPage onSuccess={() => { clearPasswordRecovery(); void signOut() }} />`
+- **Supabase redirect URLs** добавлены через Management API: `https://elestet.net/reset-password`, `http://localhost:5173/reset-password`
+
+### Логистика — Каскад статусов Рейс → Поставки (20.07.2026)
+- Маппинг (только вперёд по возрастанию):
+  - Формируется → Формируется
+  - Отправлен → В пути (transit_at где null)
+  - Прибыл → Прибыл (существующий bulkArriveTripLines, пропускает Отгружен)
+  - Завершён → Отгружен (shipped_date где null)
+- `isAscending = newIdx > currentIdx` (TRIP_ORDER = ['Формируется','Отправлен','Прибыл','Завершён']) — назад не следует
+- `bulkSetTripLineStatus(accountId, tripId, status, today)` — новая функция в `tripService.ts`
+- **Автозавершение**: в `changeTripLineStatus` — если после смены ВСЕ поставки рейса = «Отгружен» → автоматически `updateTripStatusInSupabase(tripId, 'Завершён')`
+
+### Логистика — Фильтр по дате (24.07.2026)
+- Кнопка воронки в тулбаре (`isDateFilterActive` → синий фон)
+- Модалка: выбор поля + «От» / «До» (оба опциональны) + Применить / Сбросить
+- 5 полей: `created_at` (рейс), `departure_date`, `arrived_at`, `planned_marketplace_delivery_date` (поставки), `wb_acceptance_date` (поставки)
+- Для полей поставок: рейс проходит если ХОТЯ БЫ ОДНА поставка в диапазоне
+- `filteredTrips` useMemo обновлён: сначала текстовый поиск, затем date filter
+
 
 ### Приёмка — черновая система (draft/pending)
 - **Все методы** (Навалом, По баркоду, Из каталога, Готовые короба) → pending в памяти, сохраняются по кнопке «Сохранить»

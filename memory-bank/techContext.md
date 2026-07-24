@@ -77,9 +77,9 @@ SubscriptionPage
 - `VITE_SUPABASE_ANON_KEY`
 
 ## Deploy
-- Хостинг: Vercel (elestet.net = production, master branch)
-- CI/CD: автодеплой при push в `main` (production) или `master` (preview → production)
-- **ВАЖНО:** текущая рабочая ветка — `master`. В `main` НЕ мержить.
+- Хостинг: Vercel (elestet.net = production, main branch)
+- CI/CD: автодеплой при push в `main` (production)
+- **ВАЖНО:** текущая рабочая ветка — `main`. В `master` больше не мержить.
 - `vercel.json`: `"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]` — SPA routing
 - Supabase Project: `jzucxqakvgzpgtvagsnq.supabase.co`
 

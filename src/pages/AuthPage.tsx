@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
+import { supabase } from '../lib/supabase'
+import { validatePassword } from '../lib/passwordUtils'
 
 interface AuthPageProps {
   isSupabaseConfigured: boolean
@@ -8,17 +10,9 @@ interface AuthPageProps {
   onSignUp: (values: { fullName: string; email: string; password: string }) => Promise<unknown>
 }
 
-type AuthMode = 'sign-in' | 'sign-up'
+type AuthMode = 'sign-in' | 'sign-up' | 'forgot'
 
-const passwordPattern = /^(?=.*\d)[A-Za-z\d]{6,}$/
-
-const validatePassword = (password: string) => {
-  if (!passwordPattern.test(password)) {
-    return 'Пароль: минимум 6 символов, только буквы и цифры, хотя бы 1 цифра. Регистр не учитывается.'
-  }
-
-  return null
-}
+const validatePasswordLocal = (password: string) => validatePassword(password)
 
 const initialValues = {
   fullName: '',
@@ -35,6 +29,9 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [forgotEmail, setForgotEmail] = useState('')
+  const [forgotSent, setForgotSent] = useState(false)
+  const [isForgotSubmitting, setIsForgotSubmitting] = useState(false)
 
   // Автоскрытие тоста ошибки через 4 сек
   useEffect(() => {
@@ -61,7 +58,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         return
       }
 
-      const passwordError = validatePassword(values.password)
+      const passwordError = validatePasswordLocal(values.password)
 
       if (passwordError) {
         setError(passwordError)
@@ -97,6 +94,23 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
     }
   }
 
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!supabase) return
+    setIsForgotSubmitting(true)
+    setError(null)
+    try {
+      const redirectTo = `${window.location.origin}/reset-password`
+      const { error: forgotErr } = await supabase.auth.resetPasswordForEmail(forgotEmail.trim(), { redirectTo })
+      if (forgotErr) throw forgotErr
+      setForgotSent(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка отправки')
+    } finally {
+      setIsForgotSubmitting(false)
+    }
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10">
       {success ? (
@@ -115,6 +129,43 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         <div className="mb-6">
           <div className="text-[30px] font-black uppercase leading-none tracking-tight text-slate-900">ELESTET</div>
         </div>
+
+        {/* ── Режим: Забыли пароль ── */}
+        {mode === 'forgot' && (
+          <div className="flex flex-1 flex-col">
+            <h2 className="mb-1 text-lg font-semibold text-slate-800">Восстановление пароля</h2>
+            <p className="mb-5 text-sm text-slate-400">Введите email — отправим ссылку для сброса</p>
+            {forgotSent ? (
+              <div className="rounded-2xl bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-800">
+                Письмо отправлено на <strong>{forgotEmail}</strong>. Проверьте почту и перейдите по ссылке.
+              </div>
+            ) : (
+              <form className="grid gap-4" onSubmit={handleForgotSubmit}>
+                <Input
+                  label="Email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  required
+                />
+                <Button type="submit" className="w-full" disabled={isForgotSubmitting}>
+                  {isForgotSubmitting ? 'Отправка...' : 'Отправить ссылку'}
+                </Button>
+              </form>
+            )}
+            <button
+              type="button"
+              onClick={() => { setMode('sign-in'); setForgotSent(false); setForgotEmail(''); setError(null) }}
+              className="mt-4 text-sm text-slate-400 hover:text-slate-600"
+            >
+              ← Назад к входу
+            </button>
+          </div>
+        )}
+
+        {/* ── Режим: Вход / Регистрация ── */}
+        {mode !== 'forgot' && (<>
 
         <div className="mb-5 flex rounded-2xl bg-slate-100 p-1">
           <button
@@ -254,7 +305,17 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
                 ? 'Войти'
                 : 'Зарегистрироваться'}
           </Button>
+          {mode === 'sign-in' && (
+            <button
+              type="button"
+              onClick={() => { setMode('forgot'); setError(null) }}
+              className="mt-3 text-center text-xs text-slate-400 hover:text-slate-600"
+            >
+              Забыли пароль?
+            </button>
+          )}
         </form>
+      </>)}
       </div>
     </div>
   )

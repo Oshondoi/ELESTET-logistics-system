@@ -163,27 +163,63 @@ export const ShipmentsPage = ({
   const [bulkMoveError, setBulkMoveError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
+  // ── Фильтр по дате ───────────────────────────────────────────
+  type DateFilterField = 'created_at' | 'departure_date' | 'arrived_at' | 'planned_mp' | 'wb_acceptance'
+  interface DateFilterState { field: DateFilterField; from: string; to: string }
+  const DATE_FILTER_LABELS: Record<DateFilterField, string> = {
+    created_at: 'Дата создания рейса',
+    departure_date: 'Дата отправки',
+    arrived_at: 'Дата прибытия рейса',
+    planned_mp: 'Запланированная дата МП',
+    wb_acceptance: 'Дата приёмки ВБ',
+  }
+  const [dateFilterOpen, setDateFilterOpen] = useState(false)
+  const [dateFilter, setDateFilter] = useState<DateFilterState | null>(null)
+  const [dateFilterDraft, setDateFilterDraft] = useState<DateFilterState>({ field: 'departure_date', from: '', to: '' })
+  const isDateFilterActive = dateFilter !== null && (dateFilter.from !== '' || dateFilter.to !== '')
+
   const filteredTrips = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    if (!q) return trips
-    const matchesLine = (line: (typeof trips)[0]['lines'][0]) => {
-      if (line.store?.name?.toLowerCase().includes(q)) return true
-      if (line.store?.supplier_full?.toLowerCase().includes(q)) return true
-      if (line.store?.store_code?.toLowerCase().includes(q)) return true
-      if (line.destination_warehouse.toLowerCase().includes(q)) return true
-      if (String(line.shipment_number).includes(q)) return true
-      if (line.wb_supply_id?.toLowerCase().includes(q)) return true
-      return false
+    let result = trips
+    if (q) {
+      const matchesLine = (line: (typeof trips)[0]['lines'][0]) => {
+        if (line.store?.name?.toLowerCase().includes(q)) return true
+        if (line.store?.supplier_full?.toLowerCase().includes(q)) return true
+        if (line.store?.store_code?.toLowerCase().includes(q)) return true
+        if (line.destination_warehouse.toLowerCase().includes(q)) return true
+        if (String(line.shipment_number).includes(q)) return true
+        if (line.wb_supply_id?.toLowerCase().includes(q)) return true
+        return false
+      }
+      const tripMatches = (trip: (typeof trips)[0]) =>
+        trip.trip_number?.toLowerCase().includes(q) || trip.carrier.toLowerCase().includes(q)
+      result = result
+        .filter((trip) => tripMatches(trip) || trip.lines.some(matchesLine))
+        .map((trip) => {
+          if (tripMatches(trip)) return trip
+          return { ...trip, lines: trip.lines.filter(matchesLine) }
+        })
     }
-    const tripMatches = (trip: (typeof trips)[0]) =>
-      trip.trip_number?.toLowerCase().includes(q) || trip.carrier.toLowerCase().includes(q)
-    return trips
-      .filter((trip) => tripMatches(trip) || trip.lines.some(matchesLine))
-      .map((trip) => {
-        if (tripMatches(trip)) return trip
-        return { ...trip, lines: trip.lines.filter(matchesLine) }
+    if (dateFilter && (dateFilter.from || dateFilter.to)) {
+      const { field, from, to } = dateFilter
+      const inRange = (d: string | null | undefined) => {
+        if (!d) return false
+        const day = d.slice(0, 10)
+        if (from && day < from) return false
+        if (to && day > to) return false
+        return true
+      }
+      result = result.filter((trip) => {
+        if (field === 'created_at') return inRange(trip.created_at)
+        if (field === 'departure_date') return inRange(trip.departure_date)
+        if (field === 'arrived_at') return inRange(trip.arrived_at)
+        if (field === 'planned_mp') return trip.lines.some((l) => inRange(l.planned_marketplace_delivery_date))
+        if (field === 'wb_acceptance') return trip.lines.some((l) => inRange(l.wb_acceptance_date))
+        return true
       })
-  }, [trips, searchQuery])
+    }
+    return result
+  }, [trips, searchQuery, dateFilter])
 
   const lineToTripId = useMemo(() => {
     const next = new Map<string, string>()
@@ -531,6 +567,24 @@ export const ShipmentsPage = ({
                   <path d="M12 18.5h4" />
                 </svg>
               </Button>
+              {/* Кнопка фильтра по дате */}
+              <Button
+                type="button"
+                variant="secondary"
+                className={[
+                  '!h-10 !w-10 !min-w-10 !rounded-2xl !px-0',
+                  isDateFilterActive
+                    ? '!bg-[#E3EAF6] !text-blue-600 hover:!bg-[#E3EAF6]'
+                    : '!text-slate-400',
+                ].join(' ')}
+                onClick={() => { setDateFilterDraft(dateFilter ?? { field: 'departure_date', from: '', to: '' }); setDateFilterOpen(true) }}
+                aria-label="Фильтр по дате"
+                title="Фильтр по дате"
+              >
+                <svg viewBox="0 0 24 24" className="h-[15px] w-[15px] shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                </svg>
+              </Button>
               {/* Кнопка настройки колонок */}
               <Button
                 type="button"
@@ -695,6 +749,78 @@ export const ShipmentsPage = ({
           await onAddTripLine(tripId, values)
         }}
       />
+
+      {/* ── Модалка фильтра по дате ── */}
+      {dateFilterOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setDateFilterOpen(false)}>
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-5 text-base font-semibold text-slate-800">Фильтр по дате</h3>
+
+            <div className="grid gap-4">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-500">Поле даты</label>
+                <select
+                  value={dateFilterDraft.field}
+                  onChange={(e) => setDateFilterDraft((d) => ({ ...d, field: e.target.value as DateFilterField }))}
+                  className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-300"
+                >
+                  {(Object.keys(DATE_FILTER_LABELS) as DateFilterField[]).map((key) => (
+                    <option key={key} value={key}>{DATE_FILTER_LABELS[key]}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-500">От</label>
+                  <input
+                    type="date"
+                    value={dateFilterDraft.from}
+                    onChange={(e) => setDateFilterDraft((d) => ({ ...d, from: e.target.value }))}
+                    className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-500">До</label>
+                  <input
+                    type="date"
+                    value={dateFilterDraft.to}
+                    onChange={(e) => setDateFilterDraft((d) => ({ ...d, to: e.target.value }))}
+                    className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => { setDateFilter(null); setDateFilterOpen(false) }}
+                className="rounded-xl px-4 py-2 text-sm text-slate-400 hover:bg-slate-100"
+              >
+                Сбросить
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDateFilterOpen(false)}
+                  className="rounded-xl px-4 py-2 text-sm text-slate-500 hover:bg-slate-100"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setDateFilter({ ...dateFilterDraft }); setDateFilterOpen(false) }}
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  Применить
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
+

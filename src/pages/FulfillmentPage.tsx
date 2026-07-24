@@ -84,7 +84,7 @@ import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulf
 import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, initBatchPipeline, completeBatchPipelineStage, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo } from '../types'
 import { fetchExecutorOptions } from '../services/outsourceService'
-import { findProductByBarcode } from '../services/fulfillmentService'
+import { findProductByBarcode, fetchPhotosByBarcodes } from '../services/fulfillmentService'
 import { createTrip, addTripLine, setTripLineFulfillmentBatch, updateTripLineTripId, updateTripLineWeight } from '../services/tripService'
 import { fetchWorkTariffs, fetchConsumables, fetchConsumableCatalog } from '../services/directoriesService'
 import { Card } from '../components/ui/Card'
@@ -324,6 +324,7 @@ const BatchDetailModal = ({
   const [items, setItems] = useState<FulfillmentItem[]>(initialBatch.items)
   const [isSavingStage, setIsSavingStage] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [photoMap, setPhotoMap] = useState<Record<string, string | null>>({})
 
   // Приёмка: режим добавления
   const [addMode, setAddMode] = useState<AddMode>('bulk')
@@ -591,6 +592,17 @@ const BatchDetailModal = ({
   const [isSavingDraft, setIsSavingDraft] = useState(false)
 
   const store = stores.find((s) => s.id === batch.store_id)
+
+  // Фото товаров для таблицы приёмки (barcode → photo_url)
+  useEffect(() => {
+    if (!batch.store_id) return
+    const barcodes = [...new Set(items.map((i) => i.barcode).filter((b) => b && b !== 'bulk'))]
+    if (!barcodes.length) return
+    fetchPhotosByBarcodes(accountId, batch.store_id, barcodes).then((map) => {
+      setPhotoMap(map)
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.length])
 
   // Загрузить тарифы работ из БД
   useEffect(() => {
@@ -3245,6 +3257,7 @@ const BatchDetailModal = ({
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       <tr>
+                        <th className="px-2 py-2.5 w-12" />
                         <th className="px-4 py-2.5 text-left">Баркод</th>
                         <th className="px-4 py-2.5 text-left">Наименование</th>
                         <th className="px-4 py-2.5 text-left">Артикул ВБ</th>
@@ -3263,6 +3276,9 @@ const BatchDetailModal = ({
                         return aBox - bBox
                       }).map((it) => (
                         <tr key={it.id} className={`${pendingDeleteIds.has(it.id) ? 'opacity-40 line-through bg-red-50/60' : it.product_name === 'Готовые короба' ? 'bg-orange-50/60 hover:bg-orange-50' : `hover:bg-slate-50/50 ${pendingItemIds.has(it.id) ? 'bg-blue-50/60' : ''}`}`}>
+                          <td className="px-2 py-1.5">
+                            <PhotoThumb url={photoMap[it.barcode] ?? null} />
+                          </td>
                           <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{it.barcode || <span className="text-slate-300">—</span>}</td>
                           <td className="px-4 py-2.5 text-slate-700">{it.product_name ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{it.article ?? <span className="text-slate-300">—</span>}</td>
@@ -3300,7 +3316,7 @@ const BatchDetailModal = ({
                     </tbody>
                     <tfoot className="sticky bottom-0 z-10 border-t border-slate-200 bg-slate-50 font-semibold">
                       <tr>
-                        <td colSpan={5} className="px-4 py-2.5 text-sm text-slate-500">
+                        <td colSpan={6} className="px-4 py-2.5 text-sm text-slate-500">
                           <span>Итого</span>
                           {receptionCompletedDate && (
                             <span className="ml-3 text-xs font-normal text-slate-400">
@@ -5030,7 +5046,8 @@ const BatchDetailModal = ({
                         const totalItems = supply.boxes.reduce((s, b) => s + b.items.reduce((ss, i) => ss + i.qty, 0), 0)
                         const closedBoxes = supply.boxes.filter((b) => b.status === 'closed').length
                         const isActiveStage = batch.current_stage === 'packing'
-                        const canDeleteCard = canManageStageData && (isActiveStage || canSupplyDeleteLocked)
+                        const isReadyBoxSupply = items.some((i) => i.product_name === 'Готовые короба' && i.notes === supply.warehouse_name)
+                        const canDeleteCard = canManageStageData && (isActiveStage || canSupplyDeleteLocked) && !isReadyBoxSupply
                         const linkedLine = supply.trip_line_id
                           ? trips.flatMap((t) => t.lines).find((l) => l.id === supply.trip_line_id)
                           : null
@@ -5075,6 +5092,7 @@ const BatchDetailModal = ({
                     if (!supply) return null
                     const totalBoxes = supply.boxes.length
                     const nextBoxNum = totalBoxes + 1
+                    const isReadyBoxSupply = items.some((i) => i.product_name === 'Готовые короба' && i.notes === supply.warehouse_name)
                     return (
                       <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onClick={() => setActiveSupplyId(null)}>
                         <div className="relative flex h-[90vh] w-[80%] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -5089,7 +5107,7 @@ const BatchDetailModal = ({
                             <div className="flex items-center gap-3">
                               {(() => {
                                 const isActiveStage = batch.current_stage === 'packing'
-                                const canDelete = canManageStageData && (isActiveStage || canSupplyDeleteLocked)
+                                const canDelete = canManageStageData && (isActiveStage || canSupplyDeleteLocked) && !isReadyBoxSupply
                                 return canDelete ? (
                                   <button
                                     onClick={() => setDeleteSupplyConfirm(supply.id)}
@@ -5174,7 +5192,7 @@ const BatchDetailModal = ({
                                         Закрыть ✓
                                       </button>
                                     )}
-                                    {canManageStageData && !isOpen && (
+                                    {canManageStageData && !isOpen && !isReadyBoxSupply && (
                                       <button
                                         onClick={() => {
                                           if (!box._local) void reopenBox(box.id)
@@ -5185,7 +5203,7 @@ const BatchDetailModal = ({
                                         Открыть повторно
                                       </button>
                                     )}
-                                    {canManageStageData && (
+                                    {canManageStageData && !isReadyBoxSupply && (
                                       <button
                                         onClick={() => setDeleteBoxConfirm({ supplyId: supply.id, boxId: box.id })}
                                         className="text-xs text-red-400 hover:text-red-600"

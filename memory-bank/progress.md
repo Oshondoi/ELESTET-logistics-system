@@ -3,7 +3,44 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен (elestet.net).
 
-## Что сделано за сессию 12-16.07.2026
+## Что сделано за сессию 17-24.07.2026
+
+### FulfillmentPage — Фото в таблице приёмки
+- Первая колонка таблицы на этапе Приёмки — `<PhotoThumb>` с hover-превью
+- `fetchPhotosByBarcodes` в `fulfillmentService.ts` — batch-запрос по barcodes
+- `photoMap` state + `useEffect([items.length])` — подгрузка при изменении кол-ва позиций
+
+### FulfillmentPage — Защита поставок «Готовые короба» на этапе Короба
+- Нельзя удалить поставку (кнопка корзины на карточке + «Удалить» в шапке модалки)
+- Нельзя «Открыть повторно» или «Удалить» короба внутри такой поставки
+- Идентификация: `items.some(i => i.product_name === 'Готовые короба' && i.notes === supply.warehouse_name)`
+- `isReadyBoxSupply` вычисляется один раз при открытии модалки поставки
+
+### Система сброса пароля (4 формы — единая валидация)
+- `src/lib/passwordUtils.ts` — `validatePassword` + `normalizePassword` (toLowerCase)
+- **ProfileModal**: паттерн + toLowerCase (было только length ≥ 6)
+- **AdminPage → таб Пользователи**: колонка «Сброс пароля» → модалка → Edge Function
+- **Edge Function `admin-reset-password`** (задеплоена): только `sydykovsam@gmail.com`, `auth.admin.updateUserById`
+- **AuthPage**: режим `'forgot'` — ссылка «Забыли пароль?», `resetPasswordForEmail`
+- **ResetPasswordPage** (`/reset-password`): новая страница, ловит `PASSWORD_RECOVERY` event
+- **useAuth.ts**: `isPasswordRecovery`, `clearPasswordRecovery`, `resetPasswordForEmail`
+- **App.tsx**: `if (isPasswordRecovery) → <ResetPasswordPage>`
+- **Supabase redirect URLs** настроены через Management API
+
+### Логистика — Каскад статусов Рейс → Поставки
+- При смене статуса рейса **вперёд** → все поставки меняют статус автоматически
+- Назад (откат) — поставки НЕ следуют, только рейс
+- `TRIP_ORDER = ['Формируется','Отправлен','Прибыл','Завершён']`, `isAscending = newIdx > currentIdx`
+- `bulkSetTripLineStatus` в `tripService.ts` — новая функция для массовой смены статуса
+- **Автозавершение рейса**: если все поставки = «Отгружен» → рейс автоматически «Завершён»
+
+### Логистика — Фильтр по дате
+- Кнопка-воронка в тулбаре (синяя когда активна)
+- Модалка: поле даты + диапазон От/До + Применить/Сбросить
+- 5 полей: Дата создания, Дата отправки, Дата прибытия рейса, Запланированная МП, Приёмка ВБ
+- `filteredTrips` useMemo: текстовый поиск → date filter
+
+
 
 ### FulfillmentPage — Приёмка (полный рефактор черновой системы)
 
