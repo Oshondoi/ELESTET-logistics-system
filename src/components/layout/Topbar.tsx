@@ -13,6 +13,7 @@ interface TopbarProps {
   onAdminClick?: () => void
   onGlossaryClick?: () => void
   onDiaryClick?: () => void
+  onTzPromptsClick?: () => void
   onFinanceReportClick?: () => void
   onPromotionClick?: () => void
   onHomeClick?: () => void
@@ -20,7 +21,7 @@ interface TopbarProps {
   onSignOut: () => void
 }
 
-export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
+export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onTzPromptsClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
   const initial = userName ? userName.charAt(0).toUpperCase() : (userEmail ? userEmail.charAt(0).toUpperCase() : '?')
   const displayName = userName || userEmail || 'Профиль'
   const [open, setOpen] = useState(false)
@@ -119,6 +120,20 @@ export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, u
               <path d="M8 7h8M8 11h8M8 15h5" />
             </svg>
             Дневник
+          </button>
+        )}
+        {onTzPromptsClick && (
+          <button
+            type="button"
+            onClick={onTzPromptsClick}
+            className="flex h-7 items-center gap-1.5 rounded-xl border border-slate-200 px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <rect x="3" y="3" width="18" height="18" rx="3" />
+              <path d="M9 9h6M9 12h6M9 15h4" />
+              <path d="M7 9h.01M7 12h.01M7 15h.01" />
+            </svg>
+            Промпты ТЗ
           </button>
         )}
         {onPromotionClick && (

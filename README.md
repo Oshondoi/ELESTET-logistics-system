@@ -2,6 +2,58 @@
 
 MVP веб-приложения для логистики поставок на стеке `React + Vite + Tailwind CSS + Supabase`.
 
+## FBS Заказы — Архитектура (05.08.2026)
+
+### Паттерн: Stale-While-Revalidate
+Браузер читает из Supabase DB (мгновенно). WB API вызывается только при синке.
+
+```
+Открыл страницу  → читаем fbs_orders из Supabase (<100ms)
+                 → если synced_at > 10 мин → фоновый sync_orders
+Нажал "Обновить" → sync_orders (WB→DB) → перечитываем из DB
+```
+
+Масштаб: до 1000+ магазинов. Детали: `/memories/repo/fbs-architecture.md`
+
+### Статусы WB (supplierStatus)
+| WB статус | Таб | Триггер |
+|---|---|---|
+| `new` | Новые | `GET /api/v3/orders/new` |
+| `confirm` | В сборке | `POST /api/v3/supplies` + `PATCH /api/v3/supplies/{id}/orders/{orderId}` |
+| `complete` | В доставке | Передача поставки в доставку |
+| `done` | Отгружено | Наш внутренний (`fbs_done_{accountId}` localStorage) |
+
+### Критические факты WB API
+- **Правильный хост FBS:** `https://marketplace-api.wildberries.ru` (НЕ suppliers-api — он мёртв)
+- `GET /api/v3/orders` параметр `dateFrom` = **Unix timestamp (int)**, не ISO строка
+- `GET /api/v3/supplies/{id}/orders` — НЕ существует (404)
+- Стикеры PNG 58×40 через jsPDF → открывается в Chrome PDF viewer
+
+### Edge Function wb-fbs (v16)
+Все actions: `get_orders_new`, `get_orders_all`, `get_orders_status`, `sync_orders`,
+`get_wb_warehouses`, `create_supply`, `add_order_to_supply`, `get_supplies`,
+`get_sticker`, `update_stocks`
+
+### DB таблицы
+- `fbs_orders` — кэш заказов WB, `UNIQUE(store_id, wb_order_id)`, RLS по account_id
+- `fbs_sync_log` — последний синк по магазину (`last_synced_at`, `orders_count`)
+- SQL: `supabase/patch_fbs_db.sql`
+
+## WMS Склад (Lite) — 02.08.2026
+
+### Что реализовано
+- Склады (`wms_warehouses`): название, зоны, `fbs_enabled`, `wb_warehouse_id`
+- Зоны (`wms_zones`): название, цвет
+- Ячейки (`wms_cells`): столбец + ряд, статусы: свободна/занята/резерв/заглушена (серая)
+- Позиции ячеек (`wms_cell_items`): товар или короб с содержимым
+- Боксы (`wms_box_contents`): содержимое коробов
+
+### Связь WMS с FBS
+- `wms_warehouses.fbs_enabled = true` → склад участвует в FBS
+- `wms_warehouses.wb_warehouse_id` → ID склада WB (для обновления остатков)
+- При загрузке FBS заказов: поиск ячейки по баркоду в fbs_enabled складах
+- SQL: `supabase/patch_wms.sql`, `patch_wms_boxes.sql`, `patch_wms_disabled.sql`
+
 ## Принцип работы с кодом (хирургические изменения)
 
 > Делаем ровно то, что попросили. Ничего лишнего.
@@ -36,11 +88,13 @@ MVP веб-приложения для логистики поставок на 
 | **Дневник** | `/diary` | `DiaryPage` | `isSuperAdmin` |
 | **Словарь** | `/glossary` | `GlossaryPage` | `isAdmin` |
 | **Админ** | `/admin` | `AdminPage` | `isAdmin` |
+| **Промпты ТЗ** | `/tz-prompts` | `TzPromptsPage` | `isSuperAdmin` |
 
 - `AdminPage` — 6 табов: users / subscriptions / access / team / plans / payment. SessionStorage ключ: `'admin_tab'`.
 - `GlossaryPage` — внутренняя документация проекта (термины, паттерны, API-справочники). Ключевой инструмент memory management между сессиями.
 - `DiaryPage` — личный рабочий дневник. БД: `diary_entries`, Storage: `diary-media`.
 - `FinanceReportPage` — финансовая аналитика по платежам клиентов.
+- `TzPromptsPage` — шпаргалка / TODO-лист промптов и ТЗ для AI-ассистента. БД: `tz_prompts`. Блоки с заголовком + текстом, пометка выполненных, добавление/редактирование/удаление прямо на странице.
 
 ## Что уже есть
 

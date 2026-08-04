@@ -75,13 +75,15 @@ export function graceDaysLeft(account: AccountBillingInfo): number {
 // ── Доступ к страницам по тарифу ─────────────────────────────
 // На trial/grace/expired — все страницы видны (write = canWrite)
 // На активной подписке — зависит от тарифа
-const OPERATIONAL_ONLY_PAGES = ['fulfillment', 'shipments', 'directories', 'invoices'] as const
+const OPERATIONAL_ONLY_PAGES = ['fulfillment', 'shipments', 'directories', 'invoices', 'wms', 'fbs'] as const
 
 export const PLAN_PAGE_LABELS: Record<string, { title: string; desc: string }> = {
   fulfillment:  { title: 'Фулфилмент',   desc: 'Производственный учёт, пайплайн заказов, маркировка и отгрузка' },
   shipments:    { title: 'Логистика',     desc: 'Управление отгрузками, перевозчиками и транспортными документами' },
   directories:  { title: 'Справочники',   desc: 'Перевозчики, склады и тарифные справочники' },
   invoices:     { title: 'Счета',         desc: 'Выставление и отслеживание счетов для клиентов' },
+  wms:          { title: 'Склад (WMS)',   desc: 'Адресное хранение: визуальная карта ячеек, учёт остатков, FBS-резервирование' },
+  fbs:          { title: 'FBS Заказы',   desc: 'Сборка FBS-заказов с WB, поиск товара в ячейках, синхронизация остатков' },
 }
 
 /**

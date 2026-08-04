@@ -40,6 +40,9 @@ import { AdminPage } from './pages/AdminPage'
 import type { AdminStats, AccountBillingRow as AdminAccountBillingRow } from './pages/AdminPage'
 import { GlossaryPage } from './pages/GlossaryPage'
 import { DiaryPage } from './pages/DiaryPage'
+import { TzPromptsPage } from './pages/TzPromptsPage'
+import { WmsPage } from './pages/WmsPage'
+import { FbsOrdersPage } from './pages/FbsOrdersPage'
 import { FinanceReportPage } from './pages/FinanceReportPage'
 import { PromotionPage } from './pages/PromotionPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
@@ -77,12 +80,14 @@ const PlanGatewall = ({ page, onUpgrade }: { page: string; onUpgrade: () => void
   )
 }
 
-type PageKey = 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'promotion' | 'subscription' | 'payment_result'
+type PageKey = 'home' | 'fulfillment' | 'shipments' | 'wms' | 'fbs' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'promotion' | 'subscription' | 'payment_result' | 'tz_prompts'
 
 const PAGE_ROUTES: Record<PageKey, string> = {
   home: '/',
   fulfillment: '/fulfillment',
   shipments: '/shipments',
+  wms: '/wms',
+  fbs: '/fbs',
   stores: '/stores',
   directories: '/directories',
   products: '/products',
@@ -97,6 +102,7 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   promotion: '/promotion',
   subscription: '/subscription',
   payment_result: '/payment/result',
+  tz_prompts: '/tz-prompts',
 }
 
 const ROUTE_PAGES: Record<string, PageKey> = Object.fromEntries(
@@ -262,6 +268,8 @@ const pageTitles: Record<PageKey, string> = {
   home: 'Главная',
   fulfillment: 'Фулфилмент',
   shipments: 'Логистика',
+  wms: 'Склад',
+  fbs: 'FBS Заказы',
   stores: 'Магазины',
   directories: 'Справочники',
   products: 'Товары',
@@ -276,6 +284,7 @@ const pageTitles: Record<PageKey, string> = {
   promotion: 'Продвижение',
   subscription: 'Подписка',
   payment_result: 'Результат оплаты',
+  tz_prompts: 'Промпты ТЗ',
 }
 
 function App() {
@@ -494,6 +503,8 @@ function App() {
     stickers: 'stickers_view',
     reviews: 'reviews_view',
     invoices: null,
+    wms: null,
+    fbs: null,
     roles: 'roles_manage',
     admin: null,
     glossary: null,
@@ -502,6 +513,7 @@ function App() {
     promotion: null,
     subscription: null,
     payment_result: null,
+    tz_prompts: null,
   }
 
   // Если текущая страница недоступна по правам — показываем home.
@@ -511,6 +523,7 @@ function App() {
     if (isAccountsLoading || isPermissionsLoading) return activePage
     if ((activePage === 'admin' || activePage === 'glossary') && !isSupport) return 'home'
     if ((activePage === 'diary' || activePage === 'finance_report' || activePage === 'promotion') && !isSupport) return 'home'
+    if (activePage === 'tz_prompts' && !isSuperAdmin) return 'home'
     const key = pagePermKey[activePage]
     if (key !== null && !permissions[key]) return 'home'
     return activePage
@@ -725,7 +738,7 @@ function App() {
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-900">
       <ToastContainer />
       <div className="flex h-full">
-        {effectivePage !== 'admin' && effectivePage !== 'glossary' && effectivePage !== 'diary' && effectivePage !== 'finance_report' && effectivePage !== 'promotion' && (
+        {effectivePage !== 'admin' && effectivePage !== 'glossary' && effectivePage !== 'diary' && effectivePage !== 'finance_report' && effectivePage !== 'promotion' && effectivePage !== 'tz_prompts' && (
           <Sidebar
             activePage={effectivePage}
             onSelectPage={setActivePage}
@@ -757,7 +770,8 @@ function App() {
             onDiaryClick={isAdmin ? () => setActivePage('diary') : undefined}
             onFinanceReportClick={isAdmin ? () => setActivePage('finance_report') : undefined}
             onPromotionClick={isAdmin ? () => setActivePage('promotion') : undefined}
-            onHomeClick={['admin', 'glossary', 'diary', 'finance_report', 'promotion'].includes(effectivePage) ? () => setActivePage('home') : undefined}
+            onTzPromptsClick={isSuperAdmin ? () => setActivePage('tz_prompts') : undefined}
+            onHomeClick={['admin', 'glossary', 'diary', 'finance_report', 'promotion', 'tz_prompts'].includes(effectivePage) ? () => setActivePage('home') : undefined}
             onProfileClick={() => setProfileModalOpen(true)}
             onSignOut={() => void signOut()}
           />
@@ -992,6 +1006,20 @@ function App() {
                 />
               ) : effectivePage === 'glossary' ? (
                 <GlossaryPage />
+              ) : effectivePage === 'tz_prompts' ? (
+                <TzPromptsPage />
+              ) : effectivePage === 'wms' ? (
+                isPageGated('wms') ? (
+                  <PlanGatewall page="wms" onUpgrade={() => setActivePage('subscription')} />
+                ) : (
+                  <WmsPage accountId={activeAccount?.id ?? ''} />
+                )
+              ) : effectivePage === 'fbs' ? (
+                isPageGated('fbs') ? (
+                  <PlanGatewall page="fbs" onUpgrade={() => setActivePage('subscription')} />
+                ) : (
+                  <FbsOrdersPage stores={stores} accountId={activeAccount?.id ?? ''} />
+                )
               ) : effectivePage === 'diary' ? (
                 <DiaryPage
                   userId={session?.user?.id ?? ''}

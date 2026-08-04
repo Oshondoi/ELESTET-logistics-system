@@ -5,8 +5,8 @@ import { getWhitelabelLogoUrl } from '../../lib/companyLogo'
 import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription' | 'payment_result'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'wms' | 'fbs' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription' | 'payment_result'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'wms' | 'fbs' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -56,6 +56,29 @@ const items = [
         <circle cx="5.5" cy="20.5" r="1.5" />
         <circle cx="18.5" cy="20.5" r="1.5" />
         <path d="M15 9V5H1" />
+      </svg>
+    ),
+  },
+  {
+    key: 'wms',
+    label: 'Склад',
+    permKey: null,
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+        <polyline points="9 22 9 12 15 12 15 22" />
+      </svg>
+    ),
+  },
+  {
+    key: 'fbs',
+    label: 'FBS Заказы',
+    permKey: null,
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3" />
+        <rect x="9" y="11" width="14" height="10" rx="2" />
+        <path d="M9 16h14" />
       </svg>
     ),
   },

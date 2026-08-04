@@ -1,6 +1,19 @@
 # Active Context
 
-## Current Focus (17-24.07.2026) — Сессия завершена
+## Current Focus (24.07.2026)
+
+### Страница «Промпты ТЗ» (24.07.2026)
+- Новая admin-страница (только `isSuperAdmin`) — `/tz-prompts`, `TzPromptsPage`
+- БД: таблица `tz_prompts` (id, title, content, is_done, position, created_at, updated_at)
+- RLS: только `platform_role = 'superadmin'` (поле `profiles.user_id = auth.uid()`)
+- SQL-патч: `supabase/patch_tz_prompts.sql` — **ПРИМЕНИТЬ В БД**
+- Функционал: добавить промпт (модалка), редактировать (модалка), удалить (confirm), пометить выполненным (круглый чекбокс)
+- Кнопка «Выполненные (N)» — показать/скрыть; выполненные отображаются в отдельной секции серыми зачёркнутыми
+- Кнопка «Промпты ТЗ» в Topbar — только при `isSuperAdmin`
+
+---
+
+## Previous Session (17-24.07.2026) — Сессия завершена
 
 ### FulfillmentPage — Фото в таблице приёмки
 - Добавлена первая колонка «Фото» в таблицу добавленных позиций на этапе Приёмки

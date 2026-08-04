@@ -17,6 +17,7 @@
 | **Дневник** | `/diary` | `DiaryPage` | `isSuperAdmin` |
 | **Словарь** | `/glossary` | `GlossaryPage` | `isAdmin` |
 | **Админ** | `/admin` | `AdminPage` | `isAdmin` |
+| **Промпты ТЗ** | `/tz-prompts` | `TzPromptsPage` | `isSuperAdmin` |
 
 Контроль доступа: `isSuperAdmin` / `isAdmin` из `usePlatformRole(session.user.id)` → App.tsx → props в Topbar.  
 Пользователи системы эти страницы не видят вообще.
