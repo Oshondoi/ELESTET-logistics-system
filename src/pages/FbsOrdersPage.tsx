@@ -403,37 +403,6 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
     window.open(URL.createObjectURL(blob), '_blank')
   }
-
-  // Наш picking slip если стикер WB недоступен
-  function printPickingSlip(orders: FbsOrder[], wbWh: string) {
-    const pages = orders.map((order) => {
-      const loc = order.cellLocation
-      return `<div class="page">
-        <div class="big">#${order.id}</div>
-        ${loc ? `<div class="cell">${loc.col}${loc.row} <span style="font-size:12px;font-weight:400">${loc.zoneName} · ${loc.warehouseName}</span></div>` : ''}
-        <div class="row"><span>WB арт.</span><span>${order.nmId}</span></div>
-        <div class="row"><span>Артикул</span><span>${order.article||'—'}</span></div>
-        ${order.skus.map(s=>`<div class="row"><span>Баркод</span><span>${s}</span></div>`).join('')}
-        <div class="row"><span>Склад WB</span><span>${wbWh}</span></div>
-        <hr/><div style="font-size:9px;color:#888;text-align:center">${new Date().toLocaleString('ru')}</div>
-      </div>`
-    }).join('\n')
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-  @page { size: 80mm 100mm; margin: 4mm; }
-  body { font-family: monospace; font-size: 11px; margin: 0; }
-  .page { page-break-after: always; }
-  .page:last-child { page-break-after: auto; }
-  .big { font-size: 18px; font-weight: bold; margin: 2mm 0; }
-  .cell { font-size: 24px; font-weight: 900; margin: 2mm 0; border: 1px solid #000; padding: 2mm; text-align: center; }
-  .row { display: flex; justify-content: space-between; border-bottom: 1px dashed #ccc; padding: 1mm 0; }
-  hr { border: none; border-top: 1px solid #000; margin: 2mm 0; }
-</style></head>
-<body>${pages}<script>window.onload=()=>window.print()</script></body></html>`
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
-    window.open(URL.createObjectURL(blob), '_blank')
-  }
-
   const wbWhName = (id: number) => {
     const w = wbWarehouses.find((wh) => wh.id === id)
     if (!w) return `#${id}`

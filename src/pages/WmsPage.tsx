@@ -48,7 +48,7 @@ interface WmsCell {
   account_id: string
   col: string
   row: number
-  status: 'occupied' | 'reserved'
+  status: 'free' | 'occupied' | 'reserved' | 'disabled'
   items: WmsCellItem[]
 }
 
