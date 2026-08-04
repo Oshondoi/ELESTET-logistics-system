@@ -265,7 +265,7 @@ function CellModal({ cell, zone, accountId, zoneId, onClose, onRefresh }: {
 }) {
   const [internalItems, setInternalItems] = useState<WmsCellItem[]>(cell.dbCell?.items ?? [])
   const [internalCellId, setInternalCellId] = useState<string | null>(cell.dbCell?.id ?? null)
-  const [internalStatus, setInternalStatus] = useState<'free' | 'occupied' | 'reserved'>(cell.status)
+  const [internalStatus, setInternalStatus] = useState<'free' | 'occupied' | 'reserved' | 'disabled'>(cell.status)
   const [addMode, setAddMode] = useState<null | 'item' | 'box'>(null)
   const [expandedBoxIds, setExpandedBoxIds] = useState<Set<string>>(new Set())
 
@@ -292,7 +292,7 @@ function CellModal({ cell, zone, accountId, zoneId, onClose, onRefresh }: {
     return (data as WmsCell)?.id ?? null
   }
 
-  const handleSetStatus = async (newStatus: 'free' | 'occupied' | 'reserved') => {
+  const handleSetStatus = async (newStatus: 'free' | 'occupied' | 'reserved' | 'disabled') => {
     if (!supabase || newStatus === internalStatus) return
     if (newStatus === 'free') {
       if (internalCellId) {
