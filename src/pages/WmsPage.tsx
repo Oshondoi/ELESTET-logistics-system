@@ -743,7 +743,7 @@ export function WmsPage({ accountId }: { accountId: string }) {
     <div className="flex h-full overflow-hidden">
 
       {/* ── Left panel: warehouse tree ──────────────────────────────────── */}
-      <div className="flex w-64 flex-shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white">
+      <div className="flex w-64 flex-shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white select-none">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
           <span className="text-sm font-semibold text-slate-700">Склады</span>
           <button type="button" title="Создать склад"

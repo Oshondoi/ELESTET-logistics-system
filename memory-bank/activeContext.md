@@ -1,8 +1,49 @@
 # Active Context
 
-## Current Focus (24.07.2026)
+## Current Focus (06.08.2026)
 
-### Страница «Промпты ТЗ» (24.07.2026)
+### FBS — Миграция на новый WB API (06.08.2026)
+- **Старый endpoint удалён WB 18.12.2025:** `PATCH /api/v3/supplies/{id}/orders/{orderId}`
+- **Новый endpoint:** `PATCH /api/marketplace/v3/supplies/{supplyId}/orders` с телом `{"orders": [orderId]}`
+- Edge Function `wb-fbs` обновлён до **v21**
+- `wbStatus = declined_by_client` → записываем `wb_status = cancel` (старые отменённые заказы гасят из «Новые» после синка)
+- `sync_orders` теперь проверяет `wbStatus` (не только `supplierStatus`) для определения фактической отмены
+
+### FulfillmentPage — Прямая запись коробов/поставок в DB (06.08.2026)
+- **Поставка** (`+ Поставка`): сразу `createSupply` в DB (без `_local`)
+- **Короб** (модалка): сразу `createBox` в DB (без `_local`)
+- **Товар в короб** (скан, Enter, кнопка): оптимистичный UI + фоновый `addBoxItem` в DB
+- `addItemToBoxDirect(supplyId, boxId, bc, qty)` — новый хелпер, оптимистичное обновление state + пишет в DB фоном
+- `persistLocalSupplies` — убран из всех save-хандлеров
+- `updateBoxItem` — новая функция в `fulfillmentService.ts` для qty-обновления существующего товара
+
+### FulfillmentPage — Кнопки завершения этапов (06.08.2026)
+- **Все** кнопки "Завершить" теперь сначала сохраняют данные, затем завершают
+- `handleCompletePipelineStage` теперь сохраняет буфер текущего этапа перед завершением стадии пайплайна
+- При переключении этапа с несохранёнными данными — диалог "Сохранить и перейти / Перейти без сохранения / Отмена"
+- `handleCompleteReception` заменён на `handleSaveStageAndAdvance` (полное сохранение pending items)
+
+### FulfillmentPage — Исправление ошибок с `_local_` ID (06.08.2026)
+- `createBox` ходит грациозно при дубликате (23505) — подхватывает существующий короб
+- `addBoxItem` стрипает `_local_` item_id → null
+- `stageDraft` loops пропускают ID начинающиеся с `_local_`
+- `persistLocalSupplies`: каждый короб/товар в отдельном try/catch (ошибка одного не стопит остальные)
+
+### RolesPage — Фикс Аутсорс
+- Таб "Аутсорс": теперь показывает только партнёров, где я заказчик (`is_requester = true`)
+- "Мои услуги" переименованы в **"Заказчики"**
+
+### FbsOrdersPage — UI фиксы
+- Колонка "Ячейка" → **"Адрес"**
+- Кнопка печати скрыта на табе "Новые" (WB не выдаёт стикеры до перевода в сборку)
+- `handleAssemble`: внутренний try/catch пер заказ, не останавливается при частичных 409
+
+### WMS — select-none для левой панели
+- `select-none` на контейнер дерева складов/зон — текст не выделяется при быстрых кликах
+
+---
+
+## Previous Session (05.08.2026) — Сессия завершена
 - Новая admin-страница (только `isSuperAdmin`) — `/tz-prompts`, `TzPromptsPage`
 - БД: таблица `tz_prompts` (id, title, content, is_done, position, created_at, updated_at)
 - RLS: только `platform_role = 'superadmin'` (поле `profiles.user_id = auth.uid()`)

@@ -3,7 +3,54 @@
 ## Current Status
 MVP в активной разработке. Деплой на Vercel активен (elestet.net).
 
-## Что сделано за сессию 17-24.07.2026
+## Что сделано за сессию 05-06.08.2026
+
+### FBS — Миграция на новый WB API endpoint
+- WB удалил `PATCH /api/v3/supplies/{id}/orders/{orderId}` 18.12.2025
+- Новый endpoint: `PATCH /api/marketplace/v3/supplies/{supplyId}/orders` + body `{"orders": [orderId]}`
+- Edge Function `wb-fbs` обновлена до v21
+- `sync_orders` теперь проверяет `wbStatus` + `WB_CANCEL_STATUSES = {declined_by_client, canceled, cancel_by_client}` → `wb_status = cancel`
+- `handleAssemble` не останавливается при 409 на отдельных заказах — продолжает с остальными
+- Кнопка печати скрыта на табе «Новые»
+
+### FulfillmentPage — Прямая запись коробов/поставок в DB
+- **Supply**: `+ Поставка` → немедленный `createSupply` в DB (убран `_local`)
+- **Box**: модалка «Добавить» → немедленный `createBox` в DB (убран `_local`)
+- **Item**: скан/добавление → оптимистичный UI + фоновый `addBoxItem` в DB
+- `addItemToBoxDirect(supplyId, boxId, bc, qty)` — новый хелпер с оптимистичным паттерном
+- `updateBoxItem(itemId, {qty})` — новая функция в `fulfillmentService.ts`
+- `persistLocalSupplies` убрана из всех save-хандлеров
+- Удаление box/supply/item: убраны все `_local` гарды
+
+### FulfillmentPage — Кнопки завершения этапов
+- Все «Завершить» теперь сначала сохраняют, потом завершают
+- `handleCompletePipelineStage` сохраняет буфер текущего этапа перед завершением стадии пайплайна
+- `handleCompleteReception` заменён на `handleSaveStageAndAdvance` (полное сохранение)
+- При переключении этапа с несохранёнными данными — диалог «Сохранить и перейти / Перейти без сохранения / Отмена»
+
+### FulfillmentPage — Исправления ошибок
+- `createBox` graceful при дубликате (23505) — подхватывает существующий
+- `addBoxItem` стрипает `_local_` item_id → null
+- `stageDraft` loops пропускают `_local_` ID
+- `persistLocalSupplies`: каждый box/item в отдельном try/catch
+
+### RolesPage
+- Таб «Аутсорс»: только партнёры где я заказчик (`is_requester = true`)
+- «Мои услуги» переименован в **«Заказчики»**
+
+### WMS
+- `select-none` на левой панели (нет выделения при быстрых кликах)
+
+### FbsOrdersPage
+- Колонка «Ячейка» → **«Адрес»**
+- Кнопка печати скрыта на табе «Новые»
+
+### Модалка «Несколько коробов»
+- Синхронизация Кол-во ↔ От ↔ До: при изменении любого поля пересчитываются остальные
+
+---
+
+
 
 ### FulfillmentPage — Фото в таблице приёмки
 - Первая колонка таблицы на этапе Приёмки — `<PhotoThumb>` с hover-превью

@@ -844,7 +844,19 @@ export const createBox = async (data: {
     .insert({ ...data, status: 'open' })
     .select()
     .single()
-  if (error) throw error
+  if (error) {
+    // если короб уже существует — вернуть его
+    if (error.code === '23505') {
+      const { data: existing } = await (supabase as any)
+        .from('fulfillment_boxes')
+        .select()
+        .eq('supply_id', data.supply_id)
+        .eq('box_number', data.box_number)
+        .single()
+      if (existing) return existing as FulfillmentBox
+    }
+    throw error
+  }
   return row as FulfillmentBox
 }
 
@@ -892,9 +904,23 @@ export const addBoxItem = async (data: {
   qty: number
 }): Promise<FulfillmentBoxItem> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  // _local_ IDs существуют только в памяти — в DB их нет, обнуляем
+  const safeData = { ...data, item_id: data.item_id?.startsWith('_local_') ? null : data.item_id }
   const { data: row, error } = await (supabase as any)
     .from('fulfillment_box_items')
-    .insert(data)
+    .insert(safeData)
+    .select()
+    .single()
+  if (error) throw error
+  return row as FulfillmentBoxItem
+}
+
+export const updateBoxItem = async (itemId: string, updates: { qty: number }): Promise<FulfillmentBoxItem> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: row, error } = await (supabase as any)
+    .from('fulfillment_box_items')
+    .update(updates)
+    .eq('id', itemId)
     .select()
     .single()
   if (error) throw error

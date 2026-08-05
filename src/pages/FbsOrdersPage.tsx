@@ -38,8 +38,7 @@ interface CellLocation {
 interface WbWarehouse {
   id: number
   name: string
-  city?: string
-  address?: string
+  officeId?: number
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -306,11 +305,21 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       const supRes = await invokeFbs(selectedStoreId, { action: 'create_supply', name: `Сборка ${date}` })
       const supplyId = supRes.id as string
       if (!supplyId) throw new Error('WB не вернул ID поставки')
+      const failedIds: number[] = []
       for (const orderId of ids) {
-        await invokeFbs(selectedStoreId, { action: 'add_order_to_supply', supply_id: supplyId, order_id: orderId })
+        try {
+          const res = await invokeFbs(selectedStoreId, { action: 'add_order_to_supply', supply_id: supplyId, order_id: orderId })
+          if (res.success === false) failedIds.push(orderId)
+        } catch {
+          failedIds.push(orderId)
+        }
       }
-      // Синкаем с WB чтобы обновить статус в DB
       void doSync()
+      if (failedIds.length > 0 && failedIds.length < ids.length) {
+        alert(`Часть заказов добавлена. Не удалось добавить: ${failedIds.join(', ')} (возможно устарели или не соответствуют складу поставки)`)
+      } else if (failedIds.length === ids.length) {
+        alert(`Не удалось добавить заказы в поставку: ${failedIds.join(', ')}. Возможно они устарели или не соответствуют складу.`)
+      }
     } catch (e) {
       alert(`Ошибка при переводе в сборку: ${String(e)}`)
     } finally {
@@ -534,7 +543,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Заказ / Арт. WB</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Арт. продавца</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Баркоды</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-500">Ячейка</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-500">Адрес</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-500">Кол-во</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">WB склад</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Время</th>
@@ -582,15 +591,18 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                     <td className={`px-4 py-3 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
-                        {/* Стикер */}
-                        <button type="button" title="Печать стикера" disabled={isBusy}
-                          onClick={() => void handlePrintSticker(order)}
-                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
-                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                            <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-                            <rect x="6" y="14" width="12" height="8"/>
-                          </svg>
-                        </button>
+                        {/* Стикер — скрыт на табе Новые, WB не выдаёт стикеры до перевода в сборку */}
+                        {activeTab !== 'pending' && (
+                          <button type="button" title="Печать стикера" disabled={isBusy}
+                            onClick={() => void handlePrintSticker(order)}
+                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+                              <rect x="6" y="14" width="12" height="8"/>
+                            </svg>
+
+                          </button>
+                        )}
                         {/* Основное действие */}
                         {activeTab === 'pending' && (
                           <button type="button" disabled={isBusy}

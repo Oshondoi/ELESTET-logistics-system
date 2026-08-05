@@ -162,7 +162,11 @@ Deno.serve(async (req) => {
         })
         if (sr.ok) {
           const sd = await sr.json()
-          ;(sd.orders ?? []).forEach((s: any) => statusMap.set(s.id, s.supplierStatus ?? 'new'))
+          const WB_CANCEL_STATUSES = new Set(['declined_by_client', 'canceled', 'cancel_by_client'])
+          ;(sd.orders ?? []).forEach((s: any) => {
+            const status = WB_CANCEL_STATUSES.has(s.wbStatus) ? 'cancel' : (s.supplierStatus ?? 'new')
+            statusMap.set(s.id, status)
+          })
         }
       }
       // orders/new всегда new если не нашли в status
@@ -209,6 +213,43 @@ Deno.serve(async (req) => {
         })
       }
 
+      // Получаем наши DB-заказы со статусом 'new' — проверим их у WB отдельно
+      const dbNewR = await fetch(`${SUPABASE_URL}/rest/v1/fbs_orders?store_id=eq.${store_id}&wb_status=eq.new&select=wb_order_id`, {
+        headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+      })
+      const dbNewOrders: { wb_order_id: number }[] = await dbNewR.json().catch(() => [])
+      const dbNewIds = dbNewOrders.map(o => o.wb_order_id).filter(id => !orderMap.has(id))
+
+      // Проверяем статус стейл-заказов (которые есть в DB как new, но не пришли от WB)
+      if (dbNewIds.length > 0) {
+        const sr2 = await fetch(`${WB_BASE}/api/v3/orders/status`, {
+          method: 'POST',
+          headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orders: dbNewIds }),
+        })
+        if (sr2.ok) {
+          const sd2 = await sr2.json()
+          const WB_CANCEL_STATUSES2 = new Set(['declined_by_client', 'canceled', 'cancel_by_client'])
+          const staleRows = (sd2.orders ?? []).map((s: any) => ({
+            store_id, wb_order_id: s.id,
+            wb_status: WB_CANCEL_STATUSES2.has(s.wbStatus) ? 'cancel' : (s.supplierStatus && s.supplierStatus !== 'new' ? s.supplierStatus : 'cancel'),
+            synced_at: new Date().toISOString(),
+          }))
+          // Заказы которых WB вообще не знает (не вернул в status) → cancel
+          const returnedIds = new Set((sd2.orders ?? []).map((s: any) => s.id))
+          dbNewIds.filter(id => !returnedIds.has(id)).forEach(id => staleRows.push({
+            store_id, wb_order_id: id, wb_status: 'cancel', synced_at: new Date().toISOString(),
+          }))
+          if (staleRows.length > 0) {
+            await fetch(`${SUPABASE_URL}/rest/v1/fbs_orders`, {
+              method: 'POST',
+              headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
+              body: JSON.stringify(staleRows),
+            })
+          }
+        }
+      }
+
       // Обновляем sync log
       await fetch(`${SUPABASE_URL}/rest/v1/fbs_sync_log`, {
         method: 'POST',
@@ -239,11 +280,18 @@ Deno.serve(async (req) => {
     if (action === 'add_order_to_supply') {
       const { supply_id, order_id } = body as { supply_id: string; order_id: number }
       if (!supply_id || !order_id) return err('supply_id и order_id обязательны')
-      const r = await fetch(`${WB_BASE}/api/v3/supplies/${encodeURIComponent(supply_id)}/orders/${order_id}`, {
+      // Новый bulk-endpoint (старый /api/v3/supplies/{id}/orders/{orderId} удалён 18.12.2025)
+      const r = await fetch(`${WB_BASE}/api/marketplace/v3/supplies/${encodeURIComponent(supply_id)}/orders`, {
         method: 'PATCH',
-        headers: { Authorization: apiKey },
+        headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orders: [order_id] }),
       })
       if (r.status === 401 || r.status === 403) throw new Error('no_permission')
+      // 409 = WB отклонил конкретный заказ (старый/несовместимый); возвращаем детали без throw
+      if (r.status === 409) {
+        const details = await r.json().catch(() => [])
+        return ok({ success: false, failed: details })
+      }
       if (!r.ok) throw new Error(`WB ${r.status}: ${await r.text()}`)
       return ok({ success: true })
     }

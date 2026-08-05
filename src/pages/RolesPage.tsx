@@ -421,7 +421,7 @@ export const RolesPage = ({
           <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 w-fit">
             {([
               { key: 'partners', label: 'Аутсорс' },
-              { key: 'services', label: 'Мои услуги' },
+              { key: 'services', label: 'Заказчики' },
               { key: 'invites', label: 'Приглашения' },
             ] as const).map((tab) => (
               <button
@@ -499,10 +499,10 @@ export const RolesPage = ({
                 <div className="py-6 text-center text-sm text-slate-400">Загрузка...</div>
               ) : partnersError ? (
                 <div className="py-4 text-center text-sm text-rose-500">{partnersError}</div>
-              ) : partners.filter((p) => p.status === 'accepted').length > 0 ? (
+              ) : partners.filter((p) => p.status === 'accepted' && p.is_requester).length > 0 ? (
                 <Card className="overflow-hidden rounded-3xl">
                   {partners
-                    .filter((p) => p.status === 'accepted')
+                    .filter((p) => p.status === 'accepted' && p.is_requester)
                     .map((p) => (
                       <div
                         key={p.connection_id}

@@ -2,7 +2,7 @@
 
 MVP веб-приложения для логистики поставок на стеке `React + Vite + Tailwind CSS + Supabase`.
 
-## FBS Заказы — Архитектура (05.08.2026)
+## FBS Заказы — Архитектура (06.08.2026)
 
 ### Паттерн: Stale-While-Revalidate
 Браузер читает из Supabase DB (мгновенно). WB API вызывается только при синке.
@@ -13,23 +13,24 @@ MVP веб-приложения для логистики поставок на 
 Нажал "Обновить" → sync_orders (WB→DB) → перечитываем из DB
 ```
 
-Масштаб: до 1000+ магазинов. Детали: `/memories/repo/fbs-architecture.md`
-
-### Статусы WB (supplierStatus)
+### Статусы WB (supplierStatus + wbStatus)
 | WB статус | Таб | Триггер |
 |---|---|---|
-| `new` | Новые | `GET /api/v3/orders/new` |
-| `confirm` | В сборке | `POST /api/v3/supplies` + `PATCH /api/v3/supplies/{id}/orders/{orderId}` |
+| `new` (+ wbStatus=waiting) | Новые | `GET /api/v3/orders/new` |
+| `confirm` | В сборке | `POST /api/v3/supplies` + `PATCH /api/marketplace/v3/supplies/{id}/orders` |
 | `complete` | В доставке | Передача поставки в доставку |
 | `done` | Отгружено | Наш внутренний (`fbs_done_{accountId}` localStorage) |
+| wbStatus=`declined_by_client`/`canceled` | → `cancel` в DB | скрывается из «Новые» |
 
 ### Критические факты WB API
-- **Правильный хост FBS:** `https://marketplace-api.wildberries.ru` (НЕ suppliers-api — он мёртв)
+- **Правильный хост FBS:** `https://marketplace-api.wildberries.ru`
 - `GET /api/v3/orders` параметр `dateFrom` = **Unix timestamp (int)**, не ISO строка
 - `GET /api/v3/supplies/{id}/orders` — НЕ существует (404)
-- Стикеры PNG 58×40 через jsPDF → открывается в Chrome PDF viewer
+- **ВАЖНО:** `PATCH /api/v3/supplies/{id}/orders/{orderId}` — удалён WB 18.12.2025!
+- **Актуальный endpoint:** `PATCH /api/marketplace/v3/supplies/{supplyId}/orders` + `{"orders": [orderId]}` → 204
+- WB auto-cancel: `wbStatus=declined_by_client` → сохраняем `wb_status=cancel` → заказ пропадает из «Новые»
 
-### Edge Function wb-fbs (v16)
+### Edge Function wb-fbs (v21)
 Все actions: `get_orders_new`, `get_orders_all`, `get_orders_status`, `sync_orders`,
 `get_wb_warehouses`, `create_supply`, `add_order_to_supply`, `get_supplies`,
 `get_sticker`, `update_stocks`
@@ -159,10 +160,23 @@ MVP веб-приложения для логистики поставок на 
 - При reception: outer div = `overflow-hidden flex flex-col`
 - Шарики прогресс-бара уменьшены (midpoint); `py-2.5 minHeight:72`; footer: `py-2.5 px-5 text-xs`
 
-### Модалка «Новый короб» (16.07.2026)
+### Модалка «Новый короб» (06.08.2026)
 - Два горизонтальных блока: **Одиночный** и **Несколько** (Кол-во + От + До)
-- Активный блок: синяя рамка; неактивный: серый + поля disabled
-- Кол-во автоматически пересчитывает «До»
+- Синхронизация: изменение любого из трёх полей пересчитывает остальные (`До = От + Кол-во - 1`)
+- Если «До» < минимума → «От» фиксируется в 1, «До» = Кол-во
+
+### FulfillmentPage — Прямая запись коробов/поставок (06.08.2026)
+- **+ Поставка** → `createSupply` сразу в DB (нет `_local`)
+- **Добавить короб(а)** → `createBox` сразу в DB (нет `_local`)
+- **Скан / + Добавить** → оптимистичный UI + фоновый `addBoxItem`; дубликат баркода → `updateBoxItem`
+- `addItemToBoxDirect(supplyId, boxId, bc, qty)` — хелпер с оптимистичным паттерном
+- `updateBoxItem(itemId, {qty})` — новая функция в `fulfillmentService.ts`
+- `persistLocalSupplies` убрана — коробы/поставки пишутся сразу
+
+### FulfillmentPage — Кнопки завершения этапов (06.08.2026)
+- **Все** кнопки «Завершить этап» сначала сохраняют буфер, затем завершают
+- `handleCompletePipelineStage` (пайплайн) сохраняет данные текущего viewStage перед завершением
+- При переключении этапа с грязными данными — диалог: «Сохранить и перейти» / «Перейти без сохранения» / «Отмена»
 
 ### SQL фиксы (16.07.2026)
 - `patch_fix_admin_get_access_overrides.sql` — ПРИМЕНЁН: `user_id is ambiguous` — квалифицировали `p.user_id`
