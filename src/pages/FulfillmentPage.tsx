@@ -1665,10 +1665,40 @@ const BatchDetailModal = ({
           const fresh = await fetchSupplies(batch.id)
           setSupplies(fresh)
         })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_box_items' },
-        async () => {
-          const fresh = await fetchSupplies(batch.id)
-          setSupplies(fresh)
+      // позиции — гранулярно, чтобы не стирать оптимистичные _opt_ элементы
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'fulfillment_box_items' },
+        (payload: any) => {
+          const item = payload.new
+          if (!item) return
+          setSupplies((prev) => prev.map((s) => ({
+            ...s, boxes: s.boxes.map((b) => b.id !== item.box_id ? b : {
+              ...b, items: (() => {
+                if (b.items.find((i) => i.id === item.id)) return b.items
+                // заменяем оптимистичный _opt_ с тем же баркодом реальным
+                const optIdx = b.items.findIndex((i) => i.id.startsWith('_opt_') && i.barcode === item.barcode)
+                if (optIdx !== -1) return b.items.map((i, idx) => idx === optIdx ? item : i)
+                return [...b.items, item]
+              })(),
+            }),
+          })))
+        })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'fulfillment_box_items' },
+        (payload: any) => {
+          const item = payload.new
+          if (!item) return
+          setSupplies((prev) => prev.map((s) => ({
+            ...s, boxes: s.boxes.map((b) => b.id !== item.box_id ? b : {
+              ...b, items: b.items.map((i) => i.id === item.id ? { ...i, ...item } : i),
+            }),
+          })))
+        })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'fulfillment_box_items' },
+        (payload: any) => {
+          const old = payload.old
+          if (!old?.id) return
+          setSupplies((prev) => prev.map((s) => ({
+            ...s, boxes: s.boxes.map((b) => ({ ...b, items: b.items.filter((i) => i.id !== old.id) })),
+          })))
         })
       .subscribe()
 
