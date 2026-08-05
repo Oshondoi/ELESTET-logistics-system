@@ -1688,9 +1688,6 @@ const BatchDetailModal = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewStage, batch.id])
 
-
-  }, [activeSupplyId])
-
   // Сохранить локальные поставки/короба/позиции в БД
   const persistLocalSupplies = async () => {
     const localSupplies = supplies.filter((s) => s._local)
