@@ -1581,6 +1581,14 @@ const BatchDetailModal = ({
 
   // ── Обогащение баркода данными о товаре ─────────────────────
   // Добавить товар в короб сразу в DB (оптимистично)
+  const lookupAndCacheBarcode = useCallback(async (bc: string) => {
+    if (packingProductCache[bc] !== undefined) return
+    // Сначала быстро ставим null чтобы не дублировать запросы
+    setPackingProductCache((prev) => ({ ...prev, [bc]: null }))
+    const info = await findProductByBarcode(accountId, batch.store_id, bc)
+    setPackingProductCache((prev) => ({ ...prev, [bc]: info }))
+  }, [packingProductCache, accountId, batch.store_id])
+
   const addItemToBoxDirect = useCallback((supplyId: string, boxId: string, bc: string, qty: number) => {
     const matched = items.find((it) => it.barcode === bc)
     const safeItemId = matched?.id?.startsWith('_local_') ? null : (matched?.id ?? null)
@@ -1623,14 +1631,6 @@ const BatchDetailModal = ({
     }))
     void lookupAndCacheBarcode(bc)
   }, [items, accountId, lookupAndCacheBarcode])
-
-  const lookupAndCacheBarcode = useCallback(async (bc: string) => {
-    if (packingProductCache[bc] !== undefined) return
-    // Сначала быстро ставим null чтобы не дублировать запросы
-    setPackingProductCache((prev) => ({ ...prev, [bc]: null }))
-    const info = await findProductByBarcode(accountId, batch.store_id, bc)
-    setPackingProductCache((prev) => ({ ...prev, [bc]: info }))
-  }, [packingProductCache, accountId, batch.store_id])
 
   // Preload info для всех баркодов в активной поставке
   useEffect(() => {

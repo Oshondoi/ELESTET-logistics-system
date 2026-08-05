@@ -415,7 +415,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const wbWhName = (id: number) => {
     const w = wbWarehouses.find((wh) => wh.id === id)
     if (!w) return `#${id}`
-    return w.city && w.city !== w.name ? `${w.name} · ${w.city}` : w.name
+    return w.name
   }
 
   // ─── No stores guard ────────────────────────────────────────────────────────
