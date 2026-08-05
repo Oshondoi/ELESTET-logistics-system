@@ -1645,6 +1645,61 @@ const BatchDetailModal = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSupplyId])
 
+  // Realtime-подписка на коробы и позиции активной поставки
+  useEffect(() => {
+    if (!activeSupplyId || !supabase) return
+    const channel = (supabase as any)
+      .channel(`supply-rt-${activeSupplyId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'fulfillment_boxes', filter: `supply_id=eq.${activeSupplyId}` },
+        (payload: any) => {
+          const box = { ...payload.new, items: [] }
+          setSupplies((prev) => prev.map((s) => s.id !== activeSupplyId ? s : {
+            ...s, boxes: s.boxes.find((b) => b.id === box.id) ? s.boxes : [...s.boxes, box],
+          }))
+        })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'fulfillment_boxes', filter: `supply_id=eq.${activeSupplyId}` },
+        (payload: any) => {
+          setSupplies((prev) => prev.map((s) => s.id !== activeSupplyId ? s : {
+            ...s, boxes: s.boxes.map((b) => b.id === payload.new.id ? { ...b, ...payload.new } : b),
+          }))
+        })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'fulfillment_boxes', filter: `supply_id=eq.${activeSupplyId}` },
+        (payload: any) => {
+          setSupplies((prev) => prev.map((s) => s.id !== activeSupplyId ? s : {
+            ...s, boxes: s.boxes.filter((b) => b.id !== payload.old.id),
+          }))
+        })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'fulfillment_box_items' },
+        (payload: any) => {
+          const item = payload.new
+          setSupplies((prev) => prev.map((s) => s.id !== activeSupplyId ? s : {
+            ...s, boxes: s.boxes.map((b) => b.id !== item.box_id ? b : {
+              // пропускаем если item уже есть (наш собственный оптимистичный)
+              ...b, items: b.items.find((i) => i.id === item.id) ? b.items : [...b.items, item],
+            }),
+          }))
+        })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'fulfillment_box_items' },
+        (payload: any) => {
+          const item = payload.new
+          setSupplies((prev) => prev.map((s) => s.id !== activeSupplyId ? s : {
+            ...s, boxes: s.boxes.map((b) => b.id !== item.box_id ? b : {
+              ...b, items: b.items.map((i) => i.id === item.id ? { ...i, ...item } : i),
+            }),
+          }))
+        })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'fulfillment_box_items' },
+        (payload: any) => {
+          setSupplies((prev) => prev.map((s) => s.id !== activeSupplyId ? s : {
+            ...s, boxes: s.boxes.map((b) => ({ ...b, items: b.items.filter((i) => i.id !== payload.old.id) })),
+          }))
+        })
+      .subscribe()
+
+    return () => { void (supabase as any).removeChannel(channel) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSupplyId])
+
   // Сохранить локальные поставки/короба/позиции в БД
   const persistLocalSupplies = async () => {
     const localSupplies = supplies.filter((s) => s._local)
