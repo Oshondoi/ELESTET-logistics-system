@@ -1652,6 +1652,12 @@ const BatchDetailModal = ({
 
     const channel = (supabase as any)
       .channel(`packing-rt-${batch.id}`)
+      // поставки партии — INSERT/DELETE/UPDATE
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_supplies', filter: `batch_id=eq.${batch.id}` },
+        async () => {
+          const fresh = await fetchSupplies(batch.id)
+          setSupplies(fresh)
+        })
       // коробы — любой supply этой партии
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_boxes' },
         async () => {
