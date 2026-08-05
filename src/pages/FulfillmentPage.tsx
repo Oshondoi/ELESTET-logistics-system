@@ -1648,48 +1648,27 @@ const BatchDetailModal = ({
   // Realtime-подписка на этапе Короба — обновляет ВСЕ поставки партии
   useEffect(() => {
     if (viewStage !== 'packing' || !supabase) return
-    const supplyIds = new Set(supplies.map((s) => s.id))
 
     const channel = (supabase as any)
       .channel(`packing-rt-${batch.id}`)
       // поставки партии — INSERT/DELETE/UPDATE (фильтр клиентский — REPLICA IDENTITY требует его)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_supplies' },
         async (payload: any) => {
-          // проверяем что событие относится к нашей партии
           const record = payload.new ?? payload.old
           if (record?.batch_id !== batch.id) return
           const fresh = await fetchSupplies(batch.id)
           setSupplies(fresh)
         })
-      // коробы — любой supply этой партии
+      // коробы и позиции — полный refetch при любом изменении (надёжнее stale closure)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_boxes' },
         async () => {
-          // простой full-refetch — надёжнее гранулярного merge
           const fresh = await fetchSupplies(batch.id)
           setSupplies(fresh)
         })
-      // позиции коробов
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_box_items' },
-        (payload: any) => {
-          // точечное обновление item чтобы не мигал интерфейс
-          const item = payload.new ?? payload.old
-          if (!item) return
-          setSupplies((prev) => {
-            // находим поставку которой принадлежит этот item через box_id
-            const supplyId = prev.find((s) => s.boxes.some((b) => b.id === item.box_id))?.id
-            if (!supplyId || !supplyIds.has(supplyId)) return prev
-            return prev.map((s) => s.id !== supplyId ? s : {
-              ...s, boxes: s.boxes.map((b) => b.id !== item.box_id ? b : {
-                ...b, items: (() => {
-                  if (payload.eventType === 'DELETE') return b.items.filter((i) => i.id !== item.id)
-                  const exists = b.items.find((i) => i.id === item.id)
-                  if (exists) return b.items.map((i) => i.id === item.id ? { ...i, ...item } : i)
-                  // INSERT — пропускаем если уже есть оптимистичная копия с тем же id
-                  return [...b.items, item]
-                })(),
-              }),
-            })
-          })
+        async () => {
+          const fresh = await fetchSupplies(batch.id)
+          setSupplies(fresh)
         })
       .subscribe()
 
