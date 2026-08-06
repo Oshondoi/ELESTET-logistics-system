@@ -201,7 +201,7 @@ Deno.serve(async (req) => {
       }))
 
       if (rows.length > 0) {
-        await fetch(`${SUPABASE_URL}/rest/v1/fbs_orders`, {
+        const upsertR = await fetch(`${SUPABASE_URL}/rest/v1/fbs_orders?on_conflict=store_id,wb_order_id`, {
           method: 'POST',
           headers: {
             apikey: SUPABASE_SERVICE_KEY,
@@ -211,6 +211,10 @@ Deno.serve(async (req) => {
           },
           body: JSON.stringify(rows),
         })
+        if (!upsertR.ok) {
+          const errText = await upsertR.text()
+          throw new Error(`DB upsert failed ${upsertR.status}: ${errText.slice(0, 300)}`)
+        }
       }
 
       // Получаем наши DB-заказы со статусом 'new' — проверим их у WB отдельно

@@ -5002,6 +5002,16 @@ const BatchDetailModal = ({
                         const totalBoxes = supplies.reduce((s, sup) => s + sup.boxes.length, 0)
                         setBoxesQtyMode('all')
                         setBoxesQtyInput(String(totalBoxes))
+                        // сохраняем напрямую, не через stale state
+                        void (async () => {
+                          setIsSavingBoxesQty(true)
+                          try {
+                            const updated = await updateBatch(batch.id, { boxes_qty: totalBoxes, box_catalog_consumable_id: boxCatalogConsumableId || null })
+                            setBatch((prev) => ({ ...prev, ...updated }))
+                            onBatchUpdated(updated)
+                          } catch (err) { setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка') }
+                          finally { setIsSavingBoxesQty(false) }
+                        })()
                       }}
                       className={`rounded-xl px-3 py-1.5 text-sm font-medium transition-colors ${boxesQtyMode === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
@@ -5018,8 +5028,10 @@ const BatchDetailModal = ({
                   <input
                     type="number"
                     min={0}
+                    step={1}
                     value={boxesQtyInput}
-                    onChange={(e) => setBoxesQtyInput(e.target.value)}
+                    onChange={(e) => setBoxesQtyInput(e.target.value.replace(/[^0-9]/g, ''))}
+                    onBlur={() => { if (boxesQtyMode === 'custom') void handleSaveBoxesQty() }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && boxesQtyMode === 'custom') {
                         void handleSaveBoxesQty()
@@ -5042,19 +5054,7 @@ const BatchDetailModal = ({
                       ))}
                     </select>
                   )}
-                  <button
-                    type="button"
-                    disabled={isSavingBoxesQty || !canManageStageData}
-                    onClick={() => { void handleSaveBoxesQty() }}
-                    className="shrink-0 rounded-xl bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                  >
-                    {isSavingBoxesQty ? '...' : 'Сохранить'}
-                  </button>
-                  {batch.boxes_qty != null && (
-                    <span className="text-sm text-slate-400">
-                      Сохранено: <span className="font-medium text-slate-700">{batch.boxes_qty}</span> шт.
-                    </span>
-                  )}
+                  {isSavingBoxesQty && <svg className="h-4 w-4 animate-spin text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>}
                 </div>
               </div>
 
@@ -5286,6 +5286,36 @@ const BatchDetailModal = ({
                                     </span>
                                     <span className="text-xs text-slate-400">{box.items.length} позиций · {boxTotal} ед.</span>
                                     <div className="flex-1" />
+                                    {/* Экспорт баркодов этой поставки в Excel */}
+                                    {supply.boxes.some((b) => b.items.length > 0) && (
+                                      <button
+                                        type="button"
+                                        title="Скачать Excel: баркод → номер короба"
+                                        onClick={() => {
+                                          import('xlsx').then((XLSX) => {
+                                            const data: (string | number)[][] = [['Баркод', 'Короб']]
+                                            supply.boxes.forEach((b) => b.items.forEach((item) => {
+                                              data.push([item.barcode, b.box_number])
+                                            }))
+                                            const ws = XLSX.utils.aoa_to_sheet(data)
+                                            // авто-ширина колонок по максимальному содержимому
+                                            const colWidths = data.reduce((acc, row) => {
+                                              row.forEach((cell, i) => { acc[i] = Math.max(acc[i] ?? 0, String(cell).length + 2) })
+                                              return acc
+                                            }, [] as number[])
+                                            ws['!cols'] = colWidths.map((w) => ({ wch: w }))
+                                            const wb = XLSX.utils.book_new()
+                                            XLSX.utils.book_append_sheet(wb, ws, 'Коробки')
+                                            XLSX.writeFile(wb, `${supply.warehouse_name}_коробки.xlsx`)
+                                          })
+                                        }}
+                                        className="flex items-center rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
+                                      >
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                                        </svg>
+                                      </button>
+                                    )}
                                     {/* Авто-добавление (если есть право) */}
                                     {canPackingAutoAdd && canManageStageData && isOpen && (
                                       <button
