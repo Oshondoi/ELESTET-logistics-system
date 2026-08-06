@@ -422,6 +422,27 @@ SessionStorage ключ: 'admin_tab' — таб сохраняется межд�
 Условие показа: isAdmin === true (email владельца).`,
     },
     {
+      name: 'Аккордеон (accordion expand/collapse)',
+      category: 'UI паттерны',
+      description: `Паттерн раскрытия дочерних строк по клику на родительскую. Используется в: TripTable (рейс → поставки), ProductsPage (товар → размеры/баркоды), StickersPage (товар → размеры), FbsOrdersPage (поставка → заказы).
+
+Анимация (единый стандарт):
+  display: grid
+  grid-template-rows: isExpanded ? '1fr' : '0fr'
+  transition: grid-template-rows 220ms ease
+  + дочерний div с overflow: hidden
+
+Состояние:
+  expandedIds: Set<string> — набор раскрытых ID
+  toggle(id) → n.has(id) ? n.delete(id) : n.add(id)
+
+Иконка-шеврон: rotate-90 при isExpanded (SVG path "m9 18 6-6-6-6" или "M9 5l7 7-7 7")
+
+Кнопка «Развернуть все / Свернуть все»:
+  expandAll: boolean — useState + localStorage
+  collapseSignal: number — инкремент форсирует схлопывание даже если expandAll уже false`,
+    },
+    {
       name: 'Anchored dropdown (привязанный список)',
       category: 'UI паттерны',
       description: `Кастомный SearchableSelect в KizPage.tsx. Список открывается через createPortal в document.body с position:fixed — не расширяет родителя и не обрезается overflow модалки.

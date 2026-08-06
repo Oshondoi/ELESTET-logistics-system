@@ -22,6 +22,7 @@ interface FbsOrder {
   // enriched
   cellLocation: CellLocation | null
   shipStatus: 'pending' | 'assembling' | 'delivering' | 'done'
+  supply_id: string | null
 }
 
 interface CellLocation {
@@ -162,6 +163,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [openSupplies, setOpenSupplies] = useState<{ id: string; name: string; ordersCount?: number }[]>([])
   const [loadingSupplies, setLoadingSupplies] = useState(false)
   const [orderMenuId, setOrderMenuId] = useState<number | null>(null)
+  const [expandedSupplyIds, setExpandedSupplyIds] = useState<Set<string>>(new Set())
 
   // Склады WB при смене магазина
   useEffect(() => {
@@ -239,6 +241,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         currencyCode: d.currencyCode ?? 643,
         cellLocation: null,
         shipStatus: wbToShip(row.wb_status, row.wb_order_id),
+        supply_id: row.supply_id ?? null,
       } as FbsOrder
     })
     const enriched = await enrichWithCells(mapped)
@@ -462,7 +465,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: 'pending',    label: 'Новые' },
-    { key: 'assembling', label: 'В сборке' },
+    { key: 'assembling', label: 'На сборке' },
     { key: 'delivering', label: 'В доставке' },
     { key: 'done',       label: 'Отгружено' },
   ]
@@ -558,7 +561,97 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         </div>
       )}
 
-      {tabOrders.length > 0 && (
+      {tabOrders.length > 0 && activeTab === 'assembling' && (() => {
+        // Группируем по supply_id для аккордеона
+        const supplyGroups = new Map<string, FbsOrder[]>()
+        tabOrders.forEach((o) => {
+          const key = o.supply_id ?? '__none__'
+          if (!supplyGroups.has(key)) supplyGroups.set(key, [])
+          supplyGroups.get(key)!.push(o)
+        })
+        return (
+          <div className="flex-1 overflow-auto">
+            {Array.from(supplyGroups.entries()).map(([supplyId, supplyOrders]) => {
+              const isExpanded = expandedSupplyIds.has(supplyId)
+              const toggle = () => setExpandedSupplyIds((prev) => { const n = new Set(prev); n.has(supplyId) ? n.delete(supplyId) : n.add(supplyId); return n })
+              const wh = wbWhName(supplyOrders[0]?.warehouseId ?? 0)
+              return (
+                <div key={supplyId} className="border-b border-slate-200">
+                  {/* Строка поставки (родитель) */}
+                  <div className="flex cursor-pointer items-center gap-3 bg-white px-4 py-3 hover:bg-slate-50 transition-colors" onClick={toggle}>
+                    <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 flex-shrink-0 text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <path d="M9 18l6-6-6-6" />
+                    </svg>
+                    <div className="flex flex-1 items-center gap-4 min-w-0">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 truncate">{supplyId === '__none__' ? 'Без поставки' : supplyId}</p>
+                      </div>
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">{supplyOrders.length} зак.</span>
+                      {wh && <span className="text-xs text-slate-400">{wh}</span>}
+                    </div>
+                    {supplyId !== '__none__' && (
+                      <button type="button" title="Отгрузить всю поставку"
+                        disabled={busyIds.size > 0}
+                        onClick={(e) => { e.stopPropagation(); void handleShip(supplyOrders) }}
+                        className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40 transition">
+                        Отгрузить всё
+                      </button>
+                    )}
+                  </div>
+                  {/* Аккордеон — заказы */}
+                  <div style={{ display: 'grid', gridTemplateRows: isExpanded ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
+                    <div className="overflow-hidden">
+                      <table className="w-full text-xs border-t border-slate-100 bg-slate-50/50">
+                        <tbody>
+                          {supplyOrders.map((order) => {
+                            const sla = slaLabel(order.ddate, order.createdAt)
+                            const loc = order.cellLocation
+                            const isBusy = busyIds.has(order.id)
+                            return (
+                              <tr key={order.id} className="border-b border-slate-100 hover:bg-white transition-colors">
+                                <td className="px-3 py-2 w-8">
+                                  <input type="checkbox" checked={selected.has(order.id)} onChange={() => toggleSelect(order.id)} className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
+                                </td>
+                                <td className="px-2 py-2 w-12">
+                                  <PhotoThumb url={getWbPhotoUrl(order.nmId)} className="h-9 w-9 rounded-lg" />
+                                </td>
+                                <td className="px-4 py-2">
+                                  <div className="font-mono text-[11px] text-slate-400">{order.id}</div>
+                                  <a href={`https://www.wildberries.ru/catalog/${order.nmId}/detail.aspx`} target="_blank" rel="noreferrer" className="font-mono text-blue-600 hover:underline">{order.nmId}</a>
+                                </td>
+                                <td className="px-4 py-2 text-slate-700">{order.article || '—'}</td>
+                                <td className="px-4 py-2 font-mono text-slate-600">{order.skus[0]}</td>
+                                <td className="px-4 py-2">
+                                  {loc ? <span className="font-semibold text-violet-700">{loc.col}{loc.row} <span className="text-slate-400 font-normal">{loc.warehouseName}</span></span> : <span className="text-amber-500">Не найден</span>}
+                                </td>
+                                <td className={`px-4 py-2 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
+                                <td className="px-4 py-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <button type="button" title="Печать стикера" disabled={isBusy} onClick={() => void handlePrintSticker(order)}
+                                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
+                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                                    </button>
+                                    <button type="button" disabled={!loc || isBusy} onClick={() => void handleShip([order])}
+                                      className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40 transition">
+                                      {isBusy ? '...' : 'Отгрузить'}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })()}
+
+      {tabOrders.length > 0 && activeTab !== 'assembling' && (
         <div className="flex-1 overflow-auto">
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-white">
