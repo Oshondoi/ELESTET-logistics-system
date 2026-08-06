@@ -5303,7 +5303,7 @@ const BatchDetailModal = ({
                                               row.forEach((cell, i) => { acc[i] = Math.max(acc[i] ?? 0, String(cell).length + 2) })
                                               return acc
                                             }, [] as number[])
-                                            ws['!cols'] = colWidths.map((w) => ({ wch: w }))
+                                            ws['!cols'] = colWidths.map((w) => ({ wch: w as number }))
                                             const wb = XLSX.utils.book_new()
                                             XLSX.utils.book_append_sheet(wb, ws, 'Коробки')
                                             XLSX.writeFile(wb, `${supply.warehouse_name}_коробки.xlsx`)
