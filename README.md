@@ -30,7 +30,7 @@ MVP веб-приложения для логистики поставок на 
 - **Актуальный endpoint:** `PATCH /api/marketplace/v3/supplies/{supplyId}/orders` + `{"orders": [orderId]}` → 204
 - WB auto-cancel: `wbStatus=declined_by_client` → сохраняем `wb_status=cancel` → заказ пропадает из «Новые»
 
-### Edge Function wb-fbs (v21)
+### Edge Function wb-fbs (v24)
 Все actions: `get_orders_new`, `get_orders_all`, `get_orders_status`, `sync_orders`,
 `get_wb_warehouses`, `create_supply`, `add_order_to_supply`, `get_supplies`,
 `get_sticker`, `update_stocks`
@@ -164,6 +164,25 @@ MVP веб-приложения для логистики поставок на 
 - Два горизонтальных блока: **Одиночный** и **Несколько** (Кол-во + От + До)
 - Синхронизация: изменение любого из трёх полей пересчитывает остальные (`До = От + Кол-во - 1`)
 - Если «До» < минимума → «От» фиксируется в 1, «До» = Кол-во
+
+### FBS — «На сборке» таб (07.08.2026)
+- Таб «В сборке» → **«На сборке»**; заказы сгруппированы по `supply_id` аккордеоном
+- Кнопка «Отгрузить всё» на строке поставки
+- «В сборку» / «Взять в сборку» → модалка с выбором: «Создать поставку» / «Добавить к созданной»
+- 3-точечное меню на каждом заказе в «Новые»
+
+### FBS — Синк исправлен (07.08.2026)
+- `?on_conflict=store_id,wb_order_id` в upsert URL — был тихий 409, синк не работал
+- Автосинк каждые **2 минуты**; upsert без поля `skus` (jsonb vs text[] конфликт)
+
+### FulfillmentPage — Блок Коробки (07.08.2026)
+- Автосохранение при клике «Все коробки», blur, Enter — кнопки «Сохранить» нет
+- Кнопка Excel в заголовке открытого короба: Баркод + Номер короба (SheetJS, авто-ширина)
+
+### FulfillmentPage — Realtime (07.08.2026)
+- Подписка при `viewStage === 'packing'`: `fulfillment_supplies`, `fulfillment_boxes`, `fulfillment_box_items`
+- Debounce 600ms защищает от гонок оптимистичного UI
+- `REPLICA IDENTITY FULL` на всех трёх таблицах
 
 ### FulfillmentPage — Прямая запись коробов/поставок (06.08.2026)
 - **+ Поставка** → `createSupply` сразу в DB (нет `_local`)
