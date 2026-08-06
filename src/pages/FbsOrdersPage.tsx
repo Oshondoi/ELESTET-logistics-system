@@ -156,6 +156,12 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   })
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set())
+  const [assembleModal, setAssembleModal] = useState<{ ids: number[] } | null>(null)
+  const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
+  const [newSupplyName, setNewSupplyName] = useState('')
+  const [openSupplies, setOpenSupplies] = useState<{ id: string; name: string; ordersCount?: number }[]>([])
+  const [loadingSupplies, setLoadingSupplies] = useState(false)
+  const [orderMenuId, setOrderMenuId] = useState<number | null>(null)
 
   // Склады WB при смене магазина
   useEffect(() => {
@@ -303,21 +309,38 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     setSelected(new Set())
   }
 
-  const handleAssemble = async (ids: number[]) => {
-    setBusyIds((s) => new Set([...s, ...ids]))
+  const openAssembleModal = async (ids: number[]) => {
+    const date = new Date().toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    setNewSupplyName(`Сборка ${date}`)
+    setAssembleTab('new')
+    setAssembleModal({ ids })
+    setLoadingSupplies(true)
     try {
-      const date = new Date().toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: 'numeric' })
-      const supRes = await invokeFbs(selectedStoreId, { action: 'create_supply', name: `Сборка ${date}` })
-      const supplyId = supRes.id as string
-      if (!supplyId) throw new Error('WB не вернул ID поставки')
+      const d = await invokeFbs(selectedStoreId, { action: 'get_supplies', closed: false, limit: 50 })
+      const sups = (d.supplies ?? d ?? []) as any[]
+      setOpenSupplies(sups.map((s: any) => ({ id: s.id, name: s.name || s.id, ordersCount: s.ordersCount })))
+    } catch { setOpenSupplies([]) }
+    finally { setLoadingSupplies(false) }
+  }
+
+  const handleAssemble = async (ids: number[], existingSupplyId?: string) => {
+    setBusyIds((s) => new Set([...s, ...ids]))
+    setAssembleModal(null)
+    try {
+      let supplyId: string
+      if (existingSupplyId) {
+        supplyId = existingSupplyId
+      } else {
+        const supRes = await invokeFbs(selectedStoreId, { action: 'create_supply', name: newSupplyName || `Сборка ${new Date().toLocaleDateString('ru')}` })
+        supplyId = supRes.id as string
+        if (!supplyId) throw new Error('WB не вернул ID поставки')
+      }
       const failedIds: number[] = []
       for (const orderId of ids) {
         try {
           const res = await invokeFbs(selectedStoreId, { action: 'add_order_to_supply', supply_id: supplyId, order_id: orderId })
           if (res.success === false) failedIds.push(orderId)
-        } catch {
-          failedIds.push(orderId)
-        }
+        } catch { failedIds.push(orderId) }
       }
       void doSync()
       if (failedIds.length > 0 && failedIds.length < ids.length) {
@@ -476,7 +499,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
         {/* Массовые действия */}
         {selectedTab.length > 0 && activeTab === 'pending' && (
-          <button type="button" onClick={() => handleAssemble(selectedTab.map((o) => o.id))}
+          <button type="button" onClick={() => void openAssembleModal(selectedTab.map((o) => o.id))}
             className="h-8 rounded-xl bg-amber-500 px-4 text-xs font-semibold text-white hover:bg-amber-600 transition">
             Взять в сборку ({selectedTab.length})
           </button>
@@ -608,13 +631,31 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
                           </button>
                         )}
-                        {/* Основное действие */}
+                        {/* Действия для Новых — 3-точечное меню */}
                         {activeTab === 'pending' && (
-                          <button type="button" disabled={isBusy}
-                            onClick={() => handleAssemble([order.id])}
-                            className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-40 transition">
-                            В сборку
-                          </button>
+                          <div className="relative">
+                            <button type="button" disabled={isBusy}
+                              onClick={(e) => { e.stopPropagation(); setOrderMenuId(orderMenuId === order.id ? null : order.id) }}
+                              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                            </button>
+                            {orderMenuId === order.id && (
+                              <div className="absolute right-0 top-8 z-50 w-52 rounded-2xl border border-slate-200 bg-white shadow-xl py-1" onClick={(e) => e.stopPropagation()}>
+                                <button type="button"
+                                  onClick={() => { setOrderMenuId(null); void openAssembleModal([order.id]) }}
+                                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50">
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                                  Создать поставку
+                                </button>
+                                <button type="button"
+                                  onClick={() => { setOrderMenuId(null); setAssembleTab('existing'); void openAssembleModal([order.id]) }}
+                                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50">
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><path d="m15 14 5 5"/><path d="m20 14-5 5"/></svg>
+                                  Добавить к созданной
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         )}
                         {activeTab === 'assembling' && (
                           <button type="button" disabled={!loc || isBusy}
@@ -640,6 +681,81 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+      {/* Клик вне меню — закрываем */}
+      {orderMenuId !== null && (
+        <div className="fixed inset-0 z-40" onClick={() => setOrderMenuId(null)} />
+      )}
+
+      {/* Модалка выбора поставки */}
+      {assembleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setAssembleModal(null)}>
+          <div className="w-full max-w-md rounded-3xl bg-white shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 pt-5 pb-4">
+              <h2 className="text-base font-semibold text-slate-800 mb-4">В сборку ({assembleModal.ids.length} заказ{assembleModal.ids.length > 1 ? 'а' : ''})</h2>
+              {/* Табы */}
+              <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 mb-4">
+                {(['new', 'existing'] as const).map((tab) => (
+                  <button key={tab} type="button"
+                    onClick={() => setAssembleTab(tab)}
+                    className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${assembleTab === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                    {tab === 'new' ? 'Создать поставку' : 'Добавить к созданной'}
+                  </button>
+                ))}
+              </div>
+
+              {assembleTab === 'new' ? (
+                <div className="space-y-3">
+                  <label className="text-xs font-medium text-slate-600">Название поставки</label>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={newSupplyName}
+                    onChange={(e) => setNewSupplyName(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {loadingSupplies ? (
+                    <p className="py-4 text-center text-sm text-slate-400">Загрузка поставок...</p>
+                  ) : openSupplies.length === 0 ? (
+                    <p className="py-4 text-center text-sm text-slate-400">Нет открытых поставок на WB</p>
+                  ) : (
+                    openSupplies.map((sup) => (
+                      <button key={sup.id} type="button"
+                        onClick={() => void handleAssemble(assembleModal.ids, sup.id)}
+                        className="w-full flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-left hover:border-violet-300 hover:bg-violet-50 transition-colors">
+                        <div>
+                          <p className="text-sm font-medium text-slate-800">{sup.name}</p>
+                          <p className="text-xs text-slate-400 font-mono">{sup.id}</p>
+                        </div>
+                        {sup.ordersCount != null && (
+                          <span className="text-xs text-slate-400">{sup.ordersCount} зак.</span>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-3 border-t border-slate-100 px-6 py-4">
+              {assembleTab === 'new' && (
+                <button type="button"
+                  disabled={!newSupplyName.trim()}
+                  onClick={() => void handleAssemble(assembleModal.ids)}
+                  className="flex-1 rounded-2xl bg-amber-500 py-2.5 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50 transition">
+                  Создать и добавить
+                </button>
+              )}
+              <button type="button"
+                onClick={() => setAssembleModal(null)}
+                className="flex-1 rounded-2xl border border-slate-200 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition">
+                Отмена
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
