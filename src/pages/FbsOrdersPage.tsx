@@ -289,7 +289,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     warehouseId: o.warehouseId ?? 0, article: o.article ?? '', nmId: o.nmId ?? 0,
     chrtId: o.chrtId ?? 0, skus: o.skus ?? [], price: o.price ?? 0,
     convertedPrice: o.convertedPrice ?? 0, currencyCode: o.currencyCode ?? 643,
-    cellLocation: null, shipStatus: status,
+    cellLocation: null, shipStatus: status, supply_id: null,
   }), [])
 
   // Склады WB при смене магазина
@@ -749,13 +749,6 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                               </div>
                             )}
                           </div>
-                        )}
-                        {activeTab === 'assembling' && (
-                          <button type="button" disabled={!loc || isBusy}
-                            onClick={() => void handleShip([order])}
-                            className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40 transition">
-                            {isBusy ? '...' : 'Отгрузить'}
-                          </button>
                         )}
                         {activeTab === 'delivering' && (
                           <button type="button"
