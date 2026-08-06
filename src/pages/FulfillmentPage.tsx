@@ -1657,13 +1657,49 @@ const BatchDetailModal = ({
           const record = payload.new ?? payload.old
           if (record?.batch_id !== batch.id) return
           const fresh = await fetchSupplies(batch.id)
-          setSupplies(fresh)
+          setSupplies((prev) => {
+            return fresh.map((fs) => {
+              const prevSupply = prev.find((ps) => ps.id === fs.id)
+              if (!prevSupply) return fs
+              return {
+                ...fs,
+                boxes: fs.boxes.map((fb) => {
+                  const prevBox = prevSupply.boxes.find((pb) => pb.id === fb.id)
+                  if (!prevBox) return fb
+                  const optItems = prevBox.items.filter((i) => i.id.startsWith('_opt_'))
+                  if (optItems.length === 0) return fb
+                  const freshBarcodes = new Set(fb.items.map((i) => i.barcode))
+                  const stillPending = optItems.filter((i) => !freshBarcodes.has(i.barcode))
+                  return { ...fb, items: [...fb.items, ...stillPending] }
+                }),
+              }
+            })
+          })
         })
       // коробы и позиции — полный refetch при любом изменении (надёжнее stale closure)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_boxes' },
         async () => {
           const fresh = await fetchSupplies(batch.id)
-          setSupplies(fresh)
+          // сохраняем _opt_ элементы которые ещё не подтверждены DB
+          setSupplies((prev) => {
+            return fresh.map((fs) => {
+              const prevSupply = prev.find((ps) => ps.id === fs.id)
+              if (!prevSupply) return fs
+              return {
+                ...fs,
+                boxes: fs.boxes.map((fb) => {
+                  const prevBox = prevSupply.boxes.find((pb) => pb.id === fb.id)
+                  if (!prevBox) return fb
+                  const optItems = prevBox.items.filter((i) => i.id.startsWith('_opt_'))
+                  if (optItems.length === 0) return fb
+                  // добавляем _opt_ только если их баркода ещё нет в свежих данных
+                  const freshBarcodes = new Set(fb.items.map((i) => i.barcode))
+                  const stillPending = optItems.filter((i) => !freshBarcodes.has(i.barcode))
+                  return { ...fb, items: [...fb.items, ...stillPending] }
+                }),
+              }
+            })
+          })
         })
       // позиции — гранулярно, чтобы не стирать оптимистичные _opt_ элементы
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'fulfillment_box_items' },
