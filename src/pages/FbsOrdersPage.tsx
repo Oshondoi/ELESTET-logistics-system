@@ -254,6 +254,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     try {
       await invokeFbs(selectedStoreId, { action: 'sync_orders' })
       await readFromDb()
+      setLastSyncedAt(new Date())
     } catch (e) { setError(String(e)) }
     finally { setLoading(false) }
   }, [selectedStoreId, readFromDb])
@@ -268,6 +269,10 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         return prev
       })
     })
+
+    // Автосинк каждые 2 минуты — без нажатия "Обновить"
+    const timer = setInterval(() => { void doSync() }, 2 * 60_000)
+    return () => clearInterval(timer)
   }, [selectedStoreId])
 
   const mapRawOrder = useCallback((o: any, status: FbsOrder['shipStatus']): FbsOrder => ({
