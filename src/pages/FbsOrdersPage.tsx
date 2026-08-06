@@ -691,9 +691,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       {/* Модалка выбора поставки */}
       {assembleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setAssembleModal(null)}>
-          <div className="w-full max-w-md rounded-3xl bg-white shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="px-6 pt-5 pb-4">
-              <h2 className="text-base font-semibold text-slate-800 mb-4">В сборку ({assembleModal.ids.length} заказ{assembleModal.ids.length > 1 ? 'а' : ''})</h2>
+          <div className="flex w-[50vw] flex-col rounded-3xl bg-white shadow-2xl overflow-hidden" style={{ height: '90vh' }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex flex-1 flex-col overflow-y-auto px-6 pb-2">
+              <h2 className="text-base font-semibold text-slate-800 mb-4 pt-5">В сборку ({assembleModal.ids.length} заказ{assembleModal.ids.length > 1 ? 'а' : ''})</h2>
               {/* Табы */}
               <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 mb-4">
                 {(['new', 'existing'] as const).map((tab) => (
@@ -717,7 +717,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                   />
                 </div>
               ) : (
-                <div className="space-y-2 max-h-64 overflow-y-auto">
+                <div className="flex-1 overflow-y-auto space-y-2 px-6">
                   {loadingSupplies ? (
                     <p className="py-4 text-center text-sm text-slate-400">Загрузка поставок...</p>
                   ) : openSupplies.length === 0 ? (
