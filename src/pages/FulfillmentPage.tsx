@@ -5299,11 +5299,14 @@ const BatchDetailModal = ({
                                             }))
                                             const ws = XLSX.utils.aoa_to_sheet(data)
                                             // авто-ширина колонок по максимальному содержимому
-                                            const colWidths = data.reduce((acc, row) => {
-                                              row.forEach((cell, i) => { acc[i] = Math.max(acc[i] ?? 0, String(cell).length + 2) })
-                                              return acc
-                                            }, [] as number[])
-                                            ws['!cols'] = colWidths.map((w) => ({ wch: w as number }))
+                                            const colWidths: number[] = []
+                                            data.forEach((row) => {
+                                              row.forEach((cell, i) => {
+                                                const len = String(cell).length + 2
+                                                colWidths[i] = colWidths[i] !== undefined ? Math.max(colWidths[i], len) : len
+                                              })
+                                            })
+                                            ws['!cols'] = colWidths.map((w) => ({ wch: w }))
                                             const wb = XLSX.utils.book_new()
                                             XLSX.utils.book_append_sheet(wb, ws, 'Коробки')
                                             XLSX.writeFile(wb, `${supply.warehouse_name}_коробки.xlsx`)
