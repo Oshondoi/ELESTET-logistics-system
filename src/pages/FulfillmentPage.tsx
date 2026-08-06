@@ -1589,48 +1589,41 @@ const BatchDetailModal = ({
     setPackingProductCache((prev) => ({ ...prev, [bc]: info }))
   }, [packingProductCache, accountId, batch.store_id])
 
+  // Добавить товар в короб: сначала write в DB, потом обновляем state точечно (без _opt_)
   const addItemToBoxDirect = useCallback((supplyId: string, boxId: string, bc: string, qty: number) => {
     const matched = items.find((it) => it.barcode === bc)
     const safeItemId = matched?.id?.startsWith('_local_') ? null : (matched?.id ?? null)
-    const now = new Date().toISOString()
+
+    // оптимистично обновляем qty в UI (не ждём DB) — realtime подтвердит через 600ms
     setSupplies((prev) => prev.map((s) => s.id !== supplyId ? s : {
       ...s, boxes: s.boxes.map((bx) => bx.id !== boxId ? bx : {
         ...bx, items: (() => {
           const ex = bx.items.find((i) => i.barcode === bc)
-          if (ex) {
-            const newQty = ex.qty + qty
-            // обновляем в DB фоново
-            void updateBoxItem(ex.id, { qty: newQty }).then((saved) => {
-              setSupplies((p) => p.map((ss) => ss.id !== supplyId ? ss : {
-                ...ss, boxes: ss.boxes.map((bb) => bb.id !== boxId ? bb : {
-                  ...bb, items: bb.items.map((i) => i.id === ex.id ? { ...saved, items: [] } : i)
-                })
-              }))
-            })
-            return bx.items.map((i) => i.barcode === bc ? { ...i, qty: newQty } : i)
-          }
-          const tempId = `_opt_${crypto.randomUUID()}`
-          const optimistic = { id: tempId, _local: true as const, supply_id: supplyId, box_id: boxId, account_id: accountId, barcode: bc, item_id: safeItemId, product_name: matched?.product_name ?? null, qty, created_at: now }
-          // сохраняем в DB фоново
-          void addBoxItem({ box_id: boxId, account_id: accountId, barcode: bc, item_id: safeItemId, product_name: matched?.product_name ?? null, qty }).then((saved) => {
-            setSupplies((p) => p.map((ss) => ss.id !== supplyId ? ss : {
-              ...ss, boxes: ss.boxes.map((bb) => bb.id !== boxId ? bb : {
-                ...bb, items: bb.items.map((i) => i.id === tempId ? saved : i)
-              })
-            }))
-          }).catch(() => {
-            setSupplies((p) => p.map((ss) => ss.id !== supplyId ? ss : {
-              ...ss, boxes: ss.boxes.map((bb) => bb.id !== boxId ? bb : {
-                ...bb, items: bb.items.filter((i) => i.id !== tempId)
-              })
-            }))
-          })
-          return [...bx.items, optimistic]
+          if (ex) return bx.items.map((i) => i.barcode === bc ? { ...i, qty: i.qty + qty } : i)
+          const now = new Date().toISOString()
+          return [...bx.items, { id: `_opt_${crypto.randomUUID()}`, _local: true as const, supply_id: supplyId, box_id: boxId, account_id: accountId, barcode: bc, item_id: safeItemId, product_name: matched?.product_name ?? null, qty, created_at: now }]
         })()
       })
     }))
+
+    // пишем в DB; realtime сделает fetchSupplies после debounce → заменит _opt_ на реальный
+    const existingItem = supplies.find((s) => s.id === supplyId)?.boxes.find((b) => b.id === boxId)?.items.find((i) => i.barcode === bc)
+    if (existingItem && !existingItem.id.startsWith('_opt_')) {
+      void updateBoxItem(existingItem.id, { qty: existingItem.qty + qty })
+    } else {
+      void addBoxItem({ box_id: boxId, account_id: accountId, barcode: bc, item_id: safeItemId, product_name: matched?.product_name ?? null, qty })
+        .catch(() => {
+          // откат при ошибке
+          setSupplies((p) => p.map((ss) => ss.id !== supplyId ? ss : {
+            ...ss, boxes: ss.boxes.map((bb) => bb.id !== boxId ? bb : {
+              ...bb, items: bb.items.filter((i) => !(i.barcode === bc && i.id.startsWith('_opt_')))
+            })
+          }))
+        })
+    }
+
     void lookupAndCacheBarcode(bc)
-  }, [items, accountId, lookupAndCacheBarcode])
+  }, [items, accountId, supplies, lookupAndCacheBarcode])
 
   // Preload info для всех баркодов в активной поставке
   useEffect(() => {
@@ -1648,35 +1641,38 @@ const BatchDetailModal = ({
   // Realtime-подписка на этапе Короба — обновляет ВСЕ поставки партии
   useEffect(() => {
     if (viewStage !== 'packing' || !supabase) return
-    const supplyIds = new Set(supplies.map((s) => s.id))
+
+    // debounce: даём время нашим собственным write-операциям завершиться до рефетча
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(async () => {
+        const fresh = await fetchSupplies(batch.id)
+        setSupplies(fresh)
+      }, 600)
+    }
 
     const channel = (supabase as any)
       .channel(`packing-rt-${batch.id}`)
-      // поставки партии — INSERT/DELETE/UPDATE (фильтр клиентский — REPLICA IDENTITY требует его)
+      // поставки партии — клиентский фильтр (REPLICA IDENTITY FULL)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_supplies' },
-        async (payload: any) => {
-          // проверяем что событие относится к нашей партии
+        (payload: any) => {
           const record = payload.new ?? payload.old
           if (record?.batch_id !== batch.id) return
-          const fresh = await fetchSupplies(batch.id)
-          setSupplies(fresh)
+          scheduleRefresh()
         })
-      // коробы — любой supply этой партии
+      // коробы
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_boxes' },
-        async () => {
-          // простой full-refetch — надёжнее гранулярного merge
-          const fresh = await fetchSupplies(batch.id)
-          setSupplies(fresh)
-        })
+        () => { scheduleRefresh() })
       // позиции коробов
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_box_items' },
-        async () => {
-          const fresh = await fetchSupplies(batch.id)
-          setSupplies(fresh)
-        })
+        () => { scheduleRefresh() })
       .subscribe()
 
-    return () => { void (supabase as any).removeChannel(channel) }
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      void (supabase as any).removeChannel(channel)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewStage, batch.id])
 
