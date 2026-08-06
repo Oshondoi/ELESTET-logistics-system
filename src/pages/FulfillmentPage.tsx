@@ -1648,93 +1648,31 @@ const BatchDetailModal = ({
   // Realtime-подписка на этапе Короба — обновляет ВСЕ поставки партии
   useEffect(() => {
     if (viewStage !== 'packing' || !supabase) return
+    const supplyIds = new Set(supplies.map((s) => s.id))
 
     const channel = (supabase as any)
       .channel(`packing-rt-${batch.id}`)
       // поставки партии — INSERT/DELETE/UPDATE (фильтр клиентский — REPLICA IDENTITY требует его)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_supplies' },
         async (payload: any) => {
+          // проверяем что событие относится к нашей партии
           const record = payload.new ?? payload.old
           if (record?.batch_id !== batch.id) return
           const fresh = await fetchSupplies(batch.id)
-          setSupplies((prev) => {
-            return fresh.map((fs) => {
-              const prevSupply = prev.find((ps) => ps.id === fs.id)
-              if (!prevSupply) return fs
-              return {
-                ...fs,
-                boxes: fs.boxes.map((fb) => {
-                  const prevBox = prevSupply.boxes.find((pb) => pb.id === fb.id)
-                  if (!prevBox) return fb
-                  const optItems = prevBox.items.filter((i) => i.id.startsWith('_opt_'))
-                  if (optItems.length === 0) return fb
-                  const freshBarcodes = new Set(fb.items.map((i) => i.barcode))
-                  const stillPending = optItems.filter((i) => !freshBarcodes.has(i.barcode))
-                  return { ...fb, items: [...fb.items, ...stillPending] }
-                }),
-              }
-            })
-          })
+          setSupplies(fresh)
         })
-      // коробы и позиции — полный refetch при любом изменении (надёжнее stale closure)
+      // коробы — любой supply этой партии
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_boxes' },
         async () => {
+          // простой full-refetch — надёжнее гранулярного merge
           const fresh = await fetchSupplies(batch.id)
-          // сохраняем _opt_ элементы которые ещё не подтверждены DB
-          setSupplies((prev) => {
-            return fresh.map((fs) => {
-              const prevSupply = prev.find((ps) => ps.id === fs.id)
-              if (!prevSupply) return fs
-              return {
-                ...fs,
-                boxes: fs.boxes.map((fb) => {
-                  const prevBox = prevSupply.boxes.find((pb) => pb.id === fb.id)
-                  if (!prevBox) return fb
-                  const optItems = prevBox.items.filter((i) => i.id.startsWith('_opt_'))
-                  if (optItems.length === 0) return fb
-                  // добавляем _opt_ только если их баркода ещё нет в свежих данных
-                  const freshBarcodes = new Set(fb.items.map((i) => i.barcode))
-                  const stillPending = optItems.filter((i) => !freshBarcodes.has(i.barcode))
-                  return { ...fb, items: [...fb.items, ...stillPending] }
-                }),
-              }
-            })
-          })
+          setSupplies(fresh)
         })
-      // позиции — гранулярно, чтобы не стирать оптимистичные _opt_ элементы
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'fulfillment_box_items' },
-        (payload: any) => {
-          const item = payload.new
-          if (!item) return
-          setSupplies((prev) => prev.map((s) => ({
-            ...s, boxes: s.boxes.map((b) => b.id !== item.box_id ? b : {
-              ...b, items: (() => {
-                if (b.items.find((i) => i.id === item.id)) return b.items
-                // заменяем оптимистичный _opt_ с тем же баркодом реальным
-                const optIdx = b.items.findIndex((i) => i.id.startsWith('_opt_') && i.barcode === item.barcode)
-                if (optIdx !== -1) return b.items.map((i, idx) => idx === optIdx ? item : i)
-                return [...b.items, item]
-              })(),
-            }),
-          })))
-        })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'fulfillment_box_items' },
-        (payload: any) => {
-          const item = payload.new
-          if (!item) return
-          setSupplies((prev) => prev.map((s) => ({
-            ...s, boxes: s.boxes.map((b) => b.id !== item.box_id ? b : {
-              ...b, items: b.items.map((i) => i.id === item.id ? { ...i, ...item } : i),
-            }),
-          })))
-        })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'fulfillment_box_items' },
-        (payload: any) => {
-          const old = payload.old
-          if (!old?.id) return
-          setSupplies((prev) => prev.map((s) => ({
-            ...s, boxes: s.boxes.map((b) => ({ ...b, items: b.items.filter((i) => i.id !== old.id) })),
-          })))
+      // позиции коробов
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'fulfillment_box_items' },
+        async () => {
+          const fresh = await fetchSupplies(batch.id)
+          setSupplies(fresh)
         })
       .subscribe()
 
