@@ -885,22 +885,21 @@ export const deleteBox = async (boxId: string): Promise<void> => {
 
 // ── Packing: Box Items ────────────────────────────────────────
 
-export const addBoxItem = async (data: {
+export const incrementBoxItem = async (data: {
   box_id: string
-  account_id: string
   barcode: string
   item_id: string | null
   product_name: string | null
   qty: number
 }): Promise<FulfillmentBoxItem> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  // _local_ IDs существуют только в памяти — в DB их нет, обнуляем
-  const safeData = { ...data, item_id: data.item_id?.startsWith('_local_') ? null : data.item_id }
-  const { data: row, error } = await (supabase as any)
-    .from('fulfillment_box_items')
-    .insert(safeData)
-    .select()
-    .single()
+  const { data: row, error } = await (supabase as any).rpc('increment_fulfillment_box_item', {
+    p_box_id: data.box_id,
+    p_barcode: data.barcode,
+    p_item_id: data.item_id?.startsWith('_local_') ? null : data.item_id,
+    p_product_name: data.product_name,
+    p_qty: data.qty,
+  })
   if (error) throw error
   return row as FulfillmentBoxItem
 }

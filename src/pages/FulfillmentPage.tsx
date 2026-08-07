@@ -67,7 +67,7 @@ import {
   createBox,
   deleteBox,
   syncReadyBoxSupply,
-  addBoxItem,
+  incrementBoxItem,
   deleteBoxItem,
   updateBoxItem,
   fetchStageCompletedAt,
@@ -554,7 +554,12 @@ const BatchDetailModal = ({
   const [isSavingBox, setIsSavingBox] = useState<string | null>(null)
   const packingBarcodeRef = useRef<HTMLInputElement>(null)
   const packingQtyRef = useRef<HTMLInputElement>(null)
-  const [packingAutoAdd, setPackingAutoAdd] = useState(false)
+  const packingAutoAddStorageKey = 'fulfillment_packing_auto_add'
+  const [packingAutoAdd, setPackingAutoAdd] = useState(() => localStorage.getItem(packingAutoAddStorageKey) === 'true')
+  const [packingItemEdits, setPackingItemEdits] = useState<Record<string, string>>({})
+  const [savingPackingItemId, setSavingPackingItemId] = useState<string | null>(null)
+  const [deletingPackingItemId, setDeletingPackingItemId] = useState<string | null>(null)
+  const [deleteBoxItemConfirm, setDeleteBoxItemConfirm] = useState<{ supplyId: string; boxId: string; itemId: string } | null>(null)
   const [packingProductCache, setPackingProductCache] = useState<Record<string, ProductInfo | null>>({})
   const [packingPhotoPreview, setPackingPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
   const [packingCameraOpen, setPackingCameraOpen] = useState(false)
@@ -569,6 +574,10 @@ const BatchDetailModal = ({
   const [addBoxQty, setAddBoxQty] = useState('')
   const [deleteBoxConfirm, setDeleteBoxConfirm] = useState<{ supplyId: string; boxId: string } | null>(null)
   const [deleteSupplyConfirm, setDeleteSupplyConfirm] = useState<string | null>(null) // supplyId
+
+  useEffect(() => {
+    localStorage.setItem(packingAutoAddStorageKey, String(packingAutoAdd))
+  }, [packingAutoAdd, packingAutoAddStorageKey])
   // Тип тарифа логистики для каждой поставки (переопределение, NULL = наследует от партии)
   const [supplyTariffTypeMap, setSupplyTariffTypeMap] = useState<Record<string, 'per_box' | 'per_kg' | null>>({})
   const [supplyWeightMap, setSupplyWeightMap] = useState<Record<string, string>>({})
@@ -1703,24 +1712,29 @@ const BatchDetailModal = ({
       })
     }))
 
-    // пишем в DB; realtime сделает fetchSupplies после debounce → заменит _opt_ на реальный
-    const existingItem = supplies.find((s) => s.id === supplyId)?.boxes.find((b) => b.id === boxId)?.items.find((i) => i.barcode === bc)
-    if (existingItem && !existingItem.id.startsWith('_opt_')) {
-      void updateBoxItem(existingItem.id, { qty: existingItem.qty + qty })
-    } else {
-      void addBoxItem({ box_id: boxId, account_id: accountId, barcode: bc, item_id: safeItemId, product_name: matched?.product_name ?? null, qty })
-        .catch(() => {
-          // откат при ошибке
-          setSupplies((p) => p.map((ss) => ss.id !== supplyId ? ss : {
-            ...ss, boxes: ss.boxes.map((bb) => bb.id !== boxId ? bb : {
-              ...bb, items: bb.items.filter((i) => !(i.barcode === bc && i.id.startsWith('_opt_')))
-            })
-          }))
-        })
-    }
+    // База атомарно создаёт строку или увеличивает qty. Это защищает от быстрых
+    // повторных сканов, нескольких вкладок и нескольких сотрудников.
+    void incrementBoxItem({ box_id: boxId, barcode: bc, item_id: safeItemId, product_name: matched?.product_name ?? null, qty })
+      .then((saved) => {
+        setSupplies((prev) => prev.map((s) => s.id !== supplyId ? s : {
+          ...s,
+          boxes: s.boxes.map((bx) => {
+            if (bx.id !== boxId) return bx
+            const firstIndex = bx.items.findIndex((item) => item.barcode === bc)
+            const optimisticQty = bx.items.filter((item) => item.barcode === bc).reduce((sum, item) => sum + item.qty, 0)
+            const nextItems = bx.items.filter((item) => item.barcode !== bc)
+            nextItems.splice(firstIndex < 0 ? nextItems.length : firstIndex, 0, { ...saved, qty: Math.max(saved.qty, optimisticQty) })
+            return { ...bx, items: nextItems }
+          }),
+        }))
+      })
+      .catch((err) => {
+        setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось добавить товар в короб')
+        void fetchSupplies(batch.id).then(setSupplies)
+      })
 
     void lookupAndCacheBarcode(bc)
-  }, [items, accountId, supplies, lookupAndCacheBarcode])
+  }, [items, accountId, batch.id, lookupAndCacheBarcode])
 
   // Preload info для всех баркодов в активной поставке
   useEffect(() => {
@@ -1791,7 +1805,7 @@ const BatchDetailModal = ({
           const createdBox = await createBox({ supply_id: created.id, account_id: box.account_id, box_number: box.box_number })
           for (const item of box.items) {
             try {
-              await addBoxItem({ box_id: createdBox.id, account_id: item.account_id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
+              await incrementBoxItem({ box_id: createdBox.id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
             } catch { /* item-level error не останавливает остальные */ }
           }
         } catch { /* box-level error не останавливает остальные короба */ }
@@ -1806,14 +1820,14 @@ const BatchDetailModal = ({
             const createdBox = await createBox({ supply_id: supply.id, account_id: box.account_id, box_number: box.box_number })
             for (const item of box.items) {
               try {
-                await addBoxItem({ box_id: createdBox.id, account_id: item.account_id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
+                await incrementBoxItem({ box_id: createdBox.id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
               } catch { /* item-level error не останавливает остальные */ }
             }
           } catch { /* box-level error не останавливает остальные короба */ }
         } else {
           for (const item of box.items.filter((i) => i._local)) {
             try {
-              await addBoxItem({ box_id: box.id, account_id: item.account_id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
+              await incrementBoxItem({ box_id: box.id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
             } catch { /* item-level error не останавливает остальные */ }
           }
         }
@@ -5403,16 +5417,62 @@ const BatchDetailModal = ({
                                                 </div>
                                               </div>
                                               <div className="flex items-center gap-2 flex-shrink-0 pt-0.5">
-                                                <span className="text-slate-700 font-medium text-xs">{item.qty}&nbsp;ед.</span>
-                                                {canManageStageData && (
-                                                  <button
-                                                    onClick={async () => {
-                                                      // не удаляем оптимистичные ID — они сами обновятся или откатятся
-                                                      if (!item.id.startsWith('_opt_')) await deleteBoxItem(item.id)
-                                                      setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, items: b.items.filter((i) => i.id !== item.id) } : b) } : s))
-                                                    }}
-                                                    className="text-red-400 hover:text-red-600"
-                                                  >✕</button>
+                                                {packingItemEdits[item.id] !== undefined ? (
+                                                  <input
+                                                    type="number"
+                                                    min={1}
+                                                    value={packingItemEdits[item.id]}
+                                                    onChange={(e) => setPackingItemEdits((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                                    className="w-16 rounded-lg border border-blue-300 bg-white px-2 py-1 text-center text-xs font-medium text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                                                    autoFocus
+                                                  />
+                                                ) : (
+                                                  <span className="text-slate-700 font-medium text-xs">{item.qty}&nbsp;ед.</span>
+                                                )}
+                                                {canManageStageData && !item.id.startsWith('_opt_') && (
+                                                  <>
+                                                    {packingItemEdits[item.id] !== undefined ? (
+                                                      <button
+                                                        type="button"
+                                                        disabled={savingPackingItemId === item.id || !Number.isInteger(Number(packingItemEdits[item.id])) || Number(packingItemEdits[item.id]) < 1}
+                                                        onClick={async () => {
+                                                          const qty = Number(packingItemEdits[item.id])
+                                                          if (!Number.isInteger(qty) || qty < 1) return
+                                                          setSavingPackingItemId(item.id)
+                                                          try {
+                                                            const saved = await updateBoxItem(item.id, { qty })
+                                                            setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, items: b.items.map((candidate) => candidate.id === item.id ? saved : candidate) } : b) } : s))
+                                                            setPackingItemEdits((prev) => { const next = { ...prev }; delete next[item.id]; return next })
+                                                          } catch (err) {
+                                                            setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось сохранить количество')
+                                                          } finally {
+                                                            setSavingPackingItemId(null)
+                                                          }
+                                                        }}
+                                                        title="Сохранить количество"
+                                                        className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-40"
+                                                      >
+                                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5" /></svg>
+                                                      </button>
+                                                    ) : (
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => setPackingItemEdits((prev) => ({ ...prev, [item.id]: String(item.qty) }))}
+                                                        title="Изменить количество"
+                                                        className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-blue-50 hover:text-blue-600"
+                                                      >
+                                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                                                      </button>
+                                                    )}
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => setDeleteBoxItemConfirm({ supplyId: supply.id, boxId: box.id, itemId: item.id })}
+                                                      title="Удалить позицию"
+                                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500"
+                                                    >
+                                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 14H6L5 6" /><path d="M10 11v5M14 11v5" /></svg>
+                                                    </button>
+                                                  </>
                                                 )}
                                               </div>
                                             </div>
@@ -5669,6 +5729,61 @@ const BatchDetailModal = ({
                         </div>
                       </div>
                     , document.body)
+                  })()}
+
+                  {/* Модалка: подтверждение удаления позиции из короба */}
+                  {deleteBoxItemConfirm && (() => {
+                    const dSupply = supplies.find((s) => s.id === deleteBoxItemConfirm.supplyId)
+                    const dBox = dSupply?.boxes.find((b) => b.id === deleteBoxItemConfirm.boxId)
+                    const dItem = dBox?.items.find((item) => item.id === deleteBoxItemConfirm.itemId)
+                    if (!dItem) return null
+                    const isDeleting = deletingPackingItemId === dItem.id
+                    return createPortal(
+                      <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40" onClick={() => { if (!isDeleting) setDeleteBoxItemConfirm(null) }}>
+                        <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-red-100">
+                              <svg viewBox="0 0 24 24" className="h-5 w-5 text-red-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 14H6L5 6" /><path d="M10 11v5M14 11v5" /></svg>
+                            </div>
+                            <div>
+                              <p className="font-semibold text-slate-800">Удалить позицию из короба?</p>
+                              <p className="mt-0.5 text-xs text-slate-400">Баркод {dItem.barcode} · {dItem.qty} ед. будут удалены полностью.</p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              disabled={isDeleting}
+                              onClick={() => setDeleteBoxItemConfirm(null)}
+                              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isDeleting}
+                              onClick={async () => {
+                                setDeletingPackingItemId(dItem.id)
+                                try {
+                                  await deleteBoxItem(dItem.id)
+                                  setSupplies((prev) => prev.map((s) => s.id === dSupply!.id ? { ...s, boxes: s.boxes.map((b) => b.id === dBox!.id ? { ...b, items: b.items.filter((item) => item.id !== dItem.id) } : b) } : s))
+                                  setPackingItemEdits((prev) => { const next = { ...prev }; delete next[dItem.id]; return next })
+                                  setDeleteBoxItemConfirm(null)
+                                } catch (err) {
+                                  setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось удалить позицию')
+                                } finally {
+                                  setDeletingPackingItemId(null)
+                                }
+                              }}
+                              className="flex-1 rounded-xl bg-red-500 py-2.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-40"
+                            >
+                              {isDeleting ? 'Удаление…' : 'Удалить'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>,
+                      document.body,
+                    )
                   })()}
 
                   {/* Модалка: подтверждение удаления короба */}

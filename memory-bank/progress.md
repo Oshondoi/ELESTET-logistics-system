@@ -52,7 +52,7 @@ MVP в активной разработке. Деплой на Vercel акти�
 ### FulfillmentPage — Прямая запись коробов/поставок в DB
 - **Supply**: `+ Поставка` → немедленный `createSupply` в DB (убран `_local`)
 - **Box**: модалка «Добавить» → немедленный `createBox` в DB (убран `_local`)
-- **Item**: скан/добавление → оптимистичный UI + фоновый `addBoxItem` в DB
+- **Item**: скан/добавление → оптимистичный UI + атомарный `incrementBoxItem` в DB
 - `addItemToBoxDirect(supplyId, boxId, bc, qty)` — новый хелпер с оптимистичным паттерном
 - `updateBoxItem(itemId, {qty})` — новая функция в `fulfillmentService.ts`
 - `persistLocalSupplies` убрана из всех save-хандлеров
@@ -66,7 +66,7 @@ MVP в активной разработке. Деплой на Vercel акти�
 
 ### FulfillmentPage — Исправления ошибок
 - `createBox` graceful при дубликате (23505) — подхватывает существующий
-- `addBoxItem` стрипает `_local_` item_id → null
+- `incrementBoxItem` стрипает `_local_` item_id → null и атомарно объединяет одинаковый баркод
 - `stageDraft` loops пропускают `_local_` ID
 - `persistLocalSupplies`: каждый box/item в отдельном try/catch
 
@@ -98,6 +98,13 @@ MVP в активной разработке. Деплой на Vercel акти�
 - Содержимое готового короба редактируется, но сам короб удалить нельзя
 - Идентификация: `fulfillment_supplies.source_item_id`, fallback по складу для старых данных
 - Открытие/закрытие коробов удалено из UI и логики; `status` остаётся технической колонкой
+
+### FulfillmentPage — Уникальные баркоды внутри короба
+- Накопленные дубли объединены суммированием `qty`; в БД добавлен unique index `(box_id, barcode)`
+- Быстрые повторные сканы используют атомарный RPC `increment_fulfillment_box_item`
+- Количество редактируется только после карандаша и сохраняется галочкой
+- Удаление позиции выполняется корзиной после подтверждения
+- Последний выбор режима «Авто» запоминается в браузере
 
 ### Система сброса пароля (4 формы — единая валидация)
 - `src/lib/passwordUtils.ts` — `validatePassword` + `normalizePassword` (toLowerCase)
