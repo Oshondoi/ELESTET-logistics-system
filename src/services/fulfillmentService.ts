@@ -759,6 +759,7 @@ export const createSupply = async (data: {
   trip_id: string | null
   trip_line_id: string | null
   created_by: string | null
+  source_item_id?: string | null
 }): Promise<FulfillmentSupply> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data: row, error } = await (supabase as any)
@@ -768,6 +769,19 @@ export const createSupply = async (data: {
     .single()
   if (error) throw error
   return row as FulfillmentSupply
+}
+
+export const syncReadyBoxSupply = async (
+  itemId: string,
+  targetCount: number,
+): Promise<string> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('sync_ready_box_supply', {
+    p_item_id: itemId,
+    p_target_count: targetCount,
+  })
+  if (error) throw error
+  return data as string
 }
 
 export const deleteSupply = async (supplyId: string): Promise<void> => {
@@ -857,30 +871,6 @@ export const createBox = async (data: {
     }
     throw error
   }
-  return row as FulfillmentBox
-}
-
-export const closeBox = async (boxId: string): Promise<FulfillmentBox> => {
-  if (!supabase) throw new Error('Supabase is not configured')
-  const { data: row, error } = await (supabase as any)
-    .from('fulfillment_boxes')
-    .update({ status: 'closed' })
-    .eq('id', boxId)
-    .select()
-    .single()
-  if (error) throw error
-  return row as FulfillmentBox
-}
-
-export const reopenBox = async (boxId: string): Promise<FulfillmentBox> => {
-  if (!supabase) throw new Error('Supabase is not configured')
-  const { data: row, error } = await (supabase as any)
-    .from('fulfillment_boxes')
-    .update({ status: 'open' })
-    .eq('id', boxId)
-    .select()
-    .single()
-  if (error) throw error
   return row as FulfillmentBox
 }
 

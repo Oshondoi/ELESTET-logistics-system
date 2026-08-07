@@ -42,6 +42,13 @@ interface WbWarehouse {
   officeId?: number
 }
 
+interface WbSupply {
+  id: string
+  name: string
+  ordersCount?: number
+  done?: boolean
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getWbPhotoUrl(nmId: number): string {
@@ -160,7 +167,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [assembleModal, setAssembleModal] = useState<{ ids: number[] } | null>(null)
   const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
   const [newSupplyName, setNewSupplyName] = useState('')
-  const [openSupplies, setOpenSupplies] = useState<{ id: string; name: string; ordersCount?: number }[]>([])
+  const [openSupplies, setOpenSupplies] = useState<WbSupply[]>([])
   const [loadingSupplies, setLoadingSupplies] = useState(false)
   const [orderMenuId, setOrderMenuId] = useState<number | null>(null)
   const [expandedSupplyIds, setExpandedSupplyIds] = useState<Set<string>>(new Set())
@@ -256,21 +263,31 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     if (syncLog?.last_synced_at) setLastSyncedAt(new Date(syncLog.last_synced_at))
   }, [selectedStoreId, enrichWithCells])
 
+  const loadOpenSupplies = useCallback(async () => {
+    if (!selectedStoreId) return
+    const d = await invokeFbs(selectedStoreId, { action: 'get_supplies', closed: false, limit: 1000 })
+    const sups = (d.supplies ?? d ?? []) as any[]
+    setOpenSupplies(sups
+      .filter((s: any) => s.done !== true)
+      .map((s: any) => ({ id: s.id, name: s.name || s.id, ordersCount: s.ordersCount, done: s.done })))
+  }, [selectedStoreId])
+
   // Синк с WB → upsert в fbs_orders → перечитываем из DB
   const doSync = useCallback(async () => {
     if (!selectedStoreId) return
     setLoading(true); setError(null)
     try {
       await invokeFbs(selectedStoreId, { action: 'sync_orders' })
-      await readFromDb()
+      await Promise.all([readFromDb(), loadOpenSupplies()])
       setLastSyncedAt(new Date())
     } catch (e) { setError(String(e)) }
     finally { setLoading(false) }
-  }, [selectedStoreId, readFromDb])
+  }, [selectedStoreId, readFromDb, loadOpenSupplies])
 
   // При смене магазина: читаем из DB, если данные старые — фоновый синк
   useEffect(() => {
     if (!selectedStoreId) return
+    void loadOpenSupplies().catch(() => setOpenSupplies([]))
     void readFromDb().then(() => {
       setLastSyncedAt(prev => {
         const stale = !prev || (Date.now() - prev.getTime()) > 10 * 60_000
@@ -319,9 +336,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     setAssembleModal({ ids })
     setLoadingSupplies(true)
     try {
-      const d = await invokeFbs(selectedStoreId, { action: 'get_supplies', closed: false, limit: 50 })
-      const sups = (d.supplies ?? d ?? []) as any[]
-      setOpenSupplies(sups.map((s: any) => ({ id: s.id, name: s.name || s.id, ordersCount: s.ordersCount })))
+      await loadOpenSupplies()
     } catch { setOpenSupplies([]) }
     finally { setLoadingSupplies(false) }
   }
@@ -486,7 +501,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
         <select
           value={selectedStoreId}
-          onChange={(e) => { setSelectedStoreId(e.target.value); localStorage.setItem(lsKey, e.target.value); setOrders([]); setSelected(new Set()) }}
+          onChange={(e) => { setSelectedStoreId(e.target.value); localStorage.setItem(lsKey, e.target.value); setOrders([]); setOpenSupplies([]); setSelected(new Set()) }}
           className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-violet-400"
         >
           {storesWithKey.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -555,26 +570,28 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         <div className="mx-5 mt-3 rounded-xl bg-red-50 px-4 py-2.5 text-xs text-red-600">{error}</div>
       )}
 
-      {!loading && tabOrders.length === 0 && !error && (
+      {!loading && tabOrders.length === 0 && !(activeTab === 'assembling' && openSupplies.length > 0) && !error && (
         <div className="flex h-full items-center justify-center text-sm text-slate-400">
           {orders.length === 0 ? 'Загрузка...' : `Нет заказов в статусе "${tabs.find(t => t.key === activeTab)?.label}"`}
         </div>
       )}
 
-      {tabOrders.length > 0 && activeTab === 'assembling' && (() => {
-        // Группируем по supply_id для аккордеона
-        const supplyGroups = new Map<string, FbsOrder[]>()
+      {(tabOrders.length > 0 || openSupplies.length > 0) && activeTab === 'assembling' && (() => {
+        // Основой списка служат поставки WB, включая пустые; заказы вкладываются по supply_id
+        const supplyGroups = new Map<string, { supply: WbSupply | null; orders: FbsOrder[] }>()
+        openSupplies.forEach((supply) => supplyGroups.set(supply.id, { supply, orders: [] }))
         tabOrders.forEach((o) => {
           const key = o.supply_id ?? '__none__'
-          if (!supplyGroups.has(key)) supplyGroups.set(key, [])
-          supplyGroups.get(key)!.push(o)
+          if (!supplyGroups.has(key)) supplyGroups.set(key, { supply: null, orders: [] })
+          supplyGroups.get(key)!.orders.push(o)
         })
         return (
           <div className="flex-1 overflow-auto">
-            {Array.from(supplyGroups.entries()).map(([supplyId, supplyOrders]) => {
+            {Array.from(supplyGroups.entries()).map(([supplyId, group]) => {
+              const { supply, orders: supplyOrders } = group
               const isExpanded = expandedSupplyIds.has(supplyId)
               const toggle = () => setExpandedSupplyIds((prev) => { const n = new Set(prev); n.has(supplyId) ? n.delete(supplyId) : n.add(supplyId); return n })
-              const wh = wbWhName(supplyOrders[0]?.warehouseId ?? 0)
+              const wh = supplyOrders.length > 0 ? wbWhName(supplyOrders[0].warehouseId) : ''
               return (
                 <div key={supplyId} className="border-b border-slate-200">
                   {/* Строка поставки (родитель) */}
@@ -584,12 +601,15 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                     </svg>
                     <div className="flex flex-1 items-center gap-4 min-w-0">
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-800 truncate">{supplyId === '__none__' ? 'Без поставки' : supplyId}</p>
+                        <p className="text-sm font-semibold text-slate-800 truncate">{supplyId === '__none__' ? 'Без поставки' : (supply?.name || supplyId)}</p>
+                        {supplyId !== '__none__' && supply?.name && supply.name !== supplyId && (
+                          <p className="font-mono text-[11px] text-slate-400">{supplyId}</p>
+                        )}
                       </div>
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">{supplyOrders.length} зак.</span>
                       {wh && <span className="text-xs text-slate-400">{wh}</span>}
                     </div>
-                    {supplyId !== '__none__' && (
+                    {supplyId !== '__none__' && supplyOrders.length > 0 && (
                       <button type="button" title="Отгрузить всю поставку"
                         disabled={busyIds.size > 0}
                         onClick={(e) => { e.stopPropagation(); void handleShip(supplyOrders) }}
@@ -601,7 +621,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                   {/* Аккордеон — заказы */}
                   <div style={{ display: 'grid', gridTemplateRows: isExpanded ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
                     <div className="overflow-hidden">
-                      <table className="w-full text-xs border-t border-slate-100 bg-slate-50/50">
+                      {supplyOrders.length === 0 ? (
+                        <div className="border-t border-slate-100 bg-slate-50/50 px-12 py-4 text-xs text-slate-400">В поставке пока нет заказов</div>
+                      ) : <table className="w-full text-xs border-t border-slate-100 bg-slate-50/50">
                         <tbody>
                           {supplyOrders.map((order) => {
                             const sla = slaLabel(order.ddate, order.createdAt)
@@ -641,7 +663,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                             )
                           })}
                         </tbody>
-                      </table>
+                      </table>}
                     </div>
                   </div>
                 </div>

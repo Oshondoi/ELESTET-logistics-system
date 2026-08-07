@@ -65,9 +65,8 @@ import {
   deleteSupply,
   updateSupply,
   createBox,
-  closeBox,
-  reopenBox,
   deleteBox,
+  syncReadyBoxSupply,
   addBoxItem,
   deleteBoxItem,
   updateBoxItem,
@@ -351,7 +350,6 @@ const BatchDetailModal = ({
   const scannerCaptureRef = useRef<((barcode: string) => void) | null>(null)
   const otkFileInputRef = useRef<HTMLInputElement>(null)
   const markingFileInputRef = useRef<HTMLInputElement>(null)
-  const markingBarcodeRef = useRef<HTMLInputElement>(null)
   const markingVideoRef = useRef<HTMLVideoElement>(null)
   const markingStreamRef = useRef<MediaStream | null>(null)
   const markingDetectRef = useRef(false)
@@ -414,14 +412,11 @@ const BatchDetailModal = ({
   const [markingLogs, setMarkingLogs] = useState<FulfillmentMarkingLog[]>([])
   const [isLoadingMarking, setIsLoadingMarking] = useState(false)
   const [markingTariff, setMarkingTariff] = useState<string>('')
-  const [markingBarcode, setMarkingBarcode] = useState('')
   const [markingCameraOpen, setMarkingCameraOpen] = useState(false)
   const [markingCameraError, setMarkingCameraError] = useState<string | null>(null)
   const [markingScannedBarcode, setMarkingScannedBarcode] = useState<string | null>(null)
   const [markingRescanKey, setMarkingRescanKey] = useState(0)
   const [markingEditScanTarget, setMarkingEditScanTarget] = useState<{ type: 'log'; id: string } | { type: 'buffer'; tempId: string } | null>(null)
-  const [markingItemId, setMarkingItemId] = useState<string | null>(null)
-  const [markingItemName, setMarkingItemName] = useState<string | null>(null)
   const [markingQty, setMarkingQty] = useState('')
   const [markingDefect, setMarkingDefect] = useState('')
   const [markingLabelsQty, setMarkingLabelsQty] = useState('')
@@ -582,6 +577,9 @@ const BatchDetailModal = ({
   const [receptionDraft, setReceptionDraft] = useState<Record<string, number>>(
     Object.fromEntries(initialBatch.items.map((it) => [it.id, it.qty_received]))
   )
+  const [receptionBoxesDraft, setReceptionBoxesDraft] = useState<Record<string, number>>(
+    Object.fromEntries(initialBatch.items.filter((it) => it.boxes != null).map((it) => [it.id, it.boxes ?? 0]))
+  )
   // Локальные (несохранённые) элементы приёмки — только в памяти до нажатия «Сохранить»
   const [pendingItemIds, setPendingItemIds] = useState<Set<string>>(new Set())
   // Элементы помеченные на удаление — удаляются из БД только при «Сохранить»
@@ -595,6 +593,56 @@ const BatchDetailModal = ({
   const [isSavingDraft, setIsSavingDraft] = useState(false)
 
   const store = stores.find((s) => s.id === batch.store_id)
+  const isReadyBoxSupply = (supply: FulfillmentSupplyWithBoxes) => {
+    if (supply.source_item_id) return true
+    const warehouseHasLinkedReadySupply = supplies.some((candidate) =>
+      !!candidate.source_item_id && candidate.warehouse_name === supply.warehouse_name
+    )
+    return !warehouseHasLinkedReadySupply && items.some((item) =>
+      item.product_name === 'Готовые короба' && item.notes === supply.warehouse_name
+    )
+  }
+
+  const boxExportFilename = (supply: FulfillmentSupplyWithBoxes, boxNumber?: number) => {
+    const safePart = (value: string) => (value || 'unknown').trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').replace(/[. ]+$/g, '') || 'unknown'
+    const date = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    const parts = [`C${accountShortId ?? 'unknown'}`, `P${batch.short_id ?? 'unknown'}`, safePart(store?.name ?? 'unknown'), safePart(supply.warehouse_name)]
+    if (boxNumber != null) parts.push(`BOX${boxNumber}`)
+    parts.push(date)
+    return `${parts.join('_')}.xlsx`
+  }
+
+  const writeBoxesExcel = async (data: (string | number)[][], filename: string) => {
+    const XLSX = await import('xlsx')
+    const ws = XLSX.utils.aoa_to_sheet(data)
+    const colWidths: number[] = []
+    data.forEach((row) => {
+      row.forEach((cell, i) => {
+        const len = String(cell).length + 2
+        colWidths[i] = colWidths[i] !== undefined ? Math.max(colWidths[i], len) : len
+      })
+    })
+    ws['!cols'] = colWidths.map((w) => ({ wch: w }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Коробки')
+    XLSX.writeFile(wb, filename)
+  }
+
+  const downloadSupplyBoxesExcel = (supply: FulfillmentSupplyWithBoxes) => {
+    const data: (string | number)[][] = [['Баркод товара', 'Кол-во товаров', 'ШК короба', 'Срок годности', 'Номер короба']]
+    ;[...supply.boxes]
+      .sort((a, b) => a.box_number - b.box_number)
+      .forEach((box) => box.items.forEach((item) => {
+        data.push([item.barcode, item.qty, '', '', box.box_number])
+      }))
+    void writeBoxesExcel(data, boxExportFilename(supply))
+  }
+
+  const downloadSingleBoxExcel = (supply: FulfillmentSupplyWithBoxes, box: FulfillmentSupplyWithBoxes['boxes'][number]) => {
+    const data: (string | number)[][] = [['Баркод', 'Короб']]
+    box.items.forEach((item) => data.push([item.barcode, box.box_number]))
+    void writeBoxesExcel(data, boxExportFilename(supply, box.box_number))
+  }
 
   // Фото товаров для таблицы приёмки (barcode → photo_url)
   useEffect(() => {
@@ -1470,6 +1518,47 @@ const BatchDetailModal = ({
     setIsDirty(true)
   }
 
+  const handleUpdateReadyBoxesDraft = (id: string, boxes: number) => {
+    const nextBoxes = Math.max(1, boxes)
+    setReceptionBoxesDraft((p) => ({ ...p, [id]: nextBoxes }))
+    if (pendingItemIds.has(id)) {
+      const next = items.map((it) => it.id === id ? { ...it, boxes: nextBoxes } : it)
+      setItems(next)
+      onItemsChanged(next)
+    }
+    setIsDirty(true)
+  }
+
+  const confirmReadyBoxCountChanges = (changes: { item: FulfillmentItem; boxes: number }[]) => {
+    const reductions: string[] = []
+    for (const { item, boxes: targetCount } of changes) {
+      const supply = supplies.find((s) =>
+        s.source_item_id === item.id || (!s.source_item_id && s.warehouse_name === item.notes)
+      )
+      if (!supply || targetCount >= (item.boxes ?? 0)) continue
+      const boxesToDelete = supply.boxes
+        .filter((box) => box.box_number > targetCount)
+        .sort((a, b) => a.box_number - b.box_number)
+      const blocked = boxesToDelete.filter((box) => box.items.length > 0)
+      if (blocked.length > 0) {
+        setError(`Нельзя уменьшить количество до ${targetCount}. Содержат товары: ${blocked.map((box) => `BOX${box.box_number}`).join(', ')}.`)
+        return false
+      }
+      if (boxesToDelete.length > 0) {
+        reductions.push(`${supply.warehouse_name}: ${boxesToDelete.map((box) => `BOX${box.box_number}`).join(', ')}`)
+      }
+    }
+    return reductions.length === 0 || window.confirm(`Будут удалены пустые готовые короба:\n${reductions.join('\n')}\n\nПродолжить?`)
+  }
+
+  const syncReadyBoxSupplyCounts = async (changes: { item: FulfillmentItem; boxes: number }[]) => {
+    if (changes.length === 0) return
+    await Promise.all(changes.map(({ item, boxes }) => syncReadyBoxSupply(item.id, boxes)))
+    const freshSupplies = await fetchSupplies(batch.id)
+    setSupplies(freshSupplies)
+    rebuildSlotsFromSupplies(freshSupplies)
+  }
+
   // Пересчитать и сохранить otk_discrepancy по актуальным данным
   const recalcOtkDiscrepancy = async (currentItems: FulfillmentItem[], currentOtkLogs: typeof otkLogs) => {
     const tReceived = currentItems.reduce((s, it) => s + (it.qty_received ?? 0), 0)
@@ -1488,6 +1577,23 @@ const BatchDetailModal = ({
     setIsSavingDraft(true)
     setError(null)
     try {
+      const plannedReadyBoxChanges = items
+        .filter((it) => !pendingItemIds.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
+        .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
+      if (!confirmReadyBoxCountChanges(plannedReadyBoxChanges)) return
+      for (const id of pendingDeleteIds) {
+        const item = items.find((candidate) => candidate.id === id)
+        if (item?.product_name !== 'Готовые короба') continue
+        const supply = supplies.find((candidate) =>
+          candidate.source_item_id === item.id || (!candidate.source_item_id && candidate.warehouse_name === item.notes)
+        )
+        const filledBoxes = supply?.boxes.filter((box) => box.items.length > 0) ?? []
+        if (filledBoxes.length > 0) {
+          setError(`Нельзя удалить готовые короба. Содержат товары: ${filledBoxes.map((box) => `BOX${box.box_number}`).join(', ')}.`)
+          return
+        }
+      }
+
       let currentItems = [...items]
       const currentPending = new Set(pendingItemIds)
       let newlySavedReadyBoxItems: FulfillmentItem[] = []
@@ -1512,48 +1618,37 @@ const BatchDetailModal = ({
         setPendingItemIds(new Set())
       }
 
-      // 2. Сохранить изменённые qty существующих позиций
+      // 2. Сохранить изменённые qty и количество готовых коробов существующих позиций
+      const readyBoxCountChanges = currentItems
+        .filter((it) => !currentPending.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
+        .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
       const toUpdate = currentItems.filter((it) =>
         !currentPending.has(it.id) &&
         receptionDraft[it.id] !== undefined &&
         receptionDraft[it.id] !== it.qty_received
       )
-      const updated = await Promise.all(toUpdate.map((it) => updateItem(it.id, { qty_received: receptionDraft[it.id] })))
-      const finalItems = currentItems.map((it) => { const u = updated.find((x) => x.id === it.id); return u ?? it })
-
-      // Создать поставки для вновь сохранённых «Готовые короба» items
-      for (const item of newlySavedReadyBoxItems) {
-        const wh = warehouses.find((w) => w.name === item.notes)
-        const supply = await createSupply({
-          batch_id: batch.id,
-          account_id: batch.account_id,
-          warehouse_name: item.notes ?? '',
-          warehouse_id: wh?.id ?? null,
-          trip_id: null, trip_line_id: null,
-          created_by: userId || null,
-        })
-        const boxCount = item.boxes ?? 1
-        for (let i = 1; i <= boxCount; i++) {
-          const box = await createBox({ supply_id: supply.id, account_id: batch.account_id, box_number: i })
-          await closeBox(box.id)
-        }
-      }
-      if (newlySavedReadyBoxItems.length > 0) {
-        const freshSupplies = await fetchSupplies(batch.id)
-        setSupplies(freshSupplies)
-        rebuildSlotsFromSupplies(freshSupplies)
-      }
+      const updated = await Promise.all(toUpdate.map((it) => updateItem(it.id, {
+        qty_received: receptionDraft[it.id],
+      })))
+      await syncReadyBoxSupplyCounts([
+        ...readyBoxCountChanges,
+        ...newlySavedReadyBoxItems.map((item) => ({ item, boxes: item.boxes ?? 1 })),
+      ])
+      const finalItems = currentItems.map((it) => {
+        const u = updated.find((x) => x.id === it.id) ?? it
+        const boxChange = readyBoxCountChanges.find((change) => change.item.id === it.id)
+        return boxChange ? { ...u, boxes: boxChange.boxes } : u
+      })
 
       // 3. Применить отложенные удаления
       const currentPendingDelete = new Set(pendingDeleteIds)
       if (currentPendingDelete.size > 0) {
         for (const id of currentPendingDelete) {
           const itemToDelete = finalItems.find((i) => i.id === id)
-          await deleteItem(id)
           // Если «Готовые короба» — удалить соответствующую поставку
           if (itemToDelete?.product_name === 'Готовые короба' && itemToDelete.notes) {
             const matchingSupply = supplies.find((s) =>
-              s.warehouse_name === itemToDelete.notes &&
+              (s.source_item_id === itemToDelete.id || (!s.source_item_id && s.warehouse_name === itemToDelete.notes)) &&
               s.boxes.every((b) => b.items.length === 0)
             )
             if (matchingSupply) {
@@ -1563,6 +1658,7 @@ const BatchDetailModal = ({
               rebuildSlotsFromSupplies(updatedSupplies)
             }
           }
+          await deleteItem(id)
         }
         setPendingDeleteIds(new Set())
       }
@@ -1570,6 +1666,7 @@ const BatchDetailModal = ({
       const finalItemsAfterDelete = finalItems.filter((it) => !currentPendingDelete.has(it.id))
       setItems(finalItemsAfterDelete)
       onItemsChanged(finalItemsAfterDelete)
+      setReceptionBoxesDraft(Object.fromEntries(finalItemsAfterDelete.filter((it) => it.boxes != null).map((it) => [it.id, it.boxes ?? 0])))
       await recalcOtkDiscrepancy(finalItemsAfterDelete, otkLogs)
       setIsDirty(false)
     } catch (err) {
@@ -1697,11 +1794,10 @@ const BatchDetailModal = ({
               await addBoxItem({ box_id: createdBox.id, account_id: item.account_id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
             } catch { /* item-level error не останавливает остальные */ }
           }
-          if (box.status === 'closed') await closeBox(createdBox.id)
         } catch { /* box-level error не останавливает остальные короба */ }
       }
     }
-    // Также сохранить изменения статуса у уже существующих коробов (reopen/close)
+    // Также сохранить новые короба и позиции у существующих поставок.
     const savedSupplies = supplies.filter((s) => !s._local)
     for (const supply of savedSupplies) {
       for (const box of supply.boxes) {
@@ -1713,7 +1809,6 @@ const BatchDetailModal = ({
                 await addBoxItem({ box_id: createdBox.id, account_id: item.account_id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
               } catch { /* item-level error не останавливает остальные */ }
             }
-            if (box.status === 'closed') await closeBox(createdBox.id)
           } catch { /* box-level error не останавливает остальные короба */ }
         } else {
           for (const item of box.items.filter((i) => i._local)) {
@@ -1883,6 +1978,13 @@ const BatchDetailModal = ({
     setIsSavingStage(true)
     setError(null)
     try {
+      if (batch.current_stage === 'reception') {
+        const plannedReadyBoxChanges = items
+          .filter((it) => !pendingItemIds.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
+          .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
+        if (!confirmReadyBoxCountChanges(plannedReadyBoxChanges)) return
+      }
+
       for (const [id, val] of Object.entries(stageDraft)) {
         if (id.startsWith('_local_')) continue  // ещё не в DB
         if (batch.current_stage === 'packing') await updateItem(id, { qty_packed: val.qty, boxes: val.boxes ?? 0 })
@@ -1894,6 +1996,7 @@ const BatchDetailModal = ({
         // 1. Сохранить pending items в БД (inline, как handleSaveReceptionDraft)
         let savedItems = [...items]
         const currentPending = new Set(pendingItemIds)
+        let newlySavedReadyBoxItems: FulfillmentItem[] = []
         if (currentPending.size > 0) {
           const pendingList = savedItems.filter((it) => currentPending.has(it.id))
           const sList = await Promise.all(pendingList.map((it) => addItem({
@@ -1902,54 +2005,35 @@ const BatchDetailModal = ({
             qty_received: it.qty_received, qty_otk: null, qty_marked: null, qty_packed: it.qty_packed,
             boxes: it.boxes, notes: it.notes, sort_order: it.sort_order,
           })))
+          newlySavedReadyBoxItems = sList.filter((it) => it.product_name === 'Готовые короба' && (it.boxes ?? 0) > 0)
           const m = new Map(pendingList.map((p, i) => [p.id, sList[i]]))
           savedItems = savedItems.map((it) => m.get(it.id) ?? it)
           setPendingItemIds(new Set())
         }
-        const toUpd = savedItems.filter((it) => !currentPending.has(it.id) && receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received)
+        const readyBoxCountChanges = savedItems
+          .filter((it) => !currentPending.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
+          .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
+        const toUpd = savedItems.filter((it) =>
+          !currentPending.has(it.id) &&
+          receptionDraft[it.id] !== undefined &&
+          receptionDraft[it.id] !== it.qty_received
+        )
         if (toUpd.length > 0) {
-          const upd = await Promise.all(toUpd.map((it) => updateItem(it.id, { qty_received: receptionDraft[it.id] })))
+          const upd = await Promise.all(toUpd.map((it) => updateItem(it.id, {
+            qty_received: receptionDraft[it.id],
+          })))
           savedItems = savedItems.map((it) => { const u = upd.find((x) => x.id === it.id); return u ?? it })
         }
+        await syncReadyBoxSupplyCounts([
+          ...readyBoxCountChanges,
+          ...newlySavedReadyBoxItems.map((item) => ({ item, boxes: item.boxes ?? 1 })),
+        ])
+        savedItems = savedItems.map((it) => {
+          const boxChange = readyBoxCountChanges.find((change) => change.item.id === it.id)
+          return boxChange ? { ...it, boxes: boxChange.boxes } : it
+        })
 
-        // 2. Создать поставки для «Готовые короба» items
-        const readyBoxItems = savedItems.filter((it) => it.product_name === 'Готовые короба' && (it.boxes ?? 0) > 0)
-        for (const item of readyBoxItems) {
-          const wh = warehouses.find((w) => w.name === item.notes)
-          const supply = await createSupply({
-            batch_id: batch.id,
-            account_id: batch.account_id,
-            warehouse_name: item.notes ?? '',
-            warehouse_id: wh?.id ?? null,
-            trip_id: null, trip_line_id: null,
-            created_by: userId || null,
-          })
-          const boxCount = item.boxes ?? 1
-          for (let i = 1; i <= boxCount; i++) {
-            const box = await createBox({ supply_id: supply.id, account_id: batch.account_id, box_number: i })
-            await closeBox(box.id)
-          }
-        }
-
-        // 3. Если ВСЕ items — «Готовые короба» → сразу в Логистику
-        if (readyBoxItems.length > 0 && readyBoxItems.length === savedItems.length) {
-          if (supabase) {
-            await (supabase as any).from('fulfillment_stage_logs').insert({ batch_id: batch.id, stage: 'reception' })
-          }
-          const updated = await updateBatch(batch.id, { current_stage: 'logistics', status: 'active' })
-          const newBatch = { ...batch, ...updated }
-          setBatch(newBatch)
-          onBatchUpdated(updated)
-          setItems(savedItems)
-          onItemsChanged(savedItems)
-          setIsDirty(false)
-          const freshSupplies = await fetchSupplies(batch.id)
-          setSupplies(freshSupplies)
-          rebuildSlotsFromSupplies(freshSupplies)
-          return
-        }
-
-        // 4. Смешанная партия → обновляем state и продолжаем обычный advanceStage
+        // Маршрут определяют только включённые этапы; готовые короба ничего не перепрыгивают.
         setItems(savedItems)
         onItemsChanged(savedItems)
         setIsDirty(false)
@@ -2204,10 +2288,7 @@ const BatchDetailModal = ({
     const labelsQty = markingLabelsAll
       ? (qty > 0 ? qty : null)
       : (Number(markingLabelsQty) > 0 ? Number(markingLabelsQty) : null)
-    if (!markingBarcode.trim()) return
     if (qty <= 0 && qtyDefect <= 0) return
-    const hasBarcodeItems = items.some((it) => it.barcode && it.barcode.trim() !== '')
-    if (hasBarcodeItems && !markingItemId) return
     setMarkingBuffer((prev) => [...prev, {
       tempId: crypto.randomUUID(),
       performer_user_id: markingPerformerId || null,
@@ -2217,17 +2298,14 @@ const BatchDetailModal = ({
       qty_defect: qtyDefect,
       notes: markingNotes.trim(),
       photo_files: markingPhotoFiles,
-      barcode: markingBarcode.trim() || null,
-      item_id: markingItemId,
-      item_name: markingItemName,
+      barcode: null,
+      item_id: null,
+      item_name: null,
       consumable_id: markingConsumableId || null,
       labels_qty: labelsQty,
       labels_all: markingLabelsAll,
     }])
     setIsDirty(true)
-    setMarkingBarcode('')
-    setMarkingItemId(null)
-    setMarkingItemName(null)
     setMarkingQty('')
     setMarkingDefect('')
     setMarkingLabelsQty('')
@@ -3415,7 +3493,11 @@ const BatchDetailModal = ({
                           </td>
                           {items.some((i) => i.boxes) && (
                             <td className="px-3 py-2.5 text-center text-sm">
-                              {it.boxes
+                              {it.product_name === 'Готовые короба' && canManageStageData
+                                ? <input type="number" min={1} value={receptionBoxesDraft[it.id] ?? it.boxes ?? 1}
+                                    onChange={(e) => handleUpdateReadyBoxesDraft(it.id, Number(e.target.value))}
+                                    className="w-16 rounded-lg border border-orange-200 bg-white px-2 py-1 text-center text-sm font-medium text-orange-600 outline-none focus:border-orange-400" />
+                                : it.boxes
                                 ? <span className="font-medium text-orange-600">{it.boxes}</span>
                                 : <span className="text-slate-300">—</span>}
                             </td>
@@ -3446,7 +3528,7 @@ const BatchDetailModal = ({
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, it) => s + (receptionDraft[it.id] ?? it.qty_received ?? 0), 0)}</td>
-                        {items.some((i) => i.boxes) && <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, i) => s + (i.boxes ?? 0), 0) || '—'}</td>}
+                        {items.some((i) => i.boxes) && <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, i) => s + (receptionBoxesDraft[i.id] ?? i.boxes ?? 0), 0) || '—'}</td>}
                         {items.some((i) => i.notes) && <td />}
                         {canManageStageData && <td />}
                       </tr>
@@ -3859,67 +3941,6 @@ const BatchDetailModal = ({
                         </button>
                       </div>
                       <div className="space-y-3 p-5">
-                        {/* ШК — обязательное */}
-                        <div>
-                          <label className="mb-1 block text-xs font-medium text-slate-500">Штрихкод <span className="text-red-400">*</span></label>
-                          <div className="flex items-center gap-2">
-                            <div className="relative flex-1">
-                              <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="1.75">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 13.5 9.375v-4.5Z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75ZM6.75 16.5h.75v.75h-.75v-.75ZM16.5 6.75h.75v.75h-.75v-.75ZM13.5 13.5h.75v.75h-.75v-.75ZM13.5 19.5h.75v.75h-.75v-.75ZM19.5 13.5h.75v.75h-.75v-.75ZM19.5 19.5h.75v.75h-.75v-.75ZM16.5 16.5h.75v.75h-.75v-.75Z" />
-                              </svg>
-                              <input
-                                ref={markingBarcodeRef}
-                                type="text"
-                                placeholder="Сканировать ШК…"
-                                value={markingBarcode}
-                                onChange={(e) => {
-                                  const v = e.target.value
-                                  setMarkingBarcode(v)
-                                  const found = items.find((it) => it.barcode === v.trim())
-                                  if (found) { setMarkingItemId(found.id); setMarkingItemName(found.product_name ?? found.barcode) }
-                                  else { setMarkingItemId(null); setMarkingItemName(null) }
-                                }}
-                                onKeyDown={(e) => { if (e.key === 'Enter' && markingBarcode.trim()) { e.preventDefault(); (e.target as HTMLElement).closest('.marking-modal-form')?.querySelector<HTMLInputElement>('.marking-qty-input')?.focus() } }}
-                                className={`w-full rounded-xl border bg-white pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${markingBarcode.trim() ? 'border-slate-200' : 'border-red-300 focus:ring-red-400'}`}
-                              />
-                            </div>
-                            <button type="button" title="Сканировать камерой" onClick={() => { setMarkingCameraOpen((p) => !p); setMarkingCameraError(null) }}
-                              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors ${markingCameraOpen ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-blue-500'}`}>
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className="h-5 w-5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
-                              </svg>
-                            </button>
-                          </div>
-                          {markingBarcode.trim() && (
-                            (() => {
-                              const hasBarcodeItems = items.some((it) => it.barcode && it.barcode.trim() !== '')
-                              if (markingItemName) {
-                                return (
-                                  <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-emerald-50 border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-700">
-                                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" /></svg>
-                                    {markingItemName}
-                                  </span>
-                                )
-                              }
-                              if (hasBarcodeItems) {
-                                return (
-                                  <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-red-50 border border-red-200 px-2 py-1 text-xs font-medium text-red-700">
-                                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clipRule="evenodd" /></svg>
-                                    Такой баркод не найден в данной партии
-                                  </span>
-                                )
-                              }
-                              return (
-                                <span className="mt-1.5 flex items-center gap-1 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 text-xs font-medium text-amber-700">
-                                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" /></svg>
-                                  Не найден в партии
-                                </span>
-                              )
-                            })()
-                          )}
-                        </div>
                         {/* Исполнитель */}
                         {canOtkAssign && markingPerformers.length > 0 ? (
                           <div>
@@ -4024,7 +4045,7 @@ const BatchDetailModal = ({
                           Отмена
                         </button>
                         <button type="button" onClick={handleAddMarkingLog}
-                          disabled={isAddingMarking || !markingBarcode.trim() || ((!markingQty || Number(markingQty) <= 0) && (!markingDefect || Number(markingDefect) <= 0)) || (items.some((it) => it.barcode && it.barcode.trim() !== '') && markingBarcode.trim() !== '' && !markingItemId)}
+                          disabled={isAddingMarking || ((!markingQty || Number(markingQty) <= 0) && (!markingDefect || Number(markingDefect) <= 0))}
                           className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                           {isAddingMarking ? 'Сохранение…' : '+ Добавить'}
                         </button>
@@ -5165,10 +5186,9 @@ const BatchDetailModal = ({
                       {supplies.map((supply) => {
                         const totalBoxes = supply.boxes.length
                         const totalItems = supply.boxes.reduce((s, b) => s + b.items.reduce((ss, i) => ss + i.qty, 0), 0)
-                        const closedBoxes = supply.boxes.filter((b) => b.status === 'closed').length
                         const isActiveStage = batch.current_stage === 'packing'
-                        const isReadyBoxSupply = items.some((i) => i.product_name === 'Готовые короба' && i.notes === supply.warehouse_name)
-                        const canDeleteCard = canManageStageData && (isActiveStage || canSupplyDeleteLocked) && !isReadyBoxSupply
+                        const readyBoxSupply = isReadyBoxSupply(supply)
+                        const canDeleteCard = canManageStageData && (isActiveStage || canSupplyDeleteLocked) && !readyBoxSupply
                         const linkedLine = supply.trip_line_id
                           ? trips.flatMap((t) => t.lines).find((l) => l.id === supply.trip_line_id)
                           : null
@@ -5177,19 +5197,27 @@ const BatchDetailModal = ({
                             <button
                               type="button"
                               onClick={() => setActiveSupplyId(supply.id)}
-                              className="relative flex w-full flex-col items-start gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                              className="relative flex w-full flex-col items-start gap-1 rounded-2xl border border-slate-200 bg-white px-3 pb-10 pt-3 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
                             >
                               {supply._local && (
                                 <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-amber-400" title="сохранение..." />
                               )}
                               <p className="truncate text-xs font-bold text-blue-600 leading-tight w-full pr-6">{supply.warehouse_name ?? <span className="text-slate-400 font-normal italic">склад не указан</span>}</p>
                               <p className="text-xs text-slate-400">{totalBoxes} кор. · {totalItems} ед.</p>
-                              {totalBoxes > 0 && (
-                                <p className="text-xs text-slate-400">{closedBoxes}/{totalBoxes} закрыто</p>
-                              )}
                               {linkedLine && (
                                 <p className="text-xs font-medium text-emerald-600">П-{linkedLine.shipment_number}</p>
                               )}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={totalItems === 0}
+                              onClick={() => downloadSupplyBoxesExcel(supply)}
+                              className="absolute bottom-2 left-2 flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent transition-colors"
+                              title={totalItems === 0 ? 'В коробах нет товаров' : 'Скачать все короба поставки'}
+                            >
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                              </svg>
                             </button>
                             {canDeleteCard && (
                               <button
@@ -5213,7 +5241,7 @@ const BatchDetailModal = ({
                     if (!supply) return null
                     const totalBoxes = supply.boxes.length
                     const nextBoxNum = totalBoxes + 1
-                    const isReadyBoxSupply = items.some((i) => i.product_name === 'Готовые короба' && i.notes === supply.warehouse_name)
+                    const readyBoxSupply = isReadyBoxSupply(supply)
                     return (
                       <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onClick={() => setActiveSupplyId(null)}>
                         <div className="relative flex h-[90vh] w-[80%] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -5228,7 +5256,7 @@ const BatchDetailModal = ({
                             <div className="flex items-center gap-3">
                               {(() => {
                                 const isActiveStage = batch.current_stage === 'packing'
-                                const canDelete = canManageStageData && (isActiveStage || canSupplyDeleteLocked) && !isReadyBoxSupply
+                                const canDelete = canManageStageData && (isActiveStage || canSupplyDeleteLocked) && !readyBoxSupply
                                 return canDelete ? (
                                   <button
                                     onClick={() => setDeleteSupplyConfirm(supply.id)}
@@ -5259,7 +5287,6 @@ const BatchDetailModal = ({
                                   >
                                     Короб #{box.box_number}
                                     {box.items.length > 0 && <span className={`ml-1 ${isActive ? 'text-blue-200' : 'text-slate-400'}`}>· {boxTotal} ед.</span>}
-                                    {box.status === 'closed' && <span className={`ml-1 ${isActive ? 'text-blue-200' : 'text-green-500'}`}>✓</span>}
                                   </button>
                                 )
                               })}
@@ -5275,43 +5302,19 @@ const BatchDetailModal = ({
                             ) : (() => {
                               const box = supply.boxes.find((b) => b.id === packingOpenBoxId) ?? supply.boxes[0]
                               if (!box) return null
-                              const isOpen = box.status === 'open'
                               const boxTotal = box.items.reduce((s, i) => s + i.qty, 0)
                               return (
                                 <div className="flex flex-col h-full">
                                   {/* Строка управления коробом */}
                                   <div className="flex items-center gap-3 px-5 border-b border-slate-100 bg-slate-50 min-h-[44px]">
-                                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isOpen ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
-                                      {isOpen ? 'открыт' : 'закрыт'}
-                                    </span>
                                     <span className="text-xs text-slate-400">{box.items.length} позиций · {boxTotal} ед.</span>
                                     <div className="flex-1" />
-                                    {/* Экспорт баркодов этой поставки в Excel */}
-                                    {supply.boxes.some((b) => b.items.length > 0) && (
+                                    {/* Экспорт содержимого активного короба в Excel */}
+                                    {box.items.length > 0 && (
                                       <button
                                         type="button"
-                                        title="Скачать Excel: баркод → номер короба"
-                                        onClick={() => {
-                                          import('xlsx').then((XLSX) => {
-                                            const data: (string | number)[][] = [['Баркод', 'Короб']]
-                                            supply.boxes.forEach((b) => b.items.forEach((item) => {
-                                              data.push([item.barcode, b.box_number])
-                                            }))
-                                            const ws = XLSX.utils.aoa_to_sheet(data)
-                                            // авто-ширина колонок по максимальному содержимому
-                                            const colWidths: number[] = []
-                                            data.forEach((row) => {
-                                              row.forEach((cell, i) => {
-                                                const len = String(cell).length + 2
-                                                colWidths[i] = colWidths[i] !== undefined ? Math.max(colWidths[i], len) : len
-                                              })
-                                            })
-                                            ws['!cols'] = colWidths.map((w) => ({ wch: w }))
-                                            const wb = XLSX.utils.book_new()
-                                            XLSX.utils.book_append_sheet(wb, ws, 'Коробки')
-                                            XLSX.writeFile(wb, `${supply.warehouse_name}_коробки.xlsx`)
-                                          })
-                                        }}
+                                        title="Скачать Excel этого короба"
+                                        onClick={() => downloadSingleBoxExcel(supply, box)}
                                         className="flex items-center rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
                                       >
                                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
@@ -5320,7 +5323,7 @@ const BatchDetailModal = ({
                                       </button>
                                     )}
                                     {/* Авто-добавление (если есть право) */}
-                                    {canPackingAutoAdd && canManageStageData && isOpen && (
+                                    {canPackingAutoAdd && canManageStageData && (
                                       <button
                                         type="button"
                                         onClick={() => setPackingAutoAdd((v) => !v)}
@@ -5335,29 +5338,7 @@ const BatchDetailModal = ({
                                         Авто
                                       </button>
                                     )}
-                                    {canManageStageData && isOpen && (
-                                      <button
-                                        onClick={() => {
-                                          setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, status: 'closed' } : b) } : s))
-                                          setIsDirty(true)
-                                        }}
-                                        className="text-xs font-medium text-green-600 hover:text-green-800"
-                                      >
-                                        Закрыть ✓
-                                      </button>
-                                    )}
-                                    {canManageStageData && !isOpen && !isReadyBoxSupply && (
-                                      <button
-                                        onClick={() => {
-                                          if (!box._local) void reopenBox(box.id)
-                                          setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, status: 'open' } : b) } : s))
-                                        }}
-                                        className="text-xs text-slate-500 hover:text-slate-700 font-medium"
-                                      >
-                                        Открыть повторно
-                                      </button>
-                                    )}
-                                    {canManageStageData && !isReadyBoxSupply && (
+                                    {canManageStageData && !readyBoxSupply && (
                                       <button
                                         onClick={() => setDeleteBoxConfirm({ supplyId: supply.id, boxId: box.id })}
                                         className="text-xs text-red-400 hover:text-red-600"
@@ -5423,7 +5404,7 @@ const BatchDetailModal = ({
                                               </div>
                                               <div className="flex items-center gap-2 flex-shrink-0 pt-0.5">
                                                 <span className="text-slate-700 font-medium text-xs">{item.qty}&nbsp;ед.</span>
-                                                {canManageStageData && isOpen && (
+                                                {canManageStageData && (
                                                   <button
                                                     onClick={async () => {
                                                       // не удаляем оптимистичные ID — они сами обновятся или откатятся
@@ -5442,7 +5423,7 @@ const BatchDetailModal = ({
                                   </div>
 
                                   {/* Форма добавления позиции (только открытый короб) */}
-                                  {canManageStageData && isOpen && (
+                                  {canManageStageData && (
                                     <div className="border-t border-slate-100 px-5 py-4 space-y-3">
                                       <div className="flex items-center gap-2">
                                         <div className="relative flex-1">
@@ -5531,7 +5512,7 @@ const BatchDetailModal = ({
                           </div>
 
                           {/* Подвал: добавить короб */}
-                          {canManageStageData && (
+                          {canManageStageData && !readyBoxSupply && (
                             <div className="border-t border-slate-100 px-5 py-3">
                               <button
                                 onClick={() => { setAddBoxNum(String(nextBoxNum)); setAddBoxNumTo(''); setAddBoxQty(''); setAddBoxMode('single'); setAddBoxModal({ supplyId: supply.id, nextNum: nextBoxNum }) }}
@@ -7037,20 +7018,6 @@ const BatchDetailModal = ({
                           }
                           setMarkingEditScanTarget(null)
                           setMarkingCameraOpen(false)
-                        } else {
-                          setMarkingBarcode(raw)
-                          const found = markingItemsRef.current.find((it) => it.barcode === raw)
-                          if (found) {
-                            setMarkingItemId(found.id)
-                            setMarkingItemName(found.product_name ?? found.barcode)
-                          } else {
-                            setMarkingItemId(null)
-                            setMarkingItemName(null)
-                          }
-                          setMarkingCameraOpen(false)
-                          setTimeout(() => {
-                            document.querySelector<HTMLInputElement>('.marking-qty-input')?.focus()
-                          }, 80)
                         }
                       }}
                       className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
