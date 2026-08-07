@@ -5188,7 +5188,7 @@ const BatchDetailModal = ({
                     )}
                   </div>
 
-                  {/* Список поставок — grid 6 колонок */}
+                  {/* Список поставок */}
                   {isLoadingSupplies ? (
                     <p className="text-center text-sm text-slate-400 py-4">Загрузка поставок…</p>
                   ) : supplies.length === 0 ? (
@@ -5196,7 +5196,7 @@ const BatchDetailModal = ({
                       Поставок ещё нет. Создайте первую поставку выше.
                     </div>
                   ) : (
-                    <div className="grid grid-cols-6 gap-2">
+                    <div className="grid grid-cols-2 items-stretch gap-2 sm:grid-cols-3 xl:grid-cols-6">
                       {supplies.map((supply) => {
                         const totalBoxes = supply.boxes.length
                         const totalItems = supply.boxes.reduce((s, b) => s + b.items.reduce((ss, i) => ss + i.qty, 0), 0)
@@ -5207,32 +5207,37 @@ const BatchDetailModal = ({
                           ? trips.flatMap((t) => t.lines).find((l) => l.id === supply.trip_line_id)
                           : null
                         return (
-                          <div key={supply.id} className="relative">
+                          <div
+                            key={supply.id}
+                            className="group relative flex h-full min-h-[118px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-colors hover:border-blue-300"
+                          >
                             <button
                               type="button"
                               onClick={() => setActiveSupplyId(supply.id)}
-                              className="relative flex w-full flex-col items-start gap-1 rounded-2xl border border-slate-200 bg-white px-3 pb-10 pt-3 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                              className="relative flex w-full flex-1 flex-col items-start gap-1 px-3 pb-1 pt-3 text-left transition-colors group-hover:bg-blue-50/40"
                             >
                               {supply._local && (
                                 <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-amber-400" title="сохранение..." />
                               )}
                               <p className="truncate text-xs font-bold text-blue-600 leading-tight w-full pr-6">{supply.warehouse_name ?? <span className="text-slate-400 font-normal italic">склад не указан</span>}</p>
                               <p className="text-xs text-slate-400">{totalBoxes} кор. · {totalItems} ед.</p>
-                              {linkedLine && (
-                                <p className="text-xs font-medium text-emerald-600">П-{linkedLine.shipment_number}</p>
-                              )}
+                              <p className={`text-xs font-medium ${linkedLine ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                {linkedLine ? `Поставка П-${linkedLine.shipment_number}` : 'Не передана в логистику'}
+                              </p>
                             </button>
-                            <button
-                              type="button"
-                              disabled={totalItems === 0}
-                              onClick={() => downloadSupplyBoxesExcel(supply)}
-                              className="absolute bottom-2 left-2 flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent transition-colors"
-                              title={totalItems === 0 ? 'В коробах нет товаров' : 'Скачать все короба поставки'}
-                            >
-                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
-                              </svg>
-                            </button>
+                            <div className="flex h-9 flex-shrink-0 items-end px-2 pb-2">
+                              <button
+                                type="button"
+                                disabled={totalItems === 0}
+                                onClick={() => downloadSupplyBoxesExcel(supply)}
+                                className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
+                                title={totalItems === 0 ? 'В коробах нет товаров' : 'Скачать все короба поставки'}
+                              >
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                                </svg>
+                              </button>
+                            </div>
                             {canDeleteCard && (
                               <button
                                 type="button"
