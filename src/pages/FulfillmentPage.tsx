@@ -205,7 +205,7 @@ const getStoredBoxExportColumns = (): OptionalBoxExportColumnKey[] => {
   }
 }
 
-const writeBoxExportWorkbook = async (data: (string | number)[][], filename: string) => {
+const createBoxExportWorkbook = async (data: (string | number)[][]) => {
   const XLSX = await import('xlsx')
   const ws = XLSX.utils.aoa_to_sheet(data)
   const colWidths: number[] = []
@@ -218,7 +218,17 @@ const writeBoxExportWorkbook = async (data: (string | number)[][], filename: str
   ws['!cols'] = colWidths.map((width) => ({ wch: width }))
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Коробки')
+  return { XLSX, wb }
+}
+
+const writeBoxExportWorkbook = async (data: (string | number)[][], filename: string) => {
+  const { XLSX, wb } = await createBoxExportWorkbook(data)
   XLSX.writeFile(wb, filename)
+}
+
+const createBoxExportWorkbookBytes = async (data: (string | number)[][]): Promise<ArrayBuffer> => {
+  const { XLSX, wb } = await createBoxExportWorkbook(data)
+  return XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
 }
 
 const buildBoxExportRows = async ({
@@ -268,6 +278,9 @@ const buildBoxExportRows = async ({
   return data
 }
 
+const safeBoxExportFilenamePart = (value: string) =>
+  (value || 'unknown').trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').replace(/[. ]+$/g, '') || 'unknown'
+
 const getBoxExportFilename = ({
   accountShortId,
   batchShortId,
@@ -281,12 +294,37 @@ const getBoxExportFilename = ({
   warehouseName: string
   boxNumber?: number
 }) => {
-  const safePart = (value: string) => (value || 'unknown').trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').replace(/[. ]+$/g, '') || 'unknown'
   const date = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
-  const parts = [`C${accountShortId ?? 'unknown'}`, `P${batchShortId ?? 'unknown'}`, safePart(storeName ?? 'unknown'), safePart(warehouseName)]
+  const parts = [`C${accountShortId ?? 'unknown'}`, `P${batchShortId ?? 'unknown'}`, safeBoxExportFilenamePart(storeName ?? 'unknown'), safeBoxExportFilenamePart(warehouseName)]
   if (boxNumber != null) parts.push(`BOX${boxNumber}`)
   parts.push(date)
   return `${parts.join('_')}.xlsx`
+}
+
+const getBatchBoxExportArchiveFilename = ({
+  accountShortId,
+  batchShortId,
+  storeName,
+  mode,
+}: {
+  accountShortId: number | null
+  batchShortId: number | null
+  storeName?: string | null
+  mode: 'ALL' | 'CUSTOM'
+}) => {
+  const date = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+  return `C${accountShortId ?? 'unknown'}_P${batchShortId ?? 'unknown'}_${safeBoxExportFilenamePart(storeName ?? 'unknown')}_${mode}_${date}.zip`
+}
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -8582,7 +8620,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
   const [batchSearch, setBatchSearch] = useState('')
   const [isPreparingBatchExportId, setIsPreparingBatchExportId] = useState<string | null>(null)
   const [batchExportSource, setBatchExportSource] = useState<{ batch: FulfillmentBatchWithItems; supplies: FulfillmentSupplyWithBoxes[] } | null>(null)
-  const [batchExportTarget, setBatchExportTarget] = useState<{ batch: FulfillmentBatchWithItems; supply: FulfillmentSupplyWithBoxes } | null>(null)
+  const [batchExportSelectedSupplyIds, setBatchExportSelectedSupplyIds] = useState<string[]>([])
+  const [batchExportTarget, setBatchExportTarget] = useState<{ batch: FulfillmentBatchWithItems; supplies: FulfillmentSupplyWithBoxes[]; archiveMode: 'ALL' | 'CUSTOM' | null } | null>(null)
   const [batchExportSelectedColumns, setBatchExportSelectedColumns] = useState<OptionalBoxExportColumnKey[]>(getStoredBoxExportColumns)
   const [isExportingBatchBoxes, setIsExportingBatchBoxes] = useState(false)
   const [batchExportError, setBatchExportError] = useState<string | null>(null)
@@ -8669,11 +8708,15 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     finally { setIsOpeningDetail(null) }
   }
 
-  const openBatchExportColumns = (batch: FulfillmentBatchWithItems, supply: FulfillmentSupplyWithBoxes) => {
+  const openBatchExportColumns = (
+    batch: FulfillmentBatchWithItems,
+    supplies: FulfillmentSupplyWithBoxes[],
+    archiveMode: 'ALL' | 'CUSTOM' | null,
+  ) => {
     setBatchExportSource(null)
     setBatchExportSelectedColumns(getStoredBoxExportColumns())
     setBatchExportError(null)
-    setBatchExportTarget({ batch, supply })
+    setBatchExportTarget({ batch, supplies, archiveMode })
   }
 
   const handleOpenBatchBoxesExport = async (batch: FulfillmentBatch) => {
@@ -8685,14 +8728,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
         fetchBatchWithItems(batch.id),
         fetchSupplies(batch.id),
       ])
-      const filledSupplies = supplies.filter((supply) => supply.boxes.some((box) => box.items.length > 0))
-      if (filledSupplies.length === 0) {
-        setBatchExportSource({ batch: fullBatch, supplies: [] })
-      } else if (filledSupplies.length === 1) {
-        openBatchExportColumns(fullBatch, filledSupplies[0])
-      } else {
-        setBatchExportSource({ batch: fullBatch, supplies: filledSupplies })
-      }
+      setBatchExportSelectedSupplyIds([])
+      setBatchExportSource({ batch: fullBatch, supplies })
     } catch (error) {
       setBatchExportError(error instanceof Error ? error.message : 'Не удалось загрузить короба партии')
       setBatchExportSource({ batch: { ...batch, items: [] }, supplies: [] })
@@ -8701,26 +8738,97 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     }
   }
 
+  const isBatchExportSupplyEmpty = (supply: FulfillmentSupplyWithBoxes) =>
+    !supply.boxes.some((box) => box.items.length > 0)
+
+  const toggleBatchExportSupply = (supplyId: string) => {
+    setBatchExportSelectedSupplyIds((previous) => previous.includes(supplyId)
+      ? previous.filter((id) => id !== supplyId)
+      : [...previous, supplyId])
+    setBatchExportError(null)
+  }
+
+  const toggleAllBatchExportSupplies = () => {
+    if (!batchExportSource) return
+    const allIds = batchExportSource.supplies.map((supply) => supply.id)
+    const allSelected = allIds.length > 0 && allIds.every((id) => batchExportSelectedSupplyIds.includes(id))
+    setBatchExportSelectedSupplyIds(allSelected ? [] : allIds)
+    setBatchExportError(null)
+  }
+
+  const continueBatchExport = () => {
+    if (!batchExportSource) return
+    const selected = batchExportSource.supplies.filter((supply) => batchExportSelectedSupplyIds.includes(supply.id))
+    const emptySelected = selected.filter(isBatchExportSupplyEmpty)
+    if (selected.length === 0) {
+      setBatchExportError('Выберите хотя бы одну поставку')
+      return
+    }
+    if (emptySelected.length > 0) {
+      setBatchExportError('У выбранных поставок отсутствуют данные коробов')
+      return
+    }
+    const allSelected = selected.length === batchExportSource.supplies.length
+    openBatchExportColumns(
+      batchExportSource.batch,
+      selected,
+      selected.length === 1 ? null : allSelected ? 'ALL' : 'CUSTOM',
+    )
+  }
+
   const handleDownloadBatchBoxes = async () => {
     if (!batchExportTarget || isExportingBatchBoxes) return
     setIsExportingBatchBoxes(true)
     setBatchExportError(null)
     try {
-      const { batch, supply } = batchExportTarget
-      const data = await buildBoxExportRows({
-        accountId: batch.account_id,
-        storeId: batch.store_id,
-        batchItems: batch.items,
-        boxes: supply.boxes,
-        optionalColumnKeys: batchExportSelectedColumns,
-      })
+      const { batch, supplies, archiveMode } = batchExportTarget
       const store = stores.find((candidate) => candidate.id === batch.store_id)
-      await writeBoxExportWorkbook(data, getBoxExportFilename({
-        accountShortId,
-        batchShortId: batch.short_id,
-        storeName: store?.name,
-        warehouseName: supply.warehouse_name,
-      }))
+      if (supplies.length === 1) {
+        const supply = supplies[0]
+        const data = await buildBoxExportRows({
+          accountId: batch.account_id,
+          storeId: batch.store_id,
+          batchItems: batch.items,
+          boxes: supply.boxes,
+          optionalColumnKeys: batchExportSelectedColumns,
+        })
+        await writeBoxExportWorkbook(data, getBoxExportFilename({
+          accountShortId,
+          batchShortId: batch.short_id,
+          storeName: store?.name,
+          warehouseName: supply.warehouse_name,
+        }))
+      } else {
+        const { default: JSZip } = await import('jszip')
+        const zip = new JSZip()
+        const usedFilenames = new Map<string, number>()
+        await Promise.all(supplies.map(async (supply) => {
+          const data = await buildBoxExportRows({
+            accountId: batch.account_id,
+            storeId: batch.store_id,
+            batchItems: batch.items,
+            boxes: supply.boxes,
+            optionalColumnKeys: batchExportSelectedColumns,
+          })
+          const baseFilename = getBoxExportFilename({
+            accountShortId,
+            batchShortId: batch.short_id,
+            storeName: store?.name,
+            warehouseName: supply.warehouse_name,
+          })
+          const duplicateNumber = (usedFilenames.get(baseFilename) ?? 0) + 1
+          usedFilenames.set(baseFilename, duplicateNumber)
+          const filename = duplicateNumber === 1 ? baseFilename : baseFilename.replace(/\.xlsx$/i, `_${duplicateNumber}.xlsx`)
+          zip.file(filename, await createBoxExportWorkbookBytes(data))
+        }))
+        const archive = await zip.generateAsync({ type: 'blob' })
+        downloadBlob(archive, getBatchBoxExportArchiveFilename({
+          accountShortId,
+          batchShortId: batch.short_id,
+          storeName: store?.name,
+          mode: archiveMode ?? 'CUSTOM',
+        }))
+      }
       setBatchExportTarget(null)
     } catch (error) {
       setBatchExportError(error instanceof Error ? error.message : 'Не удалось скачать Excel')
@@ -8879,6 +8987,13 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     return STAGE_LABELS[b.current_stage]
   }
 
+  const selectedBatchExportSupplies = batchExportSource?.supplies.filter((supply) => batchExportSelectedSupplyIds.includes(supply.id)) ?? []
+  const selectedEmptyBatchExportSupplies = selectedBatchExportSupplies.filter(isBatchExportSupplyEmpty)
+  const allBatchExportSuppliesSelected = !!batchExportSource
+    && batchExportSource.supplies.length > 0
+    && batchExportSource.supplies.every((supply) => batchExportSelectedSupplyIds.includes(supply.id))
+  const canContinueBatchExport = selectedBatchExportSupplies.length > 0 && selectedEmptyBatchExportSupplies.length === 0
+
   return (
     <div className="space-y-4">
       {/* Модалки */}
@@ -8887,40 +9002,99 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
       {settingsOpen && <SettingsModal settings={settings} accountId={accountId} accountName={accountName} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
       {batchExportSource && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onClick={() => setBatchExportSource(null)}>
-          <div className="w-full max-w-md space-y-4 rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="w-full max-w-xl space-y-4 rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-base font-semibold text-slate-800">
-                  {batchExportSource.supplies.length > 0 ? 'Выберите поставку' : 'Нет данных для скачивания'}
+                <p className="text-base font-semibold text-slate-800">Выберите поставки</p>
+                <p className="mt-0.5 flex items-baseline gap-1.5 text-xs">
+                  <span className="font-bold text-slate-900">
+                    {batchExportSource.batch.short_id != null ? `P-${batchExportSource.batch.short_id}` : '—'}
+                  </span>
+                  <span className="text-slate-400">{batchExportSource.batch.name}</span>
                 </p>
-                <p className="mt-0.5 text-xs text-slate-400">{batchExportSource.batch.name}</p>
               </div>
               <button type="button" onClick={() => setBatchExportSource(null)} className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100" aria-label="Закрыть">
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
               </button>
             </div>
             {batchExportSource.supplies.length > 0 ? (
-              <div className="space-y-2">
-                {batchExportSource.supplies.map((supply) => {
-                  const boxes = supply.boxes.length
-                  const units = supply.boxes.reduce((sum, box) => sum + box.items.reduce((boxSum, item) => boxSum + item.qty, 0), 0)
-                  return (
-                    <button
-                      key={supply.id}
-                      type="button"
-                      onClick={() => openBatchExportColumns(batchExportSource.batch, supply)}
-                      className="flex w-full cursor-pointer items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60"
-                    >
-                      <span className="font-medium text-slate-700">{supply.warehouse_name}</span>
-                      <span className="text-xs text-slate-400">{boxes} кор. · {units} ед.</span>
-                    </button>
-                  )
-                })}
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={toggleAllBatchExportSupplies}
+                  className={`flex w-full cursor-pointer items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
+                    allBatchExportSuppliesSelected && selectedEmptyBatchExportSupplies.length > 0
+                      ? 'border-red-300 bg-red-50 text-red-700'
+                      : allBatchExportSuppliesSelected
+                        ? 'border-blue-300 bg-blue-50 text-blue-700'
+                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50/60'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 font-semibold">
+                    <span className={`flex h-4 w-4 items-center justify-center rounded border ${allBatchExportSuppliesSelected ? selectedEmptyBatchExportSupplies.length > 0 ? 'border-red-500 bg-red-500 text-white' : 'border-blue-500 bg-blue-500 text-white' : 'border-slate-300 bg-white'}`}>
+                      {allBatchExportSuppliesSelected && <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="m2 6 2.5 2.5L10 3"/></svg>}
+                    </span>
+                    Все поставки
+                  </span>
+                  <span className="text-xs font-medium">ALL · {batchExportSource.supplies.length}</span>
+                </button>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {batchExportSource.supplies.map((supply) => {
+                    const boxes = supply.boxes.length
+                    const units = supply.boxes.reduce((sum, box) => sum + box.items.reduce((boxSum, item) => boxSum + item.qty, 0), 0)
+                    const selected = batchExportSelectedSupplyIds.includes(supply.id)
+                    const empty = isBatchExportSupplyEmpty(supply)
+                    return (
+                      <button
+                        key={supply.id}
+                        type="button"
+                        onClick={() => toggleBatchExportSupply(supply.id)}
+                        className={`flex min-h-16 w-full cursor-pointer items-start gap-2 rounded-2xl border px-3 py-2.5 text-left transition ${
+                          selected && empty
+                            ? 'border-red-300 bg-red-50 text-red-700'
+                            : selected
+                              ? 'border-blue-300 bg-blue-50 text-blue-700'
+                              : 'border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50/60'
+                        }`}
+                      >
+                        <span className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${selected ? empty ? 'border-red-500 bg-red-500 text-white' : 'border-blue-500 bg-blue-500 text-white' : 'border-slate-300 bg-white'}`}>
+                          {selected && <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="m2 6 2.5 2.5L10 3"/></svg>}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">{supply.warehouse_name}</span>
+                          <span className={`mt-0.5 block text-xs ${selected && empty ? 'font-medium text-red-600' : 'text-slate-400'}`}>
+                            {selected && empty ? 'Данные коробов отсутствуют' : `${boxes} кор. · ${units} ед.`}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             ) : (
               <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                {batchExportError || 'В партии пока нет заполненных коробов.'}
+                {batchExportError || 'В партии пока нет поставок.'}
               </p>
+            )}
+            {batchExportSource.supplies.length > 0 && (
+              <div className="flex items-center justify-between gap-4 border-t border-slate-100 pt-4">
+                <p className={`text-xs ${selectedEmptyBatchExportSupplies.length > 0 ? 'font-medium text-red-600' : 'text-slate-400'}`}>
+                  {selectedEmptyBatchExportSupplies.length > 0
+                    ? 'Уберите пустые поставки, чтобы продолжить'
+                    : selectedBatchExportSupplies.length === 0
+                      ? 'Выберите хотя бы одну поставку'
+                      : `Выбрано: ${selectedBatchExportSupplies.length}`}
+                </p>
+                <button
+                  type="button"
+                  disabled={!canContinueBatchExport}
+                  onClick={continueBatchExport}
+                  className="cursor-pointer rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                >
+                  Далее
+                </button>
+              </div>
             )}
           </div>
         </div>,
@@ -8932,7 +9106,11 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-base font-semibold text-slate-800">Выберите колонки Excel</p>
-                <p className="mt-0.5 text-xs text-slate-400">{batchExportTarget.supply.warehouse_name} · Все короба поставки</p>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {batchExportTarget.supplies.length === 1
+                    ? `${batchExportTarget.supplies[0].warehouse_name} · Все короба поставки`
+                    : `${batchExportTarget.supplies.length} поставки · ${batchExportTarget.archiveMode}`}
+                </p>
               </div>
               <button type="button" disabled={isExportingBatchBoxes} onClick={() => setBatchExportTarget(null)} className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Закрыть">
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -8973,7 +9151,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
             <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
               <button type="button" disabled={isExportingBatchBoxes} onClick={() => setBatchExportTarget(null)} className="cursor-pointer rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">Отмена</button>
               <button type="button" disabled={isExportingBatchBoxes} onClick={() => void handleDownloadBatchBoxes()} className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-wait disabled:opacity-50">
-                {isExportingBatchBoxes ? 'Подготовка…' : 'Скачать Excel'}
+                {isExportingBatchBoxes ? 'Подготовка…' : batchExportTarget.supplies.length > 1 ? 'Скачать ZIP' : 'Скачать Excel'}
               </button>
             </div>
           </div>
