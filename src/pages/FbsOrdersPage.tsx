@@ -164,7 +164,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   })
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set())
-  const [assembleModal, setAssembleModal] = useState<{ ids: number[] } | null>(null)
+  const [assembleModal, setAssembleModal] = useState<{ ids: number[]; mode: 'assemble' | 'move'; sourceSupplyIds: string[] } | null>(null)
   const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
   const [newSupplyName, setNewSupplyName] = useState('')
   const [openSupplies, setOpenSupplies] = useState<WbSupply[]>([])
@@ -329,11 +329,16 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     setSelected(new Set())
   }
 
-  const openAssembleModal = async (ids: number[]) => {
+  const openAssembleModal = async (
+    ids: number[],
+    initialTab: 'new' | 'existing' = 'new',
+    mode: 'assemble' | 'move' = 'assemble',
+    sourceSupplyIds: string[] = [],
+  ) => {
     const date = new Date().toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: 'numeric' })
     setNewSupplyName(`Сборка ${date}`)
-    setAssembleTab('new')
-    setAssembleModal({ ids })
+    setAssembleTab(mode === 'move' ? 'existing' : initialTab)
+    setAssembleModal({ ids, mode, sourceSupplyIds })
     setLoadingSupplies(true)
     try {
       await loadOpenSupplies()
@@ -342,6 +347,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   }
 
   const handleAssemble = async (ids: number[], existingSupplyId?: string) => {
+    const operationMode = assembleModal?.mode ?? 'assemble'
     setBusyIds((s) => new Set([...s, ...ids]))
     setAssembleModal(null)
     try {
@@ -360,14 +366,25 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           if (res.success === false) failedIds.push(orderId)
         } catch { failedIds.push(orderId) }
       }
+      const successIds = ids.filter((id) => !failedIds.includes(id))
+      if (successIds.length > 0) {
+        setOrders((previous) => previous.map((order) => successIds.includes(order.id)
+          ? { ...order, shipStatus: 'assembling', supply_id: supplyId }
+          : order))
+        setSelected((previous) => {
+          const next = new Set(previous)
+          successIds.forEach((id) => next.delete(id))
+          return next
+        })
+      }
       void doSync()
       if (failedIds.length > 0 && failedIds.length < ids.length) {
-        alert(`Часть заказов добавлена. Не удалось добавить: ${failedIds.join(', ')} (возможно устарели или не соответствуют складу поставки)`)
+        alert(`Часть заказов ${operationMode === 'move' ? 'перенесена' : 'добавлена'}. Не удалось ${operationMode === 'move' ? 'перенести' : 'добавить'}: ${failedIds.join(', ')} (возможно устарели или не соответствуют складу поставки)`)
       } else if (failedIds.length === ids.length) {
-        alert(`Не удалось добавить заказы в поставку: ${failedIds.join(', ')}. Возможно они устарели или не соответствуют складу.`)
+        alert(`Не удалось ${operationMode === 'move' ? 'перенести' : 'добавить'} заказы в поставку: ${failedIds.join(', ')}. Возможно они устарели или не соответствуют складу.`)
       }
     } catch (e) {
-      alert(`Ошибка при переводе в сборку: ${String(e)}`)
+      alert(`${operationMode === 'move' ? 'Ошибка при переносе' : 'Ошибка при переводе в сборку'}: ${String(e)}`)
     } finally {
       setBusyIds((s) => { const n = new Set(s); ids.forEach(i => n.delete(i)); return n })
     }
@@ -399,23 +416,30 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     finally { setBusyIds((s) => { const n = new Set(s); ids.forEach((i) => n.delete(i)); return n }) }
   }
 
-  const handlePrintSticker = async (order: FbsOrder) => {
-    setBusyIds((s) => new Set([...s, order.id]))
+  const handlePrintStickers = async (ordersToPrint: FbsOrder[]) => {
+    if (ordersToPrint.length === 0) return
+    const ids = ordersToPrint.map((order) => order.id)
+    setBusyIds((s) => new Set([...s, ...ids]))
     try {
-      // PNG 58×40 от WB API → jsPDF → открывается в Chrome PDF viewer (тёмный фон)
-      const res = await invokeFbs(selectedStoreId, {
-        action: 'get_sticker', order_ids: [order.id], fmt: 'png', w: 58, h: 40
-      }).catch(() => null)
-      const stickers = (res?.stickers as any[]) ?? []
+      const stickers: any[] = []
+      for (let index = 0; index < ids.length; index += 100) {
+        const res = await invokeFbs(selectedStoreId, {
+          action: 'get_sticker', order_ids: ids.slice(index, index + 100), fmt: 'png', w: 58, h: 40,
+        }).catch(() => null)
+        stickers.push(...((res?.stickers as any[]) ?? []))
+      }
 
-      if (stickers.length > 0 && stickers[0]?.file) {
-        buildAndOpenPdf(stickers.map((s: any) => s.file as string))
+      const files = stickers.map((sticker) => sticker?.file).filter((file): file is string => typeof file === 'string' && file.length > 0)
+      if (files.length > 0) {
+        buildAndOpenPdf(files)
       } else {
-        printPickingSlip([order], wbWhName(order.warehouseId))
+        printPickingSlip(ordersToPrint)
       }
     } catch (e) { alert(String(e)) }
-    finally { setBusyIds((s) => { const n = new Set(s); n.delete(order.id); return n }) }
+    finally { setBusyIds((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n }) }
   }
+
+  const handlePrintSticker = (order: FbsOrder) => handlePrintStickers([order])
 
   // jsPDF — каждый стикер 58×40мм, открывается как PDF (тёмный фон Chrome PDF viewer)
   function buildAndOpenPdf(base64PngList: string[]) {
@@ -430,7 +454,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   }
 
   // Наш picking slip (fallback если стикер WB недоступен)
-  function printPickingSlip(orders: FbsOrder[], wbWh: string) {
+  function printPickingSlip(orders: FbsOrder[]) {
     const pages = orders.map((order) => {
       const loc = order.cellLocation
       return `<div class="page">
@@ -439,7 +463,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         <div class="row"><span>WB арт.</span><span>${order.nmId}</span></div>
         <div class="row"><span>Артикул</span><span>${order.article||'—'}</span></div>
         ${order.skus.map(s=>`<div class="row"><span>Баркод</span><span>${s}</span></div>`).join('')}
-        <div class="row"><span>Склад WB</span><span>${wbWh}</span></div>
+        <div class="row"><span>Склад WB</span><span>${wbWhName(order.warehouseId)}</span></div>
         <hr/><div style="font-size:9px;color:#888;text-align:center">${new Date().toLocaleString('ru')}</div>
       </div>`
     }).join('\n')
@@ -492,6 +516,17 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
   })
   const toggleAll = () => setSelected(allTabSelected ? new Set() : new Set(tabOrders.map((o) => o.id)))
+  const toggleSupplySelection = (supplyOrders: FbsOrder[]) => setSelected((previous) => {
+    const ids = supplyOrders.map((order) => order.id)
+    const allSelected = ids.length > 0 && ids.every((id) => previous.has(id))
+    return allSelected ? new Set() : new Set(ids)
+  })
+  const toggleSupplyOrderSelection = (orderId: number, supplyOrders: FbsOrder[]) => setSelected((previous) => {
+    const supplyIds = new Set(supplyOrders.map((order) => order.id))
+    const next = new Set(Array.from(previous).filter((id) => supplyIds.has(id)))
+    next.has(orderId) ? next.delete(orderId) : next.add(orderId)
+    return next
+  })
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -520,13 +555,6 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           <button type="button" onClick={() => void openAssembleModal(selectedTab.map((o) => o.id))}
             className="h-8 rounded-xl bg-amber-500 px-4 text-xs font-semibold text-white hover:bg-amber-600 transition">
             Взять в сборку ({selectedTab.length})
-          </button>
-        )}
-        {selectedTab.length > 0 && activeTab === 'assembling' && (
-          <button type="button" onClick={() => void handleShip(selectedTab)}
-            disabled={busyIds.size > 0}
-            className="h-8 rounded-xl bg-emerald-500 px-4 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50 transition">
-            Отгрузить выбранные ({selectedTab.length})
           </button>
         )}
         {selectedTab.length > 0 && activeTab === 'delivering' && (
@@ -590,7 +618,19 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
             {Array.from(supplyGroups.entries()).map(([supplyId, group]) => {
               const { supply, orders: supplyOrders } = group
               const isExpanded = expandedSupplyIds.has(supplyId)
-              const toggle = () => setExpandedSupplyIds((prev) => { const n = new Set(prev); n.has(supplyId) ? n.delete(supplyId) : n.add(supplyId); return n })
+              const selectedSupplyOrders = supplyOrders.filter((order) => selected.has(order.id))
+              const allSupplySelected = supplyOrders.length > 0 && selectedSupplyOrders.length === supplyOrders.length
+              const someSupplySelected = selectedSupplyOrders.length > 0 && !allSupplySelected
+              const toggle = () => {
+                if (isExpanded) {
+                  setSelected((previous) => {
+                    const next = new Set(previous)
+                    supplyOrders.forEach((order) => next.delete(order.id))
+                    return next
+                  })
+                }
+                setExpandedSupplyIds((prev) => { const n = new Set(prev); n.has(supplyId) ? n.delete(supplyId) : n.add(supplyId); return n })
+              }
               const wh = supplyOrders.length > 0 ? wbWhName(supplyOrders[0].warehouseId) : ''
               return (
                 <div key={supplyId} className="border-b border-slate-200">
@@ -623,7 +663,30 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                     <div className="overflow-hidden">
                       {supplyOrders.length === 0 ? (
                         <div className="border-t border-slate-100 bg-slate-50/50 px-12 py-4 text-xs text-slate-400">В поставке пока нет заказов</div>
-                      ) : <table className="w-full text-xs border-t border-slate-100 bg-slate-50/50">
+                      ) : <div className="border-t border-slate-100 bg-slate-50/50">
+                        <table className="w-full text-xs">
+                          <thead className="border-b border-slate-200 bg-slate-100/70 text-slate-500">
+                            <tr>
+                              <th className="w-8 px-3 py-2">
+                                <input
+                                  type="checkbox"
+                                  title="Выбрать все заказы поставки"
+                                  aria-label="Выбрать все заказы поставки"
+                                  ref={(element) => { if (element) element.indeterminate = someSupplySelected }}
+                                  checked={allSupplySelected}
+                                  onChange={() => toggleSupplySelection(supplyOrders)}
+                                  className="h-3.5 w-3.5 cursor-pointer rounded accent-violet-500"
+                                />
+                              </th>
+                              <th className="w-12 px-2 py-2" />
+                              <th className="px-4 py-2 text-left font-semibold">Заказ / Арт. WB</th>
+                              <th className="px-4 py-2 text-left font-semibold">Арт. продавца</th>
+                              <th className="px-4 py-2 text-left font-semibold">Баркод</th>
+                              <th className="px-4 py-2 text-left font-semibold">Адрес</th>
+                              <th className="px-4 py-2 text-left font-semibold">Время</th>
+                              <th className="px-4 py-2 text-left font-semibold">Действия</th>
+                            </tr>
+                          </thead>
                         <tbody>
                           {supplyOrders.map((order) => {
                             const sla = slaLabel(order.ddate, order.createdAt)
@@ -632,7 +695,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                             return (
                               <tr key={order.id} className="border-b border-slate-100 hover:bg-white transition-colors">
                                 <td className="px-3 py-2 w-8">
-                                  <input type="checkbox" checked={selected.has(order.id)} onChange={() => toggleSelect(order.id)} className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
+                                  <input type="checkbox" checked={selected.has(order.id)} onChange={() => toggleSupplyOrderSelection(order.id, supplyOrders)} className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
                                 </td>
                                 <td className="px-2 py-2 w-12">
                                   <PhotoThumb url={getWbPhotoUrl(order.nmId)} className="h-9 w-9 rounded-lg" />
@@ -649,6 +712,17 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                 <td className={`px-4 py-2 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                                 <td className="px-4 py-2">
                                   <div className="flex items-center gap-1.5">
+                                    {supplyId !== '__none__' && (
+                                      <button
+                                        type="button"
+                                        title="Перенести в другую поставку"
+                                        disabled={isBusy}
+                                        onClick={() => void openAssembleModal([order.id], 'existing', 'move', [supplyId])}
+                                        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-slate-200 text-slate-400 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-wait disabled:opacity-40"
+                                      >
+                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14m-5-5 5 5-5 5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                      </button>
+                                    )}
                                     <button type="button" title="Печать стикера" disabled={isBusy} onClick={() => void handlePrintSticker(order)}
                                       className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
                                       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -663,7 +737,46 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                             )
                           })}
                         </tbody>
-                      </table>}
+                        </table>
+                        {selectedSupplyOrders.length > 0 && (
+                          <>
+                          <div className="pointer-events-none fixed inset-0 z-30 bg-slate-950/10" />
+                          <div className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_12px_40px_rgba(15,23,42,0.24)]">
+                            <span className="whitespace-nowrap px-2 text-xs font-semibold text-slate-700">
+                              Выбрано: {selectedSupplyOrders.length} из {supplyOrders.length}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={busyIds.size > 0}
+                              onClick={() => void handlePrintStickers(selectedSupplyOrders)}
+                              className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-wait disabled:opacity-40"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                              Печать
+                            </button>
+                            {supplyId !== '__none__' && (
+                              <button
+                                type="button"
+                                disabled={busyIds.size > 0}
+                                onClick={() => void openAssembleModal(selectedSupplyOrders.map((order) => order.id), 'existing', 'move', [supplyId])}
+                                className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-blue-200 px-3 text-xs font-semibold text-blue-600 transition hover:bg-blue-50 disabled:cursor-wait disabled:opacity-40"
+                              >
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14m-5-5 5 5-5 5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                Перенести
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={busyIds.size > 0 || selectedSupplyOrders.some((order) => !order.cellLocation)}
+                              onClick={() => void handleShip(selectedSupplyOrders)}
+                              className="h-8 cursor-pointer rounded-xl bg-emerald-500 px-3 text-xs font-semibold text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Отгрузить
+                            </button>
+                          </div>
+                          </>
+                        )}
+                      </div>}
                     </div>
                   </div>
                 </div>
@@ -757,13 +870,13 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                             {orderMenuId === order.id && (
                               <div className="absolute right-0 top-8 z-50 w-52 rounded-2xl border border-slate-200 bg-white shadow-xl py-1" onClick={(e) => e.stopPropagation()}>
                                 <button type="button"
-                                  onClick={() => { setOrderMenuId(null); void openAssembleModal([order.id]) }}
+                                  onClick={() => { setOrderMenuId(null); void openAssembleModal([order.id], 'new') }}
                                   className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50">
                                   <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                                   Создать поставку
                                 </button>
                                 <button type="button"
-                                  onClick={() => { setOrderMenuId(null); setAssembleTab('existing'); void openAssembleModal([order.id]) }}
+                                  onClick={() => { setOrderMenuId(null); void openAssembleModal([order.id], 'existing') }}
                                   className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50">
                                   <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><path d="m15 14 5 5"/><path d="m20 14-5 5"/></svg>
                                   Добавить к созданной
@@ -801,17 +914,23 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setAssembleModal(null)}>
           <div className="flex w-[50vw] flex-col rounded-3xl bg-white shadow-2xl overflow-hidden" style={{ height: '90vh' }} onClick={(e) => e.stopPropagation()}>
             <div className="flex flex-1 flex-col overflow-y-auto px-6 pb-2">
-              <h2 className="text-base font-semibold text-slate-800 mb-4 pt-5">В сборку ({assembleModal.ids.length} заказ{assembleModal.ids.length > 1 ? 'а' : ''})</h2>
+              <h2 className="text-base font-semibold text-slate-800 mb-4 pt-5">
+                {assembleModal.mode === 'move' ? 'Перенести' : 'В сборку'} ({assembleModal.ids.length} заказ{assembleModal.ids.length > 1 ? 'а' : ''})
+              </h2>
               {/* Табы */}
-              <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 mb-4">
-                {(['new', 'existing'] as const).map((tab) => (
-                  <button key={tab} type="button"
-                    onClick={() => setAssembleTab(tab)}
-                    className={`flex-1 rounded-xl py-2 text-sm font-medium transition-colors ${assembleTab === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                    {tab === 'new' ? 'Создать поставку' : 'Добавить к созданной'}
-                  </button>
-                ))}
-              </div>
+              {assembleModal.mode === 'assemble' ? (
+                <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 mb-4">
+                  {(['new', 'existing'] as const).map((tab) => (
+                    <button key={tab} type="button"
+                      onClick={() => setAssembleTab(tab)}
+                      className={`flex-1 cursor-pointer rounded-xl py-2 text-sm font-medium transition-colors ${assembleTab === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                      {tab === 'new' ? 'Создать поставку' : 'Добавить к созданной'}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="mb-4 text-sm text-slate-500">Выберите другую активную поставку</p>
+              )}
 
               {assembleTab === 'new' ? (
                 <div className="space-y-3">
@@ -828,10 +947,10 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                 <div className="flex-1 overflow-y-auto space-y-2 px-6">
                   {loadingSupplies ? (
                     <p className="py-4 text-center text-sm text-slate-400">Загрузка поставок...</p>
-                  ) : openSupplies.length === 0 ? (
+                  ) : openSupplies.filter((sup) => !assembleModal.sourceSupplyIds.includes(sup.id)).length === 0 ? (
                     <p className="py-4 text-center text-sm text-slate-400">Нет открытых поставок на WB</p>
                   ) : (
-                    openSupplies.map((sup) => (
+                    openSupplies.filter((sup) => !assembleModal.sourceSupplyIds.includes(sup.id)).map((sup) => (
                       <button key={sup.id} type="button"
                         onClick={() => void handleAssemble(assembleModal.ids, sup.id)}
                         className="w-full flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-left hover:border-violet-300 hover:bg-violet-50 transition-colors">
