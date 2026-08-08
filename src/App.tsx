@@ -858,6 +858,7 @@ function App() {
                   onEditTripLine={editTripLine}
                   onAddTripLine={addTripLine}
                   onTripCreated={appendTrip}
+                  onRefreshTrips={refreshTrips}
                   onStoreCreated={appendStore}
                   canManage={(isOwnerOrAdmin || permissions.fulfillment_manage) && !isReadOnly}
                   canOtkAssign={(isOwnerOrAdmin || permissions.fulfillment_otk_assign) && !isReadOnly}

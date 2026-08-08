@@ -517,6 +517,7 @@ export interface TripLine {
   updated_at: string
   deleted_at?: string | null
   fulfillment_batch_id?: string | null
+  fulfillment_supply_id?: string | null
 }
 
 export interface TripLineWithStore extends TripLine {

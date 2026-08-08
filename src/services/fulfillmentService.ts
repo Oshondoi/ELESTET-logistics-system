@@ -12,6 +12,7 @@ import type {
   FulfillmentBoxItem,
   BatchConsumable,
   Product,
+  TripLine,
 } from '../types'
 
 // ── Settings ──────────────────────────────────────────────────
@@ -405,6 +406,50 @@ export const findProductByBarcode = async (
     size,
     photo_url,
   }
+}
+
+export const fetchProductInfoByBarcodes = async (
+  accountId: string,
+  storeId: string | null,
+  barcodes: string[],
+): Promise<Record<string, ProductInfo | null>> => {
+  const uniqueBarcodes = [...new Set(barcodes.map((barcode) => barcode.trim()).filter(Boolean))]
+  const result: Record<string, ProductInfo | null> = Object.fromEntries(uniqueBarcodes.map((barcode) => [barcode, null]))
+  if (!supabase || !storeId || uniqueBarcodes.length === 0) return result
+
+  const { data, error } = await (supabase as any)
+    .from('products')
+    .select('nm_id, name, vendor_code, category, color, brand, sizes, photos, barcodes')
+    .eq('account_id', accountId)
+    .eq('store_id', storeId)
+    .overlaps('barcodes', uniqueBarcodes)
+  if (error) throw error
+
+  for (const product of data ?? []) {
+    const productBarcodes = Array.isArray(product.barcodes) ? product.barcodes as string[] : []
+    const sizes = Array.isArray(product.sizes) ? product.sizes as Array<{ techSize?: string; skus?: string[] }> : []
+    const photos = product.photos as Array<{ c246x328?: string; big?: string }> | null
+    for (const barcode of uniqueBarcodes) {
+      const matchedSize = sizes.find((size) => size.skus?.includes(barcode))
+      if (!productBarcodes.includes(barcode) && !matchedSize) continue
+      result[barcode] = {
+        nm_id: product.nm_id ?? null,
+        name: product.name ?? null,
+        vendor_code: product.vendor_code ?? null,
+        category: product.category ?? null,
+        color: product.color ?? null,
+        brand: product.brand ?? null,
+        size: matchedSize?.techSize ?? null,
+        photo_url: photos?.[0]?.c246x328 ?? photos?.[0]?.big ?? null,
+      }
+    }
+  }
+
+  const missing = uniqueBarcodes.filter((barcode) => result[barcode] === null)
+  await Promise.all(missing.map(async (barcode) => {
+    result[barcode] = await findProductByBarcode(accountId, storeId, barcode)
+  }))
+  return result
 }
 
 export const fetchPhotosByBarcodes = async (
@@ -902,6 +947,19 @@ export const incrementBoxItem = async (data: {
   })
   if (error) throw error
   return row as FulfillmentBoxItem
+}
+
+export const transferSupplyToLogistics = async (
+  supplyId: string,
+  tripId: string,
+): Promise<TripLine> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('transfer_fulfillment_supply_to_logistics', {
+    p_supply_id: supplyId,
+    p_trip_id: tripId,
+  })
+  if (error) throw error
+  return data as TripLine
 }
 
 export const updateBoxItem = async (itemId: string, updates: { qty: number }): Promise<FulfillmentBoxItem> => {

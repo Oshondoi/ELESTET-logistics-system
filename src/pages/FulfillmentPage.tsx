@@ -67,6 +67,7 @@ import {
   createBox,
   deleteBox,
   syncReadyBoxSupply,
+  transferSupplyToLogistics,
   incrementBoxItem,
   deleteBoxItem,
   updateBoxItem,
@@ -84,7 +85,7 @@ import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulf
 import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, initBatchPipeline, completeBatchPipelineStage, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo } from '../types'
 import { fetchExecutorOptions } from '../services/outsourceService'
-import { findProductByBarcode, fetchPhotosByBarcodes } from '../services/fulfillmentService'
+import { findProductByBarcode, fetchPhotosByBarcodes, fetchProductInfoByBarcodes } from '../services/fulfillmentService'
 import { createTrip, addTripLine, setTripLineFulfillmentBatch, updateTripLineTripId, updateTripLineWeight } from '../services/tripService'
 import { fetchWorkTariffs, fetchConsumables, fetchConsumableCatalog } from '../services/directoriesService'
 import { Card } from '../components/ui/Card'
@@ -138,6 +139,7 @@ interface FulfillmentPageProps {
   onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues, newTripId?: string) => Promise<void>
   onAddTripLine?: (tripId: string, values: TripLineFormValues) => Promise<TripLine>
   onTripCreated?: (trip: TripWithLines) => void
+  onRefreshTrips?: () => Promise<void>
   onStoreCreated?: (store: Store) => void
   canManage?: boolean
   canOtkAssign?: boolean
@@ -286,6 +288,7 @@ interface DetailModalProps {
   onEditTripLine: (tripId: string, lineId: string, values: TripLineFormValues, newTripId?: string) => Promise<void>
   onAddTripLine?: (tripId: string, values: TripLineFormValues) => Promise<TripLine>
   onTripCreated?: (trip: TripWithLines) => void
+  onRefreshTrips?: () => Promise<void>
   zIndex?: number
 }
 
@@ -311,6 +314,7 @@ const BatchDetailModal = ({
   onEditTripLine,
   onAddTripLine,
   onTripCreated,
+  onRefreshTrips,
   zIndex = 50,
 }: DetailModalProps) => {
   // Партнёр не может управлять чужой партией (только читать + завершать свой этап)
@@ -546,6 +550,11 @@ const BatchDetailModal = ({
   const [warehouseSearch, setWarehouseSearch] = useState('')
   const [isCreatingSupply, setIsCreatingSupply] = useState(false)
   const [supplyCreateError, setSupplyCreateError] = useState<string | null>(null)
+  const [transferSupplyId, setTransferSupplyId] = useState<string | null>(null)
+  const [transferTripId, setTransferTripId] = useState('')
+  const [isTransferringSupply, setIsTransferringSupply] = useState(false)
+  const [isCreatingTransferTrip, setIsCreatingTransferTrip] = useState(false)
+  const [transferSupplyError, setTransferSupplyError] = useState<string | null>(null)
   const [packingBoxBuffer, setPackingBoxBuffer] = useState<Record<string, { barcode: string; qty: number; name: string | null; itemId: string | null }[]>>({})
   const [packingBoxBarcode, setPackingBoxBarcode] = useState<Record<string, string>>({})
   const [packingBoxQty, setPackingBoxQty] = useState<Record<string, string>>({})
@@ -602,6 +611,29 @@ const BatchDetailModal = ({
   const [isSavingDraft, setIsSavingDraft] = useState(false)
 
   const store = stores.find((s) => s.id === batch.store_id)
+  const transferTrips = useMemo(() => {
+    const unique = new Map<string, TripWithLines>()
+    ;[...trips, ...localDraftTrips].forEach((trip) => {
+      if (trip.status === 'Формируется') unique.set(trip.id, trip)
+    })
+    return [...unique.values()]
+  }, [trips, localDraftTrips])
+  const formatTripLabel = (trip: TripWithLines) =>
+    `${trip.trip_number ?? `Рейс #${trip.draft_number}`}${trip.carrier ? ` · ${trip.carrier}` : ''}${trip.departure_date ? ` · ${new Date(trip.departure_date).toLocaleDateString('ru-RU')}` : ''}`
+  const openSupplyTransfer = (supply: FulfillmentSupplyWithBoxes) => {
+    const availableIds = new Set(transferTrips.map((trip) => trip.id))
+    const usedTripIds = [...new Set(
+      supplies.map((candidate) => candidate.trip_id).filter((id): id is string => typeof id === 'string' && availableIds.has(id)),
+    )]
+    const defaultTripId = usedTripIds.length === 1
+      ? usedTripIds[0]
+      : transferTrips.length === 1
+        ? transferTrips[0].id
+        : ''
+    setTransferSupplyId(supply.id)
+    setTransferTripId(defaultTripId)
+    setTransferSupplyError(null)
+  }
   const isReadyBoxSupply = (supply: FulfillmentSupplyWithBoxes) => {
     if (supply.source_item_id) return true
     const warehouseHasLinkedReadySupply = supplies.some((candidate) =>
@@ -637,20 +669,57 @@ const BatchDetailModal = ({
     XLSX.writeFile(wb, filename)
   }
 
-  const downloadSupplyBoxesExcel = (supply: FulfillmentSupplyWithBoxes) => {
-    const data: (string | number)[][] = [['Баркод товара', 'Кол-во товаров', 'ШК короба', 'Срок годности', 'Номер короба']]
-    ;[...supply.boxes]
-      .sort((a, b) => a.box_number - b.box_number)
-      .forEach((box) => box.items.forEach((item) => {
-        data.push([item.barcode, item.qty, '', '', box.box_number])
-      }))
-    void writeBoxesExcel(data, boxExportFilename(supply))
+  const boxExportHeaders = [
+    'Баркод товара',
+    'Кол-во товаров',
+    'ШК короба',
+    'Срок годности',
+    'Номер короба',
+    'Артикул ВБ',
+    'Артикул продавца',
+    'Название товара',
+    'Цвет',
+    'Размер',
+  ]
+
+  const buildBoxesExportData = async (boxes: FulfillmentSupplyWithBoxes['boxes']): Promise<(string | number)[][]> => {
+    const sortedBoxes = [...boxes].sort((a, b) => a.box_number - b.box_number)
+    const barcodes = [...new Set(sortedBoxes.flatMap((box) => box.items.map((item) => item.barcode)))]
+    const productInfoMap = await fetchProductInfoByBarcodes(accountId, batch.store_id, barcodes)
+    const batchItemsById = new Map(items.map((item) => [item.id, item]))
+    const batchItemsByBarcode = new Map(items.map((item) => [item.barcode, item]))
+    const data: (string | number)[][] = [boxExportHeaders]
+
+    sortedBoxes.forEach((box) => {
+      box.items.forEach((item) => {
+        const info = productInfoMap[item.barcode]
+        const batchItem = (item.item_id ? batchItemsById.get(item.item_id) : undefined)
+          ?? batchItemsByBarcode.get(item.barcode)
+        data.push([
+          item.barcode,
+          item.qty,
+          '',
+          '',
+          box.box_number,
+          info?.nm_id ?? '',
+          info?.vendor_code ?? batchItem?.article ?? '',
+          info?.name ?? item.product_name ?? batchItem?.product_name ?? '',
+          info?.color ?? batchItem?.color ?? '',
+          info?.size ?? batchItem?.size ?? '',
+        ])
+      })
+    })
+    return data
   }
 
-  const downloadSingleBoxExcel = (supply: FulfillmentSupplyWithBoxes, box: FulfillmentSupplyWithBoxes['boxes'][number]) => {
-    const data: (string | number)[][] = [['Баркод', 'Короб']]
-    box.items.forEach((item) => data.push([item.barcode, box.box_number]))
-    void writeBoxesExcel(data, boxExportFilename(supply, box.box_number))
+  const downloadSupplyBoxesExcel = async (supply: FulfillmentSupplyWithBoxes) => {
+    const data = await buildBoxesExportData(supply.boxes)
+    await writeBoxesExcel(data, boxExportFilename(supply))
+  }
+
+  const downloadSingleBoxExcel = async (supply: FulfillmentSupplyWithBoxes, box: FulfillmentSupplyWithBoxes['boxes'][number]) => {
+    const data = await buildBoxesExportData([box])
+    await writeBoxesExcel(data, boxExportFilename(supply, box.box_number))
   }
 
   // Фото товаров для таблицы приёмки (barcode → photo_url)
@@ -5203,6 +5272,7 @@ const BatchDetailModal = ({
                         const isActiveStage = batch.current_stage === 'packing'
                         const readyBoxSupply = isReadyBoxSupply(supply)
                         const canDeleteCard = canManageStageData && (isActiveStage || canSupplyDeleteLocked) && !readyBoxSupply
+                        const canTransferLateSupply = canManageStageData && batch.status === 'done' && batch.stage_logistics && !supply.trip_line_id
                         const linkedLine = supply.trip_line_id
                           ? trips.flatMap((t) => t.lines).find((l) => l.id === supply.trip_line_id)
                           : null
@@ -5221,15 +5291,15 @@ const BatchDetailModal = ({
                               )}
                               <p className="truncate text-xs font-bold text-blue-600 leading-tight w-full pr-6">{supply.warehouse_name ?? <span className="text-slate-400 font-normal italic">склад не указан</span>}</p>
                               <p className="text-xs text-slate-400">{totalBoxes} кор. · {totalItems} ед.</p>
-                              <p className={`text-xs font-medium ${linkedLine ? 'text-emerald-600' : 'text-slate-400'}`}>
-                                {linkedLine ? `Поставка П-${linkedLine.shipment_number}` : 'Не передана в логистику'}
+                              <p className={`text-xs font-medium ${supply.trip_line_id ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                {linkedLine ? `Поставка П-${linkedLine.shipment_number}` : supply.trip_line_id ? 'Передана в логистику' : 'Не передана в логистику'}
                               </p>
                             </button>
-                            <div className="flex h-9 flex-shrink-0 items-end px-2 pb-2">
+                            <div className="flex min-h-9 flex-shrink-0 items-end justify-between gap-2 px-2 pb-2">
                               <button
                                 type="button"
                                 disabled={totalItems === 0}
-                                onClick={() => downloadSupplyBoxesExcel(supply)}
+                                onClick={() => { void downloadSupplyBoxesExcel(supply).catch((err) => setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось скачать Excel')) }}
                                 className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
                                 title={totalItems === 0 ? 'В коробах нет товаров' : 'Скачать все короба поставки'}
                               >
@@ -5237,6 +5307,18 @@ const BatchDetailModal = ({
                                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
                                 </svg>
                               </button>
+                              {canTransferLateSupply && (
+                                <button
+                                  type="button"
+                                  disabled={totalBoxes === 0}
+                                  onClick={() => openSupplyTransfer(supply)}
+                                  title={totalBoxes === 0 ? 'Сначала добавьте хотя бы один короб' : 'Передать поставку в логистику'}
+                                  aria-label="Передать поставку в логистику"
+                                  className="flex h-7 w-7 items-center justify-center rounded-lg text-blue-500 transition-colors hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
+                                >
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7h11v10H3z"/><path d="M14 10h4l3 3v4h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+                                </button>
+                              )}
                             </div>
                             {canDeleteCard && (
                               <button
@@ -5253,6 +5335,120 @@ const BatchDetailModal = ({
                       })}
                     </div>
                   )}
+
+                  {/* Модалка передачи поздней поставки в логистику */}
+                  {transferSupplyId && (() => {
+                    const supply = supplies.find((candidate) => candidate.id === transferSupplyId)
+                    if (!supply) return null
+                    const totalBoxes = supply.boxes.length
+                    const totalUnits = supply.boxes.reduce((sum, box) => sum + box.items.reduce((itemSum, item) => itemSum + item.qty, 0), 0)
+                    return createPortal(
+                      <div
+                        className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4"
+                        onClick={() => { if (!isTransferringSupply && !isCreatingTransferTrip) setTransferSupplyId(null) }}
+                      >
+                        <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl space-y-5" onClick={(event) => event.stopPropagation()}>
+                          <div>
+                            <p className="text-base font-semibold text-slate-800">Передать поставку в логистику?</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {supply.warehouse_name} · {totalBoxes} кор. · {totalUnits} ед.
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-xs font-medium text-slate-500">Формирующийся рейс</label>
+                            {transferTrips.length > 0 ? (
+                              <select
+                                value={transferTripId}
+                                onChange={(event) => { setTransferTripId(event.target.value); setTransferSupplyError(null) }}
+                                disabled={isTransferringSupply || isCreatingTransferTrip}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50"
+                              >
+                                <option value="">— выберите рейс —</option>
+                                {transferTrips.map((trip) => (
+                                  <option key={trip.id} value={trip.id}>{formatTripLabel(trip)}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
+                                Формирующихся рейсов нет. Создайте новый рейс.
+                              </div>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isTransferringSupply || isCreatingTransferTrip}
+                              onClick={async () => {
+                                setIsCreatingTransferTrip(true)
+                                setTransferSupplyError(null)
+                                try {
+                                  const created = await createTrip(accountId, { carrier: '', comment: '' })
+                                  const createdWithLines: TripWithLines = { ...created, lines: [] }
+                                  setLocalDraftTrips((prev) => [...prev.filter((trip) => trip.id !== created.id), createdWithLines])
+                                  onTripCreated?.(createdWithLines)
+                                  setTransferTripId(created.id)
+                                } catch (err) {
+                                  setTransferSupplyError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось создать рейс')
+                                } finally {
+                                  setIsCreatingTransferTrip(false)
+                                }
+                              }}
+                              className="text-xs font-medium text-blue-600 hover:text-blue-700 disabled:opacity-40"
+                            >
+                              {isCreatingTransferTrip ? 'Создание рейса…' : '+ Создать новый рейс'}
+                            </button>
+                          </div>
+
+                          {transferSupplyError && (
+                            <div className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{transferSupplyError}</div>
+                          )}
+
+                          <p className="text-xs leading-relaxed text-slate-400">
+                            После передачи изменения коробов и количества товаров будут автоматически синхронизироваться с логистикой.
+                          </p>
+
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              disabled={isTransferringSupply || isCreatingTransferTrip}
+                              onClick={() => setTransferSupplyId(null)}
+                              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!transferTripId || totalBoxes === 0 || isTransferringSupply || isCreatingTransferTrip}
+                              onClick={async () => {
+                                if (!transferTripId || totalBoxes === 0) return
+                                setIsTransferringSupply(true)
+                                setTransferSupplyError(null)
+                                try {
+                                  const line = await transferSupplyToLogistics(supply.id, transferTripId)
+                                  setSupplies((prev) => prev.map((candidate) => candidate.id === supply.id
+                                    ? { ...candidate, trip_id: transferTripId, trip_line_id: line.id }
+                                    : candidate))
+                                  const refreshed = await fetchSupplies(batch.id)
+                                  setSupplies(refreshed)
+                                  rebuildSlotsFromSupplies(refreshed)
+                                  try { await onRefreshTrips?.() } catch { /* поставка уже передана; список обновится при следующей загрузке */ }
+                                  setTransferSupplyId(null)
+                                  setTransferTripId('')
+                                } catch (err) {
+                                  setTransferSupplyError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось передать поставку')
+                                } finally {
+                                  setIsTransferringSupply(false)
+                                }
+                              }}
+                              className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {isTransferringSupply ? 'Передача…' : 'Передать'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>,
+                      document.body,
+                    )
+                  })()}
 
                   {/* Модалка работы с поставкой */}
                   {activeSupplyId && (() => {
@@ -5333,7 +5529,7 @@ const BatchDetailModal = ({
                                       <button
                                         type="button"
                                         title="Скачать Excel этого короба"
-                                        onClick={() => downloadSingleBoxExcel(supply, box)}
+                                        onClick={() => { void downloadSingleBoxExcel(supply, box).catch((err) => setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось скачать Excel')) }}
                                         className="flex items-center rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
                                       >
                                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
@@ -8157,7 +8353,7 @@ const SettingsModal = ({ settings, accountId, accountName = '', onClose, onSave 
 // ══════════════════════════════════════════════════════════════
 // FulfillmentPage
 // ══════════════════════════════════════════════════════════════
-export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', stores, trips, warehouses, onEditTripLine, onAddTripLine, onTripCreated, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
+export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', stores, trips, warehouses, onEditTripLine, onAddTripLine, onTripCreated, onRefreshTrips, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
   const navigate = useNavigate()
   const [batches, setBatches] = useState<FulfillmentBatch[]>([])
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null)
@@ -8428,6 +8624,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
           onEditTripLine={onEditTripLine}
           onAddTripLine={onAddTripLine}
           onTripCreated={onTripCreated}
+          onRefreshTrips={onRefreshTrips}
           zIndex={detailFromArchive ? 60 : 50}
         />,
         document.body
