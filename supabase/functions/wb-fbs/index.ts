@@ -191,7 +191,7 @@ Deno.serve(async (req) => {
         article: o.article ?? null,
         nm_id: o.nmId ?? null,
         chrt_id: o.chrtId ?? null,
-        // skus не включаем — jsonb vs text[] mismatch в PostgREST; читается из data.skus
+        skus: Array.isArray(o.skus) ? o.skus : [],
         price: o.price ?? 0,
         warehouse_id: o.warehouseId ?? 0,
         created_at: o.createdAt ?? null,

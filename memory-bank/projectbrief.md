@@ -17,6 +17,15 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - Store creation modal
 - Supabase-ready SQL schema
 - Strict Supabase-backed runtime for reads/writes
+- Fulfillment batches with reception, QA, packaging, labeling, boxes and logistics stages
+- FBS order cache/sync with WB, supply grouping, stickers, picking lists and order transfers
+- Internal superadmin tools: finance, diary, glossary, administration, prompts and tasks
+
+## Current operational rule — FBS
+- FBS order is the child unit for selection, printing and movement between supplies.
+- WB supply is the parent unit for transfer to delivery.
+- Product variant identity prefers WB barcode/SKU; `nmId` alone is not unique across sizes.
+- Unknown size remains visibly unknown instead of being guessed.
 
 ## Required Business Entities
 - `auth.users`

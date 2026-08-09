@@ -12,6 +12,213 @@ interface TzPrompt {
   created_at: string
 }
 
+interface TzTask {
+  id: string
+  text: string
+  is_done: boolean
+  position: number
+  created_at: string
+}
+
+function TasksTab() {
+  const [tasks, setTasks] = useState<TzTask[]>([])
+  const [text, setText] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const loadTasks = useCallback(async () => {
+    if (!supabase) {
+      setError('Нет подключения к базе данных')
+      setLoading(false)
+      return
+    }
+
+    setError('')
+    const { data, error: loadError } = await (supabase as any)
+      .from('tz_tasks')
+      .select('*')
+      .order('position', { ascending: true })
+      .order('created_at', { ascending: true })
+
+    if (loadError) setError(loadError.message || 'Не удалось загрузить задачи')
+    else setTasks((data || []) as TzTask[])
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { void loadTasks() }, [loadTasks])
+
+  const addTask = async () => {
+    const cleanText = text.trim()
+    if (!supabase || !cleanText || saving) return
+
+    setSaving(true)
+    setError('')
+    const maxPosition = tasks.length > 0
+      ? Math.max(...tasks.map((task) => task.position)) + 1
+      : 0
+    const { data, error: saveError } = await (supabase as any)
+      .from('tz_tasks')
+      .insert({ text: cleanText, position: maxPosition })
+      .select('*')
+      .single()
+
+    if (saveError) setError(saveError.message || 'Не удалось сохранить задачу')
+    else {
+      setTasks((prev) => [...prev, data as TzTask])
+      setText('')
+    }
+    setSaving(false)
+  }
+
+  const toggleTask = async (task: TzTask) => {
+    if (!supabase) return
+    const nextDone = !task.is_done
+    setTasks((prev) => prev.map((item) => (
+      item.id === task.id ? { ...item, is_done: nextDone } : item
+    )))
+
+    const { error: toggleError } = await (supabase as any)
+      .from('tz_tasks')
+      .update({
+        is_done: nextDone,
+        completed_at: nextDone ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', task.id)
+
+    if (toggleError) {
+      setTasks((prev) => prev.map((item) => (
+        item.id === task.id ? { ...item, is_done: task.is_done } : item
+      )))
+      setError(toggleError.message || 'Не удалось изменить задачу')
+    }
+  }
+
+  const deleteTask = async (task: TzTask) => {
+    if (!supabase || !window.confirm('Удалить эту задачу?')) return
+    const { error: deleteError } = await (supabase as any)
+      .from('tz_tasks')
+      .delete()
+      .eq('id', task.id)
+
+    if (deleteError) setError(deleteError.message || 'Не удалось удалить задачу')
+    else setTasks((prev) => prev.filter((item) => item.id !== task.id))
+  }
+
+  const activeCount = tasks.filter((task) => !task.is_done).length
+  const doneCount = tasks.length - activeCount
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-2xl border border-slate-200 bg-white p-3.5">
+        <div className="flex items-end gap-3">
+          <textarea
+            id="new-tz-task"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                void addTask()
+              }
+            }}
+            rows={1}
+            placeholder="Напишите задачу..."
+            className="min-h-[44px] flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+          />
+          <button
+            type="button"
+            title="Сортировка задач — скоро"
+            aria-label="Сортировка задач — скоро"
+            className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-slate-200 text-slate-400 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 6h12M4 6h.01M12 12h8M4 12h4M16 18h4M4 18h8" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={() => void addTask()}
+            disabled={!text.trim() || saving}
+            className="h-10 rounded-xl bg-violet-500 px-5 text-sm font-semibold text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? 'Сохранение...' : 'Добавить'}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between px-1 text-xs text-slate-500">
+        <span>{activeCount} активных</span>
+        <span>{doneCount} выполненных</span>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="py-10 text-center text-sm text-slate-400">Загрузка...</div>
+      ) : tasks.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-400">
+          Задач пока нет. Добавьте первую задачу выше.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {tasks.map((task) => (
+            <div
+              key={task.id}
+              className={`group flex items-start gap-2.5 rounded-xl border px-3 py-1.5 transition ${
+                task.is_done
+                  ? 'border-slate-200 bg-slate-50'
+                  : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => void toggleTask(task)}
+                title={task.is_done ? 'Вернуть в работу' : 'Отметить выполненной'}
+                className={`mt-0.5 flex h-5 w-5 flex-shrink-0 cursor-pointer items-center justify-center rounded-md border transition ${
+                  task.is_done
+                    ? 'border-violet-500 bg-violet-500 text-white'
+                    : 'border-slate-300 bg-white hover:border-violet-400'
+                }`}
+              >
+                {task.is_done && (
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="3">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </button>
+
+              <p className={`min-w-0 flex-1 whitespace-pre-wrap text-sm leading-5 ${
+                task.is_done ? 'text-slate-400 line-through' : 'text-slate-800'
+              }`}>
+                {task.text}
+              </p>
+
+              <button
+                type="button"
+                onClick={() => void deleteTask(task)}
+                title="Удалить задачу"
+                className="flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 focus:opacity-100"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6M14 11v6M9 6V4h6v2" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── PromptCard ───────────────────────────────────────────────────────────────
 
 function PromptCard({
@@ -107,6 +314,10 @@ function PromptCard({
 // ─── TzPromptsPage ────────────────────────────────────────────────────────────
 
 export function TzPromptsPage() {
+  const [activeTab, setActiveTab] = useState<'prompts' | 'tasks'>(() => {
+    const savedTab = localStorage.getItem('elestet-tz-prompts-active-tab')
+    return savedTab === 'tasks' || savedTab === 'prompts' ? savedTab : 'tasks'
+  })
   const [prompts, setPrompts] = useState<TzPrompt[]>([])
   const [loading, setLoading] = useState(true)
   const [showDone, setShowDone] = useState(false)
@@ -129,6 +340,10 @@ export function TzPromptsPage() {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    localStorage.setItem('elestet-tz-prompts-active-tab', activeTab)
+  }, [activeTab])
 
   const openAdd = () => {
     setEditing(null)
@@ -194,7 +409,34 @@ export function TzPromptsPage() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
+    <div className="flex h-full flex-col gap-3">
+      <div className="flex w-fit items-center rounded-xl bg-slate-100 p-1">
+        <button
+          type="button"
+          onClick={() => setActiveTab('tasks')}
+          className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
+            activeTab === 'tasks'
+              ? 'bg-white text-slate-800 shadow-sm'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Задачи
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('prompts')}
+          className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
+            activeTab === 'prompts'
+              ? 'bg-white text-slate-800 shadow-sm'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Промпты ТЗ
+        </button>
+      </div>
+
+      {activeTab === 'tasks' ? <TasksTab /> : (
+      <>
       {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -348,6 +590,8 @@ export function TzPromptsPage() {
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   )

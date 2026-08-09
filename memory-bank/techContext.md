@@ -1,5 +1,21 @@
 # Tech Context
 
+## Current feature files — 09.08.2026
+- `src/pages/FbsOrdersPage.tsx` — FBS cache UI, поставки/заказы, синк, перенос, печать, лист подбора, товарное обогащение.
+- `supabase/functions/wb-fbs/index.ts` — прокси и синхронизация WB Marketplace FBS API.
+- `src/pages/TzPromptsPage.tsx` — CRUD промптов и компактный `TasksTab`.
+- `supabase/patch_tz_tasks.sql` — `tz_tasks`, индексы, RLS superadmin; применён.
+- `supabase/seed_tz_tasks_20260809.sql` — идемпотентный сид девяти задач; применён.
+- `memory-bank/components/fbs-orders.md` и `tz-tasks.md` — подробная актуальная документация.
+
+## Packages used by current FBS/export work
+- `jspdf` — PDF; `xlsx` — Excel; `jszip` — ZIP нескольких поставок; `@supabase/supabase-js` — DB/Functions.
+
+## Validation/deploy state — 09.08.2026
+- `npx tsc -b` проходит; последний полный build проходил.
+- Vercel production отслеживает `main`; публикация 09.08.2026 отправляется через commit + push этой ветки.
+- Supabase CLI linked project: `jzucxqakvgzpgtvagsnq`.
+
 ## Stack
 - Frontend: React + TypeScript
 - Bundler: Vite

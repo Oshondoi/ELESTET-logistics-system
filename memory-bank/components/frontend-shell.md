@@ -20,6 +20,11 @@ Defines the application frame:
   - flat top bar with current page title
   - content area with page-level action bars
 
+## Page spacing rule (09.08.2026)
+- The App content wrapper owns outer padding and vertical scrolling.
+- Page roots should normally use layout gaps only, not duplicate `px-6/pt-*` and full-page `overflow-y-auto`.
+- `/tz-prompts` was aligned with Diary/Admin/Finance by removing its duplicate page padding and nested scroll.
+
 ## Why It Matters
 This shell is the UX backbone. If it becomes bloated or presentation-heavy, the app stops feeling like an operations system.
 

@@ -8,6 +8,22 @@ The product is being created to manage logistics operations for shipments going 
 - Store-specific tracking sequences are easy to break without explicit system logic
 - Operators need a clean interface in Russian for everyday work
 - Data model must be safe for future multi-company operation
+- FBS operators need to group, print, move and pick large numbers of WB orders without repeating work in the WB cabinet
+- Fulfillment operators need reliable box contents and WB-compatible Excel exports
+- The service owner needs a persistent compact task list beside long-form technical prompts
+
+## FBS operator UX
+- «На сборке» is supply-first: expand a supply to work with its orders.
+- One order can be printed or moved; several can be selected for the same actions and a picking list.
+- Delivery transfer belongs to the whole supply, preventing partial accidental shipment.
+- Product row must answer: what product, which seller article, which size, which barcode, and where it lies.
+- Missing variant data is an explicit warning with a synchronization action.
+
+## Owner task UX
+- Short tasks live separately from long prompt specifications.
+- Dense vertical cards maximize tasks visible on one screen.
+- Completion is reversible and visually obvious through gray strike-through text.
+- Tab choice persists after refresh; task data persists in Supabase.
 
 ## Target Users
 - Logistics operators
