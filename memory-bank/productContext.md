@@ -10,6 +10,7 @@ The product is being created to manage logistics operations for shipments going 
 - Data model must be safe for future multi-company operation
 - FBS operators need to group, print, move and pick large numbers of WB orders without repeating work in the WB cabinet
 - Fulfillment operators need reliable box contents and WB-compatible Excel exports
+- Warehouse operators need a visual model of real racks, pallet positions and box places so a scanned physical box can be found or moved without losing its identity
 - The service owner needs a persistent compact task list beside long-form technical prompts
 
 ## FBS operator UX
@@ -19,6 +20,14 @@ The product is being created to manage logistics operations for shipments going 
 - Product row must answer: what product, which seller article, which size, which barcode, and where it lies.
 - Missing variant data is an explicit warning with a synchronization action.
 
+## WMS operator UX
+- The warehouse tree opens a whole rack; columns are pallet positions, rows are tiers, and visible uprights match the real metal structure.
+- A rack has one or two sides. Every pallet position shows the side's box places as a physical grid; the default is `2 × 4`.
+- Clicking an empty K-place creates a box. Clicking an occupied place selects that physical box; the next click moves it to an empty place or swaps it with another box.
+- The operator sees a human-readable address such as `Лицевая сторона · B3-K5`.
+- Barcode is the stable identity of the physical box and is rendered as QR for scanning. Movement changes the address only.
+- Unsafe layout changes are rejected explicitly instead of silently losing occupied places.
+
 ## Owner task UX
 - Short tasks live separately from long prompt specifications.
 - Dense vertical cards maximize tasks visible on one screen.
@@ -27,6 +36,7 @@ The product is being created to manage logistics operations for shipments going 
 
 ## Target Users
 - Logistics operators
+- Warehouse and fulfillment operators
 - Managers
 - Admins / account owners
 - Internal teams working inside one business account

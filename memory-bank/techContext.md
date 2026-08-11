@@ -1,19 +1,23 @@
 # Tech Context
 
-## Current feature files — 09.08.2026
+## Current feature files — 11.08.2026
 - `src/pages/FbsOrdersPage.tsx` — FBS cache UI, поставки/заказы, синк, перенос, печать, лист подбора, товарное обогащение.
 - `supabase/functions/wb-fbs/index.ts` — прокси и синхронизация WB Marketplace FBS API.
+- `supabase/patch_fbs_reliable_sync.sql` — int64-safe статусы, журнал и атомарный полный снимок FBS; применён в production.
+- `src/pages/WmsPage.tsx` — визуальные стеллажи, паллетоместа, стороны, сетки K-мест, QR коробов, перенос/обмен.
+- `supabase/patch_wms_rack_layout.sql` — стороны и геометрия мест коробов, ограничения, атомарные RPC планировки и перемещения; применён в production.
 - `src/pages/TzPromptsPage.tsx` — CRUD промптов и компактный `TasksTab`.
 - `supabase/patch_tz_tasks.sql` — `tz_tasks`, индексы, RLS superadmin; применён.
 - `supabase/seed_tz_tasks_20260809.sql` — идемпотентный сид девяти задач; применён.
-- `memory-bank/components/fbs-orders.md` и `tz-tasks.md` — подробная актуальная документация.
+- `memory-bank/components/fbs-orders.md`, `wms.md` и `tz-tasks.md` — подробная актуальная документация.
 
-## Packages used by current FBS/export work
-- `jspdf` — PDF; `xlsx` — Excel; `jszip` — ZIP нескольких поставок; `@supabase/supabase-js` — DB/Functions.
+## Packages used by current FBS/export/WMS work
+- `jspdf` — PDF; `xlsx` — Excel; `jszip` — ZIP нескольких поставок; `qrcode.react` — QR физического короба; `@supabase/supabase-js` — DB/Functions.
 
-## Validation/deploy state — 09.08.2026
-- `npx tsc -b` проходит; последний полный build проходил.
-- Vercel production отслеживает `main`; публикация 09.08.2026 отправляется через commit + push этой ветки.
+## Validation/deploy state — 11.08.2026
+- Полный `npm run build` проходит: 648 модулей; остаются только прежние предупреждения Vite о размере чанков и `xlsx`.
+- Рабочая ветка — `main`; текущий опубликованный commit — `4232b15`. Vercel production автоматически собирает push в `main`.
+- Production Supabase уже содержит надёжную FBS-синхронизацию и новую WMS-планировку/RPC. Локальные FBS/WMS UI-изменения ещё требуют отдельного commit + push.
 - Supabase CLI linked project: `jzucxqakvgzpgtvagsnq`.
 
 ## Stack
@@ -28,6 +32,7 @@
 - `tailwindcss`, `@tailwindcss/postcss`
 - `@vitejs/plugin-react`
 - `@supabase/supabase-js`
+- `qrcode.react`
 
 ## Important Files
 - `src/App.tsx` — app shell, routing by activePage/effectivePage state; кеш `adminStats`/`adminAccounts`; рендеринг `PaymentResultPage`
@@ -62,8 +67,12 @@
 - `supabase/patch_billing_get_my_accounts.sql` — billing-поля в get_my_accounts RPC
 - `supabase/patch_payment_orders.sql` — таблица payment_orders + 3 RPC (create/activate/get_status)
 - `supabase/patch_access_overrides.sql` — access_overrides таблица + RPC
+- `supabase/patch_fbs_db.sql`, `supabase/patch_fbs_reliable_sync.sql` — FBS-кэш, официальные статусы WB, журнал и атомарный снимок
+- `supabase/patch_wms.sql`, `supabase/patch_wms_boxes.sql`, `supabase/patch_wms_disabled.sql` — базовая WMS-схема, физические короба и заглушённые места
+- `supabase/patch_wms_rack_layout.sql` — максимум две стороны, сетки K-мест, стойки, безопасное сохранение и атомарный move/swap
 
 ## Edge Functions (задеплоены)
+- `supabase/functions/wb-fbs/index.ts` — FBS API WB, полный sync, статусы, поставки, стикеры, остатки и передача поставки в доставку
 - `supabase/functions/create-payment/index.ts` — создание платёжного заказа (TODO: MBusiness API call)
 - `supabase/functions/payment-webhook/index.ts` — получение webhook от MBusiness (TODO: HMAC verify + field mapping)
 - Деплой: через Management API `POST /v1/projects/{id}/functions` (Supabase CLI не принимает формат токена)

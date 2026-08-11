@@ -12,6 +12,7 @@
 - shipment status history trigger
 - initial RLS policies
 - FBS cached orders and sync metadata
+- WMS warehouses, racks, sides, pallet positions, physical boxes and box contents
 - superadmin technical prompts and tasks
 
 ## `tz_tasks` (applied 09.08.2026)
@@ -25,6 +26,18 @@
 - `fbs_orders`: tenant/store cache of WB orders, unique `(store_id, wb_order_id)`; keeps raw data, WB statuses, supply relation and synchronized variant fields.
 - `fbs_sync_log`: last successful store synchronization metadata.
 - UI reads DB first; Edge Function `wb-fbs` refreshes from WB and upserts cache.
+
+## WMS tables and RPC (applied 11.08.2026)
+- Patches: `supabase/patch_wms.sql`, `patch_wms_boxes.sql`, `patch_wms_disabled.sql`, `patch_wms_rack_layout.sql`.
+- `wms_warehouses`: account warehouse, FBS participation and optional WB warehouse link.
+- `wms_zones`: one complete rack; stores pallet-position dimensions and visible upright configuration.
+- `wms_zone_sides`: stable `code` (`S1`/`S2`), editable name and shared `slot_columns × slot_rows`; database allows at most two sides per rack.
+- `wms_cells`: pallet positions such as `B3` with free/occupied/reserved/disabled state.
+- `wms_cell_items`: product or physical box. A box has unique `barcode`, optional `side_id` and `slot_number`; uniqueness protects one box per K-place.
+- `wms_box_contents`: products inside a physical box; moving the box does not rewrite this table.
+- `save_wms_zone_layout`: atomically saves rack dimensions, uprights and sides; rejects removal/shrinking that would orphan occupied data.
+- `move_or_swap_wms_box`: atomically moves a selected box to a free K-place or swaps two occupied K-places, including movement between the two sides of the same pallet position.
+- Legacy boxes without `side_id`/`slot_number` remain valid and await manual placement.
 
 ## Important SQL Patterns
 

@@ -19,6 +19,7 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - Strict Supabase-backed runtime for reads/writes
 - Fulfillment batches with reception, QA, packaging, labeling, boxes and logistics stages
 - FBS order cache/sync with WB, supply grouping, stickers, picking lists and order transfers
+- WMS Lite: warehouses, configurable one/two-sided racks, pallet positions, visual box slots, QR-addressed physical boxes and their contents
 - Internal superadmin tools: finance, diary, glossary, administration, prompts and tasks
 
 ## Current operational rule — FBS
@@ -26,6 +27,12 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - WB supply is the parent unit for transfer to delivery.
 - Product variant identity prefers WB barcode/SKU; `nmId` alone is not unique across sizes.
 - Unknown size remains visibly unknown instead of being guessed.
+
+## Current operational rule — WMS
+- A WMS zone is a complete rack: columns are pallet positions, rows are tiers.
+- A rack has one or two physical sides. Each side has one shared box-slot geometry; the default is `2 × 4 = 8` slots per pallet position.
+- A physical box keeps one stable barcode/QR identity. Moving or swapping it changes only its address, never its barcode or contents.
+- An occupied structure cannot be silently shrunk or deleted. Conflicting addresses and a third rack side are blocked by the database.
 
 ## Required Business Entities
 - `auth.users`
@@ -35,6 +42,12 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - `stores`
 - `shipments`
 - `shipment_status_history`
+- `wms_warehouses`
+- `wms_zones`
+- `wms_zone_sides`
+- `wms_cells`
+- `wms_cell_items`
+- `wms_box_contents`
 
 ## Core Business Rules
 - One user can belong to multiple accounts

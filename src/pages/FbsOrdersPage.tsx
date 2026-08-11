@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import jsPDF from 'jspdf'
 import { supabase } from '../lib/supabase'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
@@ -8,7 +8,7 @@ import type { Product, Store } from '../types'
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface FbsOrder {
-  id: number
+  id: string
   rid: string
   createdAt: string
   ddate: string
@@ -28,7 +28,10 @@ interface FbsOrder {
   productVendorCode: string | null
   productSize: string | null
   cellLocation: CellLocation | null
-  shipStatus: 'pending' | 'assembling' | 'delivering' | 'done'
+  shipStatus: TabKey
+  supplierStatus: string
+  wbSystemStatus: string
+  isInLatestSnapshot: boolean
   supply_id: string | null
 }
 
@@ -57,7 +60,7 @@ interface WbSupply {
 }
 
 interface PickingListRow {
-  orderId: number
+  orderId: string
   photoUrl: string | null
   photoDataUrl: string | null
   brand: string
@@ -144,6 +147,13 @@ function escapeHtml(value: string | number): string {
     .replace(/'/g, '&#039;')
 }
 
+function staleDataMessage(lastSyncedAt: Date | null) {
+  const suffix = lastSyncedAt
+    ? `Последняя успешная синхронизация: ${lastSyncedAt.toLocaleString('ru-RU')}.`
+    : 'Успешной синхронизации ещё не было.'
+  return `Не удалось полностью обновить данные WB. Показаны последние сохранённые данные. ${suffix}`
+}
+
 async function imageUrlToPngDataUrl(url: string): Promise<string | null> {
   try {
     const response = await fetch(url)
@@ -189,7 +199,21 @@ async function invokeFbs(storeId: string, body: Record<string, unknown>): Promis
 
 // ─── FbsOrdersPage ────────────────────────────────────────────────────────────
 
-type TabKey = 'pending' | 'assembling' | 'delivering' | 'done'
+type TabKey = 'pending' | 'assembling' | 'delivering' | 'completed' | 'cancelled' | 'archive'
+
+function tabForOfficialWbStatus(
+  supplierStatus: string,
+  wbSystemStatus: string,
+  isInLatestSnapshot: boolean,
+): TabKey {
+  if (!isInLatestSnapshot) return 'archive'
+  if (supplierStatus === 'new' && wbSystemStatus === 'waiting') return 'pending'
+  if (supplierStatus === 'confirm' && wbSystemStatus === 'waiting') return 'assembling'
+  if (supplierStatus === 'cancel' || wbSystemStatus === 'declined_by_client' || wbSystemStatus === 'canceled') return 'cancelled'
+  if (wbSystemStatus === 'sold' || wbSystemStatus === 'canceled_by_client' || wbSystemStatus === 'defect') return 'completed'
+  if (supplierStatus === 'complete') return 'delivering'
+  return 'archive'
+}
 
 interface Props {
   stores: Store[]
@@ -201,14 +225,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
   const lsKey = `fbs_store_${accountId}`
   const tabLsKey = `fbs_tab_${accountId}`
-  // localStorage только для UI (магазин + таб + done-статусы)
-  const doneLsKey = `fbs_done_${accountId}`
-  const getDoneIds = (): Set<number> => {
-    try { return new Set(JSON.parse(localStorage.getItem(doneLsKey) ?? '[]')) } catch { return new Set() }
-  }
-  const saveDoneId = (id: number) => {
-    const s = getDoneIds(); s.add(id); localStorage.setItem(doneLsKey, JSON.stringify([...s]))
-  }
+  // localStorage хранит только настройки интерфейса. Статусы заказов всегда приходят из WB.
 
   const [selectedStoreId, setSelectedStoreId] = useState<string>(() => {
     const saved = localStorage.getItem(lsKey)
@@ -221,20 +238,24 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<TabKey>(() => {
     const saved = localStorage.getItem(tabLsKey)
-    return (['pending','assembling','delivering','done'].includes(saved ?? '') ? saved : 'pending') as TabKey
+    return (['pending','assembling','delivering','completed','cancelled','archive'].includes(saved ?? '') ? saved : 'pending') as TabKey
   })
-  const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [busyIds, setBusyIds] = useState<Set<number>>(new Set())
-  const [assembleModal, setAssembleModal] = useState<{ ids: number[]; mode: 'assemble' | 'move'; sourceSupplyIds: string[] } | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  const [assembleModal, setAssembleModal] = useState<{ ids: string[]; mode: 'assemble' | 'move'; sourceSupplyIds: string[] } | null>(null)
   const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
   const [newSupplyName, setNewSupplyName] = useState('')
   const [openSupplies, setOpenSupplies] = useState<WbSupply[]>([])
   const [loadingSupplies, setLoadingSupplies] = useState(false)
-  const [orderMenuId, setOrderMenuId] = useState<number | null>(null)
+  const [orderMenuId, setOrderMenuId] = useState<string | null>(null)
   const [expandedSupplyIds, setExpandedSupplyIds] = useState<Set<string>>(new Set())
   const [pickingListMenuOpen, setPickingListMenuOpen] = useState(false)
   const [syncingProducts, setSyncingProducts] = useState(false)
   const [productSyncNotice, setProductSyncNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  const syncInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
+  const selectedStoreIdRef = useRef(selectedStoreId)
+  const lastSyncedAtRef = useRef<Date | null>(null)
+  selectedStoreIdRef.current = selectedStoreId
 
   useEffect(() => {
     setPickingListMenuOpen(false)
@@ -306,29 +327,29 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     }))
   }, [accountId, selectedStoreId])
 
-  // WB статус → наш shipStatus
-  const wbToShip = (wbStatus: string, id: number): FbsOrder['shipStatus'] => {
-    if (getDoneIds().has(id)) return 'done'
-    if (wbStatus === 'confirm') return 'assembling'
-    if (wbStatus === 'complete') return 'delivering'
-    return 'pending'
-  }
-
   // Читаем заказы из fbs_orders (Supabase DB)
   const readFromDb = useCallback(async () => {
     if (!supabase || !selectedStoreId) return
-    const { data: rows } = await (supabase as any)
-      .from('fbs_orders')
-      .select('*')
-      .eq('store_id', selectedStoreId)
-      .not('wb_status', 'in', '("cancel","cancel_carrier")')
-      .order('created_at', { ascending: false })
-      .limit(500)
+    const rows: any[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data: pageRows, error: pageError } = await (supabase as any)
+        .from('fbs_orders')
+        .select('*')
+        .eq('store_id', selectedStoreId)
+        .order('created_at', { ascending: false })
+        .range(from, from + 999)
+      if (pageError) throw pageError
+      rows.push(...(pageRows ?? []))
+      if ((pageRows ?? []).length < 1000) break
+    }
 
     const mapped: FbsOrder[] = (rows ?? []).map((row: any) => {
       const d = row.data ?? {}
+      const supplierStatus = String(row.supplier_status ?? row.wb_status ?? '')
+      const wbSystemStatus = String(row.wb_system_status ?? '')
+      const isInLatestSnapshot = row.is_in_latest_snapshot !== false
       return {
-        id: row.wb_order_id,
+        id: String(row.wb_order_id),
         rid: d.rid ?? row.rid ?? '',
         createdAt: row.created_at ?? '',
         ddate: row.ddate ?? '',
@@ -350,7 +371,10 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         productVendorCode: null,
         productSize: null,
         cellLocation: null,
-        shipStatus: wbToShip(row.wb_status, row.wb_order_id),
+        shipStatus: tabForOfficialWbStatus(supplierStatus, wbSystemStatus, isInLatestSnapshot),
+        supplierStatus,
+        wbSystemStatus,
+        isInLatestSnapshot,
         supply_id: row.supply_id ?? null,
       } as FbsOrder
     })
@@ -360,10 +384,20 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     // Проверяем sync log
     const { data: syncLog } = await (supabase as any)
       .from('fbs_sync_log')
-      .select('last_synced_at')
+      .select('last_synced_at,error,orders_count,status_counts')
       .eq('store_id', selectedStoreId)
       .single()
-    if (syncLog?.last_synced_at) setLastSyncedAt(new Date(syncLog.last_synced_at))
+    const successfulSync = syncLog?.last_synced_at ? new Date(syncLog.last_synced_at) : null
+    const latestSnapshotCount = mapped.filter((order) => order.isInLatestSnapshot).length
+    const expectedCount = Number(syncLog?.orders_count ?? latestSnapshotCount)
+    const snapshotMismatch = Number.isFinite(expectedCount) && expectedCount !== latestSnapshotCount
+    lastSyncedAtRef.current = successfulSync
+    setLastSyncedAt(successfulSync)
+    setError(syncLog?.error
+      ? staleDataMessage(successfulSync)
+      : snapshotMismatch
+        ? `Проверка целостности не пройдена: WB-снимок содержит ${expectedCount} заказов, загружено ${latestSnapshotCount}. Показаны последние сохранённые данные.`
+        : null)
     return enriched
   }, [selectedStoreId, enrichWithCells])
 
@@ -377,15 +411,38 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   }, [selectedStoreId])
 
   // Синк с WB → upsert в fbs_orders → перечитываем из DB
-  const doSync = useCallback(async () => {
-    if (!selectedStoreId) return
-    setLoading(true); setError(null)
-    try {
-      await invokeFbs(selectedStoreId, { action: 'sync_orders' })
-      await Promise.all([readFromDb(), loadOpenSupplies()])
-      setLastSyncedAt(new Date())
-    } catch (e) { setError(String(e)) }
-    finally { setLoading(false) }
+  const doSync = useCallback((): Promise<void> => {
+    if (!selectedStoreId) return Promise.resolve()
+    const existingSync = syncInFlightRef.current.get(selectedStoreId)
+    if (existingSync) return existingSync
+
+    const storeId = selectedStoreId
+    const syncPromise = (async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const result = await invokeFbs(storeId, { action: 'sync_orders' })
+        await Promise.all([readFromDb(), loadOpenSupplies()])
+        const serverSyncTime = typeof result.last_synced_at === 'string' ? new Date(result.last_synced_at) : null
+        if (result.partial === true) {
+          setError(staleDataMessage(serverSyncTime ?? lastSyncedAtRef.current))
+        } else {
+          const successfulSync = serverSyncTime ?? new Date()
+          lastSyncedAtRef.current = successfulSync
+          setLastSyncedAt(successfulSync)
+        }
+      } catch {
+        setError(staleDataMessage(lastSyncedAtRef.current))
+      } finally {
+        if (selectedStoreIdRef.current === storeId) setLoading(false)
+      }
+    })()
+
+    syncInFlightRef.current.set(storeId, syncPromise)
+    void syncPromise.finally(() => {
+      if (syncInFlightRef.current.get(storeId) === syncPromise) syncInFlightRef.current.delete(storeId)
+    })
+    return syncPromise
   }, [selectedStoreId, readFromDb, loadOpenSupplies])
 
   const handleProductSync = async () => {
@@ -413,13 +470,13 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   useEffect(() => {
     if (!selectedStoreId) return
     void loadOpenSupplies().catch(() => setOpenSupplies([]))
-    void readFromDb().then(() => {
-      setLastSyncedAt(prev => {
-        const stale = !prev || (Date.now() - prev.getTime()) > 10 * 60_000
+    void readFromDb()
+      .then(() => {
+        const previousSync = lastSyncedAtRef.current
+        const stale = !previousSync || (Date.now() - previousSync.getTime()) > 10 * 60_000
         if (stale) void doSync()
-        return prev
       })
-    })
+      .catch(() => setError(staleDataMessage(lastSyncedAtRef.current)))
 
     // Автосинк каждые 2 минуты — без нажатия "Обновить"
     const timer = setInterval(() => { void doSync() }, 2 * 60_000)
@@ -427,12 +484,14 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   }, [selectedStoreId])
 
   const mapRawOrder = useCallback((o: any, status: FbsOrder['shipStatus']): FbsOrder => ({
-    id: o.id, rid: o.rid ?? '', createdAt: o.createdAt ?? '', ddate: o.ddate ?? '',
+    id: String(o.id), rid: o.rid ?? '', createdAt: o.createdAt ?? '', ddate: o.ddate ?? '',
     warehouseId: o.warehouseId ?? 0, article: o.article ?? '', nmId: o.nmId ?? 0,
     chrtId: o.chrtId ?? 0, skus: o.skus ?? [], price: o.price ?? 0,
     convertedPrice: o.convertedPrice ?? 0, currencyCode: o.currencyCode ?? 643,
     photoUrl: null, productBarcode: null, productName: null, productBrand: null,
-    productVendorCode: null, productSize: null, cellLocation: null, shipStatus: status, supply_id: null,
+    productVendorCode: null, productSize: null, cellLocation: null, shipStatus: status,
+    supplierStatus: status === 'pending' ? 'new' : status === 'assembling' ? 'confirm' : 'complete',
+    wbSystemStatus: 'waiting', isInLatestSnapshot: true, supply_id: null,
   }), [])
 
   // Склады WB при смене магазина
@@ -449,14 +508,8 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
   // ─── Handlers ──────────────────────────────────────────────────────────────
 
-  const setStatus = (ids: number[], status: FbsOrder['shipStatus']) => {
-    if (status === 'done') ids.forEach(saveDoneId)
-    setOrders((prev) => prev.map((o) => ids.includes(o.id) ? { ...o, shipStatus: status } : o))
-    setSelected(new Set())
-  }
-
   const openAssembleModal = async (
-    ids: number[],
+    ids: string[],
     initialTab: 'new' | 'existing' = 'new',
     mode: 'assemble' | 'move' = 'assemble',
     sourceSupplyIds: string[] = [],
@@ -473,7 +526,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     finally { setLoadingSupplies(false) }
   }
 
-  const handleAssemble = async (ids: number[], existingSupplyId?: string) => {
+  const handleAssemble = async (ids: string[], existingSupplyId?: string) => {
     const operationMode = assembleModal?.mode ?? 'assemble'
     setBusyIds((s) => new Set([...s, ...ids]))
     setAssembleModal(null)
@@ -488,7 +541,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         supplyId = supRes.id as string
         if (!supplyId) throw new Error('WB не вернул ID поставки')
       }
-      const failedIds: number[] = []
+      const failedIds: string[] = []
       for (const orderId of ids) {
         try {
           const res = await invokeFbs(selectedStoreId, { action: 'add_order_to_supply', supply_id: supplyId, order_id: orderId })
@@ -498,7 +551,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       const successIds = ids.filter((id) => !failedIds.includes(id))
       if (successIds.length > 0) {
         setOrders((previous) => previous.map((order) => successIds.includes(order.id)
-          ? { ...order, shipStatus: 'assembling', supply_id: supplyId }
+          ? { ...order, shipStatus: 'assembling' as const, supplierStatus: 'confirm', wbSystemStatus: 'waiting', supply_id: supplyId }
           : order))
         setSelected((previous) => {
           const next = new Set(previous)
@@ -519,11 +572,13 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     }
   }
 
-  const handleShip = async (orders2ship: FbsOrder[]) => {
+  const handleShip = async (supplyId: string, orders2ship: FbsOrder[]) => {
     if (!supabase) return
     const ids = orders2ship.map((o) => o.id)
     setBusyIds((s) => new Set([...s, ...ids]))
     try {
+      // Статус меняет только WB: сначала передаём целую поставку в доставку.
+      await invokeFbs(selectedStoreId, { action: 'deliver_supply', supply_id: supplyId })
       for (const order of orders2ship) {
         if (!order.cellLocation) continue
         const { data: current } = await (supabase as any)
@@ -540,7 +595,8 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           }).catch(() => null)
         }
       }
-      setStatus(ids, 'delivering')
+      setSelected(new Set())
+      await Promise.all([doSync(), loadOpenSupplies()])
     } catch (e) { alert(String(e)) }
     finally { setBusyIds((s) => { const n = new Set(s); ids.forEach((i) => n.delete(i)); return n }) }
   }
@@ -581,14 +637,14 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     if (productsError) throw productsError
 
     const productByNmId = new Map<number, Product>((productData ?? []).map((product: Product) => [product.nm_id, product]))
-    const stickerByOrderId = new Map<number, { partA?: number; partB?: number }>()
+    const stickerByOrderId = new Map<string, { partA?: number; partB?: number }>()
     const ids = ordersToExport.map((order) => order.id)
     for (let index = 0; index < ids.length; index += 100) {
       const response = await invokeFbs(selectedStoreId, {
         action: 'get_sticker', order_ids: ids.slice(index, index + 100), fmt: 'png', w: 58, h: 40,
       })
-      for (const sticker of (response.stickers as Array<{ orderId: number; partA?: number; partB?: number }> | undefined) ?? []) {
-        stickerByOrderId.set(sticker.orderId, sticker)
+      for (const sticker of (response.stickers as Array<{ orderId: string | number; partA?: number; partB?: number }> | undefined) ?? []) {
+        stickerByOrderId.set(String(sticker.orderId), sticker)
       }
     }
 
@@ -796,14 +852,16 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     { key: 'pending',    label: 'Новые' },
     { key: 'assembling', label: 'На сборке' },
     { key: 'delivering', label: 'В доставке' },
-    { key: 'done',       label: 'Отгружено' },
+    { key: 'completed',  label: 'Завершённые' },
+    { key: 'cancelled',  label: 'Отменённые' },
+    { key: 'archive',    label: 'Архив' },
   ]
   const tabOrders = orders.filter((o) => o.shipStatus === activeTab)
   const ordersWithoutSize = tabOrders.filter((order) => !order.productSize)
   const selectedTab = tabOrders.filter((o) => selected.has(o.id))
   const allTabSelected = tabOrders.length > 0 && tabOrders.every((o) => selected.has(o.id))
 
-  const toggleSelect = (id: number) => setSelected((s) => {
+  const toggleSelect = (id: string) => setSelected((s) => {
     const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
   })
   const toggleAll = () => setSelected(allTabSelected ? new Set() : new Set(tabOrders.map((o) => o.id)))
@@ -812,7 +870,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     const allSelected = ids.length > 0 && ids.every((id) => previous.has(id))
     return allSelected ? new Set() : new Set(ids)
   })
-  const toggleSupplyOrderSelection = (orderId: number, supplyOrders: FbsOrder[]) => setSelected((previous) => {
+  const toggleSupplyOrderSelection = (orderId: string, supplyOrders: FbsOrder[]) => setSelected((previous) => {
     const supplyIds = new Set(supplyOrders.map((order) => order.id))
     const next = new Set(Array.from(previous).filter((id) => supplyIds.has(id)))
     next.has(orderId) ? next.delete(orderId) : next.add(orderId)
@@ -827,7 +885,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
         <select
           value={selectedStoreId}
-          onChange={(e) => { setSelectedStoreId(e.target.value); localStorage.setItem(lsKey, e.target.value); setOrders([]); setOpenSupplies([]); setSelected(new Set()); setProductSyncNotice(null) }}
+          onChange={(e) => { setSelectedStoreId(e.target.value); localStorage.setItem(lsKey, e.target.value); setOrders([]); setOpenSupplies([]); setSelected(new Set()); setProductSyncNotice(null); setError(null); setLastSyncedAt(null); lastSyncedAtRef.current = null }}
           className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-violet-400"
         >
           {storesWithKey.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -846,12 +904,6 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           <button type="button" onClick={() => void openAssembleModal(selectedTab.map((o) => o.id))}
             className="h-8 rounded-xl bg-amber-500 px-4 text-xs font-semibold text-white hover:bg-amber-600 transition">
             Взять в сборку ({selectedTab.length})
-          </button>
-        )}
-        {selectedTab.length > 0 && activeTab === 'delivering' && (
-          <button type="button" onClick={() => setStatus(selectedTab.map((o) => o.id), 'done')}
-            className="h-8 rounded-xl bg-slate-600 px-4 text-xs font-semibold text-white hover:bg-slate-700 transition">
-            Завершить выбранные ({selectedTab.length})
           </button>
         )}
       </div>
@@ -877,7 +929,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                   key === 'pending' ? 'bg-blue-100 text-blue-600' :
                   key === 'assembling' ? 'bg-amber-100 text-amber-600' :
                   key === 'delivering' ? 'bg-violet-100 text-violet-600' :
-                  'bg-emerald-100 text-emerald-700'
+                  key === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                  key === 'cancelled' ? 'bg-red-100 text-red-600' :
+                  'bg-slate-200 text-slate-600'
                 }`}>{count}</span>
               )}
             </button>
@@ -886,7 +940,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       </div>
 
       {error && (
-        <div className="mx-5 mt-3 rounded-xl bg-red-50 px-4 py-2.5 text-xs text-red-600">{error}</div>
+        <div className="mx-5 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+          <span className="font-semibold">Данные могут быть устаревшими.</span>{' '}{error}
+        </div>
       )}
 
       {ordersWithoutSize.length > 0 && (
@@ -967,7 +1023,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                     {supplyId !== '__none__' && supplyOrders.length > 0 && (
                       <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
                         disabled={busyIds.size > 0}
-                        onClick={(e) => { e.stopPropagation(); void handleShip(supplyOrders) }}
+                        onClick={(e) => { e.stopPropagation(); void handleShip(supplyId, supplyOrders) }}
                         className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-wait disabled:opacity-40">
                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M5 12h14m-5-5 5 5-5 5" />
@@ -1210,7 +1266,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         {/* Стикер — скрыт на табе Новые, WB не выдаёт стикеры до перевода в сборку */}
-                        {activeTab !== 'pending' && (
+                        {(activeTab === 'delivering' || activeTab === 'completed') && (
                           <button type="button" title="Печать стикера" disabled={isBusy}
                             onClick={() => void handlePrintSticker(order)}
                             className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
@@ -1247,14 +1303,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                             )}
                           </div>
                         )}
-                        {activeTab === 'delivering' && (
-                          <button type="button"
-                            onClick={() => setStatus([order.id], 'done')}
-                            className="rounded-lg bg-slate-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-600 transition">
-                            Завершить
-                          </button>
-                        )}
-                        {activeTab === 'done' && (
+                        {activeTab === 'completed' && (
                           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">✓</span>
                         )}
                       </div>
