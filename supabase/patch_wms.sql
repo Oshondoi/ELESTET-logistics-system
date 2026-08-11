@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS public.wms_zones (
   account_id   uuid    NOT NULL,
   name         text    NOT NULL,
   cols         integer NOT NULL DEFAULT 6  CHECK (cols  BETWEEN 1 AND 26),
-  rows         integer NOT NULL DEFAULT 8  CHECK (rows  BETWEEN 1 AND 50),
+  rows         integer NOT NULL DEFAULT 3  CHECK (rows  BETWEEN 1 AND 50),
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now()
 );

@@ -29,8 +29,8 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - Unknown size remains visibly unknown instead of being guessed.
 
 ## Current operational rule — WMS
-- A WMS zone is a complete rack: columns are pallet positions, rows are tiers.
-- A rack has one or two physical sides. Each side has one shared box-slot geometry; the default is `2 × 4 = 8` slots per pallet position.
+- A WMS zone is a complete rack: columns are pallet positions, rows are tiers; a new rack starts with three tiers by default.
+- A rack has one or two physical sides, named `Сторона 1` and `Сторона 2` by default. Each side has one shared box-slot geometry; the default is `2 × 4 = 8` slots per pallet position.
 - A physical box keeps one stable barcode/QR identity. Moving or swapping it changes only its address, never its barcode or contents.
 - An occupied structure cannot be silently shrunk or deleted. Conflicting addresses and a third rack side are blocked by the database.
 

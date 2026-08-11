@@ -30,7 +30,7 @@
 ## WMS tables and RPC (applied 11.08.2026)
 - Patches: `supabase/patch_wms.sql`, `patch_wms_boxes.sql`, `patch_wms_disabled.sql`, `patch_wms_rack_layout.sql`.
 - `wms_warehouses`: account warehouse, FBS participation and optional WB warehouse link.
-- `wms_zones`: one complete rack; stores pallet-position dimensions and visible upright configuration.
+- `wms_zones`: one complete rack; stores pallet-position dimensions and visible upright configuration; database default is three tiers (`rows = 3`).
 - `wms_zone_sides`: stable `code` (`S1`/`S2`), editable name and shared `slot_columns × slot_rows`; database allows at most two sides per rack.
 - `wms_cells`: pallet positions such as `B3` with free/occupied/reserved/disabled state.
 - `wms_cell_items`: product or physical box. A box has unique `barcode`, optional `side_id` and `slot_number`; uniqueness protects one box per K-place.

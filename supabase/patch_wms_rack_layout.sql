@@ -8,6 +8,8 @@ alter table public.wms_zones
     check (upright_every between 1 and 26),
   add column if not exists upright_after_cols integer[] not null default '{}'::integer[];
 
+alter table public.wms_zones alter column rows set default 3;
+
 create table if not exists public.wms_zone_sides (
   id         uuid primary key default gen_random_uuid(),
   zone_id    uuid not null references public.wms_zones(id) on delete cascade,
@@ -83,8 +85,8 @@ insert into public.wms_zone_sides (zone_id, account_id, code, name, slot_count, 
 select z.id, z.account_id, defaults.code, defaults.name, defaults.slot_count, defaults.position
 from public.wms_zones z
 cross join (values
-  ('S1'::text, 'Лицевая сторона'::text, 8, 0),
-  ('S2'::text, 'Задняя сторона'::text, 8, 1)
+  ('S1'::text, 'Сторона 1'::text, 8, 0),
+  ('S2'::text, 'Сторона 2'::text, 8, 1)
 ) as defaults(code, name, slot_count, position)
 where not exists (select 1 from public.wms_zone_sides s where s.zone_id = z.id);
 

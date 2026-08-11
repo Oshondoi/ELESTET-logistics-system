@@ -113,8 +113,8 @@ function generateGrid(zone: WmsZone, cells: WmsCell[]): VirtualCell[][] {
 
 function defaultZoneSides(): WmsZoneSide[] {
   return [
-    { code: 'S1', name: 'Лицевая сторона', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 0 },
-    { code: 'S2', name: 'Задняя сторона', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 1 },
+    { code: 'S1', name: 'Сторона 1', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 0 },
+    { code: 'S2', name: 'Сторона 2', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 1 },
   ]
 }
 
@@ -230,7 +230,7 @@ function ZoneModal({ editing, onClose, onSave }: {
 }) {
   const [name, setName] = useState(editing?.name ?? '')
   const [cols, setCols] = useState(String(editing?.cols ?? 6))
-  const [rows, setRows] = useState(String(editing?.rows ?? 8))
+  const [rows, setRows] = useState(String(editing?.rows ?? 3))
   const [uprightMode, setUprightMode] = useState<'interval' | 'custom'>(editing?.upright_mode ?? 'interval')
   const [uprightEvery, setUprightEvery] = useState(String(editing?.upright_every ?? 3))
   const [customUprights, setCustomUprights] = useState<number[]>(editing?.upright_after_cols ?? [])
@@ -284,10 +284,10 @@ function ZoneModal({ editing, onClose, onSave }: {
     while (usedCodes.has(`S${index}`)) index += 1
     setSides((previous) => [...previous, {
       code: `S${index}`,
-       name: previous.length === 0 ? 'Лицевая сторона' : 'Задняя сторона',
-       slot_count: 8,
-       slot_columns: 2,
-       slot_rows: 4,
+      name: `Сторона ${index}`,
+      slot_count: 8,
+      slot_columns: 2,
+      slot_rows: 4,
       position: previous.length,
     }])
   }
@@ -441,11 +441,12 @@ function ZoneModal({ editing, onClose, onSave }: {
 
 // ─── CellModal ────────────────────────────────────────────────────────────────
 
-function CellModal({ cell, zone, accountId, zoneId, onClose, onRefresh }: {
+function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onRefresh }: {
   cell: VirtualCell
   zone: WmsZone
   accountId: string
   zoneId: string
+  initialSideKey?: string
   onClose: () => void
   onRefresh: () => void
 }) {
@@ -464,11 +465,12 @@ function CellModal({ cell, zone, accountId, zoneId, onClose, onRefresh }: {
   const [boxName, setBoxName] = useState('')
   const [boxBarcode, setBoxBarcode] = useState('')
   const zoneSides = normalizedZoneSides(zone)
-  const [boxSideId, setBoxSideId] = useState(zoneSides[0]?.id ?? '')
+  const initialSide = zoneSides.find((side) => (side.id ?? side.code) === initialSideKey) ?? zoneSides[0]
+  const [boxSideId, setBoxSideId] = useState(initialSide?.id ?? '')
   const [boxSlotNumber, setBoxSlotNumber] = useState('1')
   const [boxRows, setBoxRows] = useState<BoxRow[]>([{ tempId: '1', barcode: '', product_name: '', qty_per_box: '1' }])
   const [assigningBoxId, setAssigningBoxId] = useState<string | null>(null)
-  const [assignmentSideId, setAssignmentSideId] = useState(zoneSides[0]?.id ?? '')
+  const [assignmentSideId, setAssignmentSideId] = useState(initialSide?.id ?? '')
   const [assignmentSlotNumber, setAssignmentSlotNumber] = useState('1')
   const [movingBoxId, setMovingBoxId] = useState<string | null>(null)
 
@@ -674,7 +676,9 @@ function CellModal({ cell, zone, accountId, zoneId, onClose, onRefresh }: {
             <h2 className="text-base font-semibold text-slate-800">
               Паллетоместо <span className="font-black">{cell.col}{cell.row}</span>
             </h2>
-            <p className="text-xs text-slate-400">{zone.name}</p>
+            <p className="text-xs text-slate-400">
+              {zone.name}{initialSide ? ` · ${initialSide.name}` : ''}
+            </p>
           </div>
           <button type="button" onClick={() => { onClose(); onRefresh() }} className="text-slate-400 hover:text-slate-600">
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1034,7 +1038,7 @@ export function WmsPage({ accountId }: { accountId: string }) {
 
   const [warehouseModal, setWarehouseModal] = useState<{ open: boolean; editing: WmsWarehouse | null }>({ open: false, editing: null })
   const [zoneModal, setZoneModal] = useState<{ open: boolean; editing: WmsZone | null; warehouseId: string }>({ open: false, editing: null, warehouseId: '' })
-  const [selectedCellCoord, setSelectedCellCoord] = useState<{ col: string; row: number } | null>(null)
+  const [selectedCellCoord, setSelectedCellCoord] = useState<{ col: string; row: number; sideKey: string } | null>(null)
 
   // ── Data loaders ──────────────────────────────────────────────────────────
 
@@ -1075,6 +1079,7 @@ export function WmsPage({ accountId }: { accountId: string }) {
 
   const selectedZone = Object.values(zonesByWarehouse).flat().find((z) => z.id === selectedZoneId) ?? null
   const grid = selectedZone ? generateGrid(selectedZone, cells) : []
+  const selectedZoneSides = selectedZone ? normalizedZoneSides(selectedZone) : []
   const currentCell = selectedCellCoord
     ? (grid.flat().find((c) => c.col === selectedCellCoord.col && c.row === selectedCellCoord.row) ?? null)
     : null
@@ -1298,7 +1303,7 @@ export function WmsPage({ accountId }: { accountId: string }) {
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="text-sm font-semibold text-slate-800">{selectedZone.name}</h2>
               <span className="text-xs text-slate-400">
-                {selectedZone.cols} паллетомест × {selectedZone.rows} ярусов · {normalizedZoneSides(selectedZone).length} сторон
+                {selectedZone.cols} паллетомест × {selectedZone.rows} ярусов · {selectedZoneSides.length} сторон
               </span>
               <div className="ml-auto flex items-center gap-4 text-xs text-slate-500">
                 <span className="flex items-center gap-1.5">
@@ -1320,60 +1325,83 @@ export function WmsPage({ accountId }: { accountId: string }) {
               </div>
             </div>
 
-            {/* Excel-style grid */}
-            <div className="overflow-auto">
-              <table className="border-separate border-spacing-1">
-                <thead>
-                  <tr>
-                    {/* Row-number column header (empty) */}
-                    <th className="h-7 w-8" />
-                    {Array.from({ length: selectedZone.cols }, (_, ci) => (
-                      <th key={ci} className={`h-7 min-w-[52px] text-center text-xs font-bold text-slate-500 ${ci > 0 && selectedZone.upright_after_cols.includes(ci) ? 'border-l-[6px] border-slate-700 pl-1' : ''}`}>
-                        {colIndexToLetter(ci)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {grid.map((rowCells, rowIdx) => (
-                    <tr key={rowIdx}>
-                      {/* Row number */}
-                      <td className="h-10 w-8 text-center text-xs font-bold text-slate-400">
-                        {rowIdx + 1}
-                      </td>
-                      {rowCells.map((vcell, cellIndex) => {
-                        const isSelected =
-                          selectedCellCoord?.col === vcell.col &&
-                          selectedCellCoord?.row === vcell.row
-                        const totalQty = vcell.dbCell?.items.reduce((s, i) => s + i.qty, 0) ?? 0
-                        return (
-                          <td key={`${vcell.col}-${vcell.row}`} className={cellIndex > 0 && selectedZone.upright_after_cols.includes(cellIndex) ? 'border-l-[6px] border-slate-700 pl-1' : ''}>
-                            <button
-                              type="button"
-                              title={`${vcell.col}${vcell.row}`}
-                              onClick={() => setSelectedCellCoord({ col: vcell.col, row: vcell.row })}
-                              className={`flex h-10 min-w-[52px] flex-col items-center justify-center rounded-lg border text-[10px] font-semibold leading-tight transition ${
-                                isSelected ? 'ring-2 ring-violet-400 ring-offset-1' : ''
-                              } ${
-                                vcell.status === 'occupied'
-                                  ? 'border-red-200 bg-red-100 text-red-700 hover:bg-red-200'
-                                  : vcell.status === 'reserved'
-                                  ? 'border-amber-200 bg-amber-100 text-amber-700 hover:bg-amber-200'
-                                  : vcell.status === 'disabled'
-                                  ? 'border-slate-300 bg-slate-200 text-slate-400 cursor-not-allowed'
-                                  : 'border-emerald-200 bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              }`}
-                            >
-                              <span className="text-[11px] font-bold">{vcell.col}{vcell.row}</span>
-                              {vcell.status !== 'free' && totalQty > 0 && <span>{totalQty} ед.</span>}
-                            </button>
-                          </td>
-                        )
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {/* One full rack view for every accessible side */}
+            <div className="flex flex-col gap-5">
+              {selectedZoneSides.map((side) => {
+                const sideKey = side.id ?? side.code
+                return (
+                  <section key={sideKey}>
+                    {selectedZoneSides.length > 1 && (
+                      <div className="mb-1 text-xs font-semibold text-slate-700">{side.name}</div>
+                    )}
+                    <div className="overflow-auto">
+                      <table className="border-separate border-spacing-1">
+                        <thead>
+                          <tr>
+                            {/* Row-number column header (empty) */}
+                            <th className="h-7 w-8" />
+                            {Array.from({ length: selectedZone.cols }, (_, ci) => (
+                              <th key={ci} className={`h-7 min-w-[52px] text-center text-xs font-bold text-slate-500 ${ci > 0 && selectedZone.upright_after_cols.includes(ci) ? 'border-l-[6px] border-slate-700 pl-1' : ''}`}>
+                                {colIndexToLetter(ci)}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {grid.map((rowCells, rowIdx) => (
+                            <tr key={rowIdx}>
+                              {/* Row number */}
+                              <td className="h-10 w-8 text-center text-xs font-bold text-slate-400">
+                                {rowIdx + 1}
+                              </td>
+                              {rowCells.map((vcell, cellIndex) => {
+                                const isSelected =
+                                  selectedCellCoord?.col === vcell.col &&
+                                  selectedCellCoord?.row === vcell.row &&
+                                  selectedCellCoord?.sideKey === sideKey
+                                const cellItems = vcell.dbCell?.items ?? []
+                                const hasAddressedBoxes = cellItems.some((item) => item.item_type === 'box' && item.side_id)
+                                const sideItems = hasAddressedBoxes
+                                  ? cellItems.filter((item) => item.side_id === side.id || (!item.side_id && side.position === 0))
+                                  : cellItems
+                                const visualStatus = vcell.status === 'reserved' || vcell.status === 'disabled'
+                                  ? vcell.status
+                                  : hasAddressedBoxes
+                                    ? (sideItems.length > 0 ? 'occupied' : 'free')
+                                    : vcell.status
+                                const totalQty = sideItems.reduce((sum, item) => sum + item.qty, 0)
+                                return (
+                                  <td key={`${vcell.col}-${vcell.row}`} className={cellIndex > 0 && selectedZone.upright_after_cols.includes(cellIndex) ? 'border-l-[6px] border-slate-700 pl-1' : ''}>
+                                    <button
+                                      type="button"
+                                      title={`${side.name} · ${vcell.col}${vcell.row}`}
+                                      onClick={() => setSelectedCellCoord({ col: vcell.col, row: vcell.row, sideKey })}
+                                      className={`flex h-10 min-w-[52px] flex-col items-center justify-center rounded-lg border text-[10px] font-semibold leading-tight transition ${
+                                        isSelected ? 'ring-2 ring-violet-400 ring-offset-1' : ''
+                                      } ${
+                                        visualStatus === 'occupied'
+                                          ? 'border-red-200 bg-red-100 text-red-700 hover:bg-red-200'
+                                          : visualStatus === 'reserved'
+                                          ? 'border-amber-200 bg-amber-100 text-amber-700 hover:bg-amber-200'
+                                          : visualStatus === 'disabled'
+                                          ? 'border-slate-300 bg-slate-200 text-slate-400 cursor-not-allowed'
+                                          : 'border-emerald-200 bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                      }`}
+                                    >
+                                      <span className="text-[11px] font-bold">{vcell.col}{vcell.row}</span>
+                                      {visualStatus !== 'free' && totalQty > 0 && <span>{totalQty} ед.</span>}
+                                    </button>
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                )
+              })}
             </div>
           </div>
         )}
@@ -1396,11 +1424,12 @@ export function WmsPage({ accountId }: { accountId: string }) {
       )}
       {selectedCellCoord && currentCell && selectedZone && (
         <CellModal
-          key={`${selectedCellCoord.col}-${selectedCellCoord.row}`}
+          key={`${selectedCellCoord.sideKey}-${selectedCellCoord.col}-${selectedCellCoord.row}`}
           cell={currentCell}
           zone={selectedZone}
           accountId={accountId}
           zoneId={selectedZoneId!}
+          initialSideKey={selectedCellCoord.sideKey}
           onClose={() => setSelectedCellCoord(null)}
           onRefresh={() => { if (selectedZoneId) void loadCells(selectedZoneId) }}
         />
