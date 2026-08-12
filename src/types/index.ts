@@ -849,6 +849,8 @@ export interface FulfillmentSupply {
   id: string
   batch_id: string
   account_id: string
+  supply_number: number
+  next_box_number: number
   warehouse_id: string | null
   warehouse_name: string
   trip_id: string | null
@@ -866,6 +868,7 @@ export interface FulfillmentBox {
   supply_id: string
   account_id: string
   box_number: number
+  barcode: string
   status: 'open' | 'closed'
   created_at: string
   _local?: boolean

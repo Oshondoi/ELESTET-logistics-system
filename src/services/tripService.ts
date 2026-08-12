@@ -76,6 +76,7 @@ export const addTripLine = async (
   accountId: string,
   tripId: string,
   values: TripLineFormValues,
+  fulfillmentSupplyId: string | null = null,
 ): Promise<TripLine> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase.rpc('add_trip_line', {
@@ -95,6 +96,7 @@ export const addTripLine = async (
     p_status: values.status,
     p_payment_status: values.payment_status,
     p_comment: values.comment,
+    p_fulfillment_supply_id: fulfillmentSupplyId,
   })
 
   if (error) throw error

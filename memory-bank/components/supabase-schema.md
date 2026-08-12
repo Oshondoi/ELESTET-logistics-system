@@ -39,6 +39,17 @@
 - `move_or_swap_wms_box`: atomically moves a selected box to a free K-place or swaps two occupied K-places, including movement between the two sides of the same pallet position.
 - Legacy boxes without `side_id`/`slot_number` remain valid and await manual placement.
 
+## Fulfillment supply numbers and box barcodes (applied 12.08.2026)
+- Patch: `supabase/patch_fulfillment_box_barcodes.sql`.
+- `fulfillment_supplies.supply_number`: positive, unique per `account_id`, allocated from one company-wide number space shared with logistics shipment numbers.
+- `fulfillment_supplies.next_box_number`: next never-issued box number for that supply.
+- `fulfillment_supply_number_registry`: permanent registry of issued company-wide supply numbers; deletion does not make a number reusable.
+- `fulfillment_boxes.barcode`: required globally unique system code `EL_C{company}_P{batch}_S{supply}_B{box}`; maximum 30 characters is enforced during generation.
+- `fulfillment_box_barcode_registry`: permanent tombstone registry of issued box numbers/barcodes. A deleted box code can never be assigned again.
+- Database triggers generate both identifiers, validate tenant consistency and align `trip_lines.shipment_number` with the linked fulfillment supply.
+- `add_trip_line(..., p_fulfillment_supply_id)` links the supply atomically and reuses its number; ordinary logistics lines continue receiving the next free number in the shared company sequence.
+- Backfill verified in production: all 87 supplies numbered; all 1982 boxes have unique barcodes.
+
 ## Important SQL Patterns
 
 ### Store Code Generation

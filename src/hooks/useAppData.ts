@@ -317,9 +317,9 @@ export const useAppData = (accountId: string | null) => {
     setTrips((current) => [trip, ...current])
   }
 
-  const addTripLine = async (tripId: string, values: TripLineFormValues) => {
+  const addTripLine = async (tripId: string, values: TripLineFormValues, fulfillmentSupplyId: string | null = null) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
-    const line = await addTripLineInSupabase(accountId, tripId, values)
+    const line = await addTripLineInSupabase(accountId, tripId, values, fulfillmentSupplyId)
     const store = accountStores.find((s) => s.id === line.store_id)
     const lineWithStore = { ...line, store }
     setTrips((current) =>
