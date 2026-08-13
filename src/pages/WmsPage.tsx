@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
+import { buildWmsLocationQrPdf, type WmsLocationQrLabel } from '../lib/wmsLocationQrPdf'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -12,6 +13,7 @@ interface WmsWarehouse {
   fbs_enabled: boolean
   wb_warehouse_id: string
   created_at: string
+  short_id: number
 }
 
 interface WmsZone {
@@ -25,6 +27,7 @@ interface WmsZone {
   upright_every: number
   upright_after_cols: number[]
   sides: WmsZoneSide[]
+  short_id: number
 }
 
 interface WmsZoneSide {
@@ -113,6 +116,49 @@ type ZoneSettings = {
   sides: WmsZoneSide[]
 }
 
+type WmsScanLocation = {
+  kind: 'pallet' | 'slot'
+  code: string
+  warehouseId: string
+  warehouseShortId: number
+  warehouseName: string
+  rackId: string
+  rackShortId: number
+  rackName: string
+  sideId: string
+  sideNumber: number
+  sideName: string
+  pallet: string
+  col: string
+  row: number
+  slotNumber: number | null
+  slotCount: number
+  slotColumns: number
+  slotRows: number
+  filled: number
+  full: boolean
+  status: 'free' | 'occupied' | 'reserved' | 'disabled'
+  slots: Array<{
+    number: number
+    occupied: boolean
+    boxId: string | null
+    boxNumber: number | null
+    boxBarcode: string | null
+  }>
+}
+
+type WmsScanBox = {
+  kind: 'box'
+  code: string
+  boxId: string
+  boxNumber: number
+  barcode: string
+  placed: boolean
+  itemId: string | null
+  addressCode: string | null
+  addressText: string | null
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function colIndexToLetter(index: number): string {
@@ -157,6 +203,21 @@ function intervalUprights(cols: number, every: number): number[] {
   if (cols < 1 || every < 1) return result
   for (let column = every; column < cols; column += every) result.push(column)
   return result
+}
+
+function wmsPalletCode(accountShortId: number, warehouseShortId: number, rackShortId: number, sideNumber: number, pallet: string) {
+  return `C${accountShortId}_W${warehouseShortId}_R${rackShortId}_S${sideNumber}_${pallet.toUpperCase()}`
+}
+
+function wmsSlotCode(accountShortId: number, warehouseShortId: number, rackShortId: number, sideNumber: number, pallet: string, slotNumber: number) {
+  return `${wmsPalletCode(accountShortId, warehouseShortId, rackShortId, sideNumber, pallet)}_K${slotNumber}`
+}
+
+function openWmsQrPdf(labels: WmsLocationQrLabel[]) {
+  const blob = buildWmsLocationQrPdf(labels)
+  const url = URL.createObjectURL(blob)
+  window.open(url, '_blank', 'noopener,noreferrer')
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 // ─── WarehouseModal ───────────────────────────────────────────────────────────
@@ -464,10 +525,12 @@ function ZoneModal({ editing, onClose, onSave }: {
 
 // ─── CellModal ────────────────────────────────────────────────────────────────
 
-function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onRefresh }: {
+function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, initialSideKey, onClose, onRefresh }: {
   cell: VirtualCell
   zone: WmsZone
+  warehouse: WmsWarehouse
   accountId: string
+  accountShortId: number | null
   zoneId: string
   initialSideKey?: string
   onClose: () => void
@@ -795,11 +858,39 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
               <div className="flex flex-col gap-2.5">
                 {zoneSides.map((side) => {
                   const filled = boxes.filter((box) => box.side_id === side.id && box.slot_number).length
+                  const sideNumber = side.position + 1
+                  const pallet = `${cell.col}${cell.row}`
+                  const palletCode = accountShortId == null ? '' : wmsPalletCode(accountShortId, warehouse.short_id, zone.short_id, sideNumber, pallet)
+                  const locationLabels = palletCode ? [
+                    {
+                      code: palletCode,
+                      title: `ПАЛЛЕТОМЕСТО ${pallet}`,
+                      warehouseName: warehouse.name,
+                      rackName: zone.name,
+                      sideName: side.name,
+                      address: pallet,
+                    },
+                    ...Array.from({ length: side.slot_count }, (_, index) => index + 1).map((slotNumber) => ({
+                      code: wmsSlotCode(accountShortId!, warehouse.short_id, zone.short_id, sideNumber, pallet, slotNumber),
+                      title: `КОРОБОМЕСТО K${slotNumber}`,
+                      warehouseName: warehouse.name,
+                      rackName: zone.name,
+                      sideName: side.name,
+                      address: `${pallet}-K${slotNumber}`,
+                    })),
+                  ] : []
                   return (
                     <div key={side.id ?? side.code} className="rounded-xl border border-slate-200 p-3">
                       <div className="mb-2 flex items-center justify-between">
                         <span className="text-xs font-semibold text-slate-700">{side.name}</span>
-                        <span className="text-[10px] text-slate-400">{filled} из {side.slot_count}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-400">{filled} из {side.slot_count}</span>
+                          <button type="button" disabled={!locationLabels.length} onClick={() => openWmsQrPdf(locationLabels)}
+                            title={`Печать QR паллетоместа и K1–K${side.slot_count}`}
+                            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40">
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z" /></svg>
+                          </button>
+                        </div>
                       </div>
                       <div className="mx-auto grid w-full max-w-xs gap-1.5 rounded-xl border-4 border-amber-200/70 bg-amber-50/40 p-2"
                         style={{ gridTemplateColumns: `repeat(${side.slot_columns}, minmax(0, 1fr))` }}>
@@ -1097,6 +1188,124 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
   )
 }
 
+function ScanWorkspace({ location, pendingBox, error, success, busy, onScan, onSelectSlot, onConfirm, onReset, onClose }: {
+  location: WmsScanLocation | null
+  pendingBox: WmsScanBox | null
+  error: string
+  success: string
+  busy: boolean
+  onScan: (code: string) => void
+  onSelectSlot: (slot: number) => void
+  onConfirm: (action: 'move' | 'swap') => void
+  onReset: () => void
+  onClose: () => void
+}) {
+  const [manualCode, setManualCode] = useState('')
+  const title = location
+    ? `${location.warehouseName} · ${location.rackName} · ${location.sideName} · ${location.pallet}`
+    : pendingBox ? `Короб №${pendingBox.boxNumber}` : 'Ожидание сканирования'
+
+  return (
+    <div className="fixed inset-0 z-[70] flex flex-col bg-slate-950/60 backdrop-blur-sm">
+      <div className="flex min-h-0 flex-1 flex-col bg-white sm:m-3 sm:rounded-3xl sm:shadow-2xl">
+        <header className="flex items-center gap-3 border-b border-slate-200 px-5 py-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-600">
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4M7 12h10" /></svg>
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-base font-semibold text-slate-900">Адресное сканирование</h2>
+            <p className="truncate text-xs text-slate-500">{title}</p>
+          </div>
+          <button type="button" onClick={onReset} className="cursor-pointer rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">Сбросить фокус</button>
+          <button type="button" onClick={onClose} className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="Закрыть и сбросить">
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          </button>
+        </header>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-slate-50 p-5 lg:flex-row">
+          <section className="flex min-w-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <form onSubmit={(event) => { event.preventDefault(); if (manualCode.trim()) { onScan(manualCode); setManualCode('') } }} className="flex min-w-[280px] flex-1 gap-2">
+                <input value={manualCode} onChange={(event) => setManualCode(event.target.value)} placeholder="Сканируйте QR или введите код" autoFocus
+                  className="min-w-0 flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100" />
+                <button disabled={!manualCode.trim() || busy} className="cursor-pointer rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Применить</button>
+              </form>
+            </div>
+
+            {!location ? (
+              <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 p-8 text-center">
+                <div className="mb-3 text-lg font-semibold text-slate-700">Сканируйте паллетоместо, коробоместо или короб</div>
+                <p className="max-w-lg text-sm leading-6 text-slate-500">Место никогда не выбирается автоматически. После паллетоместа явно выберите K на сетке или отсканируйте QR конкретного K.</p>
+              </div>
+            ) : (
+              <>
+                <div className={`mb-4 rounded-xl border px-4 py-3 ${location.full ? 'border-red-300 bg-red-50' : 'border-violet-200 bg-violet-50'}`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-slate-800">{location.pallet}</span>
+                    <span className="text-xs text-slate-500">Заполнено {location.filled} из {location.slotCount}</span>
+                    {location.full && <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-700">Паллетоместо заполнено — новое размещение заблокировано</span>}
+                  </div>
+                  <div className="mt-1 font-mono text-[11px] text-slate-500">{location.code}</div>
+                </div>
+                <div className="mx-auto grid w-full max-w-lg gap-3 rounded-2xl border-[6px] border-amber-200/70 bg-amber-50 p-4"
+                  style={{ gridTemplateColumns: `repeat(${location.slotColumns}, minmax(0, 1fr))` }}>
+                  {location.slots.map((slot) => {
+                    const selected = location.slotNumber === slot.number
+                    return (
+                      <button key={slot.number} type="button" onClick={() => onSelectSlot(slot.number)} disabled={busy}
+                        className={`min-h-20 cursor-pointer rounded-xl border-2 p-3 text-center transition disabled:cursor-wait ${selected ? 'border-violet-500 bg-violet-100 text-violet-800 ring-4 ring-violet-100' : slot.occupied ? 'border-amber-400 bg-amber-100 text-amber-900 hover:bg-amber-200' : location.full ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}>
+                        <div className="text-lg font-bold">K{slot.number}</div>
+                        <div className="mt-1 text-[11px]">{slot.occupied ? `Короб №${slot.boxNumber ?? '—'}` : 'Свободно'}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="mt-4 text-center text-sm text-slate-500">
+                  {location.slotNumber ? `Выбрано место K${location.slotNumber}. Теперь сканируйте короб.` : 'Выберите K на схеме или отсканируйте QR коробоместа.'}
+                </div>
+              </>
+            )}
+          </section>
+
+          <aside className="flex w-full flex-col gap-3 lg:w-80">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Короб</div>
+              {pendingBox ? (
+                <div className="mt-2">
+                  <div className="text-lg font-bold text-slate-800">Короб №{pendingBox.boxNumber}</div>
+                  <div className="mt-1 break-all font-mono text-xs text-slate-500">{pendingBox.barcode}</div>
+                  {pendingBox.placed && <div className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-700">Сейчас: {pendingBox.addressText}. Перенос потребует подтверждения.</div>}
+                </div>
+              ) : <div className="mt-2 text-sm text-slate-400">Короб не отсканирован</div>}
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs leading-5 text-slate-500">
+              <div className="font-semibold text-slate-700">Сброс фокуса</div>
+              <div>• отсканировать другое паллетоместо;</div>
+              <div>• нажать «Сбросить фокус» или закрыть;</div>
+              <div>• отсканировать <span className="font-mono font-semibold">EL_WMS_RESET_V1</span>.</div>
+              <button type="button" onClick={() => openWmsQrPdf([{
+                code: 'EL_WMS_RESET_V1',
+                title: 'СБРОС ФОКУСА',
+                warehouseName: 'Склад ELESTET',
+                rackName: 'Адресное сканирование',
+                sideName: 'Служебный QR',
+                address: 'RESET',
+              }])} className="mt-3 flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 font-medium text-slate-600 hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600">
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z" /></svg>
+                Печать QR сброса
+              </button>
+            </div>
+            {error && <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">{error}</div>}
+            {success && <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-700">{success}</div>}
+            {error.includes('Перенести его') && <button type="button" onClick={() => onConfirm('move')} className="cursor-pointer rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white">Подтвердить перенос</button>}
+            {error.includes('Поменять короба') && <button type="button" onClick={() => onConfirm('swap')} className="cursor-pointer rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white">Подтвердить обмен</button>}
+          </aside>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── WmsPage ──────────────────────────────────────────────────────────────────
 
 export function WmsPage({ accountId }: { accountId: string }) {
@@ -1110,6 +1319,15 @@ export function WmsPage({ accountId }: { accountId: string }) {
   const [warehouseModal, setWarehouseModal] = useState<{ open: boolean; editing: WmsWarehouse | null }>({ open: false, editing: null })
   const [zoneModal, setZoneModal] = useState<{ open: boolean; editing: WmsZone | null; warehouseId: string }>({ open: false, editing: null, warehouseId: '' })
   const [selectedCellCoord, setSelectedCellCoord] = useState<{ col: string; row: number; sideKey: string } | null>(null)
+  const [scanOpen, setScanOpen] = useState(false)
+  const [scanLocation, setScanLocation] = useState<WmsScanLocation | null>(null)
+  const [scanBox, setScanBox] = useState<WmsScanBox | null>(null)
+  const [scanError, setScanError] = useState('')
+  const [scanSuccess, setScanSuccess] = useState('')
+  const [scanBusy, setScanBusy] = useState(false)
+  const scanBufferRef = useRef('')
+  const scanTimerRef = useRef<number | null>(null)
+  const [accountShortId, setAccountShortId] = useState<number | null>(null)
 
   // ── Data loaders ──────────────────────────────────────────────────────────
 
@@ -1158,10 +1376,16 @@ export function WmsPage({ accountId }: { accountId: string }) {
   }, [])
 
   useEffect(() => { void loadWarehouses() }, [loadWarehouses])
+  useEffect(() => {
+    if (!supabase || !accountId) return
+    void (supabase as any).from('accounts').select('short_id').eq('id', accountId).single()
+      .then(({ data }: any) => { setAccountShortId(data?.short_id ?? null) })
+  }, [accountId])
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
   const selectedZone = Object.values(zonesByWarehouse).flat().find((z) => z.id === selectedZoneId) ?? null
+  const selectedWarehouse = selectedZone ? warehouses.find((warehouse) => warehouse.id === selectedZone.warehouse_id) ?? null : null
   const grid = selectedZone ? generateGrid(selectedZone, cells) : []
   const selectedZoneSides = selectedZone ? normalizedZoneSides(selectedZone) : []
   const currentCell = selectedCellCoord
@@ -1171,19 +1395,145 @@ export function WmsPage({ accountId }: { accountId: string }) {
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleSelectWarehouse = async (id: string) => {
-    const isExpanded = expandedWarehouseIds.has(id)
-    if (isExpanded) {
-      setExpandedWarehouseIds((prev) => { const next = new Set(prev); next.delete(id); return next })
-    } else {
-      setExpandedWarehouseIds((prev) => new Set([...prev, id]))
-      if (!zonesByWarehouse[id]) await loadZones(id)
+    setExpandedWarehouseIds((prev) => new Set([...prev, id]))
+    let zones = zonesByWarehouse[id]
+    if (!zones) {
+      if (!supabase) return
+      const { data } = await (supabase as any)
+        .from('wms_zones').select('*, sides:wms_zone_sides(*)').eq('warehouse_id', id).order('created_at')
+      zones = (data ?? []).map((zone: WmsZone) => ({
+        ...zone,
+        upright_mode: zone.upright_mode ?? 'interval',
+        upright_every: zone.upright_every ?? 3,
+        upright_after_cols: zone.upright_after_cols ?? intervalUprights(zone.cols, 3),
+        sides: normalizedZoneSides(zone),
+      }))
+      setZonesByWarehouse((prev) => ({ ...prev, [id]: zones! }))
     }
+    if (zones.length > 0) await handleSelectZone(zones[0].id)
   }
 
   const handleSelectZone = async (id: string) => {
     setSelectedZoneId(id); setCells([]); setSelectedCellCoord(null)
     await loadCells(id)
   }
+
+  const resetScan = useCallback(() => {
+    setScanLocation(null)
+    setScanBox(null)
+    setScanError('')
+    setScanSuccess('Фокус сканирования сброшен')
+  }, [])
+
+  const refreshScanLocation = useCallback(async (code: string) => {
+    if (!supabase) return null
+    const { data, error } = await (supabase as any).rpc('get_wms_scan_target', { p_code: code })
+    if (error) throw error
+    const result = data as WmsScanLocation
+    setScanLocation(result)
+    return result
+  }, [])
+
+  const placeScannedBox = useCallback(async (box: WmsScanBox, location: WmsScanLocation, confirm?: 'move' | 'swap') => {
+    if (!supabase || !location.slotNumber) return
+    setScanBusy(true); setScanError(''); setScanSuccess('')
+    try {
+      const { data, error } = await (supabase as any).rpc('place_wms_box_by_scan', {
+        p_box_barcode: box.barcode,
+        p_location_code: location.code,
+        p_confirm_move: confirm === 'move',
+        p_confirm_swap: confirm === 'swap',
+      })
+      if (error) throw error
+      if (data?.requiresConfirmation) {
+        setScanError(data.message)
+        return
+      }
+      setScanBox(null)
+      setScanSuccess(data?.message ?? `Короб №${box.boxNumber} размещён в ${location.pallet}-K${location.slotNumber}`)
+      await refreshScanLocation(wmsPalletCode(
+        Number(location.code.match(/^C(\d+)/)?.[1]), location.warehouseShortId,
+        location.rackShortId, location.sideNumber, location.pallet,
+      ))
+      await loadCells(location.rackId)
+    } catch (placeError: any) {
+      setScanError(placeError?.message || 'Не удалось разместить короб')
+    } finally {
+      setScanBusy(false)
+    }
+  }, [loadCells, refreshScanLocation])
+
+  const processScan = useCallback(async (rawCode: string) => {
+    if (!supabase || scanBusy) return
+    const code = rawCode.trim().toUpperCase()
+    if (!code) return
+    setScanOpen(true); setScanBusy(true); setScanError(''); setScanSuccess('')
+    try {
+      const { data, error } = await (supabase as any).rpc('get_wms_scan_target', { p_code: code })
+      if (error) throw error
+      if (data.kind === 'reset') { resetScan(); return }
+      if (data.kind === 'box') {
+        const box = data as WmsScanBox
+        setScanBox(box)
+        if (scanLocation?.slotNumber) await placeScannedBox(box, scanLocation)
+        else setScanSuccess(`Короб №${box.boxNumber} ожидает выбора адреса`)
+        return
+      }
+      const location = data as WmsScanLocation
+      setScanLocation(location)
+      setSelectedZoneId(location.rackId)
+      setExpandedWarehouseIds((previous) => new Set([...previous, location.warehouseId]))
+      await loadZones(location.warehouseId)
+      await loadCells(location.rackId)
+      if (location.full && !location.slotNumber) setScanError('Паллетоместо заполнено. Дальнейшее заполнение заблокировано')
+      if (scanBox && location.slotNumber) await placeScannedBox(scanBox, location)
+      else setScanSuccess(location.slotNumber ? `Выбрано коробоместо ${location.pallet}-K${location.slotNumber}` : `Выбрано паллетоместо ${location.pallet}. Теперь выберите K.`)
+    } catch (scanFailure: any) {
+      setScanError(scanFailure?.message || 'QR / ШК не распознан')
+    } finally {
+      setScanBusy(false)
+    }
+  }, [loadCells, loadZones, placeScannedBox, resetScan, scanBox, scanBusy, scanLocation])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return
+      if (event.ctrlKey || event.altKey || event.metaKey) return
+      if (event.key === 'Enter') {
+        const code = scanBufferRef.current
+        scanBufferRef.current = ''
+        if (scanTimerRef.current) window.clearTimeout(scanTimerRef.current)
+        if (code.length >= 4) void processScan(code)
+        return
+      }
+      if (event.key.length !== 1) return
+      scanBufferRef.current += event.key
+      if (scanTimerRef.current) window.clearTimeout(scanTimerRef.current)
+      scanTimerRef.current = window.setTimeout(() => { scanBufferRef.current = '' }, 180)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      if (scanTimerRef.current) window.clearTimeout(scanTimerRef.current)
+    }
+  }, [processScan])
+
+  const handleSelectScanSlot = useCallback((slotNumber: number) => {
+    if (!scanLocation) return
+    const palletCode = scanLocation.code.replace(/_K\d+$/i, '')
+    void processScan(`${palletCode}_K${slotNumber}`)
+  }, [processScan, scanLocation])
+
+  const handleConfirmScanPlacement = useCallback((action: 'move' | 'swap') => {
+    if (!scanBox || !scanLocation?.slotNumber) return
+    void placeScannedBox(scanBox, scanLocation, action)
+  }, [placeScannedBox, scanBox, scanLocation])
+
+  const handleCloseScan = useCallback(() => {
+    resetScan()
+    setScanOpen(false)
+  }, [resetScan])
 
   const handleSaveWarehouse = async (name: string, description: string, fbsEnabled: boolean, wbWarehouseId: string) => {
     if (!supabase) return
@@ -1390,6 +1740,11 @@ export function WmsPage({ accountId }: { accountId: string }) {
                 {selectedZone.cols} паллетомест × {selectedZone.rows} ярусов · {selectedZoneSides.length} сторон
               </span>
               <div className="ml-auto flex items-center gap-4 text-xs text-slate-500">
+                <button type="button" onClick={() => setScanOpen(true)}
+                  className="flex cursor-pointer items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 font-semibold text-violet-700 hover:bg-violet-100">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4M7 12h10" /></svg>
+                  Сканирование
+                </button>
                 <span className="flex items-center gap-1.5">
                   <span className="h-3 w-3 rounded-sm border border-emerald-300 bg-emerald-200" />
                   Свободна
@@ -1506,16 +1861,32 @@ export function WmsPage({ accountId }: { accountId: string }) {
           onSave={handleSaveZone}
         />
       )}
-      {selectedCellCoord && currentCell && selectedZone && (
+      {selectedCellCoord && currentCell && selectedZone && selectedWarehouse && (
         <CellModal
           key={`${selectedCellCoord.sideKey}-${selectedCellCoord.col}-${selectedCellCoord.row}`}
           cell={currentCell}
           zone={selectedZone}
+          warehouse={selectedWarehouse}
           accountId={accountId}
+          accountShortId={accountShortId}
           zoneId={selectedZoneId!}
           initialSideKey={selectedCellCoord.sideKey}
           onClose={() => setSelectedCellCoord(null)}
           onRefresh={() => { if (selectedZoneId) void loadCells(selectedZoneId) }}
+        />
+      )}
+      {scanOpen && (
+        <ScanWorkspace
+          location={scanLocation}
+          pendingBox={scanBox}
+          error={scanError}
+          success={scanSuccess}
+          busy={scanBusy}
+          onScan={(code) => void processScan(code)}
+          onSelectSlot={handleSelectScanSlot}
+          onConfirm={handleConfirmScanPlacement}
+          onReset={resetScan}
+          onClose={handleCloseScan}
         />
       )}
     </div>
