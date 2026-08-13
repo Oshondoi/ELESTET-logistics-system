@@ -58,7 +58,32 @@ interface WmsCellItem {
   box_name: string
   side_id: string | null
   slot_number: number | null
+  fulfillment_box_id: string | null
   contents: WmsBoxContent[]
+  fulfillment_box?: {
+    id: string
+    box_number: number
+    barcode: string
+    items: Array<{
+      id: string
+      barcode: string
+      product_name: string | null
+      qty: number
+    }>
+  } | null
+}
+
+interface FulfillmentStorageBox {
+  id: string
+  supply_id: string
+  account_id: string
+  box_number: number
+  barcode: string
+  status: 'open' | 'closed'
+  supply_number: number
+  warehouse_name: string
+  batch_name: string
+  batch_short_id: number | null
 }
 
 interface WmsCell {
@@ -77,8 +102,6 @@ interface VirtualCell {
   status: 'free' | 'occupied' | 'reserved' | 'disabled'
   dbCell?: WmsCell
 }
-
-type BoxRow = { tempId: string; barcode: string; product_name: string; qty_per_box: string }
 
 type ZoneSettings = {
   name: string
@@ -453,28 +476,81 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
   const [internalItems, setInternalItems] = useState<WmsCellItem[]>(cell.dbCell?.items ?? [])
   const [internalCellId, setInternalCellId] = useState<string | null>(cell.dbCell?.id ?? null)
   const [internalStatus, setInternalStatus] = useState<'free' | 'occupied' | 'reserved' | 'disabled'>(cell.status)
-  const [addMode, setAddMode] = useState<null | 'item' | 'box'>(null)
   const [expandedBoxIds, setExpandedBoxIds] = useState<Set<string>>(new Set())
-
-  // Item form
-  const [newBarcode, setNewBarcode] = useState('')
-  const [newName, setNewName] = useState('')
-  const [newQty, setNewQty] = useState('1')
-
-  // Box form
-  const [boxName, setBoxName] = useState('')
-  const [boxBarcode, setBoxBarcode] = useState('')
   const zoneSides = normalizedZoneSides(zone)
   const initialSide = zoneSides.find((side) => (side.id ?? side.code) === initialSideKey) ?? zoneSides[0]
-  const [boxSideId, setBoxSideId] = useState(initialSide?.id ?? '')
-  const [boxSlotNumber, setBoxSlotNumber] = useState('1')
-  const [boxRows, setBoxRows] = useState<BoxRow[]>([{ tempId: '1', barcode: '', product_name: '', qty_per_box: '1' }])
   const [assigningBoxId, setAssigningBoxId] = useState<string | null>(null)
   const [assignmentSideId, setAssignmentSideId] = useState(initialSide?.id ?? '')
   const [assignmentSlotNumber, setAssignmentSlotNumber] = useState('1')
   const [movingBoxId, setMovingBoxId] = useState<string | null>(null)
+  const [placementTarget, setPlacementTarget] = useState<{ sideId: string; slotNumber: number } | null>(null)
+  const [storageBoxes, setStorageBoxes] = useState<FulfillmentStorageBox[]>([])
+  const [storageLoading, setStorageLoading] = useState(false)
+  const [storageSearch, setStorageSearch] = useState('')
+  const [selectedSupplyId, setSelectedSupplyId] = useState('')
+  const [selectedStorageBoxIds, setSelectedStorageBoxIds] = useState<Set<string>>(new Set())
+  const [boxNumberExpression, setBoxNumberExpression] = useState('')
+  const [placementError, setPlacementError] = useState('')
 
   const [saving, setSaving] = useState(false)
+
+  const loadStorageBoxes = useCallback(async () => {
+    if (!supabase || !accountId) return
+    setStorageLoading(true)
+    setPlacementError('')
+    try {
+      const placedIds = new Set<string>()
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await (supabase as any)
+          .from('wms_cell_items')
+          .select('fulfillment_box_id')
+          .eq('account_id', accountId)
+          .not('fulfillment_box_id', 'is', null)
+          .range(from, from + 999)
+        if (error) throw error
+        for (const row of data ?? []) if (row.fulfillment_box_id) placedIds.add(row.fulfillment_box_id)
+        if ((data ?? []).length < 1000) break
+      }
+
+      const available: FulfillmentStorageBox[] = []
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await (supabase as any)
+          .from('fulfillment_boxes')
+          .select('id,supply_id,account_id,box_number,barcode,status,supply:fulfillment_supplies!inner(id,supply_number,warehouse_name,batch:fulfillment_batches!inner(id,name,short_id))')
+          .eq('account_id', accountId)
+          .order('created_at', { ascending: false })
+          .range(from, from + 999)
+        if (error) throw error
+        for (const row of data ?? []) {
+          if (placedIds.has(row.id)) continue
+          const supply = Array.isArray(row.supply) ? row.supply[0] : row.supply
+          const batch = Array.isArray(supply?.batch) ? supply.batch[0] : supply?.batch
+          available.push({
+            id: row.id,
+            supply_id: row.supply_id,
+            account_id: row.account_id,
+            box_number: row.box_number,
+            barcode: row.barcode,
+            status: row.status,
+            supply_number: supply?.supply_number ?? 0,
+            warehouse_name: supply?.warehouse_name ?? '',
+            batch_name: batch?.name ?? 'Партия',
+            batch_short_id: batch?.short_id ?? null,
+          })
+        }
+        if ((data ?? []).length < 1000) break
+      }
+      setStorageBoxes(available)
+    } catch (error: any) {
+      setPlacementError(error?.message || 'Не удалось загрузить короба фулфилмента')
+    } finally {
+      setStorageLoading(false)
+    }
+  }, [accountId])
+
+  useEffect(() => {
+    if (placementTarget) void loadStorageBoxes()
+  }, [placementTarget, loadStorageBoxes])
 
   const ensureCell = async (): Promise<string | null> => {
     if (internalCellId) return internalCellId
@@ -508,54 +584,6 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
     }
     setInternalStatus(newStatus)
     onRefresh()
-  }
-
-  const handleAddItem = async () => {
-    if (!supabase || !newBarcode.trim()) return
-    setSaving(true)
-    const cellId = await ensureCell()
-    if (!cellId) { setSaving(false); return }
-    const { data } = await (supabase as any)
-      .from('wms_cell_items')
-      .insert({ cell_id: cellId, account_id: accountId, item_type: 'item', barcode: newBarcode.trim(), product_name: newName.trim(), qty: parseInt(newQty) || 1, reserved_qty: 0, box_name: '' })
-      .select().single()
-    if (data) setInternalItems((prev) => [...prev, { ...(data as WmsCellItem), contents: [] }])
-    setNewBarcode(''); setNewName(''); setNewQty('1')
-    setAddMode(null); setSaving(false); onRefresh()
-  }
-
-  const handleAddBox = async () => {
-    const slotNumber = parseInt(boxSlotNumber) || 0
-    if (!supabase || !boxBarcode.trim() || !boxSideId || slotNumber < 1) return
-    setSaving(true)
-    const cellId = await ensureCell()
-    if (!cellId) { setSaving(false); return }
-    const { data: boxData, error: boxError } = await (supabase as any)
-      .from('wms_cell_items')
-      .insert({
-        cell_id: cellId, account_id: accountId, item_type: 'box',
-        box_name: boxName.trim() || `Короб ${boxBarcode.trim()}`,
-        qty: 1, barcode: boxBarcode.trim(), product_name: '', reserved_qty: 0,
-        side_id: boxSideId, slot_number: slotNumber,
-      })
-      .select().single()
-    if (boxError || !boxData) {
-      alert(boxError?.message || 'Не удалось сохранить короб')
-      setSaving(false)
-      return
-    }
-    const validRows = boxRows.filter((r) => r.barcode.trim() || r.product_name.trim())
-    let contents: WmsBoxContent[] = []
-    if (validRows.length > 0) {
-      const { data: cd } = await (supabase as any)
-        .from('wms_box_contents')
-        .insert(validRows.map((r) => ({ box_item_id: (boxData as WmsCellItem).id, account_id: accountId, barcode: r.barcode.trim(), product_name: r.product_name.trim(), qty_per_box: parseInt(r.qty_per_box) || 1 })))
-        .select()
-      contents = cd ?? []
-    }
-    setInternalItems((prev) => [...prev, { ...(boxData as WmsCellItem), contents }])
-    setBoxName(''); setBoxBarcode(''); setBoxRows([{ tempId: '1', barcode: '', product_name: '', qty_per_box: '1' }])
-    setAddMode(null); setSaving(false); onRefresh()
   }
 
   const handleMoveOrSwapBox = async (boxId: string, targetSideId: string, slotNumber: number) => {
@@ -597,18 +625,64 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
     await handleMoveOrSwapBox(boxId, assignmentSideId, parseInt(assignmentSlotNumber) || 0)
   }
 
-  const handleDeleteItem = async (itemId: string) => {
-    if (!supabase) return
-    await (supabase as any).from('wms_cell_items').delete().eq('id', itemId)
-    setInternalItems((prev) => prev.filter((x) => x.id !== itemId))
+  const placeFulfillmentBoxes = async (boxIds: string[]) => {
+    if (!supabase || !placementTarget || boxIds.length === 0) return
+    setSaving(true)
+    setPlacementError('')
+    const { error } = await (supabase as any).rpc('place_fulfillment_boxes_in_wms', {
+      p_box_ids: boxIds,
+      p_zone_id: zoneId,
+      p_col: cell.col,
+      p_row: cell.row,
+      p_target_side_id: placementTarget.sideId,
+      p_target_slot_number: placementTarget.slotNumber,
+    })
+    if (error) {
+      setPlacementError(error.message || 'Не удалось разместить короба')
+      setSaving(false)
+      return
+    }
+    setPlacementTarget(null)
+    setSelectedStorageBoxIds(new Set())
+    setSelectedSupplyId('')
+    setStorageSearch('')
+    setBoxNumberExpression('')
+    setSaving(false)
     onRefresh()
+    onClose()
   }
 
-  const handleDeleteBoxContent = async (boxId: string, contentId: string) => {
-    if (!supabase) return
-    await (supabase as any).from('wms_box_contents').delete().eq('id', contentId)
-    setInternalItems((prev) => prev.map((x) => x.id === boxId ? { ...x, contents: x.contents.filter((c) => c.id !== contentId) } : x))
-    onRefresh()
+  const applyBoxNumberExpression = () => {
+    const supplyBoxes = storageBoxes.filter((box) => box.supply_id === selectedSupplyId)
+    const requested = new Set<number>()
+    for (const rawPart of boxNumberExpression.split(',')) {
+      const part = rawPart.trim()
+      if (!part) continue
+      const range = part.match(/^(\d+)\s*-\s*(\d+)$/)
+      if (range) {
+        const start = Number(range[1]); const end = Number(range[2])
+        for (let number = Math.min(start, end); number <= Math.max(start, end); number += 1) requested.add(number)
+      } else if (/^\d+$/.test(part)) requested.add(Number(part))
+    }
+    const matched = supplyBoxes
+      .filter((box) => requested.has(box.box_number))
+      .sort((a, b) => a.box_number - b.box_number)
+    const matchedNumbers = new Set(matched.map((box) => box.box_number))
+    const missingNumbers = Array.from(requested).filter((number) => !matchedNumbers.has(number)).sort((a, b) => a - b)
+    if (requested.size === 0) {
+      setPlacementError('Укажите номера коробов: например 1, 3, 5-8')
+      return
+    }
+    if (missingNumbers.length > 0) {
+      setPlacementError(`В этой поставке нет доступных коробов №${missingNumbers.join(', ')}`)
+      return
+    }
+    if (matched.length === 0) {
+      setPlacementError('В этой поставке короба с такими номерами не найдены')
+      return
+    }
+    setPlacementError('')
+    setSelectedStorageBoxIds(new Set(matched.map((box) => box.id)))
   }
 
   const statusConfig = {
@@ -625,7 +699,6 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
       .filter((box) => box.side_id && box.slot_number)
       .map((box) => [`${box.side_id}-${box.slot_number}`, box]),
   )
-  const selectedBoxSide = zoneSides.find((side) => side.id === boxSideId)
   const selectedAssignmentSide = zoneSides.find((side) => side.id === assignmentSideId)
 
   const firstFreeSlot = (sideId: string): number | null => {
@@ -637,12 +710,6 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
     return null
   }
 
-  const startAddBoxAt = (sideId: string, slotNumber: number) => {
-    setBoxSideId(sideId)
-    setBoxSlotNumber(String(slotNumber))
-    setAddMode('box')
-  }
-
   const handleBoxSlotClick = (sideId: string, slotNumber: number, box?: WmsCellItem) => {
     if (saving) return
     if (!movingBoxId) {
@@ -650,7 +717,9 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
         setMovingBoxId(box.id)
         setExpandedBoxIds((previous) => new Set([...previous, box.id]))
       } else {
-        startAddBoxAt(sideId, slotNumber)
+        setPlacementTarget({ sideId, slotNumber })
+        setSelectedStorageBoxIds(new Set())
+        setPlacementError('')
       }
       return
     }
@@ -661,11 +730,18 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
     void handleMoveOrSwapBox(movingBoxId, sideId, slotNumber)
   }
 
-  const XIcon = () => (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  )
+  const supplyOptions = Array.from(
+    new Map(storageBoxes.map((box) => [box.supply_id, box])).values(),
+  ).sort((a, b) => (b.batch_short_id ?? 0) - (a.batch_short_id ?? 0) || b.supply_number - a.supply_number)
+  const selectedSupplyBoxes = storageBoxes
+    .filter((box) => box.supply_id === selectedSupplyId)
+    .sort((a, b) => a.box_number - b.box_number)
+  const normalizedStorageSearch = storageSearch.trim().toLowerCase()
+  const searchedStorageBoxes = storageBoxes
+    .filter((box) => !normalizedStorageSearch
+      || box.barcode.toLowerCase().includes(normalizedStorageSearch)
+      || box.batch_name.toLowerCase().includes(normalizedStorageSearch))
+    .slice(0, 20)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
@@ -707,7 +783,7 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-xs font-medium text-slate-600">Места коробов</span>
                 <span className={`text-[10px] ${movingBoxId ? 'font-medium text-violet-600' : 'text-slate-400'}`}>
-                  {movingBoxId ? 'Выберите место: свободное — перенос, занятое — обмен' : 'Свободное — добавить короб, занятое — выбрать для переноса'}
+                  {movingBoxId ? 'Выберите место: свободное — перенос, занятое — обмен' : 'Свободное — разместить существующий короб ФФ, занятое — выбрать для переноса'}
                 </span>
               </div>
               {movingBoxId && (
@@ -754,28 +830,24 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
               <span className="text-xs font-medium text-slate-600">
                 Содержимое ({internalItems.length})
               </span>
-              {addMode === null && (
-                <div className="flex gap-3">
-                  <button type="button" onClick={() => setAddMode('item')} className="text-xs text-violet-600 hover:underline">+ Товар</button>
-                  <button type="button" onClick={() => setAddMode('box')} className="text-xs text-amber-600 hover:underline">+ Короб</button>
-                </div>
-              )}
             </div>
 
-            {internalItems.length === 0 && addMode === null && (
+            {internalItems.length === 0 && (
               <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-xs text-slate-400">Паллетоместо пусто</div>
             )}
 
-            {/* Individual items */}
+            {/* Legacy direct items are history only. New products cannot receive an address without a box. */}
             {singleItems.length > 0 && (
-              <div className="mb-2 overflow-hidden rounded-xl border border-slate-100">
+              <div className="mb-2 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/50">
+                <div className="border-b border-slate-200 px-3 py-2 text-[10px] text-slate-500">
+                  Ранее добавленные товары без короба — только просмотр. Новые товары напрямую не размещаются.
+                </div>
                 <table className="w-full text-xs">
                   <thead className="bg-slate-50">
                     <tr>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Баркод</th>
                       <th className="px-3 py-2 text-left font-medium text-slate-500">Наименование</th>
                       <th className="px-3 py-2 text-right font-medium text-slate-500">Кол-во</th>
-                      <th className="w-8" />
                     </tr>
                   </thead>
                   <tbody>
@@ -784,11 +856,6 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
                         <td className="px-3 py-2 font-mono text-slate-600">{item.barcode || '—'}</td>
                         <td className="px-3 py-2 text-slate-700">{item.product_name || '—'}</td>
                         <td className="px-3 py-2 text-right font-semibold text-slate-800">{item.qty}</td>
-                        <td className="px-3 py-2">
-                          <button type="button" onClick={() => void handleDeleteItem(item.id)} className="text-slate-300 hover:text-red-400">
-                            <XIcon />
-                          </button>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -798,8 +865,17 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
 
             {/* Boxes */}
             {boxes.map((box) => {
+              const fulfillmentContents = box.fulfillment_box?.items ?? []
+              const displayContents = box.fulfillment_box_id
+                ? fulfillmentContents.map((item) => ({
+                    id: item.id,
+                    barcode: item.barcode,
+                    product_name: item.product_name ?? '',
+                    qty_per_box: item.qty,
+                  }))
+                : box.contents
               const isExpanded = expandedBoxIds.has(box.id)
-              const totalUnits = box.contents.reduce((s, c) => s + c.qty_per_box * box.qty, 0)
+              const totalUnits = displayContents.reduce((s, c) => s + c.qty_per_box * box.qty, 0)
               const boxSide = zoneSides.find((side) => side.id === box.side_id)
               const address = boxSide && box.slot_number
                 ? `${boxSide.name} · ${cell.col}${cell.row}-K${box.slot_number}`
@@ -813,8 +889,8 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
                       <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
                       <line x1="12" y1="22.08" x2="12" y2="12"/>
                     </svg>
-                    <span className="flex-1 text-xs font-semibold text-slate-800">{box.box_name}</span>
-                    {box.barcode && <span className="font-mono text-[10px] text-slate-400">{box.barcode}</span>}
+                    <span className="flex-1 text-xs font-semibold text-slate-800">{box.fulfillment_box ? `Короб №${box.fulfillment_box.box_number}` : box.box_name}</span>
+                    {(box.fulfillment_box?.barcode || box.barcode) && <span className="font-mono text-[10px] text-slate-400">{box.fulfillment_box?.barcode || box.barcode}</span>}
                     <button type="button" title="Изменить место короба"
                       onClick={() => {
                         setAssigningBoxId(isAssigning ? null : box.id)
@@ -832,9 +908,6 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
                       <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2">
                         <polyline points="6 9 12 15 18 9"/>
                       </svg>
-                    </button>
-                    <button type="button" onClick={() => void handleDeleteItem(box.id)} className="text-slate-300 hover:text-red-400">
-                      <XIcon />
                     </button>
                   </div>
                   {isAssigning && (
@@ -869,17 +942,17 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
                   )}
                   {isExpanded && (
                     <div className="border-t border-amber-100 px-3 py-2">
-                      {box.barcode && (
+                      {(box.fulfillment_box?.barcode || box.barcode) && (
                         <div className="mb-2 flex items-center gap-2 rounded-lg bg-white/80 p-2">
-                          <QRCodeSVG value={box.barcode} size={48} bgColor="transparent" />
+                          <QRCodeSVG value={box.fulfillment_box?.barcode || box.barcode} size={48} bgColor="transparent" />
                           <div>
                             <div className="text-[10px] text-slate-400">QR короба</div>
-                            <div className="font-mono text-xs font-semibold text-slate-700">{box.barcode}</div>
+                            <div className="font-mono text-xs font-semibold text-slate-700">{box.fulfillment_box?.barcode || box.barcode}</div>
                             <div className="mt-0.5 text-[10px] text-slate-400">{address}</div>
                           </div>
                         </div>
                       )}
-                      {box.contents.length === 0 ? (
+                      {displayContents.length === 0 ? (
                         <p className="text-xs text-slate-400">Содержимое не указано</p>
                       ) : (
                         <table className="w-full text-xs">
@@ -889,23 +962,15 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
                               <th className="pb-1 text-left font-normal">Наименование</th>
                               <th className="pb-1 text-right font-normal">На короб</th>
                               <th className="pb-1 text-right font-normal">Итого</th>
-                              <th className="w-5"/>
                             </tr>
                           </thead>
                           <tbody>
-                            {box.contents.map((c) => (
+                            {displayContents.map((c) => (
                               <tr key={c.id} className="border-t border-amber-100">
                                 <td className="py-1 pr-2 font-mono text-slate-600">{c.barcode || '—'}</td>
                                 <td className="py-1 pr-2 text-slate-700">{c.product_name || '—'}</td>
                                 <td className="py-1 pr-2 text-right text-slate-600">{c.qty_per_box} шт</td>
                                 <td className="py-1 pr-1 text-right font-semibold text-slate-800">= {c.qty_per_box * box.qty}</td>
-                                <td className="py-1">
-                                  <button type="button" onClick={() => void handleDeleteBoxContent(box.id, c.id)} className="text-slate-300 hover:text-red-400">
-                                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
-                                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                                    </svg>
-                                  </button>
-                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -917,106 +982,112 @@ function CellModal({ cell, zone, accountId, zoneId, initialSideKey, onClose, onR
               )
             })}
 
-            {/* Add item form */}
-            {addMode === 'item' && (
-              <div className="mt-1 flex flex-col gap-2 rounded-xl border border-violet-200 bg-violet-50/40 p-3">
-                <div className="text-[11px] font-medium text-slate-600">Новый товар</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="text" value={newBarcode} onChange={(e) => setNewBarcode(e.target.value)} placeholder="Баркод" autoFocus
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-violet-400"/>
-                  <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Наименование"
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-violet-400"/>
+            {placementTarget && (
+              <div className="mt-2 rounded-2xl border border-violet-200 bg-violet-50/40 p-3">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-800">Разместить существующий короб ФФ</div>
+                    <div className="text-[10px] text-slate-500">
+                      Адрес: {zoneSides.find((side) => side.id === placementTarget.sideId)?.name} · {cell.col}{cell.row}-K{placementTarget.slotNumber}
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => setPlacementTarget(null)} className="cursor-pointer text-xs text-slate-400 hover:text-slate-700">Закрыть</button>
                 </div>
-                <div className="flex items-center gap-2">
-                  <input type="number" value={newQty} onChange={(e) => setNewQty(e.target.value)} min={1} placeholder="Кол-во"
-                    className="w-24 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-violet-400"/>
-                  <button type="button" onClick={() => void handleAddItem()} disabled={!newBarcode.trim() || saving}
-                    className="rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-600 disabled:opacity-50">
-                    {saving ? '...' : 'Добавить'}
-                  </button>
-                  <button type="button" onClick={() => setAddMode(null)} className="text-xs text-slate-400 hover:text-slate-600">Отмена</button>
-                </div>
-              </div>
-            )}
 
-            {/* Add box form */}
-            {addMode === 'box' && (
-              <div className="mt-1 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/30 p-3">
-                <div className="text-[11px] font-medium text-slate-600">Новый короб</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-500">ШК / QR короба *</span>
-                    <input type="text" value={boxBarcode} onChange={(e) => setBoxBarcode(e.target.value)} placeholder="Сканируйте код" autoFocus
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-amber-400"/>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-500">Название</span>
-                    <input type="text" value={boxName} onChange={(e) => setBoxName(e.target.value)} placeholder="Необязательно"
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-amber-400"/>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="flex flex-col gap-1 text-[10px] text-slate-500">
-                    Сторона *
-                    <select value={boxSideId}
-                      onChange={(event) => {
-                        const sideId = event.target.value
-                        setBoxSideId(sideId)
-                        setBoxSlotNumber(String(firstFreeSlot(sideId) ?? 1))
-                      }}
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-amber-400">
-                      {zoneSides.map((side) => <option key={side.id ?? side.code} value={side.id}>{side.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="flex flex-col gap-1 text-[10px] text-slate-500">
-                    Место короба *
-                    <select value={boxSlotNumber} onChange={(event) => setBoxSlotNumber(event.target.value)}
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-amber-400">
-                      {Array.from({ length: selectedBoxSide?.slot_count ?? 0 }, (_, index) => index + 1).map((slotNumber) => {
-                        const occupied = occupiedBoxSlots.has(`${boxSideId}-${slotNumber}`)
-                        return <option key={slotNumber} value={slotNumber} disabled={occupied}>K{slotNumber}{occupied ? ' — занято' : ''}</option>
-                      })}
-                    </select>
-                  </label>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-slate-500">Содержимое 1 короба</span>
-                    <button type="button"
-                      onClick={() => setBoxRows((prev) => [...prev, { tempId: String(Date.now()), barcode: '', product_name: '', qty_per_box: '1' }])}
-                      className="text-[10px] text-violet-600 hover:underline">+ строку</button>
-                  </div>
-                  {boxRows.map((row, idx) => (
-                    <div key={row.tempId} className="flex items-center gap-1">
-                      <input type="text" value={row.barcode}
-                        onChange={(e) => setBoxRows((prev) => prev.map((r, i) => i === idx ? { ...r, barcode: e.target.value } : r))}
-                        placeholder="Баркод"
-                        className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-amber-400"/>
-                      <input type="text" value={row.product_name}
-                        onChange={(e) => setBoxRows((prev) => prev.map((r, i) => i === idx ? { ...r, product_name: e.target.value } : r))}
-                        placeholder="Наименование"
-                        className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-amber-400"/>
-                      <input type="number" value={row.qty_per_box}
-                        onChange={(e) => setBoxRows((prev) => prev.map((r, i) => i === idx ? { ...r, qty_per_box: e.target.value } : r))}
-                        min={1} placeholder="шт/кор"
-                        className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-amber-400"/>
-                      {boxRows.length > 1 && (
-                        <button type="button" onClick={() => setBoxRows((prev) => prev.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-red-400">
-                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                          </svg>
-                        </button>
+                <input
+                  type="text"
+                  value={storageSearch}
+                  onChange={(event) => setStorageSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return
+                    const exact = storageBoxes.find((box) => box.barcode.toLowerCase() === storageSearch.trim().toLowerCase())
+                    if (exact) void placeFulfillmentBoxes([exact.id])
+                    else setPlacementError('Короб с таким QR / ШК не найден среди неразмещённых коробов')
+                  }}
+                  placeholder="Сканируйте QR / ШК или найдите короб"
+                  autoFocus
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:border-violet-400"
+                />
+
+                {storageLoading ? (
+                  <div className="py-4 text-center text-xs text-slate-400">Загрузка коробов...</div>
+                ) : storageBoxes.length === 0 ? (
+                  <div className="py-4 text-center text-xs text-slate-400">Нет неразмещённых коробов фулфилмента</div>
+                ) : (
+                  <>
+                    <div className="mt-2">
+                      <div className="mb-1 text-[10px] font-medium text-slate-500">Неразмещённые короба</div>
+                      <div className="max-h-32 overflow-y-auto rounded-xl border border-slate-200 bg-white">
+                        {searchedStorageBoxes.map((box) => (
+                          <button key={box.id} type="button" onClick={() => void placeFulfillmentBoxes([box.id])}
+                            className="flex w-full cursor-pointer items-center justify-between border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-violet-50">
+                            <span>
+                              <span className="block text-xs font-semibold text-slate-700">Короб №{box.box_number}</span>
+                              <span className="block text-[10px] text-slate-400">P{box.batch_short_id ?? '?'} · S{box.supply_number} · {box.batch_name}</span>
+                            </span>
+                            <span className="font-mono text-[10px] text-slate-400">{box.barcode}</span>
+                          </button>
+                        ))}
+                        {searchedStorageBoxes.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-400">Ничего не найдено</div>}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 border-t border-violet-100 pt-3">
+                      <div className="mb-1 text-[10px] font-medium text-slate-500">Или выберите поставку</div>
+                      <select value={selectedSupplyId} onChange={(event) => {
+                        setSelectedSupplyId(event.target.value)
+                        setSelectedStorageBoxIds(new Set())
+                        setBoxNumberExpression('')
+                        setPlacementError('')
+                      }} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-violet-400">
+                        <option value="">— Поставка —</option>
+                        {supplyOptions.map((supply) => (
+                          <option key={supply.supply_id} value={supply.supply_id}>
+                            P{supply.batch_short_id ?? '?'} · {supply.batch_name} · Поставка S{supply.supply_number} · {supply.warehouse_name || 'склад не указан'}
+                          </option>
+                        ))}
+                      </select>
+
+                      {selectedSupplyId && (
+                        <div className="mt-2">
+                          <div className="flex gap-2">
+                            <input value={boxNumberExpression} onChange={(event) => setBoxNumberExpression(event.target.value)}
+                              placeholder="Номера: 1, 3, 5-8"
+                              className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-violet-400" />
+                            <button type="button" onClick={applyBoxNumberExpression}
+                              className="cursor-pointer rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs text-violet-600 hover:bg-violet-50">Выбрать номера</button>
+                            <button type="button" onClick={() => setSelectedStorageBoxIds(new Set(selectedSupplyBoxes.map((box) => box.id)))}
+                              className="cursor-pointer rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs text-violet-600 hover:bg-violet-50">Все</button>
+                          </div>
+                          <div className="mt-2 grid max-h-32 grid-cols-4 gap-1.5 overflow-y-auto">
+                            {selectedSupplyBoxes.map((box) => {
+                              const checked = selectedStorageBoxIds.has(box.id)
+                              return (
+                                <label key={box.id} className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] ${checked ? 'border-violet-300 bg-violet-100 text-violet-700' : 'border-slate-200 bg-white text-slate-600 hover:border-violet-200'}`}>
+                                  <input type="checkbox" checked={checked} onChange={() => setSelectedStorageBoxIds((previous) => {
+                                    const next = new Set(previous); checked ? next.delete(box.id) : next.add(box.id); return next
+                                  })} />
+                                  №{box.box_number}
+                                </label>
+                              )
+                            })}
+                          </div>
+                          <div className="mt-2 flex items-center justify-between">
+                            <span className="max-w-[55%] text-[10px] text-slate-400">
+                              Выбрано: {selectedStorageBoxIds.size}. Несколько коробов займут свободные места стеллажа по порядку от выбранного адреса.
+                            </span>
+                            <button type="button" disabled={selectedStorageBoxIds.size === 0 || saving}
+                              onClick={() => void placeFulfillmentBoxes(Array.from(selectedStorageBoxIds))}
+                              className="cursor-pointer rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-50">
+                              {saving ? 'Размещение...' : `Разместить ${selectedStorageBoxIds.size || ''}`}
+                            </button>
+                          </div>
+                        </div>
                       )}
                     </div>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => void handleAddBox()} disabled={!boxBarcode.trim() || !boxSideId || saving || occupiedBoxSlots.has(`${boxSideId}-${boxSlotNumber}`)}
-                    className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
-                    {saving ? '...' : 'Сохранить короб'}
-                  </button>
-                  <button type="button" onClick={() => setAddMode(null)} className="text-xs text-slate-400 hover:text-slate-600">Отмена</button>
-                </div>
+                  </>
+                )}
+                {placementError && <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[11px] text-red-600">{placementError}</div>}
               </div>
             )}
           </div>}
@@ -1068,9 +1139,22 @@ export function WmsPage({ accountId }: { accountId: string }) {
 
   const loadCells = useCallback(async (zoneId: string) => {
     if (!supabase) return
-    const { data } = await (supabase as any)
-      .from('wms_cells').select('*, items:wms_cell_items(*, contents:wms_box_contents(*))').eq('zone_id', zoneId)
-    setCells((data ?? []).map((c: any) => ({ ...c, items: (c.items ?? []).map((i: any) => ({ ...i, contents: i.contents ?? [] })) })))
+    const { data, error } = await (supabase as any)
+      .from('wms_cells')
+      .select('*, items:wms_cell_items(*, contents:wms_box_contents(*), fulfillment_box:fulfillment_boxes(*, items:fulfillment_box_items(*)))')
+      .eq('zone_id', zoneId)
+    if (error) {
+      console.error('[wms] Не удалось загрузить паллетоместа', error)
+      return
+    }
+    setCells((data ?? []).map((c: any) => ({
+      ...c,
+      items: (c.items ?? []).map((i: any) => ({
+        ...i,
+        contents: i.contents ?? [],
+        fulfillment_box: Array.isArray(i.fulfillment_box) ? (i.fulfillment_box[0] ?? null) : (i.fulfillment_box ?? null),
+      })),
+    })))
   }, [])
 
   useEffect(() => { void loadWarehouses() }, [loadWarehouses])
