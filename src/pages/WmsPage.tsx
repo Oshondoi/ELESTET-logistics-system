@@ -556,6 +556,8 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
   const [placementError, setPlacementError] = useState('')
 
   const [saving, setSaving] = useState(false)
+  const visibleZoneSides = initialSide ? [initialSide] : zoneSides.slice(0, 1)
+  const visibleSideIds = new Set(visibleZoneSides.map((side) => side.id).filter(Boolean))
 
   const loadStorageBoxes = useCallback(async () => {
     if (!supabase || !accountId) return
@@ -688,6 +690,40 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
     await handleMoveOrSwapBox(boxId, assignmentSideId, parseInt(assignmentSlotNumber) || 0)
   }
 
+  const handleUnassignBox = async (box: WmsCellItem) => {
+    if (!supabase || !box.fulfillment_box_id || saving) return
+    const boxLabel = box.fulfillment_box?.box_number
+      ? `Короб №${box.fulfillment_box.box_number}`
+      : box.box_name || 'Этот короб'
+    if (!window.confirm(`${boxLabel}: убрать адрес хранения?\n\nСам короб, его содержимое и связь с партией/поставкой останутся без изменений.`)) return
+
+    setSaving(true)
+    const { error } = await (supabase as any).rpc('unassign_wms_fulfillment_box', {
+      p_item_id: box.id,
+    })
+    if (error) {
+      alert(error.message || 'Не удалось убрать адрес короба')
+      setSaving(false)
+      return
+    }
+
+    const remainingItems = internalItems.filter((item) => item.id !== box.id)
+    setInternalItems(remainingItems)
+    setExpandedBoxIds((previous) => {
+      const next = new Set(previous)
+      next.delete(box.id)
+      return next
+    })
+    setAssigningBoxId(null)
+    setMovingBoxId(null)
+    if (remainingItems.length === 0) {
+      setInternalCellId(null)
+      setInternalStatus('free')
+    }
+    setSaving(false)
+    onRefresh()
+  }
+
   const placeFulfillmentBoxes = async (boxIds: string[]) => {
     if (!supabase || !placementTarget || boxIds.length === 0) return
     setSaving(true)
@@ -755,17 +791,20 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
     disabled: { label: 'Заглушена', active: 'border-slate-400 bg-slate-100 text-slate-500' },
   } as const
 
-  const singleItems = internalItems.filter((x) => x.item_type !== 'box')
-  const boxes       = internalItems.filter((x) => x.item_type === 'box')
+  const sideScopedItems = internalItems.filter((item) => (
+    item.side_id ? visibleSideIds.has(item.side_id) : initialSide?.position === 0
+  ))
+  const singleItems = sideScopedItems.filter((x) => x.item_type !== 'box')
+  const boxes       = sideScopedItems.filter((x) => x.item_type === 'box')
   const occupiedBoxSlots = new Map(
     boxes
       .filter((box) => box.side_id && box.slot_number)
       .map((box) => [`${box.side_id}-${box.slot_number}`, box]),
   )
-  const selectedAssignmentSide = zoneSides.find((side) => side.id === assignmentSideId)
+  const selectedAssignmentSide = visibleZoneSides.find((side) => side.id === assignmentSideId)
 
   const firstFreeSlot = (sideId: string): number | null => {
-    const side = zoneSides.find((item) => item.id === sideId)
+    const side = visibleZoneSides.find((item) => item.id === sideId)
     if (!side) return null
     for (let slot = 1; slot <= side.slot_count; slot += 1) {
       if (!occupiedBoxSlots.has(`${sideId}-${slot}`)) return slot
@@ -808,7 +847,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-      <div className="flex w-full max-w-lg flex-col rounded-3xl bg-white shadow-2xl">
+      <div className="flex h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
@@ -826,7 +865,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
           </button>
         </div>
 
-        <div className="flex flex-col gap-4 overflow-y-auto p-6" style={{ maxHeight: '75vh' }}>
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-6">
           {/* Status */}
           <div>
             <div className="mb-2 text-xs font-medium text-slate-600">Статус</div>
@@ -856,7 +895,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                 </div>
               )}
               <div className="flex flex-col gap-2.5">
-                {zoneSides.map((side) => {
+                {visibleZoneSides.map((side) => {
                   const filled = boxes.filter((box) => box.side_id === side.id && box.slot_number).length
                   const sideNumber = side.position + 1
                   const pallet = `${cell.col}${cell.row}`
@@ -919,11 +958,11 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
           {internalStatus !== 'disabled' && <div>
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-medium text-slate-600">
-                Содержимое ({internalItems.length})
+                Содержимое ({sideScopedItems.length})
               </span>
             </div>
 
-            {internalItems.length === 0 && (
+            {sideScopedItems.length === 0 && (
               <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-xs text-slate-400">Паллетоместо пусто</div>
             )}
 
@@ -985,14 +1024,21 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                     <button type="button" title="Изменить место короба"
                       onClick={() => {
                         setAssigningBoxId(isAssigning ? null : box.id)
-                        setAssignmentSideId(box.side_id ?? zoneSides[0]?.id ?? '')
-                        setAssignmentSlotNumber(String(box.slot_number ?? firstFreeSlot(zoneSides[0]?.id ?? '') ?? 1))
+                        setAssignmentSideId(box.side_id ?? initialSide?.id ?? '')
+                        setAssignmentSlotNumber(String(box.slot_number ?? firstFreeSlot(initialSide?.id ?? '') ?? 1))
                       }}
                       className={`cursor-pointer rounded-md px-1.5 py-1 text-[10px] ${box.side_id ? 'text-violet-600 hover:bg-violet-50' : 'bg-red-50 text-red-600 hover:bg-red-100'}`}>
                       {address}
                     </button>
                     {box.qty > 1 && <span className="text-xs text-slate-500">×{box.qty} кор.</span>}
                     {totalUnits > 0 && <span className="text-[10px] text-slate-400">({totalUnits} ед.)</span>}
+                    {box.fulfillment_box_id && (
+                      <button type="button" disabled={saving} title="Убрать адрес, не удаляя короб"
+                        onClick={() => void handleUnassignBox(box)}
+                        className="cursor-pointer rounded-md border border-red-100 px-1.5 py-1 text-[10px] font-medium text-red-500 hover:border-red-200 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
+                        Убрать адрес
+                      </button>
+                    )}
                     <button type="button"
                       onClick={() => setExpandedBoxIds((prev) => { const n = new Set(prev); isExpanded ? n.delete(box.id) : n.add(box.id); return n })}
                       className="text-slate-400 hover:text-slate-600">
@@ -1003,18 +1049,12 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                   </div>
                   {isAssigning && (
                     <div className="flex items-end gap-2 border-t border-amber-100 bg-white/70 px-3 py-2">
-                      <label className="flex flex-1 flex-col gap-1 text-[10px] text-slate-400">
+                      <div className="flex flex-1 flex-col gap-1 text-[10px] text-slate-400">
                         Сторона
-                        <select value={assignmentSideId}
-                          onChange={(event) => {
-                            const sideId = event.target.value
-                            setAssignmentSideId(sideId)
-                            setAssignmentSlotNumber(String(firstFreeSlot(sideId) ?? 1))
-                          }}
-                          className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-violet-400">
-                          {zoneSides.map((side) => <option key={side.id ?? side.code} value={side.id}>{side.name}</option>)}
-                        </select>
-                      </label>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
+                          {initialSide?.name ?? '—'}
+                        </div>
+                      </div>
                       <label className="flex w-28 flex-col gap-1 text-[10px] text-slate-400">
                         Место
                         <select value={assignmentSlotNumber} onChange={(event) => setAssignmentSlotNumber(event.target.value)}
@@ -1327,6 +1367,7 @@ export function WmsPage({ accountId }: { accountId: string }) {
   const [scanBusy, setScanBusy] = useState(false)
   const scanBufferRef = useRef('')
   const scanTimerRef = useRef<number | null>(null)
+  const autoOpenedAccountRef = useRef<string | null>(null)
   const [accountShortId, setAccountShortId] = useState<number | null>(null)
 
   // ── Data loaders ──────────────────────────────────────────────────────────
@@ -1375,7 +1416,17 @@ export function WmsPage({ accountId }: { accountId: string }) {
     })))
   }, [])
 
-  useEffect(() => { void loadWarehouses() }, [loadWarehouses])
+  useEffect(() => {
+    autoOpenedAccountRef.current = null
+    setLoading(true)
+    setWarehouses([])
+    setZonesByWarehouse({})
+    setExpandedWarehouseIds(new Set())
+    setSelectedZoneId(null)
+    setSelectedCellCoord(null)
+    setCells([])
+    void loadWarehouses()
+  }, [loadWarehouses])
   useEffect(() => {
     if (!supabase || !accountId) return
     void (supabase as any).from('accounts').select('short_id').eq('id', accountId).single()
@@ -1394,7 +1445,12 @@ export function WmsPage({ accountId }: { accountId: string }) {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  const handleSelectWarehouse = async (id: string) => {
+  const handleSelectZone = useCallback(async (id: string) => {
+    setSelectedZoneId(id); setCells([]); setSelectedCellCoord(null)
+    await loadCells(id)
+  }, [loadCells])
+
+  const handleSelectWarehouse = useCallback(async (id: string) => {
     setExpandedWarehouseIds((prev) => new Set([...prev, id]))
     let zones = zonesByWarehouse[id]
     if (!zones) {
@@ -1411,12 +1467,13 @@ export function WmsPage({ accountId }: { accountId: string }) {
       setZonesByWarehouse((prev) => ({ ...prev, [id]: zones! }))
     }
     if (zones.length > 0) await handleSelectZone(zones[0].id)
-  }
+  }, [handleSelectZone, zonesByWarehouse])
 
-  const handleSelectZone = async (id: string) => {
-    setSelectedZoneId(id); setCells([]); setSelectedCellCoord(null)
-    await loadCells(id)
-  }
+  useEffect(() => {
+    if (loading || warehouses.length === 0 || autoOpenedAccountRef.current === accountId) return
+    autoOpenedAccountRef.current = accountId
+    void handleSelectWarehouse(warehouses[0].id)
+  }, [accountId, handleSelectWarehouse, loading, warehouses])
 
   const resetScan = useCallback(() => {
     setScanLocation(null)
@@ -1550,8 +1607,19 @@ export function WmsPage({ accountId }: { accountId: string }) {
   }
 
   const handleDeleteWarehouse = async (id: string) => {
-    if (!supabase || !window.confirm('Удалить склад и все его стеллажи?')) return
-    await (supabase as any).from('wms_warehouses').delete().eq('id', id)
+    if (!supabase) return
+    if (warehouses.length <= 1) {
+      window.alert('Нельзя удалить единственный склад компании')
+      return
+    }
+    if (!window.confirm('Удалить склад и все его стеллажи?')) return
+    const { error } = await (supabase as any).from('wms_warehouses').delete().eq('id', id)
+    if (error) {
+      window.alert(error.message.includes('единственный склад')
+        ? 'Нельзя удалить единственный склад компании'
+        : `Не удалось удалить склад: ${error.message}`)
+      return
+    }
     setExpandedWarehouseIds((prev) => { const next = new Set(prev); next.delete(id); return next })
     setZonesByWarehouse((prev) => { const next = { ...prev }; delete next[id]; return next })
     if (selectedZoneId && (zonesByWarehouse[id] ?? []).some((z) => z.id === selectedZoneId)) {
@@ -1667,7 +1735,13 @@ export function WmsPage({ accountId }: { accountId: string }) {
                   </button>
                   <button type="button"
                     onClick={(e) => { e.stopPropagation(); void handleDeleteWarehouse(wh.id) }}
-                    className="hidden h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-red-500 group-hover:flex">
+                    disabled={warehouses.length <= 1}
+                    title={warehouses.length <= 1 ? 'Нельзя удалить единственный склад' : 'Удалить склад'}
+                    className={`hidden h-5 w-5 items-center justify-center rounded group-hover:flex ${
+                      warehouses.length <= 1
+                        ? 'cursor-not-allowed text-slate-300'
+                        : 'cursor-pointer text-slate-400 hover:text-red-500'
+                    }`}>
                     <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
                       <polyline points="3 6 5 6 21 6" />
                       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
