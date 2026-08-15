@@ -33,6 +33,9 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - A rack has one or two physical sides, named `Сторона 1` and `Сторона 2` by default. Each side has one shared box-slot geometry; the default is `2 × 4 = 8` slots per pallet position.
 - A physical box keeps one stable barcode/QR identity. Moving or swapping it changes only its address, never its barcode or contents.
 - An occupied structure cannot be silently shrunk or deleted. Conflicting addresses and a third rack side are blocked by the database.
+- WMS addresses only existing fulfillment boxes. Free/occupied are derived; disabled is the only manual pallet-position state.
+- Warehouse operations include multi-location search, unaddressed queue, atomic supply placement, immutable movement history and integrated inventory.
+- Logistics status `Отгружен` releases WMS addresses after explicit UI confirmation without deleting accepted boxes or their contents.
 
 ## Required Business Entities
 - `auth.users`

@@ -503,7 +503,7 @@ function App() {
     stickers: 'stickers_view',
     reviews: 'reviews_view',
     invoices: null,
-    wms: null,
+    wms: 'wms_view',
     fbs: null,
     roles: 'roles_manage',
     admin: null,
@@ -1013,7 +1013,12 @@ function App() {
                 isPageGated('wms') ? (
                   <PlanGatewall page="wms" onUpgrade={() => setActivePage('subscription')} />
                 ) : (
-                  <WmsPage accountId={activeAccount?.id ?? ''} />
+                  <WmsPage
+                    accountId={activeAccount?.id ?? ''}
+                    canManage={permissions.wms_manage}
+                    canViewHistory={permissions.wms_history}
+                    canInventory={permissions.wms_inventory}
+                  />
                 )
               ) : effectivePage === 'fbs' ? (
                 isPageGated('fbs') ? (

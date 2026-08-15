@@ -95,14 +95,14 @@ interface WmsCell {
   account_id: string
   col: string
   row: number
-  status: 'free' | 'occupied' | 'reserved' | 'disabled'
+  status: 'free' | 'occupied' | 'disabled'
   items: WmsCellItem[]
 }
 
 interface VirtualCell {
   col: string
   row: number
-  status: 'free' | 'occupied' | 'reserved' | 'disabled'
+  status: 'free' | 'occupied' | 'disabled'
   dbCell?: WmsCell
 }
 
@@ -137,7 +137,7 @@ type WmsScanLocation = {
   slotRows: number
   filled: number
   full: boolean
-  status: 'free' | 'occupied' | 'reserved' | 'disabled'
+  status: 'free' | 'occupied' | 'disabled'
   slots: Array<{
     number: number
     occupied: boolean
@@ -159,6 +159,54 @@ type WmsScanBox = {
   addressText: string | null
 }
 
+type WmsSearchResult = {
+  item_id: string
+  box_id: string
+  box_number: number
+  box_barcode: string
+  supply_number: number
+  batch_number: number | null
+  warehouse_id: string
+  warehouse_name: string
+  rack_id: string
+  rack_name: string
+  side_id: string
+  side_name: string
+  col: string
+  row: number
+  address_code: string
+  address_text: string
+  units: number
+}
+
+type UnaddressedBox = {
+  id: string
+  box_number: number
+  barcode: string
+  supply_id: string
+  supply_number: number
+  batch_number: number | null
+  batch_name: string
+  warehouse_name: string
+  units: number
+}
+
+type WmsMovement = {
+  id: string
+  action: 'placed' | 'moved' | 'unassigned' | 'released' | 'swapped'
+  source: string
+  from_address_text: string | null
+  to_address_text: string | null
+  created_at: string
+  fulfillment_box?: { box_number: number; barcode: string } | null
+}
+
+type InventoryScanResult = {
+  result: 'found' | 'wrong_address' | 'unexpected'
+  boxNumber: number
+  expectedAddress: string | null
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function colIndexToLetter(index: number): string {
@@ -178,6 +226,22 @@ function generateGrid(zone: WmsZone, cells: WmsCell[]): VirtualCell[][] {
     grid.push(row)
   }
   return grid
+}
+
+function signalScan(ok: boolean) {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+    const context = new AudioContextClass()
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+    oscillator.frequency.value = ok ? 880 : 220
+    gain.gain.value = 0.05
+    oscillator.connect(gain); gain.connect(context.destination)
+    oscillator.start(); oscillator.stop(context.currentTime + (ok ? 0.09 : 0.18))
+    navigator.vibrate?.(ok ? 40 : [80, 50, 80])
+  } catch {
+    // Browsers can block audio before the first user interaction; visual feedback remains available.
+  }
 }
 
 function defaultZoneSides(): WmsZoneSide[] {
@@ -525,7 +589,7 @@ function ZoneModal({ editing, onClose, onSave }: {
 
 // ─── CellModal ────────────────────────────────────────────────────────────────
 
-function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, initialSideKey, onClose, onRefresh }: {
+function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, initialSideKey, canManage, onClose, onRefresh }: {
   cell: VirtualCell
   zone: WmsZone
   warehouse: WmsWarehouse
@@ -533,12 +597,13 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
   accountShortId: number | null
   zoneId: string
   initialSideKey?: string
+  canManage: boolean
   onClose: () => void
   onRefresh: () => void
 }) {
   const [internalItems, setInternalItems] = useState<WmsCellItem[]>(cell.dbCell?.items ?? [])
   const [internalCellId, setInternalCellId] = useState<string | null>(cell.dbCell?.id ?? null)
-  const [internalStatus, setInternalStatus] = useState<'free' | 'occupied' | 'reserved' | 'disabled'>(cell.status)
+  const [internalStatus, setInternalStatus] = useState<'free' | 'occupied' | 'disabled'>(cell.status)
   const [expandedBoxIds, setExpandedBoxIds] = useState<Set<string>>(new Set())
   const zoneSides = normalizedZoneSides(zone)
   const initialSide = zoneSides.find((side) => (side.id ?? side.code) === initialSideKey) ?? zoneSides[0]
@@ -564,48 +629,22 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
     setStorageLoading(true)
     setPlacementError('')
     try {
-      const placedIds = new Set<string>()
-      for (let from = 0; ; from += 1000) {
-        const { data, error } = await (supabase as any)
-          .from('wms_cell_items')
-          .select('fulfillment_box_id')
-          .eq('account_id', accountId)
-          .not('fulfillment_box_id', 'is', null)
-          .range(from, from + 999)
-        if (error) throw error
-        for (const row of data ?? []) if (row.fulfillment_box_id) placedIds.add(row.fulfillment_box_id)
-        if ((data ?? []).length < 1000) break
-      }
-
-      const available: FulfillmentStorageBox[] = []
-      for (let from = 0; ; from += 1000) {
-        const { data, error } = await (supabase as any)
-          .from('fulfillment_boxes')
-          .select('id,supply_id,account_id,box_number,barcode,status,supply:fulfillment_supplies!inner(id,supply_number,warehouse_name,batch:fulfillment_batches!inner(id,name,short_id))')
-          .eq('account_id', accountId)
-          .order('created_at', { ascending: false })
-          .range(from, from + 999)
-        if (error) throw error
-        for (const row of data ?? []) {
-          if (placedIds.has(row.id)) continue
-          const supply = Array.isArray(row.supply) ? row.supply[0] : row.supply
-          const batch = Array.isArray(supply?.batch) ? supply.batch[0] : supply?.batch
-          available.push({
-            id: row.id,
-            supply_id: row.supply_id,
-            account_id: row.account_id,
-            box_number: row.box_number,
-            barcode: row.barcode,
-            status: row.status,
-            supply_number: supply?.supply_number ?? 0,
-            warehouse_name: supply?.warehouse_name ?? '',
-            batch_name: batch?.name ?? 'Партия',
-            batch_short_id: batch?.short_id ?? null,
-          })
-        }
-        if ((data ?? []).length < 1000) break
-      }
-      setStorageBoxes(available)
+      const { data, error } = await (supabase as any).rpc('get_unaddressed_fulfillment_boxes', {
+        p_account_id: accountId,
+      })
+      if (error) throw error
+      setStorageBoxes(((data ?? []) as UnaddressedBox[]).map((row) => ({
+        id: row.id,
+        supply_id: row.supply_id,
+        account_id: accountId,
+        box_number: row.box_number,
+        barcode: row.barcode,
+        status: 'open',
+        supply_number: row.supply_number,
+        warehouse_name: row.warehouse_name,
+        batch_name: row.batch_name,
+        batch_short_id: row.batch_number,
+      })))
     } catch (error: any) {
       setPlacementError(error?.message || 'Не удалось загрузить короба фулфилмента')
     } finally {
@@ -628,27 +667,27 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
     return (data as WmsCell)?.id ?? null
   }
 
-  const handleSetStatus = async (newStatus: 'free' | 'occupied' | 'reserved' | 'disabled') => {
-    if (!supabase || newStatus === internalStatus) return
-    if (newStatus === 'free') {
-      if (internalItems.length > 0) {
-        alert('Сначала переместите или удалите содержимое паллетоместа')
-        return
-      }
-      if (internalCellId) {
-        await (supabase as any).from('wms_cells').delete().eq('id', internalCellId)
-        setInternalCellId(null); setInternalItems([])
-      }
-    } else if (!internalCellId) {
-      const id = await ensureCell()
-      if (id && newStatus !== 'occupied') {
-        await (supabase as any).from('wms_cells').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', id)
-      }
-    } else {
-      await (supabase as any).from('wms_cells').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', internalCellId)
+  const handleToggleDisabled = async () => {
+    if (!supabase || saving) return
+    const disable = internalStatus !== 'disabled'
+    if (disable && internalItems.length > 0) {
+      alert('Нельзя заглушить паллетоместо, пока в нём находятся короба')
+      return
     }
-    setInternalStatus(newStatus)
-    onRefresh()
+    setSaving(true)
+    const { error } = await (supabase as any).rpc('set_wms_cell_disabled', {
+      p_zone_id: zoneId,
+      p_col: cell.col,
+      p_row: cell.row,
+      p_disabled: disable,
+    })
+    if (error) alert(error.message || 'Не удалось изменить заглушку паллетоместа')
+    else {
+      setInternalStatus(disable ? 'disabled' : 'free')
+      if (!disable) setInternalCellId(null)
+      onRefresh()
+    }
+    setSaving(false)
   }
 
   const handleMoveOrSwapBox = async (boxId: string, targetSideId: string, slotNumber: number) => {
@@ -784,12 +823,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
     setSelectedStorageBoxIds(new Set(matched.map((box) => box.id)))
   }
 
-  const statusConfig = {
-    free:     { label: 'Свободна',   active: 'border-emerald-400 bg-emerald-50 text-emerald-700' },
-    occupied: { label: 'Занята',     active: 'border-red-400 bg-red-50 text-red-700' },
-    reserved: { label: 'Резерв',     active: 'border-amber-400 bg-amber-50 text-amber-700' },
-    disabled: { label: 'Заглушена', active: 'border-slate-400 bg-slate-100 text-slate-500' },
-  } as const
+  const derivedStatus = internalStatus === 'disabled' ? 'disabled' : internalItems.length > 0 ? 'occupied' : 'free'
 
   const sideScopedItems = internalItems.filter((item) => (
     item.side_id ? visibleSideIds.has(item.side_id) : initialSide?.position === 0
@@ -866,17 +900,18 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-6">
-          {/* Status */}
-          <div>
-            <div className="mb-2 text-xs font-medium text-slate-600">Статус</div>
-            <div className="flex gap-2">
-              {(['free', 'occupied', 'reserved', 'disabled'] as const).map((s) => (
-                <button key={s} type="button" onClick={() => void handleSetStatus(s)}
-                  className={`flex-1 rounded-xl border py-2 text-xs font-medium transition ${internalStatus === s ? statusConfig[s].active : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                  {statusConfig[s].label}
-                </button>
-              ))}
+          {/* Status is derived from actual contents. Only the disabled state is manual. */}
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2.5">
+            <div>
+              <div className="text-[10px] text-slate-400">Статус паллетоместа</div>
+              <div className={`text-xs font-semibold ${derivedStatus === 'occupied' ? 'text-red-600' : derivedStatus === 'disabled' ? 'text-slate-500' : 'text-emerald-600'}`}>
+                {derivedStatus === 'occupied' ? 'Занята' : derivedStatus === 'disabled' ? 'Заглушена' : 'Свободна'}
+              </div>
             </div>
+            {canManage && <button type="button" onClick={() => void handleToggleDisabled()} disabled={saving || (derivedStatus === 'occupied' && internalStatus !== 'disabled')}
+              className={`cursor-pointer rounded-xl border px-3 py-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${internalStatus === 'disabled' ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>
+              {internalStatus === 'disabled' ? 'Снять заглушку' : 'Заглушить'}
+            </button>}
           </div>
 
           {/* Physical box places by side */}
@@ -936,11 +971,12 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                         {Array.from({ length: side.slot_count }, (_, index) => index + 1).map((slotNumber) => {
                           const box = side.id ? occupiedBoxSlots.get(`${side.id}-${slotNumber}`) : undefined
                           const isMoving = box?.id === movingBoxId
+                          const isTarget = placementTarget?.sideId === side.id && placementTarget?.slotNumber === slotNumber
                           return (
                             <button key={slotNumber} type="button"
                               title={box ? `${side.name} · ${cell.col}${cell.row}-K${slotNumber} · ${box.box_name}` : `${side.name} · ${cell.col}${cell.row}-K${slotNumber}`}
-                              onClick={() => side.id && handleBoxSlotClick(side.id, slotNumber, box)}
-                              className={`flex h-11 cursor-pointer flex-col items-center justify-center rounded-md border text-[10px] font-semibold transition ${isMoving ? 'border-violet-500 bg-violet-100 text-violet-700 ring-2 ring-violet-200' : box ? 'border-amber-400 bg-amber-100 text-amber-800 hover:bg-amber-200' : movingBoxId ? 'border-violet-200 bg-white text-violet-500 hover:border-violet-400 hover:bg-violet-50' : 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}>
+                              onClick={() => canManage && side.id && handleBoxSlotClick(side.id, slotNumber, box)}
+                              className={`flex h-11 cursor-pointer flex-col items-center justify-center rounded-md border text-[10px] font-semibold transition ${isMoving ? 'border-violet-500 bg-violet-100 text-violet-700 ring-2 ring-violet-200' : isTarget ? 'border-violet-500 bg-violet-100 text-violet-700 ring-2 ring-violet-300 ring-offset-1' : box ? 'border-amber-400 bg-amber-100 text-amber-800 hover:bg-amber-200' : movingBoxId ? 'border-violet-200 bg-white text-violet-500 hover:border-violet-400 hover:bg-violet-50' : 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}>
                               <span>K{slotNumber}</span>
                               {box && <span className="max-w-full truncate px-1 text-[8px] font-normal opacity-75">{box.box_name}</span>}
                             </button>
@@ -1021,7 +1057,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                     </svg>
                     <span className="flex-1 text-xs font-semibold text-slate-800">{box.fulfillment_box ? `Короб №${box.fulfillment_box.box_number}` : box.box_name}</span>
                     {(box.fulfillment_box?.barcode || box.barcode) && <span className="font-mono text-[10px] text-slate-400">{box.fulfillment_box?.barcode || box.barcode}</span>}
-                    <button type="button" title="Изменить место короба"
+                    {canManage && <button type="button" title="Изменить место короба"
                       onClick={() => {
                         setAssigningBoxId(isAssigning ? null : box.id)
                         setAssignmentSideId(box.side_id ?? initialSide?.id ?? '')
@@ -1029,10 +1065,11 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                       }}
                       className={`cursor-pointer rounded-md px-1.5 py-1 text-[10px] ${box.side_id ? 'text-violet-600 hover:bg-violet-50' : 'bg-red-50 text-red-600 hover:bg-red-100'}`}>
                       {address}
-                    </button>
+                    </button>}
+                    {!canManage && <span className="rounded-md px-1.5 py-1 text-[10px] text-slate-500">{address}</span>}
                     {box.qty > 1 && <span className="text-xs text-slate-500">×{box.qty} кор.</span>}
                     {totalUnits > 0 && <span className="text-[10px] text-slate-400">({totalUnits} ед.)</span>}
-                    {box.fulfillment_box_id && (
+                    {box.fulfillment_box_id && canManage && (
                       <button type="button" disabled={saving} title="Убрать адрес, не удаляя короб"
                         onClick={() => void handleUnassignBox(box)}
                         className="cursor-pointer rounded-md border border-red-100 px-1.5 py-1 text-[10px] font-medium text-red-500 hover:border-red-200 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
@@ -1348,7 +1385,12 @@ function ScanWorkspace({ location, pendingBox, error, success, busy, onScan, onS
 
 // ─── WmsPage ──────────────────────────────────────────────────────────────────
 
-export function WmsPage({ accountId }: { accountId: string }) {
+export function WmsPage({ accountId, canManage = true, canViewHistory = true, canInventory = true }: {
+  accountId: string
+  canManage?: boolean
+  canViewHistory?: boolean
+  canInventory?: boolean
+}) {
   const [warehouses, setWarehouses] = useState<WmsWarehouse[]>([])
   const [zonesByWarehouse, setZonesByWarehouse] = useState<Record<string, WmsZone[]>>({})
   const [cells, setCells] = useState<WmsCell[]>([])
@@ -1369,6 +1411,17 @@ export function WmsPage({ accountId }: { accountId: string }) {
   const scanTimerRef = useRef<number | null>(null)
   const autoOpenedAccountRef = useRef<string | null>(null)
   const [accountShortId, setAccountShortId] = useState<number | null>(null)
+  const [operationsModal, setOperationsModal] = useState<'search' | 'unaddressed' | 'history' | 'inventory' | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<WmsSearchResult[]>([])
+  const [unaddressedBoxes, setUnaddressedBoxes] = useState<UnaddressedBox[]>([])
+  const [movements, setMovements] = useState<WmsMovement[]>([])
+  const [operationsLoading, setOperationsLoading] = useState(false)
+  const [inventorySessionId, setInventorySessionId] = useState<string | null>(null)
+  const [inventoryBoxCode, setInventoryBoxCode] = useState('')
+  const [inventoryLocationCode, setInventoryLocationCode] = useState('')
+  const [inventoryResults, setInventoryResults] = useState<InventoryScanResult[]>([])
+  const [inventorySummary, setInventorySummary] = useState<Record<string, number> | null>(null)
 
   // ── Data loaders ──────────────────────────────────────────────────────────
 
@@ -1416,6 +1469,49 @@ export function WmsPage({ accountId }: { accountId: string }) {
     })))
   }, [])
 
+  const loadUnaddressedBoxes = useCallback(async (silent = false) => {
+    if (!supabase || !accountId) return
+    if (!silent) setOperationsLoading(true)
+    const { data, error } = await (supabase as any).rpc('get_unaddressed_fulfillment_boxes', { p_account_id: accountId })
+    if (error) {
+      if (!silent) window.alert(error.message || 'Не удалось загрузить неразмещённые короба')
+    } else {
+      setUnaddressedBoxes((data ?? []) as UnaddressedBox[])
+    }
+    if (!silent) setOperationsLoading(false)
+  }, [accountId])
+
+  useEffect(() => {
+    void loadUnaddressedBoxes(true)
+  }, [loadUnaddressedBoxes])
+
+  const runWmsSearch = useCallback(async () => {
+    if (!supabase || !accountId) return
+    setOperationsLoading(true)
+    const { data, error } = await (supabase as any).rpc('search_wms_locations', {
+      p_account_id: accountId,
+      p_query: searchQuery,
+      p_limit: 100,
+    })
+    if (error) window.alert(error.message || 'Не удалось выполнить поиск')
+    else setSearchResults((data ?? []) as WmsSearchResult[])
+    setOperationsLoading(false)
+  }, [accountId, searchQuery])
+
+  const loadMovements = useCallback(async () => {
+    if (!supabase || !accountId) return
+    setOperationsLoading(true)
+    const { data, error } = await (supabase as any)
+      .from('wms_movements')
+      .select('*, fulfillment_box:fulfillment_boxes(box_number,barcode)')
+      .eq('account_id', accountId)
+      .order('created_at', { ascending: false })
+      .limit(200)
+    if (error) window.alert(error.message || 'Не удалось загрузить историю склада')
+    else setMovements((data ?? []) as WmsMovement[])
+    setOperationsLoading(false)
+  }, [accountId])
+
   useEffect(() => {
     autoOpenedAccountRef.current = null
     setLoading(true)
@@ -1432,6 +1528,8 @@ export function WmsPage({ accountId }: { accountId: string }) {
     void (supabase as any).from('accounts').select('short_id').eq('id', accountId).single()
       .then(({ data }: any) => { setAccountShortId(data?.short_id ?? null) })
   }, [accountId])
+  useEffect(() => { if (scanError) signalScan(false) }, [scanError])
+  useEffect(() => { if (scanSuccess && scanSuccess !== 'Фокус сканирования сброшен') signalScan(true) }, [scanSuccess])
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -1442,6 +1540,12 @@ export function WmsPage({ accountId }: { accountId: string }) {
   const currentCell = selectedCellCoord
     ? (grid.flat().find((c) => c.col === selectedCellCoord.col && c.row === selectedCellCoord.row) ?? null)
     : null
+  const totalPalletPlaces = selectedZone ? selectedZone.cols * selectedZone.rows * Math.max(selectedZoneSides.length, 1) : 0
+  const disabledPalletPlaces = cells.filter((cell) => cell.status === 'disabled').length * Math.max(selectedZoneSides.length, 1)
+  const occupiedPalletPlaces = selectedZoneSides.reduce((total, side) => total + cells.filter((cell) =>
+    cell.status !== 'disabled' && (cell.items ?? []).some((item) => item.item_type === 'box' && (item.side_id === side.id || (!item.side_id && side.position === 0))),
+  ).length, 0)
+  const freePalletPlaces = Math.max(totalPalletPlaces - disabledPalletPlaces - occupiedPalletPlaces, 0)
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -1592,6 +1696,57 @@ export function WmsPage({ accountId }: { accountId: string }) {
     setScanOpen(false)
   }, [resetScan])
 
+  const openOperations = useCallback((mode: 'search' | 'unaddressed' | 'history' | 'inventory') => {
+    setOperationsModal(mode)
+    if (mode === 'unaddressed') void loadUnaddressedBoxes()
+    if (mode === 'history') void loadMovements()
+  }, [loadMovements, loadUnaddressedBoxes])
+
+  const startInventory = useCallback(async () => {
+    if (!supabase || !selectedWarehouse) return
+    setOperationsLoading(true)
+    const { data, error } = await (supabase as any).rpc('start_wms_inventory', { p_warehouse_id: selectedWarehouse.id })
+    if (error) window.alert(error.message || 'Не удалось начать инвентаризацию')
+    else {
+      setInventorySessionId(data as string)
+      setInventoryResults([])
+      setInventorySummary(null)
+    }
+    setOperationsLoading(false)
+  }, [selectedWarehouse])
+
+  const scanInventoryBox = useCallback(async () => {
+    if (!supabase || !inventorySessionId || !inventoryBoxCode.trim()) return
+    setOperationsLoading(true)
+    const { data, error } = await (supabase as any).rpc('scan_wms_inventory_box', {
+      p_session_id: inventorySessionId,
+      p_box_barcode: inventoryBoxCode.trim(),
+      p_location_code: inventoryLocationCode.trim() || null,
+    })
+    if (error) {
+      signalScan(false)
+      window.alert(error.message || 'Не удалось проверить короб')
+    } else {
+      const result = data as InventoryScanResult
+      signalScan(result.result === 'found')
+      setInventoryResults((previous) => [result, ...previous.filter((item) => item.boxNumber !== result.boxNumber)])
+    }
+    setInventoryBoxCode('')
+    setOperationsLoading(false)
+  }, [inventoryBoxCode, inventoryLocationCode, inventorySessionId])
+
+  const finishInventory = useCallback(async () => {
+    if (!supabase || !inventorySessionId) return
+    setOperationsLoading(true)
+    const { data, error } = await (supabase as any).rpc('finish_wms_inventory', { p_session_id: inventorySessionId })
+    if (error) window.alert(error.message || 'Не удалось завершить инвентаризацию')
+    else {
+      setInventorySummary(data as Record<string, number>)
+      setInventorySessionId(null)
+    }
+    setOperationsLoading(false)
+  }, [inventorySessionId])
+
   const handleSaveWarehouse = async (name: string, description: string, fbsEnabled: boolean, wbWarehouseId: string) => {
     if (!supabase) return
     const editId = warehouseModal.editing?.id
@@ -1693,13 +1848,15 @@ export function WmsPage({ accountId }: { accountId: string }) {
       <div className="flex w-64 flex-shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white select-none">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
           <span className="text-sm font-semibold text-slate-700">Склады</span>
-          <button type="button" title="Создать склад"
-            onClick={() => setWarehouseModal({ open: true, editing: null })}
-            className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-violet-600">
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
+          {canManage && (
+            <button type="button" title="Создать склад"
+              onClick={() => setWarehouseModal({ open: true, editing: null })}
+              className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-violet-600">
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {warehouses.length === 0 ? (
@@ -1725,15 +1882,15 @@ export function WmsPage({ accountId }: { accountId: string }) {
                     <polyline points="9 22 9 12 15 12 15 22" />
                   </svg>
                   <span className="flex-1 truncate text-sm font-medium text-slate-700">{wh.name}</span>
-                  <button type="button"
+                  {canManage && <button type="button"
                     onClick={(e) => { e.stopPropagation(); setWarehouseModal({ open: true, editing: wh }) }}
                     className="hidden h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-600 group-hover:flex">
                     <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                     </svg>
-                  </button>
-                  <button type="button"
+                  </button>}
+                  {canManage && <button type="button"
                     onClick={(e) => { e.stopPropagation(); void handleDeleteWarehouse(wh.id) }}
                     disabled={warehouses.length <= 1}
                     title={warehouses.length <= 1 ? 'Нельзя удалить единственный склад' : 'Удалить склад'}
@@ -1746,20 +1903,20 @@ export function WmsPage({ accountId }: { accountId: string }) {
                       <polyline points="3 6 5 6 21 6" />
                       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
                     </svg>
-                  </button>
+                  </button>}
                 </div>
 
                 {/* Zone list */}
                 {expandedWarehouseIds.has(wh.id) && (
                   <div className="ml-5 border-l border-slate-100">
-                    <button type="button"
+                    {canManage && <button type="button"
                       onClick={() => setZoneModal({ open: true, editing: null, warehouseId: wh.id })}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-400 hover:text-violet-600">
                       <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
                         <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
                       </svg>
                       Добавить стеллаж
-                    </button>
+                    </button>}
                     {(zonesByWarehouse[wh.id] ?? []).map((zone) => (
                       <div key={zone.id}
                         className={`group flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-slate-50 ${selectedZoneId === zone.id ? 'bg-violet-50' : ''}`}
@@ -1773,22 +1930,22 @@ export function WmsPage({ accountId }: { accountId: string }) {
                           {zone.name}
                         </span>
                         <span className="text-[10px] text-slate-400">{zone.cols}×{zone.rows}</span>
-                        <button type="button"
+                        {canManage && <button type="button"
                           onClick={(e) => { e.stopPropagation(); setZoneModal({ open: true, editing: zone, warehouseId: wh.id }) }}
                           className="hidden h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-600 group-hover:flex">
                           <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                           </svg>
-                        </button>
-                        <button type="button"
+                        </button>}
+                        {canManage && <button type="button"
                           onClick={(e) => { e.stopPropagation(); void handleDeleteZone(zone.id) }}
                           className="hidden h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-red-500 group-hover:flex">
                           <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
                             <polyline points="3 6 5 6 21 6" />
                             <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
                           </svg>
-                        </button>
+                        </button>}
                       </div>
                     ))}
                   </div>
@@ -1813,27 +1970,39 @@ export function WmsPage({ accountId }: { accountId: string }) {
               <span className="text-xs text-slate-400">
                 {selectedZone.cols} паллетомест × {selectedZone.rows} ярусов · {selectedZoneSides.length} сторон
               </span>
-              <div className="ml-auto flex items-center gap-4 text-xs text-slate-500">
-                <button type="button" onClick={() => setScanOpen(true)}
+              <div className="ml-auto flex flex-wrap items-center justify-end gap-2 text-xs text-slate-500">
+                <button type="button" onClick={() => openOperations('search')}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 font-medium hover:border-violet-200 hover:text-violet-700">
+                  Поиск
+                </button>
+                <button type="button" onClick={() => openOperations('unaddressed')}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 font-medium hover:border-violet-200 hover:text-violet-700">
+                  Без адреса {unaddressedBoxes.length}
+                </button>
+                {canInventory && <button type="button" onClick={() => openOperations('inventory')}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 font-medium hover:border-violet-200 hover:text-violet-700">
+                  Инвентаризация
+                </button>}
+                {canViewHistory && <button type="button" onClick={() => openOperations('history')}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 font-medium hover:border-violet-200 hover:text-violet-700">
+                  История
+                </button>}
+                {canManage && <button type="button" onClick={() => setScanOpen(true)}
                   className="flex cursor-pointer items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 font-semibold text-violet-700 hover:bg-violet-100">
                   <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4M7 12h10" /></svg>
                   Сканирование
-                </button>
-                <span className="flex items-center gap-1.5">
+                </button>}
+                <span className="flex items-center gap-1.5" title={`${freePalletPlaces} паллетомест`}>
                   <span className="h-3 w-3 rounded-sm border border-emerald-300 bg-emerald-200" />
-                  Свободна
+                  Свободно {freePalletPlaces}
                 </span>
-                <span className="flex items-center gap-1.5">
+                <span className="flex items-center gap-1.5" title={`${occupiedPalletPlaces} паллетомест`}>
                   <span className="h-3 w-3 rounded-sm border border-red-300 bg-red-200" />
-                  Занята
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="h-3 w-3 rounded-sm border border-amber-300 bg-amber-200" />
-                  Резерв
+                  Занято {occupiedPalletPlaces}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="h-3 w-3 rounded-sm border border-slate-300 bg-slate-200" />
-                  Заглушена
+                  Заглушено {disabledPalletPlaces}
                 </span>
               </div>
             </div>
@@ -1877,8 +2046,8 @@ export function WmsPage({ accountId }: { accountId: string }) {
                                 const sideItems = hasAddressedBoxes
                                   ? cellItems.filter((item) => item.side_id === side.id || (!item.side_id && side.position === 0))
                                   : cellItems
-                                const visualStatus = vcell.status === 'reserved' || vcell.status === 'disabled'
-                                  ? vcell.status
+                                const visualStatus = vcell.status === 'disabled'
+                                  ? 'disabled'
                                   : hasAddressedBoxes
                                     ? (sideItems.length > 0 ? 'occupied' : 'free')
                                     : vcell.status
@@ -1894,8 +2063,6 @@ export function WmsPage({ accountId }: { accountId: string }) {
                                       } ${
                                         visualStatus === 'occupied'
                                           ? 'border-red-200 bg-red-100 text-red-700 hover:bg-red-200'
-                                          : visualStatus === 'reserved'
-                                          ? 'border-amber-200 bg-amber-100 text-amber-700 hover:bg-amber-200'
                                           : visualStatus === 'disabled'
                                           ? 'border-slate-300 bg-slate-200 text-slate-400 cursor-not-allowed'
                                           : 'border-emerald-200 bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
@@ -1945,8 +2112,12 @@ export function WmsPage({ accountId }: { accountId: string }) {
           accountShortId={accountShortId}
           zoneId={selectedZoneId!}
           initialSideKey={selectedCellCoord.sideKey}
+          canManage={canManage}
           onClose={() => setSelectedCellCoord(null)}
-          onRefresh={() => { if (selectedZoneId) void loadCells(selectedZoneId) }}
+          onRefresh={() => {
+            if (selectedZoneId) void loadCells(selectedZoneId)
+            void loadUnaddressedBoxes(true)
+          }}
         />
       )}
       {scanOpen && (
@@ -1962,6 +2133,72 @@ export function WmsPage({ accountId }: { accountId: string }) {
           onReset={resetScan}
           onClose={handleCloseScan}
         />
+      )}
+      {operationsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="flex h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+              <div>
+                <h2 className="text-base font-semibold text-slate-800">
+                  {operationsModal === 'search' ? 'Поиск по складу' : operationsModal === 'unaddressed' ? 'Короба без адреса' : operationsModal === 'history' ? 'История склада' : 'Инвентаризация'}
+                </h2>
+                <p className="text-xs text-slate-400">{selectedWarehouse?.name ?? 'Склад'}</p>
+              </div>
+              <button type="button" onClick={() => setOperationsModal(null)} className="cursor-pointer text-xl text-slate-400 hover:text-slate-700">×</button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              {operationsModal === 'search' && (
+                <>
+                  <div className="mb-4 flex gap-2">
+                    <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runWmsSearch() }} autoFocus
+                      placeholder="Товар, баркод, QR короба, партия, поставка или адрес"
+                      className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-violet-400" />
+                    <button type="button" onClick={() => void runWmsSearch()} className="cursor-pointer rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white">Найти</button>
+                  </div>
+                  <div className="space-y-2">
+                    {searchResults.map((result) => (
+                      <button key={result.item_id} type="button" onClick={() => {
+                        setExpandedWarehouseIds((previous) => new Set([...previous, result.warehouse_id]))
+                        setSelectedZoneId(result.rack_id)
+                        void loadZones(result.warehouse_id); void loadCells(result.rack_id)
+                        setSelectedCellCoord({ col: result.col, row: result.row, sideKey: result.side_id })
+                        setOperationsModal(null)
+                      }} className="flex w-full cursor-pointer items-center justify-between rounded-xl border border-slate-200 p-3 text-left hover:border-violet-300 hover:bg-violet-50">
+                        <span><b className="text-slate-800">Короб №{result.box_number}</b><span className="ml-2 font-mono text-xs text-slate-400">{result.box_barcode}</span><span className="mt-1 block text-xs text-slate-500">P{result.batch_number ?? '?'} · S{result.supply_number} · {result.units} ед.</span></span>
+                        <span className="text-right"><b className="text-violet-700">{result.address_text}</b><span className="mt-1 block font-mono text-[10px] text-slate-400">{result.address_code}</span></span>
+                      </button>
+                    ))}
+                    {!operationsLoading && searchResults.length === 0 && <div className="py-12 text-center text-sm text-slate-400">Введите запрос — система покажет все найденные адреса</div>}
+                  </div>
+                </>
+              )}
+              {operationsModal === 'unaddressed' && (
+                <div className="space-y-2">
+                  <div className="mb-3 flex items-center justify-between text-xs text-slate-500"><span>Всего без адреса: {unaddressedBoxes.length}</span><button type="button" onClick={() => void loadUnaddressedBoxes()} className="cursor-pointer text-violet-600">Обновить</button></div>
+                  {unaddressedBoxes.map((box) => <div key={box.id} className="flex items-center justify-between rounded-xl border border-slate-200 p-3"><span><b>Короб №{box.box_number}</b><span className="ml-2 font-mono text-xs text-slate-400">{box.barcode}</span></span><span className="text-right text-xs text-slate-500">P{box.batch_number ?? '?'} · S{box.supply_number}<br />{box.units} ед.</span></div>)}
+                  {!operationsLoading && unaddressedBoxes.length === 0 && <div className="py-12 text-center text-sm text-emerald-600">Все доступные короба размещены</div>}
+                </div>
+              )}
+              {operationsModal === 'history' && (
+                <div className="space-y-2">
+                  {movements.map((movement) => {
+                    const labels = { placed: 'Размещён', moved: 'Перемещён', unassigned: 'Адрес снят', released: 'Освобождён после отгрузки', swapped: 'Короба обменяны' }
+                    return <div key={movement.id} className="grid grid-cols-[150px_1fr_170px] gap-3 rounded-xl border border-slate-200 p-3 text-xs"><b className="text-slate-800">{labels[movement.action]}</b><span className="text-slate-600">Короб №{movement.fulfillment_box?.box_number ?? '—'} · {movement.from_address_text ?? 'без адреса'} → {movement.to_address_text ?? 'без адреса'}</span><span className="text-right text-slate-400">{new Date(movement.created_at).toLocaleString('ru-RU')}</span></div>
+                  })}
+                  {!operationsLoading && movements.length === 0 && <div className="py-12 text-center text-sm text-slate-400">История пока пуста</div>}
+                </div>
+              )}
+              {operationsModal === 'inventory' && (
+                <div className="space-y-4">
+                  {!inventorySessionId && !inventorySummary && <div className="rounded-2xl border border-slate-200 p-6 text-center"><p className="mb-4 text-sm text-slate-600">Система зафиксирует ожидаемые короба, а сотрудник последовательно отсканирует фактически найденные.</p><button type="button" onClick={() => void startInventory()} disabled={!selectedWarehouse || operationsLoading} className="cursor-pointer rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Начать инвентаризацию</button></div>}
+                  {inventorySessionId && <><div className="grid grid-cols-2 gap-2"><input value={inventoryLocationCode} onChange={(event) => setInventoryLocationCode(event.target.value)} placeholder="QR адреса (необязательно)" className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-violet-400" /><input value={inventoryBoxCode} onChange={(event) => setInventoryBoxCode(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void scanInventoryBox() }} autoFocus placeholder="Сканируйте QR / ШК короба" className="rounded-xl border border-violet-300 px-4 py-2.5 text-sm outline-none focus:border-violet-500" /></div><div className="flex justify-between"><span className="text-xs text-slate-500">Проверено: {inventoryResults.length}</span><button type="button" onClick={() => void finishInventory()} className="cursor-pointer rounded-xl border border-violet-300 px-4 py-2 text-xs font-semibold text-violet-700">Завершить и сверить</button></div>{inventoryResults.map((item) => <div key={item.boxNumber} className={`rounded-xl border p-3 text-xs ${item.result === 'found' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}`}>Короб №{item.boxNumber}: {item.result === 'found' ? 'найден' : item.result === 'wrong_address' ? `неверный адрес, ожидается ${item.expectedAddress}` : 'не ожидался на этом складе'}</div>)}</>}
+                  {inventorySummary && <div className="grid grid-cols-4 gap-3">{[['Ожидалось','expected'],['Проверено','scanned'],['Не найдено','missing'],['Не на месте','wrongAddress']].map(([label,key]) => <div key={key} className="rounded-2xl border border-slate-200 p-4 text-center"><b className="block text-2xl text-slate-800">{inventorySummary[key] ?? 0}</b><span className="text-xs text-slate-500">{label}</span></div>)}</div>}
+                </div>
+              )}
+              {operationsLoading && <div className="py-4 text-center text-xs text-slate-400">Загрузка...</div>}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

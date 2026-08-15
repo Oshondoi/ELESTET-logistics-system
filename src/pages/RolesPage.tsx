@@ -24,6 +24,10 @@ const ShieldIcon = () => (
 // ─── Бейдж доступов ───────────────────────────────────────────
 
 const permLabels: Record<string, string> = {
+  wms_view: 'Склад (просмотр)',
+  wms_manage: 'Склад (управление)',
+  wms_history: 'История склада',
+  wms_inventory: 'Инвентаризация склада',
   shipments_view: 'Логистика (просмотр)',
   shipments_manage: 'Логистика (управление)',
   shipments_delete_any: 'Удаление поставок (любой статус)',

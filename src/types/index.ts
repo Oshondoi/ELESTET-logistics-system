@@ -157,6 +157,11 @@ export interface RolePermissions {
   fulfillment_stage_jump: boolean
   fulfillment_packing_autoadd: boolean
   fulfillment_supply_delete_locked: boolean
+  // Склад / адресное хранение
+  wms_view: boolean
+  wms_manage: boolean
+  wms_history: boolean
+  wms_inventory: boolean
   // Администрирование
   roles_manage: boolean
   members_manage: boolean
@@ -190,6 +195,10 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   fulfillment_stage_jump: false,
   fulfillment_packing_autoadd: false,
   fulfillment_supply_delete_locked: false,
+  wms_view: false,
+  wms_manage: false,
+  wms_history: false,
+  wms_inventory: false,
   roles_manage: false,
   members_manage: false,
 }
@@ -222,6 +231,10 @@ export const FULL_PERMISSIONS: RolePermissions = {
   fulfillment_stage_jump: true,
   fulfillment_packing_autoadd: true,
   fulfillment_supply_delete_locked: true,
+  wms_view: true,
+  wms_manage: true,
+  wms_history: true,
+  wms_inventory: true,
   roles_manage: true,
   members_manage: true,
 }

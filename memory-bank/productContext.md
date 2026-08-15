@@ -23,10 +23,12 @@ The product is being created to manage logistics operations for shipments going 
 ## WMS operator UX
 - The warehouse tree opens a whole rack; columns are pallet positions, rows are tiers, and visible uprights match the real metal structure.
 - A rack has one or two sides. Every pallet position shows the side's box places as a physical grid; the default is `2 × 4`.
-- Clicking an empty K-place creates a box. Clicking an occupied place selects that physical box; the next click moves it to an empty place or swaps it with another box.
+- Clicking an empty K-place selects a destination for an existing fulfillment box; WMS never invents a new box. Clicking an occupied place selects that physical box; the next click moves it to an empty place or swaps it with another box.
 - The operator sees a human-readable address such as `Сторона 1 · B3-K5`.
 - Barcode is the stable identity of the physical box and is rendered as QR for scanning. Movement changes the address only.
 - Unsafe layout changes are rejected explicitly instead of silently losing occupied places.
+- Operators can find every address for a product/box across all warehouses, work through an unaddressed-box queue, place a whole supply across several pallet positions, and run inventory without leaving the Warehouse page.
+- Successful and failed scans are both visible and audible. Every address change is recorded automatically for audit.
 
 ## Owner task UX
 - Short tasks live separately from long prompt specifications.

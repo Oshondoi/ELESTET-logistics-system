@@ -18,6 +18,17 @@ interface PermGroup {
 
 const PERMISSION_GROUPS: PermGroup[] = [
   {
+    label: 'Склад',
+    items: [
+      { key: 'wms_view', label: 'Просмотр склада и адресов' },
+      { key: 'wms_manage', label: 'Размещение и перемещение коробов' },
+    ],
+    subItems: [
+      { key: 'wms_history', label: 'Просмотр истории склада' },
+      { key: 'wms_inventory', label: 'Проведение инвентаризации' },
+    ],
+  },
+  {
     label: 'Фулфилмент',
     items: [
       { key: 'fulfillment_view', label: 'Просмотр фулфилмента' },

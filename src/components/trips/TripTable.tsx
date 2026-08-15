@@ -5,6 +5,7 @@ import type { ColumnConfig, CustomColDef } from '../../services/columnConfigServ
 import { DEFAULT_COLUMN_CONFIG } from '../../services/columnConfigService'
 import type { PaymentStatus, ShipmentStatus, Store, TripFormValues, TripLineFormValues, TripLineWithStore, TripStatus, TripWithLines } from '../../types'
 import { tripStatuses, shipmentStatuses, paymentStatuses } from '../../lib/constants'
+import { supabase } from '../../lib/supabase'
 import { Badge } from '../ui/Badge'
 import { Card } from '../ui/Card'
 import { DeleteConfirmModal } from '../ui/DeleteConfirmModal'
@@ -1272,7 +1273,22 @@ export const TripTable = ({
                                         value={line.status}
                                         options={shipmentStatuses}
                                         toneMap={lineTone}
-                                        onChange={(status) => onChangeTripLineStatus(trip.id, line.id, status)}
+                                        onChange={async (status) => {
+                                            if (status === 'Отгружен' && line.status !== 'Отгружен' && line.fulfillment_supply_id && supabase) {
+                                              const { data, error } = await (supabase as any).rpc('get_wms_supply_release_preview', {
+                                                p_supply_id: line.fulfillment_supply_id,
+                                              })
+                                              if (error) {
+                                                window.alert(`Не удалось проверить адреса склада: ${error.message}`)
+                                                return
+                                              }
+                                              const addressedBoxes = Number(data?.addressedBoxes ?? 0)
+                                              if (addressedBoxes > 0 && !window.confirm(
+                                                `После статуса «Отгружен» склад освободит адреса ${addressedBoxes} коробов.\n\nСами короба, их содержимое, партия и поставка не удалятся. Продолжить?`,
+                                              )) return
+                                            }
+                                            await onChangeTripLineStatus(trip.id, line.id, status)
+                                        }}
                                       />
                                       {(() => {
                                         const dateMap: Partial<Record<ShipmentStatus, string | null>> = {

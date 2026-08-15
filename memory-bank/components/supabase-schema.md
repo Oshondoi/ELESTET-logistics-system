@@ -27,17 +27,21 @@
 - `fbs_sync_log`: last successful store synchronization metadata.
 - UI reads DB first; Edge Function `wb-fbs` refreshes from WB and upserts cache.
 
-## WMS tables and RPC (applied 11.08.2026)
-- Patches: `supabase/patch_wms.sql`, `patch_wms_boxes.sql`, `patch_wms_disabled.sql`, `patch_wms_rack_layout.sql`.
+## WMS tables and RPC (applied through 15.08.2026)
+- Patches: `supabase/patch_wms.sql`, `patch_wms_boxes.sql`, `patch_wms_disabled.sql`, `patch_wms_rack_layout.sql`, `patch_wms_scanning.sql`, `patch_wms_default_warehouse.sql`, `patch_wms_unassign_box.sql`, `patch_wms_operations.sql`.
 - `wms_warehouses`: account warehouse, FBS participation and optional WB warehouse link.
 - `wms_zones`: one complete rack; stores pallet-position dimensions and visible upright configuration; database default is three tiers (`rows = 3`).
 - `wms_zone_sides`: stable `code` (`S1`/`S2`), editable name and shared `slot_columns × slot_rows`; database allows at most two sides per rack.
-- `wms_cells`: pallet positions such as `B3` with free/occupied/reserved/disabled state.
-- `wms_cell_items`: product or physical box. A box has unique `barcode`, optional `side_id` and `slot_number`; uniqueness protects one box per K-place.
+- `wms_cells`: pallet positions such as `B3`; `free/occupied` are derived from contents, while `disabled` is the only manual state. Legacy `reserved` is migrated to `disabled`.
+- `wms_cell_items`: only an existing physical fulfillment box may be newly placed. A box has canonical `barcode`, required `fulfillment_box_id`, `side_id` and `slot_number`; uniqueness protects one box per K-place.
 - `wms_box_contents`: products inside a physical box; moving the box does not rewrite this table.
 - `save_wms_zone_layout`: atomically saves rack dimensions, uprights and sides; rejects removal/shrinking that would orphan occupied data.
 - `move_or_swap_wms_box`: atomically moves a selected box to a free K-place or swaps two occupied K-places, including movement between the two sides of the same pallet position.
-- Legacy boxes without `side_id`/`slot_number` remain valid and await manual placement.
+- `wms_movements`: append-only operational audit with actor, source and before/after addresses.
+- `wms_inventory_sessions`, `wms_inventory_scans`: frozen expected-box snapshot and scan results for warehouse inventory.
+- Operational RPC: `search_wms_locations`, `get_unaddressed_fulfillment_boxes`, `get_wms_supply_release_preview`, `set_wms_cell_disabled`, `start_wms_inventory`, `scan_wms_inventory_box`, `finish_wms_inventory`.
+- `trg_release_wms_addresses_after_shipping` releases addresses when the linked Logistics line becomes `Отгружен`; it never deletes fulfillment boxes or contents.
+- Legacy boxes without `side_id`/`slot_number` remain valid and await placement; cancelled or already shipped supplies cannot be newly addressed.
 
 ## Fulfillment supply numbers and box barcodes (applied 12.08.2026)
 - Patch: `supabase/patch_fulfillment_box_barcodes.sql`.
