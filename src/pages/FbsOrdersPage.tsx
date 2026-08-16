@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import jsPDF from 'jspdf'
+import JsBarcode from 'jsbarcode'
 import { supabase } from '../lib/supabase'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { triggerSync as triggerProductSync } from '../services/productService'
@@ -13,6 +14,7 @@ interface FbsOrder {
   createdAt: string
   ddate: string
   warehouseId: number
+  officeId: number
   article: string
   nmId: number
   chrtId: number
@@ -25,6 +27,7 @@ interface FbsOrder {
   productBarcode: string | null
   productName: string | null
   productBrand: string | null
+  productColor: string | null
   productVendorCode: string | null
   productSize: string | null
   productLocations: ProductLocation[]
@@ -59,11 +62,34 @@ interface WbWarehouse {
   officeId?: number
 }
 
+interface WbOffice {
+  id: number
+  name: string
+  address?: string
+  city?: string
+}
+
 interface WbSupply {
   id: string
   name: string
   ordersCount?: number
   done?: boolean
+  createdAt?: string
+}
+
+interface StickerPrintOptions {
+  supply: boolean
+  picking: boolean
+  locations: boolean
+  productBarcode: boolean
+  wb: boolean
+}
+
+interface StickerPrintModal {
+  orders: FbsOrder[]
+  supply: WbSupply | null
+  mode: 'selected' | 'supply'
+  options: StickerPrintOptions
 }
 
 interface PickingListRow {
@@ -272,6 +298,240 @@ async function imageUrlToPngDataUrl(url: string): Promise<string | null> {
   }
 }
 
+const STICKER_WIDTH_PX = 580
+const STICKER_HEIGHT_PX = 400
+
+function createStickerCanvas(): { canvas: HTMLCanvasElement; context: CanvasRenderingContext2D } {
+  const canvas = document.createElement('canvas')
+  canvas.width = STICKER_WIDTH_PX
+  canvas.height = STICKER_HEIGHT_PX
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Браузер не поддерживает генерацию стикеров')
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.fillStyle = '#000000'
+  context.textBaseline = 'top'
+  return { canvas, context }
+}
+
+function drawWrappedText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+  maxLines = 2,
+  align: CanvasTextAlign = 'left',
+): number {
+  const words = String(text || '—').trim().split(/\s+/)
+  const lines: string[] = []
+  let line = ''
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word
+    if (context.measureText(candidate).width <= maxWidth || !line) {
+      line = candidate
+    } else {
+      lines.push(line)
+      line = word
+      if (lines.length === maxLines - 1) break
+    }
+  }
+  if (line && lines.length < maxLines) lines.push(line)
+  context.textAlign = align
+  lines.forEach((value, index) => context.fillText(value, x, y + index * lineHeight, maxWidth))
+  context.textAlign = 'left'
+  return y + lines.length * lineHeight
+}
+
+function stickerVariantKey(order: FbsOrder): string {
+  return `${fbsOrderBarcode(order) ?? ''}|${order.chrtId || ''}|${order.nmId}`
+}
+
+function stickerPageCount(modal: StickerPrintModal): number {
+  const variants = new Map<string, FbsOrder>()
+  modal.orders.forEach((order) => {
+    const key = stickerVariantKey(order)
+    if (!variants.has(key)) variants.set(key, order)
+  })
+  const articleCount = variants.size
+  const locationPages = [...variants.values()].reduce(
+    (total, order) => total + Math.max(1, Math.ceil(printableProductLocations(order).length / 3)),
+    0,
+  )
+  return (modal.options.supply ? 1 : 0)
+    + (modal.options.picking ? articleCount : 0)
+    + (modal.options.locations ? locationPages : 0)
+    + (modal.options.productBarcode ? modal.orders.length : 0)
+    + (modal.options.wb ? modal.orders.length : 0)
+}
+
+function printableProductLocations(order: FbsOrder): ProductLocation[] {
+  const unique = new Map<string, ProductLocation>()
+  for (const location of order.productLocations) {
+    const key = `${location.boxBarcode}|${location.addressCode ?? ''}|${location.slotNumber ?? ''}`
+    if (!unique.has(key)) unique.set(key, location)
+  }
+  return [...unique.values()]
+}
+
+function formatStickerDate(value?: string, supplyName?: string): string {
+  if (value) {
+    const parsed = new Date(value)
+    if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleDateString('ru-RU')
+  }
+  const dateInName = supplyName?.match(/\b\d{2}\.\d{2}\.\d{4}\b/)?.[0]
+  return dateInName || new Date().toLocaleDateString('ru-RU')
+}
+
+function buildSupplySticker(supply: WbSupply, orders: FbsOrder[], articleCount: number): string {
+  const { canvas, context } = createStickerCanvas()
+  const date = formatStickerDate(supply.createdAt, supply.name)
+  context.font = '700 22px Arial, sans-serif'
+  context.fillText(date, 28, 24)
+  context.font = '400 21px Arial, sans-serif'
+  context.fillText('Поставка:', 28, 82)
+  context.font = '700 23px Arial, sans-serif'
+  let y = drawWrappedText(context, supply.name, 28, 110, 524, 28, 2)
+  context.font = '400 22px Arial, sans-serif'
+  y += 32
+  context.fillText('Товаров итого:', 28, y)
+  context.font = '700 22px Arial, sans-serif'
+  context.fillText(String(orders.length), 220, y)
+  y += 58
+  context.font = '400 22px Arial, sans-serif'
+  context.fillText('Артикулов итого:', 28, y)
+  context.font = '700 22px Arial, sans-serif'
+  context.fillText(String(articleCount), 238, y)
+  return canvas.toDataURL('image/png')
+}
+
+function buildPickingSticker(order: FbsOrder, quantity: number): string {
+  const { canvas, context } = createStickerCanvas()
+  context.font = '700 32px Arial, sans-serif'
+  context.fillText(`${quantity} шт.`, 24, 18)
+  context.font = '700 18px Arial, sans-serif'
+  let y = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, 24, 67, 532, 22, 2)
+  context.font = '400 16px Arial, sans-serif'
+  context.fillText('Бренд:', 24, y + 4)
+  context.font = '700 16px Arial, sans-serif'
+  context.fillText(order.productBrand || '—', 88, y + 4, 460)
+  y += 25
+  context.font = '400 16px Arial, sans-serif'
+  context.fillText('Цвет:', 24, y + 4)
+  context.font = '700 16px Arial, sans-serif'
+  context.fillText(order.productColor || '—', 78, y + 4, 470)
+  y += 25
+  context.font = '400 16px Arial, sans-serif'
+  context.fillText('Размер:', 24, y + 4)
+  context.font = '700 16px Arial, sans-serif'
+  context.fillText(order.productSize || '—', 92, y + 4, 456)
+  y += 42
+  context.font = '400 16px Arial, sans-serif'
+  context.fillText('Артикул WB:', 24, y)
+  context.font = '700 16px Arial, sans-serif'
+  context.fillText(String(order.nmId), 130, y)
+  y += 24
+  context.font = '400 16px Arial, sans-serif'
+  context.fillText('Баркод:', 24, y)
+  context.font = '700 16px Arial, sans-serif'
+  context.fillText(fbsOrderBarcode(order) || '—', 98, y)
+  y += 24
+  context.font = '400 16px Arial, sans-serif'
+  context.fillText('Артикул:', 24, y)
+  context.font = '700 16px Arial, sans-serif'
+  drawWrappedText(context, order.productVendorCode || order.article || '—', 24, y + 21, 532, 19, 2)
+  return canvas.toDataURL('image/png')
+}
+
+function buildLocationStickers(order: FbsOrder): string[] {
+  const locations = printableProductLocations(order)
+  const chunks: Array<ProductLocation[]> = []
+  if (locations.length === 0) chunks.push([])
+  for (let index = 0; index < locations.length; index += 3) chunks.push(locations.slice(index, index + 3))
+
+  return chunks.map((pageLocations, pageIndex) => {
+    const { canvas, context } = createStickerCanvas()
+    context.font = '700 27px Arial, sans-serif'
+    context.fillText('Адрес товара', 24, 18)
+    if (chunks.length > 1) {
+      context.font = '700 15px Arial, sans-serif'
+      context.textAlign = 'right'
+      context.fillText(`${pageIndex + 1}/${chunks.length}`, 554, 25)
+      context.textAlign = 'left'
+    }
+    context.font = '700 17px Arial, sans-serif'
+    const titleEnd = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, 24, 62, 532, 20, 2)
+    context.font = '400 14px Arial, sans-serif'
+    context.fillText(`Баркод: ${fbsOrderBarcode(order) || '—'} · Арт. WB: ${order.nmId}`, 24, titleEnd + 4, 532)
+    let y = titleEnd + 34
+
+    if (pageLocations.length === 0) {
+      context.font = '700 23px Arial, sans-serif'
+      context.fillText('Не найден на складе', 24, y + 30)
+      context.font = '400 16px Arial, sans-serif'
+      context.fillText('Товара нет ни в одном актуальном коробе', 24, y + 66, 532)
+      return canvas.toDataURL('image/png')
+    }
+
+    pageLocations.forEach((location, index) => {
+      context.font = '700 16px Arial, sans-serif'
+      const address = productLocationAddress(location) ?? 'Без адреса'
+      const addressEnd = drawWrappedText(context, `${pageIndex * 3 + index + 1}. ${address}`, 24, y, 532, 19, 2)
+      context.font = '400 13px Arial, sans-serif'
+      context.fillText(
+        `P-${location.batchNumber} · S-${location.supplyNumber} · Короб ${location.boxNumber} · ${location.quantity} шт.`,
+        42,
+        addressEnd + 2,
+        514,
+      )
+      y = addressEnd + 29
+    })
+    return canvas.toDataURL('image/png')
+  })
+}
+
+function buildProductBarcodeSticker(order: FbsOrder, sellerName: string): string {
+  const barcode = fbsOrderBarcode(order)
+  if (!barcode) throw new Error(`У заказа ${order.id} отсутствует товарный баркод`)
+  const { canvas, context } = createStickerCanvas()
+  const barcodeCanvas = document.createElement('canvas')
+  try {
+    JsBarcode(barcodeCanvas, barcode, {
+      format: /^\d{13}$/.test(barcode) ? 'EAN13' : 'CODE128',
+      width: 2.2,
+      height: 72,
+      displayValue: true,
+      font: 'Arial',
+      fontSize: 18,
+      margin: 0,
+    })
+  } catch {
+    JsBarcode(barcodeCanvas, barcode, { format: 'CODE128', width: 2, height: 72, displayValue: true, font: 'Arial', fontSize: 18, margin: 0 })
+  }
+  const barcodeWidth = Math.min(520, barcodeCanvas.width)
+  const barcodeHeight = Math.min(112, barcodeCanvas.height * (barcodeWidth / barcodeCanvas.width))
+  context.drawImage(barcodeCanvas, (STICKER_WIDTH_PX - barcodeWidth) / 2, 12, barcodeWidth, barcodeHeight)
+  let y = 132
+  context.font = '400 16px Arial, sans-serif'
+  context.textAlign = 'center'
+  context.fillText(sellerName || 'Продавец Wildberries', STICKER_WIDTH_PX / 2, y, 530)
+  context.textAlign = 'left'
+  y += 24
+  context.font = '700 17px Arial, sans-serif'
+  y = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, STICKER_WIDTH_PX / 2, y, 530, 20, 2, 'center')
+  context.font = '400 15px Arial, sans-serif'
+  context.textAlign = 'center'
+  context.fillText(`Бренд: ${order.productBrand || '—'}`, STICKER_WIDTH_PX / 2, y + 3, 530)
+  context.fillText(`Цвет: ${order.productColor || '—'}`, STICKER_WIDTH_PX / 2, y + 23, 530)
+  context.fillText(`Размер: ${order.productSize || '—'}`, STICKER_WIDTH_PX / 2, y + 43, 530)
+  context.fillText('Артикул:', STICKER_WIDTH_PX / 2, y + 67, 530)
+  context.font = '700 15px Arial, sans-serif'
+  context.fillText(order.productVendorCode || order.article || '—', STICKER_WIDTH_PX / 2, y + 87, 530)
+  context.textAlign = 'left'
+  return canvas.toDataURL('image/png')
+}
+
 async function invokeFbs(storeId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const { data: { session } } = await supabase!.auth.getSession()
   const token = session?.access_token ?? ''
@@ -328,6 +588,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   })
   const [orders, setOrders] = useState<FbsOrder[]>([])
   const [wbWarehouses, setWbWarehouses] = useState<WbWarehouse[]>([])
+  const [wbOffices, setWbOffices] = useState<WbOffice[]>([])
   const [loading, setLoading] = useState(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -345,6 +606,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [orderMenuId, setOrderMenuId] = useState<string | null>(null)
   const [expandedSupplyIds, setExpandedSupplyIds] = useState<Set<string>>(new Set())
   const [pickingListMenuOpen, setPickingListMenuOpen] = useState(false)
+  const [stickerPrintModal, setStickerPrintModal] = useState<StickerPrintModal | null>(null)
   const [syncingProducts, setSyncingProducts] = useState(false)
   const [productSyncNotice, setProductSyncNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const syncInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
@@ -356,12 +618,18 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     setPickingListMenuOpen(false)
   }, [selected])
 
-  // Склады WB при смене магазина
+  // Склад продавца и связанный официальный пункт приёмки FBS загружаются одним запросом.
   useEffect(() => {
     if (!selectedStoreId) return
-    void invokeFbs(selectedStoreId, { action: 'get_wb_warehouses' })
-      .then((d) => setWbWarehouses((Array.isArray(d) ? d : (d.result ?? d.warehouses ?? [])) as WbWarehouse[]))
-      .catch(() => setWbWarehouses([]))
+    void invokeFbs(selectedStoreId, { action: 'get_wb_warehouse_directory' })
+      .then((data) => {
+        setWbWarehouses((data.warehouses ?? []) as WbWarehouse[])
+        setWbOffices((data.offices ?? []) as WbOffice[])
+      })
+      .catch(() => {
+        setWbWarehouses([])
+        setWbOffices([])
+      })
   }, [selectedStoreId])
 
   const enrichWithCells = useCallback(async (rawOrders: FbsOrder[]): Promise<FbsOrder[]> => {
@@ -384,6 +652,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         productBarcode: barcode,
         productName: product?.name?.trim() || null,
         productBrand: product?.brand?.trim() || null,
+        productColor: product?.color?.trim() || null,
         productVendorCode: product?.vendor_code?.trim() || order.article?.trim() || null,
         productSize: productSizeByBarcode(product, barcode, order.chrtId),
       }
@@ -453,6 +722,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         createdAt: row.created_at ?? '',
         ddate: row.ddate ?? '',
         warehouseId: row.warehouse_id ?? d.warehouseId ?? 0,
+        officeId: d.officeId ?? 0,
         article: row.article ?? d.article ?? '',
         nmId: row.nm_id ?? d.nmId ?? 0,
         chrtId: row.chrt_id ?? d.chrtId ?? 0,
@@ -467,6 +737,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         productBarcode: null,
         productName: null,
         productBrand: null,
+        productColor: null,
         productVendorCode: null,
         productSize: null,
         productLocations: [],
@@ -506,7 +777,13 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     const sups = (d.supplies ?? d ?? []) as any[]
     setOpenSupplies(sups
       .filter((s: any) => s.done !== true)
-      .map((s: any) => ({ id: s.id, name: s.name || s.id, ordersCount: s.ordersCount, done: s.done })))
+      .map((s: any) => ({
+        id: s.id,
+        name: s.name || s.id,
+        ordersCount: s.ordersCount,
+        done: s.done,
+        createdAt: s.createdAt ?? s.created_at,
+      })))
   }, [selectedStoreId])
 
   // Синк с WB → upsert в fbs_orders → перечитываем из DB
@@ -584,26 +861,14 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
   const mapRawOrder = useCallback((o: any, status: FbsOrder['shipStatus']): FbsOrder => ({
     id: String(o.id), rid: o.rid ?? '', createdAt: o.createdAt ?? '', ddate: o.ddate ?? '',
-    warehouseId: o.warehouseId ?? 0, article: o.article ?? '', nmId: o.nmId ?? 0,
+    warehouseId: o.warehouseId ?? 0, officeId: o.officeId ?? 0, article: o.article ?? '', nmId: o.nmId ?? 0,
     chrtId: o.chrtId ?? 0, skus: o.skus ?? [], price: o.price ?? 0,
     convertedPrice: o.convertedPrice ?? 0, currencyCode: o.currencyCode ?? 643,
-    photoUrl: null, productBarcode: null, productName: null, productBrand: null,
+    photoUrl: null, productBarcode: null, productName: null, productBrand: null, productColor: null,
     productVendorCode: null, productSize: null, productLocations: [], shipStatus: status,
     supplierStatus: status === 'pending' ? 'new' : status === 'assembling' ? 'confirm' : 'complete',
     wbSystemStatus: 'waiting', isInLatestSnapshot: true, supply_id: null,
   }), [])
-
-  // Склады WB при смене магазина
-  useEffect(() => {
-    if (!selectedStoreId) return
-    void invokeFbs(selectedStoreId, { action: 'get_wb_warehouses' })
-      .then((d) => {
-        const list = Array.isArray(d) ? d : (d.result ?? d.warehouses ?? [])
-        setWbWarehouses(list as WbWarehouse[])
-      })
-      .catch(() => setWbWarehouses([]))
-  }, [selectedStoreId])
-
 
   // ─── Handlers ──────────────────────────────────────────────────────────────
 
@@ -684,30 +949,76 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     finally { setBusyIds((s) => { const n = new Set(s); ids.forEach((i) => n.delete(i)); return n }) }
   }
 
-  const handlePrintStickers = async (ordersToPrint: FbsOrder[]) => {
-    if (ordersToPrint.length === 0) return
+  const getWbStickerFiles = async (ordersToPrint: FbsOrder[]): Promise<Map<string, string>> => {
     const ids = ordersToPrint.map((order) => order.id)
-    setBusyIds((s) => new Set([...s, ...ids]))
-    try {
-      const stickers: any[] = []
-      for (let index = 0; index < ids.length; index += 100) {
-        const res = await invokeFbs(selectedStoreId, {
-          action: 'get_sticker', order_ids: ids.slice(index, index + 100), fmt: 'png', w: 58, h: 40,
-        }).catch(() => null)
-        stickers.push(...((res?.stickers as any[]) ?? []))
+    const filesByOrderId = new Map<string, string>()
+    for (let index = 0; index < ids.length; index += 100) {
+      const response = await invokeFbs(selectedStoreId, {
+        action: 'get_sticker', order_ids: ids.slice(index, index + 100), fmt: 'png', w: 58, h: 40,
+      })
+      for (const sticker of (response.stickers as Array<{ orderId: string | number; file?: string }> | undefined) ?? []) {
+        if (typeof sticker.file === 'string' && sticker.file.length > 0) filesByOrderId.set(String(sticker.orderId), sticker.file)
       }
-
-      const files = stickers.map((sticker) => sticker?.file).filter((file): file is string => typeof file === 'string' && file.length > 0)
-      if (files.length > 0) {
-        buildAndOpenPdf(files)
-      } else {
-        printPickingSlip(ordersToPrint)
-      }
-    } catch (e) { alert(String(e)) }
-    finally { setBusyIds((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n }) }
+    }
+    const missingIds = ids.filter((id) => !filesByOrderId.has(id))
+    if (missingIds.length > 0) {
+      throw new Error(`Wildberries не вернул стикеры для ${missingIds.length} заказов: ${missingIds.slice(0, 5).join(', ')}${missingIds.length > 5 ? '…' : ''}`)
+    }
+    return filesByOrderId
   }
 
-  const handlePrintSticker = (order: FbsOrder) => handlePrintStickers([order])
+  const openStickerPrintModal = (ordersToPrint: FbsOrder[], supply: WbSupply | null, mode: StickerPrintModal['mode']) => {
+    if (ordersToPrint.length === 0) return
+    setPickingListMenuOpen(false)
+    setStickerPrintModal({
+      orders: ordersToPrint,
+      supply,
+      mode,
+      options: { supply: mode === 'supply', picking: true, locations: true, productBarcode: true, wb: true },
+    })
+  }
+
+  const handleCombinedStickerPrint = async () => {
+    if (!stickerPrintModal) return
+    const { orders: ordersToPrint, supply, mode, options } = stickerPrintModal
+    if (!options.supply && !options.picking && !options.locations && !options.productBarcode && !options.wb) return
+    const previewWindow = window.open('', '_blank')
+    if (previewWindow) previewWindow.document.body.innerHTML = '<div style="font:14px Arial;padding:24px;color:#475569">Формируем стикеры…</div>'
+    const ids = ordersToPrint.map((order) => order.id)
+    setStickerPrintModal(null)
+    setBusyIds((current) => new Set([...current, ...ids]))
+    try {
+      const wbFiles = options.wb ? await getWbStickerFiles(ordersToPrint) : new Map<string, string>()
+      const groups = new Map<string, FbsOrder[]>()
+      for (const order of ordersToPrint) {
+        const key = stickerVariantKey(order)
+        groups.set(key, [...(groups.get(key) ?? []), order])
+      }
+      const pages: string[] = []
+      if (mode === 'supply' && options.supply) {
+        if (!supply) throw new Error('Не найдены данные поставки')
+        pages.push(buildSupplySticker(supply, ordersToPrint, groups.size))
+      }
+      const selectedStore = storesWithKey.find((store) => store.id === selectedStoreId)
+      const sellerName = selectedStore?.supplier?.trim() || selectedStore?.supplier_full?.trim() || selectedStore?.name?.trim() || 'Продавец Wildberries'
+      for (const groupOrders of groups.values()) {
+        if (options.picking) pages.push(buildPickingSticker(groupOrders[0], groupOrders.length))
+        if (options.locations) pages.push(...buildLocationStickers(groupOrders[0]))
+        for (const order of groupOrders) {
+          if (options.productBarcode) pages.push(buildProductBarcodeSticker(order, sellerName))
+          if (options.wb) pages.push(`data:image/png;base64,${wbFiles.get(order.id)!}`)
+        }
+      }
+      const url = buildStickerPdfUrl(pages)
+      if (previewWindow) previewWindow.location.href = url
+      else window.open(url, '_blank')
+    } catch (error) {
+      previewWindow?.close()
+      alert(`Не удалось сформировать стикеры: ${String(error)}`)
+    } finally {
+      setBusyIds((current) => { const next = new Set(current); ids.forEach((id) => next.delete(id)); return next })
+    }
+  }
 
   const buildPickingListRows = async (ordersToExport: FbsOrder[]): Promise<PickingListRow[]> => {
     if (!supabase) throw new Error('Supabase не подключён')
@@ -870,51 +1181,35 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     }
   }
 
-  // jsPDF — каждый стикер 58×40мм, открывается как PDF (тёмный фон Chrome PDF viewer)
-  function buildAndOpenPdf(base64PngList: string[]) {
+  // Каждый стикер — отдельная страница PDF 58×40 мм.
+  function buildStickerPdfUrl(pageImages: string[]): string {
     const W = 58, H = 40
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [W, H] })
-    base64PngList.forEach((b64, i) => {
+    pageImages.forEach((image, i) => {
       if (i > 0) doc.addPage([W, H], 'landscape')
-      doc.addImage(`data:image/png;base64,${b64}`, 'PNG', 0, 0, W, H)
+      doc.addImage(image, 'PNG', 0, 0, W, H)
     })
-    const url = doc.output('bloburl') as unknown as string
-    window.open(url, '_blank')
+    return doc.output('bloburl') as unknown as string
+  }
+  const wbWarehouseInfo = (order: FbsOrder) => {
+    const sellerWarehouse = wbWarehouses.find((warehouse) => Number(warehouse.id) === Number(order.warehouseId))
+    const officeId = order.officeId || sellerWarehouse?.officeId || 0
+    const office = wbOffices.find((item) => Number(item.id) === Number(officeId))
+    return {
+      officialName: office?.name || (officeId ? `Склад WB #${officeId}` : 'Склад WB не определён'),
+      sellerName: sellerWarehouse?.name || (order.warehouseId ? `Склад продавца #${order.warehouseId}` : 'Склад продавца не определён'),
+      address: office?.address || null,
+    }
   }
 
-  // Наш picking slip (fallback если стикер WB недоступен)
-  function printPickingSlip(orders: FbsOrder[]) {
-    const pages = orders.map((order) => {
-      const loc = order.productLocations.find((location) => location.isAddressed)
-      return `<div class="page">
-        <div class="big">#${order.id}</div>
-        ${loc ? `<div class="cell">${escapeHtml(productLocationAddress(loc) ?? '')}</div>` : ''}
-        <div class="row"><span>WB арт.</span><span>${order.nmId}</span></div>
-        <div class="row"><span>Артикул</span><span>${order.article||'—'}</span></div>
-        ${order.skus.map(s=>`<div class="row"><span>Баркод</span><span>${s}</span></div>`).join('')}
-        <div class="row"><span>Склад WB</span><span>${wbWhName(order.warehouseId)}</span></div>
-        <hr/><div style="font-size:9px;color:#888;text-align:center">${new Date().toLocaleString('ru')}</div>
-      </div>`
-    }).join('\n')
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-  @page { size: 80mm 100mm; margin: 4mm; }
-  body { font-family: monospace; font-size: 11px; margin: 0; }
-  .page { page-break-after: always; }
-  .page:last-child { page-break-after: auto; }
-  .big { font-size: 18px; font-weight: bold; margin: 2mm 0; }
-  .cell { font-size: 24px; font-weight: 900; margin: 2mm 0; border: 1px solid #000; padding: 2mm; text-align: center; }
-  .row { display: flex; justify-content: space-between; border-bottom: 1px dashed #ccc; padding: 1mm 0; }
-  hr { border: none; border-top: 1px solid #000; margin: 2mm 0; }
-</style></head>
-<body>${pages}<script>window.onload=()=>window.print()</script></body></html>`
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
-    window.open(URL.createObjectURL(blob), '_blank')
-  }
-  const wbWhName = (id: number) => {
-    const w = wbWarehouses.find((wh) => wh.id === id)
-    if (!w) return `#${id}`
-    return w.name
+  const renderWbWarehouseCell = (order: FbsOrder) => {
+    const warehouse = wbWarehouseInfo(order)
+    return (
+      <div className="min-w-0 leading-tight" title={warehouse.address ?? undefined}>
+        <div className="truncate font-semibold text-slate-700">{warehouse.officialName}</div>
+        <div className="mt-1 truncate text-[11px] text-slate-400">Ваш склад: {warehouse.sellerName}</div>
+      </div>
+    )
   }
 
   // ─── No stores guard ────────────────────────────────────────────────────────
@@ -1085,7 +1380,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                 }
                 setExpandedSupplyIds((prev) => { const n = new Set(prev); n.has(supplyId) ? n.delete(supplyId) : n.add(supplyId); return n })
               }
-              const wh = supplyOrders.length > 0 ? wbWhName(supplyOrders[0].warehouseId) : ''
+              const wh = supplyOrders.length > 0
+                ? (wbWarehouses.find((warehouse) => Number(warehouse.id) === Number(supplyOrders[0].warehouseId))?.name || '')
+                : ''
               return (
                 <div key={supplyId} className="border-b border-slate-200">
                   {/* Строка поставки (родитель) */}
@@ -1104,14 +1401,22 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                       {wh && <span className="text-xs text-slate-400">{wh}</span>}
                     </div>
                     {supplyId !== '__none__' && supplyOrders.length > 0 && (
-                      <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
-                        disabled={busyIds.size > 0}
-                        onClick={(e) => { e.stopPropagation(); void handleShip(supplyId, supplyOrders) }}
-                        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-wait disabled:opacity-40">
-                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M5 12h14m-5-5 5 5-5 5" />
-                        </svg>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button type="button" title="Распечатать стикеры поставки" aria-label="Распечатать стикеры поставки"
+                          disabled={busyIds.size > 0}
+                          onClick={(e) => { e.stopPropagation(); openStickerPrintModal(supplyOrders, supply ?? { id: supplyId, name: supplyId }, 'supply') }}
+                          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-wait disabled:opacity-40">
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                        </button>
+                        <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
+                          disabled={busyIds.size > 0}
+                          onClick={(e) => { e.stopPropagation(); void handleShip(supplyId, supplyOrders) }}
+                          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-wait disabled:opacity-40">
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M5 12h14m-5-5 5 5-5 5" />
+                          </svg>
+                        </button>
+                      </div>
                     )}
                   </div>
                   {/* Аккордеон — заказы */}
@@ -1138,6 +1443,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                               <th className="px-4 py-2 text-left font-semibold">Товар</th>
                               <th className="px-4 py-2 text-left font-semibold">Адрес товара / Баркод</th>
                               <th className="px-4 py-2 text-left font-semibold">Время</th>
+                              <th className="px-4 py-2 text-left font-semibold">Склад FBS</th>
                               <th className="px-4 py-2 text-left font-semibold">Действия</th>
                             </tr>
                           </thead>
@@ -1179,6 +1485,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                   <ProductLocationsCell order={order} />
                                 </td>
                                 <td className={`px-4 py-2 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
+                                <td className="max-w-48 px-4 py-2">{renderWbWarehouseCell(order)}</td>
                                 <td className="px-4 py-2">
                                   <div className="flex items-center gap-1.5">
                                     {supplyId !== '__none__' && (
@@ -1194,7 +1501,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                         </svg>
                                       </button>
                                     )}
-                                    <button type="button" title="Печать стикера" disabled={isBusy} onClick={() => void handlePrintSticker(order)}
+                                    <button type="button" title="Выбрать стикеры для печати" disabled={isBusy} onClick={() => openStickerPrintModal([order], null, 'selected')}
                                       className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
                                       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                                     </button>
@@ -1215,7 +1522,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                             <button
                               type="button"
                               disabled={busyIds.size > 0}
-                              onClick={() => void handlePrintStickers(selectedSupplyOrders)}
+                              onClick={() => openStickerPrintModal(selectedSupplyOrders, null, 'selected')}
                               className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-wait disabled:opacity-40"
                             >
                               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -1285,7 +1592,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Товар</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Адрес товара / Баркод</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-500">Кол-во</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-500">WB склад</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-500">Склад FBS</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Время</th>
                 <th className="px-4 py-3" />
               </tr>
@@ -1331,14 +1638,14 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                       <ProductLocationsCell order={order} />
                     </td>
                     <td className="px-4 py-3 text-right font-semibold text-slate-800">{order.productLocations.length > 0 ? productLocationQuantity(order.productLocations) : '—'}</td>
-                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{wbWhName(order.warehouseId)}</td>
+                    <td className="max-w-48 px-4 py-3">{renderWbWarehouseCell(order)}</td>
                     <td className={`px-4 py-3 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         {/* Стикер — скрыт на табе Новые, WB не выдаёт стикеры до перевода в сборку */}
                         {(activeTab === 'delivering' || activeTab === 'completed') && (
-                          <button type="button" title="Печать стикера" disabled={isBusy}
-                            onClick={() => void handlePrintSticker(order)}
+                          <button type="button" title="Выбрать стикеры для печати" disabled={isBusy}
+                            onClick={() => openStickerPrintModal([order], null, 'selected')}
                             className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
                             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                               <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
@@ -1389,6 +1696,102 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       {orderMenuId !== null && (
         <div className="fixed inset-0 z-40" onClick={() => setOrderMenuId(null)} />
       )}
+
+      {/* Выбор комплекта стикеров */}
+      {stickerPrintModal && (() => {
+        const printOptions: Array<{
+          key: keyof StickerPrintOptions
+          title: string
+          badge: string
+          description: string
+        }> = [
+          ...(stickerPrintModal.mode === 'supply' ? [{
+            key: 'supply' as const,
+            title: 'Данные о поставке',
+            badge: 'Не нужно клеить',
+            description: 'Дата, название и итоговое количество товаров в поставке.',
+          }] : []),
+          {
+            key: 'picking',
+            title: 'Информация о товаре',
+            badge: 'Не нужно клеить',
+            description: 'Количество, название, размер, артикул WB и баркод для подбора.',
+          },
+          {
+            key: 'locations',
+            title: 'Адрес товара',
+            badge: 'Для сборки',
+            description: 'Все складские адреса товара, а для коробов без размещения — партия, поставка и короб.',
+          },
+          {
+            key: 'productBarcode',
+            title: 'Штрихкод товара',
+            badge: 'Необязательно',
+            description: 'Товарный баркод и краткая информация для внутреннего сканирования.',
+          },
+          {
+            key: 'wb',
+            title: 'Стикер WB',
+            badge: 'Обязательно для доставки',
+            description: 'Официальный уникальный стикер заказа, полученный от Wildberries.',
+          },
+        ]
+        const pageCount = stickerPageCount(stickerPrintModal)
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" onClick={() => setStickerPrintModal(null)}>
+            <div className="w-full max-w-xl overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">Распечатать стикеры</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {stickerPrintModal.mode === 'supply'
+                      ? `${stickerPrintModal.supply?.name || 'Поставка'} · ${stickerPrintModal.orders.length} заказов`
+                      : `Выбрано заказов: ${stickerPrintModal.orders.length}`}
+                  </p>
+                </div>
+                <button type="button" title="Закрыть" aria-label="Закрыть" onClick={() => setStickerPrintModal(null)} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 hover:text-slate-800">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 6 12 12M18 6 6 18" strokeLinecap="round"/></svg>
+                </button>
+              </div>
+              <div className="space-y-2 px-6 py-5">
+                {printOptions.map((option) => {
+                  const checked = stickerPrintModal.options[option.key]
+                  return (
+                    <label key={option.key} className={`flex cursor-pointer items-start gap-4 rounded-2xl border p-4 transition ${checked ? 'border-violet-200 bg-violet-50/60' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => setStickerPrintModal((current) => current ? {
+                          ...current,
+                          options: { ...current.options, [option.key]: !current.options[option.key] },
+                        } : null)}
+                        className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-violet-600"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-900">{option.title}</span>
+                          <span className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${option.key === 'wb' ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-500'}`}>{option.badge}</span>
+                        </span>
+                        <span className="mt-1 block text-xs leading-5 text-slate-500">{option.description}</span>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+              <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
+                <span className="text-sm font-semibold text-slate-700">Итого: {pageCount} стикеров</span>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setStickerPrintModal(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50">Отмена</button>
+                  <button type="button" disabled={pageCount === 0} onClick={() => void handleCombinedStickerPrint()} className="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                    Распечатать
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Модалка выбора поставки */}
       {assembleModal && (

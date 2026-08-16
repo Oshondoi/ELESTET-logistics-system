@@ -462,6 +462,14 @@ Deno.serve(async (req) => {
       return ok(data)
     }
 
+    if (action === 'get_wb_warehouse_directory') {
+      const [warehouses, offices] = await Promise.all([
+        wbGet(apiKey, '/api/v3/warehouses'),
+        wbGet(apiKey, '/api/v3/offices'),
+      ])
+      return ok({ warehouses, offices })
+    }
+
     if (action === 'update_stocks') {
       if (!wb_warehouse_id) return err('wb_warehouse_id обязателен')
       if (!stocks || !Array.isArray(stocks)) return err('stocks обязателен (массив)')
