@@ -85,8 +85,8 @@ insert into public.wms_zone_sides (zone_id, account_id, code, name, slot_count, 
 select z.id, z.account_id, defaults.code, defaults.name, defaults.slot_count, defaults.position
 from public.wms_zones z
 cross join (values
-  ('S1'::text, 'Сторона 1'::text, 8, 0),
-  ('S2'::text, 'Сторона 2'::text, 8, 1)
+  ('F1'::text, 'Сторона 1'::text, 8, 0),
+  ('F2'::text, 'Сторона 2'::text, 8, 1)
 ) as defaults(code, name, slot_count, position)
 where not exists (select 1 from public.wms_zone_sides s where s.zone_id = z.id);
 

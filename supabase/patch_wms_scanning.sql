@@ -1,5 +1,6 @@
 -- Stable WMS address codes and exact, scan-driven placement.
--- Location QR: C1_W1_R1_S1_A1 or C1_W1_R1_S1_A1_K6.
+-- Location QR: C1_W1_R1_F1_A1 or C1_W1_R1_F1_A1_K6.
+-- Legacy S1/S2 location labels remain readable after the F1/F2 migration.
 
 alter table public.wms_warehouses
   add column if not exists short_id integer;
@@ -122,9 +123,9 @@ begin
     return jsonb_build_object('kind', 'reset', 'code', v_code);
   end if;
 
-  v_match := regexp_match(v_code, '^C([0-9]+)_W([0-9]+)_R([0-9]+)_S([0-9]+)_([A-Z])([0-9]+)_K([0-9]+)$');
+  v_match := regexp_match(v_code, '^C([0-9]+)_W([0-9]+)_R([0-9]+)_[FS]([0-9]+)_([A-Z])([0-9]+)_K([0-9]+)$');
   if v_match is null then
-    v_match := regexp_match(v_code, '^C([0-9]+)_W([0-9]+)_R([0-9]+)_S([0-9]+)_([A-Z])([0-9]+)$');
+    v_match := regexp_match(v_code, '^C([0-9]+)_W([0-9]+)_R([0-9]+)_[FS]([0-9]+)_([A-Z])([0-9]+)$');
   end if;
   if v_match is not null then
     select a.id into v_account_id
@@ -233,7 +234,7 @@ begin
     'placed', v_placement.item_id is not null,
     'itemId', v_placement.item_id,
     'addressCode', case when v_placement.item_id is null then null else format(
-      'C%s_W%s_R%s_S%s_%s%s_K%s', v_placement.account_short_id,
+      'C%s_W%s_R%s_F%s_%s%s_K%s', v_placement.account_short_id,
       v_placement.warehouse_short_id, v_placement.rack_short_id,
       v_placement.side_number, v_placement.col, v_placement.row,
       v_placement.slot_number

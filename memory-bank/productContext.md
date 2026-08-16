@@ -22,7 +22,7 @@ The product is being created to manage logistics operations for shipments going 
 
 ## WMS operator UX
 - The warehouse tree opens a whole rack; columns are pallet positions, rows are tiers, and visible uprights match the real metal structure.
-- A rack has one or two sides. Every pallet position shows the side's box places as a physical grid; the default is `2 × 4`.
+- A rack has one or two sides. Their stable WMS codes are `F1/F2`, while the visible default names are `Сторона 1/Сторона 2`; fulfillment supplies keep their separate `S` prefix. Every pallet position shows the side's box places as a physical grid; the default is `2 × 4`.
 - Clicking an empty K-place selects a destination for an existing fulfillment box; WMS never invents a new box. Clicking an occupied place selects that physical box; the next click moves it to an empty place or swaps it with another box.
 - The operator sees a human-readable address such as `Сторона 1 · B3-K5`.
 - Barcode is the stable identity of the physical box and is rendered as QR for scanning. Movement changes the address only.

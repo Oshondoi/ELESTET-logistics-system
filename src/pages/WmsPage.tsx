@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
 import { buildWmsLocationQrPdf, type WmsLocationQrLabel } from '../lib/wmsLocationQrPdf'
@@ -160,23 +160,43 @@ type WmsScanBox = {
 }
 
 type WmsSearchResult = {
-  item_id: string
+  item_id: string | null
   box_id: string
   box_number: number
   box_barcode: string
   supply_number: number
+  destination_warehouse: string
   batch_number: number | null
-  warehouse_id: string
-  warehouse_name: string
-  rack_id: string
-  rack_name: string
-  side_id: string
-  side_name: string
-  col: string
-  row: number
-  address_code: string
-  address_text: string
+  batch_name: string
+  store_id: string | null
+  store_name: string | null
+  store_code: string | null
+  store_supplier: string | null
+  warehouse_id: string | null
+  warehouse_name: string | null
+  rack_id: string | null
+  rack_name: string | null
+  side_id: string | null
+  side_name: string | null
+  col: string | null
+  row: number | null
+  slot_number: number | null
+  address_code: string | null
+  address_text: string | null
+  is_addressed: boolean
   units: number
+  product_barcodes: string[]
+  product_names: string[]
+  vendor_articles: string[]
+  wb_articles: string[]
+  brands: string[]
+  colors: string[]
+  sizes: string[]
+  store_total_boxes: number
+  store_addressed_boxes: number
+  store_unaddressed_boxes: number
+  total_matches: number
+  match_reason: string
 }
 
 type UnaddressedBox = {
@@ -246,8 +266,8 @@ function signalScan(ok: boolean) {
 
 function defaultZoneSides(): WmsZoneSide[] {
   return [
-    { code: 'S1', name: 'Сторона 1', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 0 },
-    { code: 'S2', name: 'Сторона 2', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 1 },
+    { code: 'F1', name: 'Сторона 1', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 0 },
+    { code: 'F2', name: 'Сторона 2', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 1 },
   ]
 }
 
@@ -270,7 +290,7 @@ function intervalUprights(cols: number, every: number): number[] {
 }
 
 function wmsPalletCode(accountShortId: number, warehouseShortId: number, rackShortId: number, sideNumber: number, pallet: string) {
-  return `C${accountShortId}_W${warehouseShortId}_R${rackShortId}_S${sideNumber}_${pallet.toUpperCase()}`
+  return `C${accountShortId}_W${warehouseShortId}_R${rackShortId}_F${sideNumber}_${pallet.toUpperCase()}`
 }
 
 function wmsSlotCode(accountShortId: number, warehouseShortId: number, rackShortId: number, sideNumber: number, pallet: string, slotNumber: number) {
@@ -429,9 +449,9 @@ function ZoneModal({ editing, onClose, onSave }: {
     if (sides.length >= 2) return
     const usedCodes = new Set(sides.map((side) => side.code))
     let index = 1
-    while (usedCodes.has(`S${index}`)) index += 1
+    while (usedCodes.has(`F${index}`)) index += 1
     setSides((previous) => [...previous, {
-      code: `S${index}`,
+      code: `F${index}`,
       name: `Сторона ${index}`,
       slot_count: 8,
       slot_columns: 2,
@@ -1414,6 +1434,9 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
   const [operationsModal, setOperationsModal] = useState<'search' | 'unaddressed' | 'history' | 'inventory' | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<WmsSearchResult[]>([])
+  const [searchHasRun, setSearchHasRun] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  const searchRequestRef = useRef(0)
   const [unaddressedBoxes, setUnaddressedBoxes] = useState<UnaddressedBox[]>([])
   const [movements, setMovements] = useState<WmsMovement[]>([])
   const [operationsLoading, setOperationsLoading] = useState(false)
@@ -1485,18 +1508,106 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     void loadUnaddressedBoxes(true)
   }, [loadUnaddressedBoxes])
 
-  const runWmsSearch = useCallback(async () => {
+  const runWmsSearch = useCallback(async (query = searchQuery) => {
     if (!supabase || !accountId) return
+    const normalizedQuery = query.trim()
+    const requestId = ++searchRequestRef.current
+
+    if (!normalizedQuery) {
+      setSearchResults([])
+      setSearchHasRun(false)
+      setSearchError('')
+      setOperationsLoading(false)
+      return
+    }
+
     setOperationsLoading(true)
+    setSearchError('')
     const { data, error } = await (supabase as any).rpc('search_wms_locations', {
       p_account_id: accountId,
-      p_query: searchQuery,
-      p_limit: 100,
+      p_query: normalizedQuery,
+      p_limit: 300,
     })
-    if (error) window.alert(error.message || 'Не удалось выполнить поиск')
-    else setSearchResults((data ?? []) as WmsSearchResult[])
+
+    if (requestId !== searchRequestRef.current) return
+    if (error) {
+      setSearchResults([])
+      setSearchError(error.message || 'Не удалось выполнить поиск')
+    } else {
+      setSearchResults((data ?? []) as WmsSearchResult[])
+    }
+    setSearchHasRun(true)
     setOperationsLoading(false)
   }, [accountId, searchQuery])
+
+  useEffect(() => {
+    if (operationsModal !== 'search') return
+    const query = searchQuery.trim()
+    if (query.length < 2) {
+      searchRequestRef.current += 1
+      setSearchResults([])
+      setSearchHasRun(false)
+      setSearchError('')
+      setOperationsLoading(false)
+      return
+    }
+    const timeout = window.setTimeout(() => void runWmsSearch(query), 350)
+    return () => window.clearTimeout(timeout)
+  }, [operationsModal, runWmsSearch, searchQuery])
+
+  const groupedSearchResults = useMemo(() => {
+    const groups = new Map<string, {
+      key: string
+      storeId: string | null
+      storeName: string
+      storeCode: string | null
+      totalBoxes: number
+      addressedBoxes: number
+      unaddressedBoxes: number
+      results: WmsSearchResult[]
+    }>()
+
+    for (const result of searchResults) {
+      const key = result.store_id ?? 'without-store'
+      const current = groups.get(key) ?? {
+        key,
+        storeId: result.store_id,
+        storeName: result.store_name || 'Магазин не указан',
+        storeCode: result.store_code,
+        totalBoxes: result.store_total_boxes,
+        addressedBoxes: result.store_addressed_boxes,
+        unaddressedBoxes: result.store_unaddressed_boxes,
+        results: [],
+      }
+      current.results.push(result)
+      groups.set(key, current)
+    }
+
+    return [...groups.values()].map((group) => {
+      const supplies = new Map<string, {
+        key: string
+        batchName: string
+        batchNumber: number | null
+        supplyNumber: number
+        destinationWarehouse: string
+        results: WmsSearchResult[]
+      }>()
+      for (const result of group.results) {
+        const key = `${result.batch_number ?? result.batch_name}-${result.supply_number}`
+        const current = supplies.get(key) ?? {
+          key,
+          batchName: result.batch_name,
+          batchNumber: result.batch_number,
+          supplyNumber: result.supply_number,
+          destinationWarehouse: result.destination_warehouse,
+          results: [],
+        }
+        current.results.push(result)
+        supplies.set(key, current)
+      }
+      return { ...group, supplies: [...supplies.values()] }
+    })
+  }, [searchResults])
 
   const loadMovements = useCallback(async () => {
     if (!supabase || !accountId) return
@@ -1701,6 +1812,18 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     if (mode === 'unaddressed') void loadUnaddressedBoxes()
     if (mode === 'history') void loadMovements()
   }, [loadMovements, loadUnaddressedBoxes])
+
+  const closeOperations = useCallback(() => {
+    if (operationsModal === 'search') {
+      searchRequestRef.current += 1
+      setSearchQuery('')
+      setSearchResults([])
+      setSearchHasRun(false)
+      setSearchError('')
+      setOperationsLoading(false)
+    }
+    setOperationsModal(null)
+  }, [operationsModal])
 
   const startInventory = useCallback(async () => {
     if (!supabase || !selectedWarehouse) return
@@ -2144,31 +2267,121 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
                 </h2>
                 <p className="text-xs text-slate-400">{selectedWarehouse?.name ?? 'Склад'}</p>
               </div>
-              <button type="button" onClick={() => setOperationsModal(null)} className="cursor-pointer text-xl text-slate-400 hover:text-slate-700">×</button>
+              <button type="button" onClick={closeOperations} className="cursor-pointer text-xl text-slate-400 hover:text-slate-700">×</button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
               {operationsModal === 'search' && (
                 <>
-                  <div className="mb-4 flex gap-2">
-                    <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runWmsSearch() }} autoFocus
-                      placeholder="Товар, баркод, QR короба, партия, поставка или адрес"
-                      className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-violet-400" />
-                    <button type="button" onClick={() => void runWmsSearch()} className="cursor-pointer rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white">Найти</button>
+                  <div className="mb-3 flex gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === 'Enter') void runWmsSearch(event.currentTarget.value) }}
+                        autoFocus
+                        placeholder="Магазин, товар, баркод, QR короба, партия, поставка или адрес"
+                        className="w-full rounded-xl border border-slate-200 px-4 py-2.5 pr-10 text-sm outline-none focus:border-violet-400"
+                      />
+                      {operationsLoading && <span className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin rounded-full border-2 border-violet-200 border-t-violet-600" />}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void runWmsSearch()}
+                      disabled={!searchQuery.trim() || operationsLoading}
+                      className="cursor-pointer rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-default disabled:opacity-40"
+                    >Найти</button>
                   </div>
-                  <div className="space-y-2">
-                    {searchResults.map((result) => (
-                      <button key={result.item_id} type="button" onClick={() => {
-                        setExpandedWarehouseIds((previous) => new Set([...previous, result.warehouse_id]))
-                        setSelectedZoneId(result.rack_id)
-                        void loadZones(result.warehouse_id); void loadCells(result.rack_id)
-                        setSelectedCellCoord({ col: result.col, row: result.row, sideKey: result.side_id })
-                        setOperationsModal(null)
-                      }} className="flex w-full cursor-pointer items-center justify-between rounded-xl border border-slate-200 p-3 text-left hover:border-violet-300 hover:bg-violet-50">
-                        <span><b className="text-slate-800">Короб №{result.box_number}</b><span className="ml-2 font-mono text-xs text-slate-400">{result.box_barcode}</span><span className="mt-1 block text-xs text-slate-500">P{result.batch_number ?? '?'} · S{result.supply_number} · {result.units} ед.</span></span>
-                        <span className="text-right"><b className="text-violet-700">{result.address_text}</b><span className="mt-1 block font-mono text-[10px] text-slate-400">{result.address_code}</span></span>
-                      </button>
+
+                  {searchError && (
+                    <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                      Поиск не выполнен: {searchError}
+                    </div>
+                  )}
+
+                  {searchHasRun && searchResults.length > 0 && (
+                    <div className="mb-3 flex items-center justify-between text-xs text-slate-500">
+                      <span>Найдено: <b className="text-slate-700">{searchResults[0]?.total_matches ?? searchResults.length}</b></span>
+                      {(searchResults[0]?.total_matches ?? 0) > searchResults.length && <span>Показаны первые {searchResults.length}</span>}
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {groupedSearchResults.map((group) => (
+                      <section key={group.key} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <b className="text-sm text-slate-800">{group.storeName}</b>
+                              {group.storeCode && <span className="rounded-md bg-white px-2 py-0.5 font-mono text-[10px] text-slate-500">{group.storeCode}</span>}
+                            </div>
+                            <span className="mt-0.5 block text-[11px] text-slate-400">Совпадений в выдаче: {group.results.length}</span>
+                          </div>
+                          <div className="flex gap-2 text-[11px]">
+                            <span className="rounded-lg bg-white px-2.5 py-1 text-slate-600">Коробов: <b>{group.totalBoxes}</b></span>
+                            <span className="rounded-lg bg-emerald-50 px-2.5 py-1 text-emerald-700">С адресом: <b>{group.addressedBoxes}</b></span>
+                            <span className="rounded-lg bg-amber-50 px-2.5 py-1 text-amber-700">Без адреса: <b>{group.unaddressedBoxes}</b></span>
+                          </div>
+                        </div>
+
+                        <div className="divide-y divide-slate-100">
+                          {group.supplies.map((supply) => (
+                            <div key={supply.key} className="p-3">
+                              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-slate-500">
+                                <b className="text-slate-700">P{supply.batchNumber ?? '?'} · {supply.batchName}</b>
+                                <span>Поставка S{supply.supplyNumber}</span>
+                                {supply.destinationWarehouse && <span>Склад назначения: {supply.destinationWarehouse}</span>}
+                              </div>
+                              <div className="space-y-2">
+                                {supply.results.map((result) => (
+                                  <button
+                                    key={result.box_id}
+                                    type="button"
+                                    onClick={() => {
+                                      if (!result.is_addressed || !result.warehouse_id || !result.rack_id || !result.side_id || !result.col || result.row == null) return
+                                      setExpandedWarehouseIds((previous) => new Set([...previous, result.warehouse_id as string]))
+                                      setSelectedZoneId(result.rack_id)
+                                      void loadZones(result.warehouse_id)
+                                      void loadCells(result.rack_id)
+                                      setSelectedCellCoord({ col: result.col, row: result.row, sideKey: result.side_id })
+                                      closeOperations()
+                                    }}
+                                    className={`flex w-full items-center justify-between gap-4 rounded-xl border p-3 text-left transition ${result.is_addressed ? 'cursor-pointer border-slate-200 hover:border-violet-300 hover:bg-violet-50' : 'cursor-default border-amber-200 bg-amber-50/40'}`}
+                                  >
+                                    <span className="min-w-0 flex-1">
+                                      <span className="flex flex-wrap items-center gap-2">
+                                        <b className="text-sm text-slate-800">Короб №{result.box_number}</b>
+                                        <span className="font-mono text-[11px] text-slate-400">{result.box_barcode}</span>
+                                        <span className="rounded-md bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">{result.match_reason}</span>
+                                      </span>
+                                      {result.product_names.length > 0 && (
+                                        <span className="mt-1 block truncate text-xs text-slate-600" title={result.product_names.join(', ')}>
+                                          {result.product_names.slice(0, 2).join(' · ')}{result.product_names.length > 2 ? ` · ещё ${result.product_names.length - 2}` : ''}
+                                        </span>
+                                      )}
+                                      <span className="mt-1 block text-[11px] text-slate-400">
+                                        {result.units} ед.{result.product_barcodes.length > 0 ? ` · ${result.product_barcodes.slice(0, 2).join(', ')}` : ''}
+                                      </span>
+                                    </span>
+                                    <span className="shrink-0 text-right">
+                                      {result.is_addressed ? (
+                                        <>
+                                          <b className="block text-xs text-violet-700">{result.address_text}</b>
+                                          <span className="mt-1 block font-mono text-[10px] text-slate-400">{result.address_code}</span>
+                                        </>
+                                      ) : (
+                                        <span className="rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">Без адреса</span>
+                                      )}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
                     ))}
-                    {!operationsLoading && searchResults.length === 0 && <div className="py-12 text-center text-sm text-slate-400">Введите запрос — система покажет все найденные адреса</div>}
+                    {!operationsLoading && !searchHasRun && !searchError && <div className="py-12 text-center text-sm text-slate-400">Начните вводить запрос — поиск запустится автоматически</div>}
+                    {!operationsLoading && searchHasRun && searchResults.length === 0 && !searchError && <div className="py-12 text-center text-sm text-slate-400">Ничего не найдено. Проверьте код или название.</div>}
                   </div>
                 </>
               )}

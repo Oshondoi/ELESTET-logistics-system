@@ -1,11 +1,13 @@
 # Tech Context
 
-## Current feature files — 11.08.2026
+## Current feature files — 16.08.2026
 - `src/pages/FbsOrdersPage.tsx` — FBS cache UI, поставки/заказы, синк, перенос, печать, лист подбора, товарное обогащение.
 - `supabase/functions/wb-fbs/index.ts` — прокси и синхронизация WB Marketplace FBS API.
 - `supabase/patch_fbs_reliable_sync.sql` — int64-safe статусы, журнал и атомарный полный снимок FBS; применён в production.
 - `src/pages/WmsPage.tsx` — визуальные стеллажи, паллетоместа, стороны, сетки K-мест, QR коробов, перенос/обмен.
 - `supabase/patch_wms_rack_layout.sql` — стороны и геометрия мест коробов, ограничения, атомарные RPC планировки и перемещения; применён в production.
+- `supabase/patch_wms_side_codes_f.sql` — безопасная production-миграция стабильных кодов сторон с `S1/S2` на `F1/F2` без смены UUID и потери размещений.
+- `supabase/patch_wms_scanning.sql`, `supabase/patch_wms_operations.sql`, `supabase/patch_wms_sensitive_search.sql` — WMS QR/сканирование, операции и чувствительный поиск; новые адреса используют `F`, старые WMS QR с `S1/S2` остаются читаемыми.
 - `src/pages/TzPromptsPage.tsx` — CRUD промптов и компактный `TasksTab`.
 - `supabase/patch_tz_tasks.sql` — `tz_tasks`, индексы, RLS superadmin; применён.
 - `supabase/seed_tz_tasks_20260809.sql` — идемпотентный сид девяти задач; применён.
@@ -14,10 +16,10 @@
 ## Packages used by current FBS/export/WMS work
 - `jspdf` — PDF; `xlsx` — Excel; `jszip` — ZIP нескольких поставок; `qrcode.react` — QR физического короба; `@supabase/supabase-js` — DB/Functions.
 
-## Validation/deploy state — 11.08.2026
+## Validation/deploy state — 16.08.2026
 - Полный `npm run build` проходит: 648 модулей; остаются только прежние предупреждения Vite о размере чанков и `xlsx`.
-- Рабочая ветка — `main`; текущий опубликованный commit — `4232b15`. Vercel production автоматически собирает push в `main`.
-- Production Supabase уже содержит надёжную FBS-синхронизацию и новую WMS-планировку/RPC. Локальные FBS/WMS UI-изменения ещё требуют отдельного commit + push.
+- Рабочая ветка — `main`; последний commit перед текущими локальными изменениями — `9bd1554`. Vercel production автоматически собирает push в `main`.
+- Production Supabase уже содержит надёжную FBS-синхронизацию, новую WMS-планировку/RPC и стороны `F1/F2`. Миграция сохранила UUID и все 53 текущих размещения; потерянных связей — 0. Fulfillment-поставки не менялись и сохраняют `S` в ШК всех 2212 коробов.
 - Supabase CLI linked project: `jzucxqakvgzpgtvagsnq`.
 
 ## Stack
@@ -70,6 +72,8 @@
 - `supabase/patch_fbs_db.sql`, `supabase/patch_fbs_reliable_sync.sql` — FBS-кэш, официальные статусы WB, журнал и атомарный снимок
 - `supabase/patch_wms.sql`, `supabase/patch_wms_boxes.sql`, `supabase/patch_wms_disabled.sql` — базовая WMS-схема, физические короба и заглушённые места
 - `supabase/patch_wms_rack_layout.sql` — максимум две стороны, сетки K-мест, стойки, безопасное сохранение и атомарный move/swap
+- `supabase/patch_wms_side_codes_f.sql` — перевод существующих сторон на `F1/F2` без пересоздания записей
+- `supabase/patch_wms_scanning.sql`, `supabase/patch_wms_operations.sql`, `supabase/patch_wms_sensitive_search.sql` — QR, сканирование, размещение, история и поиск с новыми `F`-адресами; распознавание старых `S`-адресов сохранено
 
 ## Edge Functions (задеплоены)
 - `supabase/functions/wb-fbs/index.ts` — FBS API WB, полный sync, статусы, поставки, стикеры, остатки и передача поставки в доставку

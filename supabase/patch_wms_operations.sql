@@ -43,7 +43,7 @@ stable
 set search_path = public
 as $$
   select case when p_item.id is null then null else jsonb_build_object(
-    'code', format('C%s_W%s_R%s_S%s_%s%s_K%s',
+    'code', format('C%s_W%s_R%s_F%s_%s%s_K%s',
       a.short_id, w.short_id, z.short_id, s.position + 1, c.col, c.row, p_item.slot_number),
     'text', format('%s · %s · %s · %s%s-K%s',
       w.name, z.name, s.name, c.col, c.row, p_item.slot_number)
@@ -419,7 +419,7 @@ as $$
       fs.id as supply_id, fs.supply_number, batch.id as batch_id, batch.short_id as batch_number,
       w.id as warehouse_id, w.name as warehouse_name, z.id as rack_id, z.name as rack_name,
       s.id as side_id, s.name as side_name, c.col, c.row, wi.slot_number,
-      format('C%s_W%s_R%s_S%s_%s%s_K%s', a.short_id, w.short_id, z.short_id,
+      format('C%s_W%s_R%s_F%s_%s%s_K%s', a.short_id, w.short_id, z.short_id,
         s.position + 1, c.col, c.row, wi.slot_number) as address_code,
       format('%s · %s · %s · %s%s-K%s', w.name, z.name, s.name, c.col, c.row, wi.slot_number) as address_text,
       coalesce((select sum(bi.qty) from public.fulfillment_box_items bi where bi.box_id = fb.id), 0) as units
@@ -440,7 +440,7 @@ as $$
         or fb.box_number::text = trim(p_query)
         or fs.supply_number::text = trim(p_query)
         or batch.short_id::text = trim(p_query)
-        or format('C%s_W%s_R%s_S%s_%s%s_K%s', a.short_id, w.short_id, z.short_id,
+        or format('C%s_W%s_R%s_F%s_%s%s_K%s', a.short_id, w.short_id, z.short_id,
           s.position + 1, c.col, c.row, wi.slot_number) ilike '%' || trim(p_query) || '%'
         or exists (
           select 1 from public.fulfillment_box_items bi

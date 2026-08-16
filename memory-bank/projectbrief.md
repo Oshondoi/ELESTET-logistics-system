@@ -30,7 +30,7 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 
 ## Current operational rule — WMS
 - A WMS zone is a complete rack: columns are pallet positions, rows are tiers; a new rack starts with three tiers by default.
-- A rack has one or two physical sides, named `Сторона 1` and `Сторона 2` by default. Each side has one shared box-slot geometry; the default is `2 × 4 = 8` slots per pallet position.
+- A rack has one or two physical sides, named `Сторона 1` and `Сторона 2` by default. Their stable WMS codes are `F1` and `F2`; `S` remains reserved for fulfillment supplies. Each side has one shared box-slot geometry; the default is `2 × 4 = 8` slots per pallet position.
 - A physical box keeps one stable barcode/QR identity. Moving or swapping it changes only its address, never its barcode or contents.
 - An occupied structure cannot be silently shrunk or deleted. Conflicting addresses and a third rack side are blocked by the database.
 - WMS addresses only existing fulfillment boxes. Free/occupied are derived; disabled is the only manual pallet-position state.
