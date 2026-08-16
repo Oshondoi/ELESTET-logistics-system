@@ -71,7 +71,7 @@ as $$
         item.slot_number
       ) as address_code,
       format(
-        '%s · %s · %s · %s%s-K%s',
+        '%s / %s / %s / %s%s-K%s',
         warehouse.name,
         rack.name,
         side.name,

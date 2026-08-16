@@ -119,6 +119,15 @@ function productLocationQuantity(locations: ProductLocation[]): number {
   return locations.reduce((total, location) => total + location.quantity, 0)
 }
 
+function productLocationAddress(location: ProductLocation): string | null {
+  if (!location.isAddressed) return null
+  const place = location.palletAddress && location.slotNumber
+    ? `${location.palletAddress}-K${location.slotNumber}`
+    : null
+  const parts = [location.warehouseName, location.rackName, location.sideName, place].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : location.addressCode
+}
+
 function ProductLocationsCell({ order }: { order: FbsOrder }) {
   const barcode = order.productBarcode
   const locations = order.productLocations
@@ -144,8 +153,8 @@ function ProductLocationsCell({ order }: { order: FbsOrder }) {
 
   const renderLocation = (location: ProductLocation) => (
     <div key={`${location.boxBarcode}-${location.productBarcode}`} className="min-w-0 py-0.5">
-      <div className={`truncate font-semibold ${location.isAddressed ? 'text-violet-700' : 'text-amber-500'}`} title={location.addressText ?? 'Короб ещё не размещён в WMS'}>
-        {location.isAddressed ? location.addressText : 'Без адреса'}
+      <div className={`truncate font-semibold ${location.isAddressed ? 'text-violet-700' : 'text-amber-500'}`} title={productLocationAddress(location) ?? 'Короб ещё не размещён в WMS'}>
+        {productLocationAddress(location) ?? 'Без адреса'}
       </div>
       <div className="truncate text-[11px] text-slate-500" title={`P-${location.batchNumber} · S-${location.supplyNumber} · Короб ${location.boxNumber} · ${location.quantity} шт.`}>
         P-{location.batchNumber} · S-{location.supplyNumber} · Короб {location.boxNumber} · {location.quantity} шт.
@@ -857,7 +866,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       const loc = order.productLocations.find((location) => location.isAddressed)
       return `<div class="page">
         <div class="big">#${order.id}</div>
-        ${loc ? `<div class="cell">${escapeHtml(loc.addressText ?? '')}</div>` : ''}
+        ${loc ? `<div class="cell">${escapeHtml(productLocationAddress(loc) ?? '')}</div>` : ''}
         <div class="row"><span>WB арт.</span><span>${order.nmId}</span></div>
         <div class="row"><span>Артикул</span><span>${order.article||'—'}</span></div>
         ${order.skus.map(s=>`<div class="row"><span>Баркод</span><span>${s}</span></div>`).join('')}
