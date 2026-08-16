@@ -92,6 +92,12 @@ interface StickerPrintModal {
   options: StickerPrintOptions
 }
 
+interface StickerPageImage {
+  data: string
+  format: 'JPEG' | 'PNG'
+  alias?: string
+}
+
 interface PickingListRow {
   orderId: string
   photoUrl: string | null
@@ -308,10 +314,18 @@ function createStickerCanvas(): { canvas: HTMLCanvasElement; context: CanvasRend
   const context = canvas.getContext('2d')
   if (!context) throw new Error('Браузер не поддерживает генерацию стикеров')
   context.fillStyle = '#ffffff'
-  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.fillRect(0, 0, STICKER_WIDTH_PX, STICKER_HEIGHT_PX)
   context.fillStyle = '#000000'
   context.textBaseline = 'top'
   return { canvas, context }
+}
+
+function textStickerPage(canvas: HTMLCanvasElement): StickerPageImage {
+  return { data: canvas.toDataURL('image/jpeg', 0.94), format: 'JPEG' }
+}
+
+function losslessStickerPage(canvas: HTMLCanvasElement, alias?: string): StickerPageImage {
+  return { data: canvas.toDataURL('image/png'), format: 'PNG', alias }
 }
 
 function drawWrappedText(
@@ -355,13 +369,9 @@ function stickerPageCount(modal: StickerPrintModal): number {
     if (!variants.has(key)) variants.set(key, order)
   })
   const articleCount = variants.size
-  const locationPages = [...variants.values()].reduce(
-    (total, order) => total + Math.max(1, Math.ceil(printableProductLocations(order).length / 3)),
-    0,
-  )
   return (modal.options.supply ? 1 : 0)
     + (modal.options.picking ? articleCount : 0)
-    + (modal.options.locations ? locationPages : 0)
+    + (modal.options.locations ? articleCount : 0)
     + (modal.options.productBarcode ? modal.orders.length : 0)
     + (modal.options.wb ? modal.orders.length : 0)
 }
@@ -375,6 +385,15 @@ function printableProductLocations(order: FbsOrder): ProductLocation[] {
   return [...unique.values()]
 }
 
+function boxCountWord(count: number): string {
+  const lastTwoDigits = count % 100
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 14) return 'коробов'
+  const lastDigit = count % 10
+  if (lastDigit === 1) return 'короб'
+  if (lastDigit >= 2 && lastDigit <= 4) return 'короба'
+  return 'коробов'
+}
+
 function formatStickerDate(value?: string, supplyName?: string): string {
   if (value) {
     const parsed = new Date(value)
@@ -384,114 +403,107 @@ function formatStickerDate(value?: string, supplyName?: string): string {
   return dateInName || new Date().toLocaleDateString('ru-RU')
 }
 
-function buildSupplySticker(supply: WbSupply, orders: FbsOrder[], articleCount: number): string {
+function buildSupplySticker(supply: WbSupply, orders: FbsOrder[], articleCount: number): StickerPageImage {
   const { canvas, context } = createStickerCanvas()
   const date = formatStickerDate(supply.createdAt, supply.name)
-  context.font = '700 22px Arial, sans-serif'
+  context.font = '700 30px Arial, sans-serif'
   context.fillText(date, 28, 24)
-  context.font = '400 21px Arial, sans-serif'
-  context.fillText('Поставка:', 28, 82)
-  context.font = '700 23px Arial, sans-serif'
-  let y = drawWrappedText(context, supply.name, 28, 110, 524, 28, 2)
-  context.font = '400 22px Arial, sans-serif'
-  y += 32
+  context.font = '400 28px Arial, sans-serif'
+  context.fillText('Поставка:', 28, 84)
+  context.font = '700 30px Arial, sans-serif'
+  let y = drawWrappedText(context, supply.name, 28, 120, 524, 34, 2)
+  context.font = '400 28px Arial, sans-serif'
+  y += 28
   context.fillText('Товаров итого:', 28, y)
-  context.font = '700 22px Arial, sans-serif'
-  context.fillText(String(orders.length), 220, y)
-  y += 58
-  context.font = '400 22px Arial, sans-serif'
+  context.font = '700 30px Arial, sans-serif'
+  context.fillText(String(orders.length), 238, y)
+  y += 54
+  context.font = '400 28px Arial, sans-serif'
   context.fillText('Артикулов итого:', 28, y)
-  context.font = '700 22px Arial, sans-serif'
-  context.fillText(String(articleCount), 238, y)
-  return canvas.toDataURL('image/png')
+  context.font = '700 30px Arial, sans-serif'
+  context.fillText(String(articleCount), 270, y)
+  return textStickerPage(canvas)
 }
 
-function buildPickingSticker(order: FbsOrder, quantity: number): string {
+function buildPickingSticker(order: FbsOrder, quantity: number): StickerPageImage {
   const { canvas, context } = createStickerCanvas()
-  context.font = '700 32px Arial, sans-serif'
+  context.font = '700 38px Arial, sans-serif'
   context.fillText(`${quantity} шт.`, 24, 18)
-  context.font = '700 18px Arial, sans-serif'
-  let y = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, 24, 67, 532, 22, 2)
-  context.font = '400 16px Arial, sans-serif'
+  context.font = '700 24px Arial, sans-serif'
+  let y = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, 24, 70, 532, 28, 2)
+  context.font = '400 21px Arial, sans-serif'
   context.fillText('Бренд:', 24, y + 4)
-  context.font = '700 16px Arial, sans-serif'
-  context.fillText(order.productBrand || '—', 88, y + 4, 460)
-  y += 25
-  context.font = '400 16px Arial, sans-serif'
+  context.font = '700 21px Arial, sans-serif'
+  context.fillText(order.productBrand || '—', 100, y + 4)
+  y += 30
+  context.font = '400 21px Arial, sans-serif'
   context.fillText('Цвет:', 24, y + 4)
-  context.font = '700 16px Arial, sans-serif'
-  context.fillText(order.productColor || '—', 78, y + 4, 470)
-  y += 25
-  context.font = '400 16px Arial, sans-serif'
+  context.font = '700 21px Arial, sans-serif'
+  context.fillText(order.productColor || '—', 90, y + 4)
+  y += 30
+  context.font = '400 21px Arial, sans-serif'
   context.fillText('Размер:', 24, y + 4)
-  context.font = '700 16px Arial, sans-serif'
-  context.fillText(order.productSize || '—', 92, y + 4, 456)
-  y += 42
-  context.font = '400 16px Arial, sans-serif'
+  context.font = '700 21px Arial, sans-serif'
+  context.fillText(order.productSize || '—', 108, y + 4)
+  y += 40
+  context.font = '400 21px Arial, sans-serif'
   context.fillText('Артикул WB:', 24, y)
-  context.font = '700 16px Arial, sans-serif'
-  context.fillText(String(order.nmId), 130, y)
-  y += 24
-  context.font = '400 16px Arial, sans-serif'
+  context.font = '700 21px Arial, sans-serif'
+  context.fillText(String(order.nmId), 158, y)
+  y += 30
+  context.font = '400 21px Arial, sans-serif'
   context.fillText('Баркод:', 24, y)
-  context.font = '700 16px Arial, sans-serif'
-  context.fillText(fbsOrderBarcode(order) || '—', 98, y)
-  y += 24
-  context.font = '400 16px Arial, sans-serif'
+  context.font = '700 21px Arial, sans-serif'
+  context.fillText(fbsOrderBarcode(order) || '—', 112, y)
+  y += 30
+  context.font = '400 21px Arial, sans-serif'
   context.fillText('Артикул:', 24, y)
-  context.font = '700 16px Arial, sans-serif'
-  drawWrappedText(context, order.productVendorCode || order.article || '—', 24, y + 21, 532, 19, 2)
-  return canvas.toDataURL('image/png')
+  context.font = '700 21px Arial, sans-serif'
+  drawWrappedText(context, order.productVendorCode || order.article || '—', 24, y + 27, 532, 25, 2)
+  return textStickerPage(canvas)
 }
 
-function buildLocationStickers(order: FbsOrder): string[] {
+function buildLocationStickers(order: FbsOrder): StickerPageImage[] {
   const locations = printableProductLocations(order)
-  const chunks: Array<ProductLocation[]> = []
-  if (locations.length === 0) chunks.push([])
-  for (let index = 0; index < locations.length; index += 3) chunks.push(locations.slice(index, index + 3))
+  const { canvas, context } = createStickerCanvas()
+  context.font = '700 34px Arial, sans-serif'
+  context.fillText('Адрес товара', 24, 18)
+  context.font = '700 23px Arial, sans-serif'
+  const titleEnd = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, 24, 66, 532, 27, 2)
+  context.font = '400 20px Arial, sans-serif'
+  const metaEnd = drawWrappedText(context, `Баркод: ${fbsOrderBarcode(order) || '—'} · Арт. WB: ${order.nmId}`, 24, titleEnd + 3, 532, 23, 2)
+  const y = metaEnd + 20
 
-  return chunks.map((pageLocations, pageIndex) => {
-    const { canvas, context } = createStickerCanvas()
-    context.font = '700 27px Arial, sans-serif'
-    context.fillText('Адрес товара', 24, 18)
-    if (chunks.length > 1) {
-      context.font = '700 15px Arial, sans-serif'
-      context.textAlign = 'right'
-      context.fillText(`${pageIndex + 1}/${chunks.length}`, 554, 25)
-      context.textAlign = 'left'
-    }
-    context.font = '700 17px Arial, sans-serif'
-    const titleEnd = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, 24, 62, 532, 20, 2)
-    context.font = '400 14px Arial, sans-serif'
-    context.fillText(`Баркод: ${fbsOrderBarcode(order) || '—'} · Арт. WB: ${order.nmId}`, 24, titleEnd + 4, 532)
-    let y = titleEnd + 34
+  if (locations.length === 0) {
+    context.font = '700 28px Arial, sans-serif'
+    context.fillText('Не найден на складе', 24, y + 25)
+    context.font = '400 22px Arial, sans-serif'
+    context.fillText('Товара нет ни в одном актуальном коробе', 24, y + 67)
+    return [textStickerPage(canvas)]
+  }
 
-    if (pageLocations.length === 0) {
-      context.font = '700 23px Arial, sans-serif'
-      context.fillText('Не найден на складе', 24, y + 30)
-      context.font = '400 16px Arial, sans-serif'
-      context.fillText('Товара нет ни в одном актуальном коробе', 24, y + 66, 532)
-      return canvas.toDataURL('image/png')
-    }
-
-    pageLocations.forEach((location, index) => {
-      context.font = '700 16px Arial, sans-serif'
-      const address = productLocationAddress(location) ?? 'Без адреса'
-      const addressEnd = drawWrappedText(context, `${pageIndex * 3 + index + 1}. ${address}`, 24, y, 532, 19, 2)
-      context.font = '400 13px Arial, sans-serif'
-      context.fillText(
-        `P-${location.batchNumber} · S-${location.supplyNumber} · Короб ${location.boxNumber} · ${location.quantity} шт.`,
-        42,
-        addressEnd + 2,
-        514,
-      )
-      y = addressEnd + 29
-    })
-    return canvas.toDataURL('image/png')
-  })
+  const bestLocation = locations[0]
+  context.font = '700 28px Arial, sans-serif'
+  const addressEnd = drawWrappedText(context, productLocationAddress(bestLocation) ?? 'Без адреса', 24, y, 532, 32, 2)
+  context.font = '400 22px Arial, sans-serif'
+  const detailsEnd = drawWrappedText(
+    context,
+    `P-${bestLocation.batchNumber} · S-${bestLocation.supplyNumber} · Короб ${bestLocation.boxNumber} · ${bestLocation.quantity} шт.`,
+    24,
+    addressEnd + 5,
+    532,
+    26,
+    2,
+  )
+  const remainingBoxes = locations.length - 1
+  if (remainingBoxes > 0) {
+    context.font = '700 25px Arial, sans-serif'
+    context.fillText(`Ещё ${remainingBoxes} ${boxCountWord(remainingBoxes)}`, 24, detailsEnd + 22)
+  }
+  return [textStickerPage(canvas)]
 }
 
-function buildProductBarcodeSticker(order: FbsOrder, sellerName: string): string {
+function buildProductBarcodeSticker(order: FbsOrder, sellerName: string): StickerPageImage {
   const barcode = fbsOrderBarcode(order)
   if (!barcode) throw new Error(`У заказа ${order.id} отсутствует товарный баркод`)
   const { canvas, context } = createStickerCanvas()
@@ -512,24 +524,22 @@ function buildProductBarcodeSticker(order: FbsOrder, sellerName: string): string
   const barcodeWidth = Math.min(520, barcodeCanvas.width)
   const barcodeHeight = Math.min(112, barcodeCanvas.height * (barcodeWidth / barcodeCanvas.width))
   context.drawImage(barcodeCanvas, (STICKER_WIDTH_PX - barcodeWidth) / 2, 12, barcodeWidth, barcodeHeight)
-  let y = 132
-  context.font = '400 16px Arial, sans-serif'
+  let y = 130
+  context.font = '400 20px Arial, sans-serif'
+  y = drawWrappedText(context, sellerName || 'Продавец Wildberries', STICKER_WIDTH_PX / 2, y, 530, 23, 2, 'center')
+  y += 3
+  context.font = '700 23px Arial, sans-serif'
+  y = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, STICKER_WIDTH_PX / 2, y, 530, 27, 2, 'center')
+  context.font = '400 20px Arial, sans-serif'
   context.textAlign = 'center'
-  context.fillText(sellerName || 'Продавец Wildberries', STICKER_WIDTH_PX / 2, y, 530)
+  context.fillText(`Бренд: ${order.productBrand || '—'}`, STICKER_WIDTH_PX / 2, y + 3)
+  context.fillText(`Цвет: ${order.productColor || '—'}`, STICKER_WIDTH_PX / 2, y + 29)
+  context.fillText(`Размер: ${order.productSize || '—'}`, STICKER_WIDTH_PX / 2, y + 55)
+  context.fillText('Артикул:', STICKER_WIDTH_PX / 2, y + 85)
+  context.font = '700 20px Arial, sans-serif'
+  context.fillText(order.productVendorCode || order.article || '—', STICKER_WIDTH_PX / 2, y + 111)
   context.textAlign = 'left'
-  y += 24
-  context.font = '700 17px Arial, sans-serif'
-  y = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, STICKER_WIDTH_PX / 2, y, 530, 20, 2, 'center')
-  context.font = '400 15px Arial, sans-serif'
-  context.textAlign = 'center'
-  context.fillText(`Бренд: ${order.productBrand || '—'}`, STICKER_WIDTH_PX / 2, y + 3, 530)
-  context.fillText(`Цвет: ${order.productColor || '—'}`, STICKER_WIDTH_PX / 2, y + 23, 530)
-  context.fillText(`Размер: ${order.productSize || '—'}`, STICKER_WIDTH_PX / 2, y + 43, 530)
-  context.fillText('Артикул:', STICKER_WIDTH_PX / 2, y + 67, 530)
-  context.font = '700 15px Arial, sans-serif'
-  context.fillText(order.productVendorCode || order.article || '—', STICKER_WIDTH_PX / 2, y + 87, 530)
-  context.textAlign = 'left'
-  return canvas.toDataURL('image/png')
+  return losslessStickerPage(canvas, `product-barcode-${stickerVariantKey(order)}`)
 }
 
 async function invokeFbs(storeId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -994,7 +1004,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         const key = stickerVariantKey(order)
         groups.set(key, [...(groups.get(key) ?? []), order])
       }
-      const pages: string[] = []
+      const pages: StickerPageImage[] = []
       if (mode === 'supply' && options.supply) {
         if (!supply) throw new Error('Не найдены данные поставки')
         pages.push(buildSupplySticker(supply, ordersToPrint, groups.size))
@@ -1004,9 +1014,10 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       for (const groupOrders of groups.values()) {
         if (options.picking) pages.push(buildPickingSticker(groupOrders[0], groupOrders.length))
         if (options.locations) pages.push(...buildLocationStickers(groupOrders[0]))
+        const productBarcodePage = options.productBarcode ? buildProductBarcodeSticker(groupOrders[0], sellerName) : null
         for (const order of groupOrders) {
-          if (options.productBarcode) pages.push(buildProductBarcodeSticker(order, sellerName))
-          if (options.wb) pages.push(`data:image/png;base64,${wbFiles.get(order.id)!}`)
+          if (productBarcodePage) pages.push(productBarcodePage)
+          if (options.wb) pages.push({ data: `data:image/png;base64,${wbFiles.get(order.id)!}`, format: 'PNG' })
         }
       }
       const url = buildStickerPdfUrl(pages)
@@ -1182,12 +1193,12 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   }
 
   // Каждый стикер — отдельная страница PDF 58×40 мм.
-  function buildStickerPdfUrl(pageImages: string[]): string {
+  function buildStickerPdfUrl(pageImages: StickerPageImage[]): string {
     const W = 58, H = 40
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [W, H] })
     pageImages.forEach((image, i) => {
       if (i > 0) doc.addPage([W, H], 'landscape')
-      doc.addImage(image, 'PNG', 0, 0, W, H)
+      doc.addImage(image.data, image.format, 0, 0, W, H, image.alias, image.format === 'PNG' ? 'FAST' : undefined)
     })
     return doc.output('bloburl') as unknown as string
   }
