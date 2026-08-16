@@ -914,7 +914,7 @@ export const createBox = async (data: {
         .single()
       if (existing) return existing as FulfillmentBox
     }
-    throw error
+    throw new Error(error.message || 'Ошибка создания короба')
   }
   return row as FulfillmentBox
 }
