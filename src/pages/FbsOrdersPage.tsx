@@ -27,7 +27,7 @@ interface FbsOrder {
   productBrand: string | null
   productVendorCode: string | null
   productSize: string | null
-  cellLocation: CellLocation | null
+  productLocations: ProductLocation[]
   shipStatus: TabKey
   supplierStatus: string
   wbSystemStatus: string
@@ -35,15 +35,22 @@ interface FbsOrder {
   supply_id: string | null
 }
 
-interface CellLocation {
-  warehouseName: string
-  wbWarehouseId: string
-  zoneName: string
-  col: string
-  row: number
-  qty: number
-  reservedQty: number
-  cellItemId: string
+interface ProductLocation {
+  productBarcode: string
+  quantity: number
+  batchNumber: number
+  batchName: string
+  supplyNumber: number
+  boxNumber: number
+  boxBarcode: string
+  warehouseName: string | null
+  rackName: string | null
+  sideName: string | null
+  palletAddress: string | null
+  slotNumber: number | null
+  addressCode: string | null
+  addressText: string | null
+  isAddressed: boolean
 }
 
 interface WbWarehouse {
@@ -106,6 +113,63 @@ function productSizeByBarcode(product: Product | undefined, barcode: string | nu
   const productChrtId = matchingSize.chrtID ?? matchingSize.chrtId
   if (orderChrtId && productChrtId && Number(productChrtId) !== Number(orderChrtId)) return null
   return matchingSize.techSize?.trim() || null
+}
+
+function productLocationQuantity(locations: ProductLocation[]): number {
+  return locations.reduce((total, location) => total + location.quantity, 0)
+}
+
+function ProductLocationsCell({ order }: { order: FbsOrder }) {
+  const barcode = order.productBarcode
+  const locations = order.productLocations
+
+  if (!barcode) {
+    return (
+      <div>
+        <div className="font-semibold text-amber-500">Баркод не получен</div>
+        <div className="mt-0.5 text-[11px] text-slate-400">Невозможно найти товар на складе</div>
+      </div>
+    )
+  }
+
+  if (locations.length === 0) {
+    return (
+      <div>
+        <div className="font-semibold text-amber-500">Не найден</div>
+        <div className="mt-0.5 text-[11px] text-slate-500">Товара нет ни в одном коробе</div>
+        <div className="mt-0.5 font-mono text-[11px] text-slate-400">{barcode}</div>
+      </div>
+    )
+  }
+
+  const renderLocation = (location: ProductLocation) => (
+    <div key={`${location.boxBarcode}-${location.productBarcode}`} className="min-w-0 py-0.5">
+      <div className={`truncate font-semibold ${location.isAddressed ? 'text-violet-700' : 'text-amber-500'}`} title={location.addressText ?? 'Короб ещё не размещён в WMS'}>
+        {location.isAddressed ? location.addressText : 'Без адреса'}
+      </div>
+      <div className="truncate text-[11px] text-slate-500" title={`P-${location.batchNumber} · S-${location.supplyNumber} · Короб ${location.boxNumber} · ${location.quantity} шт.`}>
+        P-{location.batchNumber} · S-{location.supplyNumber} · Короб {location.boxNumber} · {location.quantity} шт.
+      </div>
+    </div>
+  )
+
+  const visibleLocations = locations.slice(0, 2)
+  const hiddenLocations = locations.slice(2)
+
+  return (
+    <div>
+      {visibleLocations.map(renderLocation)}
+      {hiddenLocations.length > 0 && (
+        <details className="mt-0.5">
+          <summary className="cursor-pointer select-none text-[11px] font-semibold text-violet-600 hover:text-violet-700">
+            Ещё {hiddenLocations.length} {hiddenLocations.length === 1 ? 'короб' : 'короба'}
+          </summary>
+          <div className="mt-1 border-l border-violet-200 pl-2">{hiddenLocations.map(renderLocation)}</div>
+        </details>
+      )}
+      <div className="mt-0.5 font-mono text-[11px] text-slate-400">{barcode}</div>
+    </div>
+  )
 }
 
 function slaLabel(ddate: string, createdAt?: string): { text: string; cls: string } {
@@ -296,34 +360,38 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
     const allBarcodes = [...new Set(productEnriched.flatMap((order) => order.productBarcode ? [order.productBarcode] : order.skus))]
     if (allBarcodes.length === 0) return productEnriched
-    const { data: items } = await (supabase as any)
-      .from('wms_cell_items')
-      .select(`id, barcode, qty, reserved_qty,
-        wms_cells(col, row,
-          wms_zones(name,
-            wms_warehouses(name, fbs_enabled, wb_warehouse_id)
-          )
-        )`)
-      .eq('account_id', accountId)
-      .in('barcode', allBarcodes)
-      .gt('qty', 0)
-    const cellMap = new Map<string, CellLocation>()
-    for (const item of (items ?? [])) {
-      const wh = item.wms_cells?.wms_zones?.wms_warehouses
-      if (!wh?.fbs_enabled) continue
-      const loc: CellLocation = {
-        warehouseName: wh.name, wbWarehouseId: wh.wb_warehouse_id ?? '',
-        zoneName: item.wms_cells?.wms_zones?.name ?? '',
-        col: item.wms_cells?.col ?? '', row: item.wms_cells?.row ?? 0,
-        qty: item.qty, reservedQty: item.reserved_qty ?? 0, cellItemId: item.id,
+    const { data: locationRows, error: locationError } = await (supabase as any).rpc('get_fbs_product_locations', {
+      p_account_id: accountId,
+      p_barcodes: allBarcodes,
+    })
+    if (locationError) throw locationError
+    const locationsByBarcode = new Map<string, ProductLocation[]>()
+    for (const row of (locationRows ?? [])) {
+      const barcode = String(row.product_barcode ?? '')
+      if (!barcode) continue
+      const location: ProductLocation = {
+        productBarcode: barcode,
+        quantity: Number(row.quantity ?? 0),
+        batchNumber: Number(row.batch_number ?? 0),
+        batchName: String(row.batch_name ?? ''),
+        supplyNumber: Number(row.supply_number ?? 0),
+        boxNumber: Number(row.box_number ?? 0),
+        boxBarcode: String(row.box_barcode ?? ''),
+        warehouseName: row.warehouse_name ?? null,
+        rackName: row.rack_name ?? null,
+        sideName: row.side_name ?? null,
+        palletAddress: row.pallet_address ?? null,
+        slotNumber: row.slot_number == null ? null : Number(row.slot_number),
+        addressCode: row.address_code ?? null,
+        addressText: row.address_text ?? null,
+        isAddressed: row.is_addressed === true,
       }
-      if (!cellMap.has(item.barcode)) cellMap.set(item.barcode, loc)
+      locationsByBarcode.set(barcode, [...(locationsByBarcode.get(barcode) ?? []), location])
     }
     return productEnriched.map((order) => ({
       ...order,
-      cellLocation: (order.productBarcode ? cellMap.get(order.productBarcode) : undefined)
-        ?? order.skus.map((sku) => cellMap.get(sku)).find(Boolean)
-        ?? null,
+      productLocations: (order.productBarcode ? locationsByBarcode.get(order.productBarcode) : undefined)
+        ?? order.skus.flatMap((sku) => locationsByBarcode.get(sku) ?? []),
     }))
   }, [accountId, selectedStoreId])
 
@@ -370,7 +438,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         productBrand: null,
         productVendorCode: null,
         productSize: null,
-        cellLocation: null,
+        productLocations: [],
         shipStatus: tabForOfficialWbStatus(supplierStatus, wbSystemStatus, isInLatestSnapshot),
         supplierStatus,
         wbSystemStatus,
@@ -489,7 +557,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     chrtId: o.chrtId ?? 0, skus: o.skus ?? [], price: o.price ?? 0,
     convertedPrice: o.convertedPrice ?? 0, currencyCode: o.currencyCode ?? 643,
     photoUrl: null, productBarcode: null, productName: null, productBrand: null,
-    productVendorCode: null, productSize: null, cellLocation: null, shipStatus: status,
+    productVendorCode: null, productSize: null, productLocations: [], shipStatus: status,
     supplierStatus: status === 'pending' ? 'new' : status === 'assembling' ? 'confirm' : 'complete',
     wbSystemStatus: 'waiting', isInLatestSnapshot: true, supply_id: null,
   }), [])
@@ -579,22 +647,6 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     try {
       // Статус меняет только WB: сначала передаём целую поставку в доставку.
       await invokeFbs(selectedStoreId, { action: 'deliver_supply', supply_id: supplyId })
-      for (const order of orders2ship) {
-        if (!order.cellLocation) continue
-        const { data: current } = await (supabase as any)
-          .from('wms_cell_items').select('qty').eq('id', order.cellLocation.cellItemId).single()
-        const newQty = Math.max(0, (current?.qty ?? 1) - 1)
-        await (supabase as any).from('wms_cell_items')
-          .update({ qty: newQty, updated_at: new Date().toISOString() })
-          .eq('id', order.cellLocation.cellItemId)
-        if (order.cellLocation.wbWarehouseId) {
-          await invokeFbs(selectedStoreId, {
-            action: 'update_stocks',
-            wb_warehouse_id: order.cellLocation.wbWarehouseId,
-            stocks: [{ sku: order.skus[0], amount: newQty }],
-          }).catch(() => null)
-        }
-      }
       setSelected(new Set())
       await Promise.all([doSync(), loadOpenSupplies()])
     } catch (e) { alert(String(e)) }
@@ -802,10 +854,10 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   // Наш picking slip (fallback если стикер WB недоступен)
   function printPickingSlip(orders: FbsOrder[]) {
     const pages = orders.map((order) => {
-      const loc = order.cellLocation
+      const loc = order.productLocations.find((location) => location.isAddressed)
       return `<div class="page">
         <div class="big">#${order.id}</div>
-        ${loc ? `<div class="cell">${loc.col}${loc.row} <span style="font-size:12px;font-weight:400">${loc.zoneName} · ${loc.warehouseName}</span></div>` : ''}
+        ${loc ? `<div class="cell">${escapeHtml(loc.addressText ?? '')}</div>` : ''}
         <div class="row"><span>WB арт.</span><span>${order.nmId}</span></div>
         <div class="row"><span>Артикул</span><span>${order.article||'—'}</span></div>
         ${order.skus.map(s=>`<div class="row"><span>Баркод</span><span>${s}</span></div>`).join('')}
@@ -1061,7 +1113,6 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                         <tbody>
                           {supplyOrders.map((order) => {
                             const sla = slaLabel(order.ddate, order.createdAt)
-                            const loc = order.cellLocation
                             const isBusy = busyIds.has(order.id)
                             return (
                               <tr key={order.id} className="border-b border-slate-100 hover:bg-white transition-colors">
@@ -1095,8 +1146,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                   </div>
                                 </td>
                                 <td className="px-4 py-2">
-                                  <div>{loc ? <span className="font-semibold text-violet-700">{loc.col}{loc.row} <span className="text-slate-400 font-normal">{loc.warehouseName}</span></span> : <span className="text-amber-500">Не найден</span>}</div>
-                                  <div className="mt-0.5 font-mono text-[11px] text-slate-400">{order.productBarcode ?? 'Баркод не получен'}</div>
+                                  <ProductLocationsCell order={order} />
                                 </td>
                                 <td className={`px-4 py-2 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                                 <td className="px-4 py-2">
@@ -1213,7 +1263,6 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
             <tbody>
               {tabOrders.map((order) => {
                 const sla = slaLabel(order.ddate, order.createdAt)
-                const loc = order.cellLocation
                 const isBusy = busyIds.has(order.id)
                 const isChecked = selected.has(order.id)
                 return (
@@ -1252,15 +1301,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <div>{loc ? (
-                        <span className="inline-flex items-center gap-1">
-                          <span className="font-semibold text-violet-700">{loc.col}{loc.row}</span>
-                          <span className="text-slate-400">{loc.zoneName} · {loc.warehouseName}</span>
-                        </span>
-                      ) : <span className="text-amber-500">Не найден</span>}</div>
-                      <div className="mt-0.5 font-mono text-[11px] text-slate-400">{order.productBarcode ?? 'Баркод не получен'}</div>
+                      <ProductLocationsCell order={order} />
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-slate-800">{loc ? loc.qty : '—'}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-800">{order.productLocations.length > 0 ? productLocationQuantity(order.productLocations) : '—'}</td>
                     <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{wbWhName(order.warehouseId)}</td>
                     <td className={`px-4 py-3 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                     <td className="px-4 py-3">

@@ -26,6 +26,7 @@
 - `fbs_orders`: tenant/store cache of WB orders, unique `(store_id, wb_order_id)`; keeps raw data, WB statuses, supply relation and synchronized variant fields.
 - `fbs_sync_log`: last successful store synchronization metadata.
 - UI reads DB first; Edge Function `wb-fbs` refreshes from WB and upserts cache.
+- `get_fbs_product_locations(uuid, text[])`: read-only пакетный поиск точного товарного баркода по актуальным fulfillment-коробам компании с партией, поставкой, количеством и nullable WMS-адресом; patch `patch_fbs_product_locations.sql` применён 16.08.2026.
 
 ## WMS tables and RPC (applied through 15.08.2026)
 - Patches: `supabase/patch_wms.sql`, `patch_wms_boxes.sql`, `patch_wms_disabled.sql`, `patch_wms_rack_layout.sql`, `patch_wms_scanning.sql`, `patch_wms_default_warehouse.sql`, `patch_wms_unassign_box.sql`, `patch_wms_operations.sql`.

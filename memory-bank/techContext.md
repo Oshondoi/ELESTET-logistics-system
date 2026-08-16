@@ -4,6 +4,7 @@
 - `src/pages/FbsOrdersPage.tsx` — FBS cache UI, поставки/заказы, синк, перенос, печать, лист подбора, товарное обогащение.
 - `supabase/functions/wb-fbs/index.ts` — прокси и синхронизация WB Marketplace FBS API.
 - `supabase/patch_fbs_reliable_sync.sql` — int64-safe статусы, журнал и атомарный полный снимок FBS; применён в production.
+- `supabase/patch_fbs_product_locations.sql` — пакетный read-only поиск товара FBS по содержимому коробов с партией, поставкой и текущим WMS-адресом; применён в production.
 - `src/pages/WmsPage.tsx` — визуальные стеллажи, паллетоместа, стороны, сетки K-мест, QR коробов, перенос/обмен.
 - `supabase/patch_wms_rack_layout.sql` — стороны и геометрия мест коробов, ограничения, атомарные RPC планировки и перемещения; применён в production.
 - `supabase/patch_wms_side_codes_f.sql` — безопасная production-миграция стабильных кодов сторон с `S1/S2` на `F1/F2` без смены UUID и потери размещений.
