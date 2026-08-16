@@ -23,7 +23,8 @@ export interface AccessOverrideRow {
 export async function getActiveOverride(accountId: string): Promise<ActiveOverride | null> {
   if (!supabase) return null
   const { data, error } = await (supabase as any).rpc('get_active_override', { p_account_id: accountId })
-  if (error || !data || (data as any[]).length === 0) return null
+  if (error) throw new Error(error.message)
+  if (!data || (data as any[]).length === 0) return null
   return (data as any[])[0] as ActiveOverride
 }
 

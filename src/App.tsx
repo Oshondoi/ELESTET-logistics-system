@@ -360,11 +360,28 @@ function App() {
   const activeAccount = accounts.find((account) => account.id === activeAccountId) ?? null
   const { roles, isLoading: isRolesLoading, addRole, updateRole, removeRole, cloneRoleToAccount } = useRoles(activeAccount?.id ?? null)
   const { permissions, isLoading: isPermissionsLoading, isOwnerOrAdmin } = useMyPermissions(activeAccount?.id ?? null, session?.user?.id ?? null, activeAccount?.my_role)
-  const [activeOverride, setActiveOverride] = useState<ActiveOverride | null>(null)
+  const [overrideSnapshot, setOverrideSnapshot] = useState<{ accountId: string; value: ActiveOverride | null } | null>(null)
+  const [overrideFailedAccountId, setOverrideFailedAccountId] = useState<string | null>(null)
+  const overrideRequestIdRef = useRef(0)
 
-  const fetchOverride = useCallback(() => {
-    if (!activeAccount?.id) { setActiveOverride(null); return }
-    void getActiveOverride(activeAccount.id).then(setActiveOverride)
+  const fetchOverride = useCallback(async () => {
+    const accountId = activeAccount?.id ?? null
+    const requestId = ++overrideRequestIdRef.current
+    if (!accountId) {
+      setOverrideSnapshot(null)
+      setOverrideFailedAccountId(null)
+      return
+    }
+    try {
+      const value = await getActiveOverride(accountId)
+      if (overrideRequestIdRef.current !== requestId) return
+      setOverrideSnapshot({ accountId, value })
+      setOverrideFailedAccountId(null)
+    } catch (overrideError) {
+      if (overrideRequestIdRef.current !== requestId) return
+      console.error('Не удалось загрузить статус подписки:', overrideError)
+      setOverrideFailedAccountId(accountId)
+    }
   }, [activeAccount?.id])
 
   // Первая загрузка при смене аккаунта
@@ -384,19 +401,25 @@ function App() {
     return () => document.removeEventListener('visibilitychange', handler)
   }, [fetchOverride])
 
-  const { platformRole, isSuperAdmin, isAdmin, isSupport } = usePlatformRole(session?.user?.id)
+  const { platformRole, isSuperAdmin, isAdmin, isSupport, isLoading: isPlatformRoleLoading } = usePlatformRole(session?.user?.id)
 
   // Кэш данных AdminPage между переходами на другие страницы
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null)
   const [adminAccounts, setAdminAccounts] = useState<AdminAccountBillingRow[] | null>(null)
 
   // Суперадмин / админ / саппорт — вечный operational override (биллинг не мешает)
+  const overrideMatchesActiveAccount = Boolean(activeAccount?.id && overrideSnapshot?.accountId === activeAccount.id)
+  const overrideRequestResolved = !activeAccount?.id
+    || overrideMatchesActiveAccount
+    || overrideFailedAccountId === activeAccount.id
+  const isBillingResolved = overrideRequestResolved && !isPlatformRoleLoading
+  const resolvedActiveOverride = overrideMatchesActiveAccount ? overrideSnapshot!.value : null
   const effectiveOverride: ActiveOverride | null = isSupport
     ? { type: 'plan', plan: 'operational', free_until: '2099-12-31' }
-    : activeOverride
+    : resolvedActiveOverride
 
-  const isReadOnly = activeAccount ? !canWrite(activeAccount, effectiveOverride) : false
-  const isPageGated = (page: string) => activeAccount ? !canAccessPage(page, activeAccount, effectiveOverride) : false
+  const isReadOnly = activeAccount && isBillingResolved ? !canWrite(activeAccount, effectiveOverride) : false
+  const isPageGated = (page: string) => activeAccount && isBillingResolved ? !canAccessPage(page, activeAccount, effectiveOverride) : false
 
   useEffect(() => {
     if (!isAccountsLoading && accounts.length > 0) {
@@ -777,7 +800,7 @@ function App() {
           />
 
           {/* ── Billing баннер — только для owner компании ── */}
-          {activeAccount && activeAccount.my_role === 'owner' && (() => {
+          {isBillingResolved && activeAccount && activeAccount.my_role === 'owner' && (() => {
             const status = getBillingStatus(activeAccount, effectiveOverride)
             if (status === 'active') return null
             if (status === 'trial') {
