@@ -119,6 +119,28 @@ function productLocationQuantity(locations: ProductLocation[]): number {
   return locations.reduce((total, location) => total + location.quantity, 0)
 }
 
+function OrderIdentityCell({ order }: { order: FbsOrder }) {
+  return (
+    <div className="space-y-0.5 whitespace-nowrap">
+      <div className="flex items-baseline gap-1.5">
+        <span className="w-12 shrink-0 text-[11px] text-slate-400">Заказ №</span>
+        <span className="font-semibold text-slate-900">{order.id}</span>
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <span className="w-12 shrink-0 text-[11px] text-slate-400">Арт. WB</span>
+        <a
+          href={`https://www.wildberries.ru/catalog/${order.nmId}/detail.aspx`}
+          target="_blank"
+          rel="noreferrer"
+          className="font-mono text-blue-600 hover:underline"
+        >
+          {order.nmId}
+        </a>
+      </div>
+    </div>
+  )
+}
+
 function productLocationAddress(location: ProductLocation): string | null {
   if (!location.isAddressed) return null
   const place = location.palletAddress && location.slotNumber
@@ -1112,7 +1134,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                   className="h-3.5 w-3.5 cursor-pointer rounded accent-violet-500"
                                 />
                               </th>
-                              <th className="px-4 py-2 text-left font-semibold">Заказ № / Арт. WB</th>
+                              <th className="px-4 py-2 text-left font-semibold">Заказ / Артикул WB</th>
                               <th className="px-4 py-2 text-left font-semibold">Товар</th>
                               <th className="px-4 py-2 text-left font-semibold">Адрес товара / Баркод</th>
                               <th className="px-4 py-2 text-left font-semibold">Время</th>
@@ -1129,8 +1151,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                   <input type="checkbox" checked={selected.has(order.id)} onChange={() => toggleSupplyOrderSelection(order.id, supplyOrders)} className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
                                 </td>
                                 <td className="px-4 py-2">
-                                  <div className="font-semibold text-slate-900">{order.id}</div>
-                                  <a href={`https://www.wildberries.ru/catalog/${order.nmId}/detail.aspx`} target="_blank" rel="noreferrer" className="font-mono text-blue-600 hover:underline">{order.nmId}</a>
+                                  <OrderIdentityCell order={order} />
                                 </td>
                                 <td className="px-4 py-2">
                                   <div className="flex min-w-0 items-center gap-3">
@@ -1260,7 +1281,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                   <input type="checkbox" checked={allTabSelected} onChange={toggleAll}
                     className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
                 </th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-500">Заказ № / Арт. WB</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-500">Заказ / Артикул WB</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Товар</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Адрес товара / Баркод</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-500">Кол-во</th>
@@ -1282,10 +1303,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                         className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
                     </td>
                     <td className="px-4 py-3">
-                      <div className="font-semibold text-slate-900">{order.id}</div>
-                      <a href={`https://www.wildberries.ru/catalog/${order.nmId}/detail.aspx`}
-                        target="_blank" rel="noreferrer"
-                        className="font-mono text-blue-600 hover:underline">{order.nmId}</a>
+                      <OrderIdentityCell order={order} />
                     </td>
                     <td className="px-4 py-2">
                       <div className="flex min-w-0 items-center gap-3">
