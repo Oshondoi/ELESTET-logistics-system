@@ -23,6 +23,7 @@ interface WmsZone {
   name: string
   cols: number
   rows: number
+  row_number_direction: NumberDirection
   upright_mode: 'interval' | 'custom'
   upright_every: number
   upright_after_cols: number[]
@@ -39,6 +40,7 @@ interface WmsZoneSide {
   slot_count: number
   slot_columns: number
   slot_rows: number
+  slot_number_direction: NumberDirection
   position: number
 }
 
@@ -110,11 +112,14 @@ type ZoneSettings = {
   name: string
   cols: number
   rows: number
+  rowNumberDirection: NumberDirection
   uprightMode: 'interval' | 'custom'
   uprightEvery: number
   uprightAfterCols: number[]
   sides: WmsZoneSide[]
 }
+
+type NumberDirection = 'top_to_bottom' | 'bottom_to_top'
 
 type WmsScanLocation = {
   kind: 'pallet' | 'slot'
@@ -135,6 +140,7 @@ type WmsScanLocation = {
   slotCount: number
   slotColumns: number
   slotRows: number
+  slotNumberDirection?: NumberDirection
   filled: number
   full: boolean
   status: 'free' | 'occupied' | 'disabled'
@@ -266,8 +272,8 @@ function signalScan(ok: boolean) {
 
 function defaultZoneSides(): WmsZoneSide[] {
   return [
-    { code: 'F1', name: 'Сторона 1', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 0 },
-    { code: 'F2', name: 'Сторона 2', slot_count: 8, slot_columns: 2, slot_rows: 4, position: 1 },
+    { code: 'F1', name: 'Сторона 1', slot_count: 8, slot_columns: 2, slot_rows: 4, slot_number_direction: 'top_to_bottom', position: 0 },
+    { code: 'F2', name: 'Сторона 2', slot_count: 8, slot_columns: 2, slot_rows: 4, slot_number_direction: 'top_to_bottom', position: 1 },
   ]
 }
 
@@ -278,8 +284,28 @@ function normalizedZoneSides(zone: WmsZone): WmsZoneSide[] {
       ...side,
       slot_columns: side.slot_columns ?? (side.slot_count % 2 === 0 ? 2 : 1),
       slot_rows: side.slot_rows ?? (side.slot_count % 2 === 0 ? side.slot_count / 2 : side.slot_count),
+      slot_number_direction: side.slot_number_direction ?? 'top_to_bottom',
     }))
     : defaultZoneSides()
+}
+
+function orderedSlotNumbers(side: Pick<WmsZoneSide, 'slot_count' | 'slot_columns' | 'slot_rows' | 'slot_number_direction'>): number[] {
+  const rows = Array.from({ length: side.slot_rows }, (_, rowIndex) => rowIndex)
+  if (side.slot_number_direction === 'bottom_to_top') rows.reverse()
+  return rows.flatMap((rowIndex) => Array.from({ length: side.slot_columns }, (_, columnIndex) => (
+    rowIndex * side.slot_columns + columnIndex + 1
+  ))).filter((slotNumber) => slotNumber <= side.slot_count)
+}
+
+function orderedScanSlots(location: WmsScanLocation) {
+  const order = orderedSlotNumbers({
+    slot_count: location.slotCount,
+    slot_columns: location.slotColumns,
+    slot_rows: location.slotRows,
+    slot_number_direction: location.slotNumberDirection ?? 'top_to_bottom',
+  })
+  const rank = new Map(order.map((slotNumber, index) => [slotNumber, index]))
+  return [...location.slots].sort((a, b) => (rank.get(a.number) ?? a.number) - (rank.get(b.number) ?? b.number))
 }
 
 function intervalUprights(cols: number, every: number): number[] {
@@ -399,6 +425,7 @@ function ZoneModal({ editing, onClose, onSave }: {
   const [name, setName] = useState(editing?.name ?? '')
   const [cols, setCols] = useState(String(editing?.cols ?? 6))
   const [rows, setRows] = useState(String(editing?.rows ?? 3))
+  const [rowNumberDirection, setRowNumberDirection] = useState<NumberDirection>(editing?.row_number_direction ?? 'top_to_bottom')
   const [uprightMode, setUprightMode] = useState<'interval' | 'custom'>(editing?.upright_mode ?? 'interval')
   const [uprightEvery, setUprightEvery] = useState(String(editing?.upright_every ?? 3))
   const [customUprights, setCustomUprights] = useState<number[]>(editing?.upright_after_cols ?? [])
@@ -430,11 +457,19 @@ function ZoneModal({ editing, onClose, onSave }: {
 
   const handleSave = async () => {
     if (!valid) return
+    const directionChanged = editing && (
+      (editing.row_number_direction ?? 'top_to_bottom') !== rowNumberDirection
+      || normalizedZoneSides(editing).some((oldSide) => {
+        const nextSide = normalizedSides.find((side) => side.id === oldSide.id)
+        return nextSide && nextSide.slot_number_direction !== oldSide.slot_number_direction
+      })
+    )
+    if (directionChanged && !window.confirm('Изменить направление нумерации? Цифры на схеме поменяют положение. Адреса и QR останутся прежними.')) return
     setSaving(true)
     setError('')
     try {
       await onSave({
-        name: name.trim(), cols: colNum, rows: rowNum,
+        name: name.trim(), cols: colNum, rows: rowNum, rowNumberDirection,
         uprightMode, uprightEvery: uprightEveryNum,
         uprightAfterCols: activeUprights,
         sides: normalizedSides,
@@ -456,6 +491,7 @@ function ZoneModal({ editing, onClose, onSave }: {
       slot_count: 8,
       slot_columns: 2,
       slot_rows: 4,
+      slot_number_direction: 'top_to_bottom',
       position: previous.length,
     }])
   }
@@ -500,6 +536,14 @@ function ZoneModal({ editing, onClose, onSave }: {
               <span className="text-[11px] text-slate-400">Макс. 50</span>
             </div>
           </div>
+          <label className="flex flex-col gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <span className="text-xs font-medium text-slate-700">Нумерация ярусов</span>
+            <select value={rowNumberDirection} onChange={(event) => setRowNumberDirection(event.target.value as NumberDirection)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-violet-400">
+              <option value="top_to_bottom">1 сверху, дальше вниз</option>
+              <option value="bottom_to_top">1 снизу, дальше вверх</option>
+            </select>
+          </label>
           <div className="rounded-2xl border border-slate-200 p-4">
             <div className="mb-3 flex items-center justify-between">
               <div>
@@ -540,10 +584,19 @@ function ZoneModal({ editing, onClose, onSave }: {
                     className="mb-1 flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-30">
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14" /></svg>
                   </button>
+                  <label className="col-span-5 flex items-center justify-between gap-3 border-t border-slate-200 pt-2 text-[10px] text-slate-500">
+                    Нумерация K-мест
+                    <select value={side.slot_number_direction}
+                      onChange={(event) => setSides((previous) => previous.map((item, itemIndex) => itemIndex === index ? { ...item, slot_number_direction: event.target.value as NumberDirection } : item))}
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-violet-400">
+                      <option value="top_to_bottom">K1 сверху, дальше вниз</option>
+                      <option value="bottom_to_top">K1 снизу, дальше вверх</option>
+                    </select>
+                  </label>
                 </div>
               ))}
             </div>
-            <div className="mt-2 text-[10px] text-slate-400">Места нумеруются слева направо, затем сверху вниз: K1, K2 / K3, K4… Максимум 100 мест на сторону.</div>
+            <div className="mt-2 text-[10px] text-slate-400">Внутри одного уровня K-места идут слева направо. Направление уровней выбирается для каждой стороны. Максимум 100 мест на сторону.</div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 p-4">
@@ -860,7 +913,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
   const firstFreeSlot = (sideId: string): number | null => {
     const side = visibleZoneSides.find((item) => item.id === sideId)
     if (!side) return null
-    for (let slot = 1; slot <= side.slot_count; slot += 1) {
+    for (const slot of orderedSlotNumbers(side)) {
       if (!occupiedBoxSlots.has(`${sideId}-${slot}`)) return slot
     }
     return null
@@ -964,7 +1017,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                       sideName: side.name,
                       address: pallet,
                     },
-                    ...Array.from({ length: side.slot_count }, (_, index) => index + 1).map((slotNumber) => ({
+                    ...orderedSlotNumbers(side).map((slotNumber) => ({
                       code: wmsSlotCode(accountShortId!, warehouse.short_id, zone.short_id, sideNumber, pallet, slotNumber),
                       title: `КОРОБОМЕСТО K${slotNumber}`,
                       warehouseName: warehouse.name,
@@ -988,7 +1041,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                       </div>
                       <div className="mx-auto grid w-full max-w-xs gap-1.5 rounded-xl border-4 border-amber-200/70 bg-amber-50/40 p-2"
                         style={{ gridTemplateColumns: `repeat(${side.slot_columns}, minmax(0, 1fr))` }}>
-                        {Array.from({ length: side.slot_count }, (_, index) => index + 1).map((slotNumber) => {
+                        {orderedSlotNumbers(side).map((slotNumber) => {
                           const box = side.id ? occupiedBoxSlots.get(`${side.id}-${slotNumber}`) : undefined
                           const isMoving = box?.id === movingBoxId
                           const isTarget = placementTarget?.sideId === side.id && placementTarget?.slotNumber === slotNumber
@@ -1116,7 +1169,7 @@ function CellModal({ cell, zone, warehouse, accountId, accountShortId, zoneId, i
                         Место
                         <select value={assignmentSlotNumber} onChange={(event) => setAssignmentSlotNumber(event.target.value)}
                           className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-violet-400">
-                          {Array.from({ length: selectedAssignmentSide?.slot_count ?? 0 }, (_, index) => index + 1).map((slotNumber) => {
+                          {(selectedAssignmentSide ? orderedSlotNumbers(selectedAssignmentSide) : []).map((slotNumber) => {
                             const occupied = occupiedBoxSlots.get(`${assignmentSideId}-${slotNumber}`)
                             return <option key={slotNumber} value={slotNumber}>K{slotNumber}{occupied && occupied.id !== box.id ? ` — обмен с ${occupied.box_name}` : ''}</option>
                           })}
@@ -1346,7 +1399,7 @@ function ScanWorkspace({ location, pendingBox, error, success, busy, onScan, onS
                 </div>
                 <div className="mx-auto grid w-full max-w-lg gap-3 rounded-2xl border-[6px] border-amber-200/70 bg-amber-50 p-4"
                   style={{ gridTemplateColumns: `repeat(${location.slotColumns}, minmax(0, 1fr))` }}>
-                  {location.slots.map((slot) => {
+                  {orderedScanSlots(location).map((slot) => {
                     const selected = location.slotNumber === slot.number
                     return (
                       <button key={slot.number} type="button" onClick={() => onSelectSlot(slot.number)} disabled={busy}
@@ -1464,6 +1517,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
       ...prev,
       [warehouseId]: (data ?? []).map((zone: WmsZone) => ({
         ...zone,
+        row_number_direction: zone.row_number_direction ?? 'top_to_bottom',
         upright_mode: zone.upright_mode ?? 'interval',
         upright_every: zone.upright_every ?? 3,
         upright_after_cols: zone.upright_after_cols ?? intervalUprights(zone.cols, 3),
@@ -1674,6 +1728,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
         .from('wms_zones').select('*, sides:wms_zone_sides(*)').eq('warehouse_id', id).order('created_at')
       zones = (data ?? []).map((zone: WmsZone) => ({
         ...zone,
+        row_number_direction: zone.row_number_direction ?? 'top_to_bottom',
         upright_mode: zone.upright_mode ?? 'interval',
         upright_every: zone.upright_every ?? 3,
         upright_after_cols: zone.upright_after_cols ?? intervalUprights(zone.cols, 3),
@@ -1697,14 +1752,27 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     setScanSuccess('Фокус сканирования сброшен')
   }, [])
 
+  const withScanNumberingDirection = useCallback(async (location: WmsScanLocation) => {
+    if (!supabase) return location
+    const { data } = await (supabase as any)
+      .from('wms_zone_sides')
+      .select('slot_number_direction')
+      .eq('id', location.sideId)
+      .maybeSingle()
+    return {
+      ...location,
+      slotNumberDirection: data?.slot_number_direction ?? 'top_to_bottom',
+    } as WmsScanLocation
+  }, [])
+
   const refreshScanLocation = useCallback(async (code: string) => {
     if (!supabase) return null
     const { data, error } = await (supabase as any).rpc('get_wms_scan_target', { p_code: code })
     if (error) throw error
-    const result = data as WmsScanLocation
+    const result = await withScanNumberingDirection(data as WmsScanLocation)
     setScanLocation(result)
     return result
-  }, [])
+  }, [withScanNumberingDirection])
 
   const placeScannedBox = useCallback(async (box: WmsScanBox, location: WmsScanLocation, confirm?: 'move' | 'swap') => {
     if (!supabase || !location.slotNumber) return
@@ -1751,7 +1819,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
         else setScanSuccess(`Короб №${box.boxNumber} ожидает выбора адреса`)
         return
       }
-      const location = data as WmsScanLocation
+      const location = await withScanNumberingDirection(data as WmsScanLocation)
       setScanLocation(location)
       setSelectedZoneId(location.rackId)
       setExpandedWarehouseIds((previous) => new Set([...previous, location.warehouseId]))
@@ -1765,7 +1833,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     } finally {
       setScanBusy(false)
     }
-  }, [loadCells, loadZones, placeScannedBox, resetScan, scanBox, scanBusy, scanLocation])
+  }, [loadCells, loadZones, placeScannedBox, resetScan, scanBox, scanBusy, scanLocation, withScanNumberingDirection])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1927,6 +1995,8 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
         slot_count: side.slot_count,
         slot_columns: side.slot_columns,
         slot_rows: side.slot_rows,
+        slot_number_direction: side.slot_number_direction,
+        row_number_direction: settings.rowNumberDirection,
         position: side.position,
       })),
     })
@@ -2153,11 +2223,11 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
                           </tr>
                         </thead>
                         <tbody>
-                          {grid.map((rowCells, rowIdx) => (
-                            <tr key={rowIdx}>
+                          {(selectedZone.row_number_direction === 'bottom_to_top' ? [...grid].reverse() : grid).map((rowCells) => (
+                            <tr key={rowCells[0]?.row}>
                               {/* Row number */}
                               <td className="h-10 w-8 text-center text-xs font-bold text-slate-400">
-                                {rowIdx + 1}
+                                {rowCells[0]?.row}
                               </td>
                               {rowCells.map((vcell, cellIndex) => {
                                 const isSelected =
