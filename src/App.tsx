@@ -43,6 +43,7 @@ import { DiaryPage } from './pages/DiaryPage'
 import { TzPromptsPage } from './pages/TzPromptsPage'
 import { WmsPage } from './pages/WmsPage'
 import { FbsOrdersPage } from './pages/FbsOrdersPage'
+import { FbsInfoPage } from './pages/FbsInfoPage'
 import { FinanceReportPage } from './pages/FinanceReportPage'
 import { PromotionPage } from './pages/PromotionPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
@@ -315,6 +316,7 @@ function App() {
     if (storedPage && storedPage in PAGE_ROUTES) return storedPage as PageKey
     return 'home'
   })
+  const [fbsSection, setFbsSection] = useState<'orders' | 'info'>('orders')
   // short_id партии из URL — для авто-открытия модалки
   const [initialBatchShortId, setInitialBatchShortId] = useState<number | null>(
     () => parsedFulfillmentUrl?.batchShortId ?? null
@@ -782,6 +784,10 @@ function App() {
         <main className="flex flex-1 flex-col overflow-hidden">
           <Topbar
             title={pageTitles[effectivePage]}
+            pageTabs={effectivePage === 'fbs' && isSuperAdmin ? [
+              { label: 'FBS Заказы', active: fbsSection === 'orders', onClick: () => setFbsSection('orders') },
+              { label: 'Инфо', active: fbsSection === 'info', onClick: () => setFbsSection('info') },
+            ] : undefined}
             userName={profileUserName}
             userEmail={session?.user?.email ?? ''}
             isAdmin={isSupport}
@@ -1046,6 +1052,8 @@ function App() {
               ) : effectivePage === 'fbs' ? (
                 isPageGated('fbs') ? (
                   <PlanGatewall page="fbs" onUpgrade={() => setActivePage('subscription')} />
+                ) : isSuperAdmin && fbsSection === 'info' ? (
+                  <FbsInfoPage />
                 ) : (
                   <FbsOrdersPage stores={stores} accountId={activeAccount?.id ?? ''} />
                 )

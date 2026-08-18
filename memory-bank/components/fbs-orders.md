@@ -2,6 +2,7 @@
 
 ## Файлы
 - UI: `src/pages/FbsOrdersPage.tsx`
+- Статичная справка владельца сервиса: `src/pages/FbsInfoPage.tsx`
 - Edge Function: `supabase/functions/wb-fbs/index.ts`
 - Миграция/RPC: `supabase/patch_fbs_reliable_sync.sql`
 - Кэш: `fbs_orders`, `fbs_sync_log`
@@ -34,6 +35,7 @@
 - `error`.
 
 ## Вкладки
+- В верхней панели системный владелец (`platform_role=superadmin`) видит `FBS Заказы | Инфо`; остальные роли видят обычный заголовок без вкладок. Справочная страница не монтирует `FbsOrdersPage` и не выполняет запросы заказов WB.
 - `pending` / «Новые»: `supplierStatus=new`, `wbStatus=waiting`.
 - `assembling` / «На сборке»: `supplierStatus=confirm`, `wbStatus=waiting`.
 - `delivering` / «В доставке»: `supplierStatus=complete`, пока `wbStatus` не финальный.

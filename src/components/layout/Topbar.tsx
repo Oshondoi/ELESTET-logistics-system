@@ -4,6 +4,11 @@ import { supabase } from '../../lib/supabase'
 
 interface TopbarProps {
   title: string
+  pageTabs?: Array<{
+    label: string
+    active: boolean
+    onClick: () => void
+  }>
   userName: string
   userEmail: string
   isAdmin?: boolean
@@ -21,7 +26,7 @@ interface TopbarProps {
   onSignOut: () => void
 }
 
-export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onTzPromptsClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
+export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onTzPromptsClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
   const initial = userName ? userName.charAt(0).toUpperCase() : (userEmail ? userEmail.charAt(0).toUpperCase() : '?')
   const displayName = userName || userEmail || 'Профиль'
   const [open, setOpen] = useState(false)
@@ -75,7 +80,19 @@ export const Topbar = ({ title, userName, userEmail, isAdmin, activeAccountId, u
   return (
     <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-4">
       <div className="flex items-center gap-3">
-        <div className="text-xl font-semibold tracking-tight text-slate-900">{title}</div>
+        {pageTabs?.length ? (
+          <div className="flex h-12 items-stretch gap-5">
+            {pageTabs.map((tab) => (
+              <button key={tab.label} type="button" onClick={tab.onClick}
+                className={`relative cursor-pointer text-lg font-semibold tracking-tight transition-colors ${tab.active ? 'text-slate-900' : 'text-slate-400 hover:text-slate-700'}`}>
+                {tab.label}
+                {tab.active && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-violet-500" />}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xl font-semibold tracking-tight text-slate-900">{title}</div>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
