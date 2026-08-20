@@ -6118,6 +6118,22 @@ const BatchDetailModal = ({
                                                 )}
                                                 {canManageStageData && !item.id.startsWith('_opt_') && (
                                                   <>
+                                                    <button
+                                                      type="button"
+                                                      disabled={packingItemEdits[item.id] === undefined}
+                                                      onClick={() => {
+                                                        setPackingItemEdits((prev) => {
+                                                          const next = { ...prev }
+                                                          delete next[item.id]
+                                                          return next
+                                                        })
+                                                        window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
+                                                      }}
+                                                      title={packingItemEdits[item.id] === undefined ? 'Нет несохранённых изменений' : 'Отменить изменения'}
+                                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-red-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
+                                                    >
+                                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="m6 6 12 12M18 6 6 18" /></svg>
+                                                    </button>
                                                     {packingItemEdits[item.id] !== undefined ? (
                                                       <button
                                                         type="button"
@@ -6130,6 +6146,7 @@ const BatchDetailModal = ({
                                                             const saved = await updateBoxItem(item.id, { qty })
                                                             setSupplies((prev) => prev.map((s) => s.id === supply.id ? { ...s, boxes: s.boxes.map((b) => b.id === box.id ? { ...b, items: b.items.map((candidate) => candidate.id === item.id ? saved : candidate) } : b) } : s))
                                                             setPackingItemEdits((prev) => { const next = { ...prev }; delete next[item.id]; return next })
+                                                            window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
                                                           } catch (err) {
                                                             setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось сохранить количество')
                                                           } finally {
