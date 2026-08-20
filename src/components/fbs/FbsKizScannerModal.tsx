@@ -256,6 +256,37 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
+  // Аппаратный сканер работает как клавиатура. Даже если сотрудник случайно
+  // кликнул по заголовку, списку или кнопке, первый символ следующего скана
+  // возвращает ввод в единственное рабочее поле этой модалки.
+  useEffect(() => {
+    if (busy || loading || session?.status === 'completed') return
+
+    const focusInput = () => inputRef.current?.focus({ preventScroll: true })
+    const handleWindowFocus = () => window.requestAnimationFrame(focusInput)
+    const handleDocumentKeyDown = (event: KeyboardEvent) => {
+      const input = inputRef.current
+      if (!input || input.disabled || document.activeElement === input) return
+      if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return
+
+      if (event.key.length === 1) {
+        event.preventDefault()
+        input.focus({ preventScroll: true })
+        setValue((current) => current + event.key)
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        input.focus({ preventScroll: true })
+      }
+    }
+
+    window.addEventListener('focus', handleWindowFocus)
+    document.addEventListener('keydown', handleDocumentKeyDown, true)
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus)
+      document.removeEventListener('keydown', handleDocumentKeyDown, true)
+    }
+  }, [busy, loading, session?.status])
+
   const releasePending = async () => {
     if (!supabase || !session || busy) return
     setBusy(true)
@@ -352,7 +383,15 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-3" onClick={onClose}>
-      <div className="flex h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="flex h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        onPointerDownCapture={(event) => {
+          const target = event.target as HTMLElement
+          if (target.closest('input, textarea, select, button, a, [contenteditable="true"]')) return
+          window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
+        }}
+      >
         <header className="flex items-start justify-between border-b border-slate-100 px-6 py-4">
           <div>
             <h2 className="text-xl font-bold text-slate-900">Сканирование КИЗ</h2>

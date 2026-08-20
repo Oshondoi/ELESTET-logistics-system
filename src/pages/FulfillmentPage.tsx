@@ -1033,6 +1033,64 @@ const BatchDetailModal = ({
       ? false
       : (canManage || isPartnerExecutorOfActiveStage)
 
+  const activePackingBoxId = (() => {
+    if (!activeSupplyId) return null
+    const supply = supplies.find((candidate) => candidate.id === activeSupplyId)
+    if (!supply) return null
+    return supply.boxes.some((box) => box.id === packingOpenBoxId)
+      ? packingOpenBoxId
+      : (supply.boxes[0]?.id ?? null)
+  })()
+  const packingScannerBlocked = Boolean(
+    addBoxModal
+    || deleteBoxConfirm
+    || deleteBoxItemConfirm
+    || deleteSupplyConfirm
+    || boxExportDialog
+    || boxQrDialog
+    || transferSupplyId
+    || packingCameraOpen
+  )
+
+  // В модалке поставки аппаратный сканер всегда направлен в баркод активного
+  // короба. Другие текстовые/числовые поля сохраняют обычное ручное управление.
+  useEffect(() => {
+    if (!activePackingBoxId || !canManageStageData || packingScannerBlocked) return
+
+    const focusBarcode = () => packingBarcodeRef.current?.focus({ preventScroll: true })
+    const frame = window.requestAnimationFrame(focusBarcode)
+    const handleWindowFocus = () => window.requestAnimationFrame(focusBarcode)
+    const handleDocumentKeyDown = (event: KeyboardEvent) => {
+      const input = packingBarcodeRef.current
+      if (!input || input.disabled || document.activeElement === input) return
+      if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return
+
+      const target = event.target as HTMLElement | null
+      const userIsEditingAnotherField = Boolean(target?.closest('input, textarea, select, [contenteditable="true"]'))
+      if (userIsEditingAnotherField) return
+
+      if (event.key.length === 1) {
+        event.preventDefault()
+        input.focus({ preventScroll: true })
+        setPackingBoxBarcode((current) => ({
+          ...current,
+          [activePackingBoxId]: (current[activePackingBoxId] ?? '') + event.key,
+        }))
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        input.focus({ preventScroll: true })
+      }
+    }
+
+    window.addEventListener('focus', handleWindowFocus)
+    document.addEventListener('keydown', handleDocumentKeyDown, true)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('focus', handleWindowFocus)
+      document.removeEventListener('keydown', handleDocumentKeyDown, true)
+    }
+  }, [activePackingBoxId, canManageStageData, packingScannerBlocked, supplies])
+
   const handleCompletePipelineStage = async () => {
     if (!activePipelineStage) return
     setIsCompletingPipelineStage(true)
@@ -5869,7 +5927,15 @@ const BatchDetailModal = ({
                     const readyBoxSupply = isReadyBoxSupply(supply)
                     return (
                       <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onClick={() => setActiveSupplyId(null)}>
-                        <div className="relative flex h-[90vh] w-[80%] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                        <div
+                          className="relative flex h-[90vh] w-[80%] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+                          onClick={(e) => e.stopPropagation()}
+                          onPointerDownCapture={(event) => {
+                            const target = event.target as HTMLElement
+                            if (target.closest('input, textarea, select, button, a, [contenteditable="true"]')) return
+                            window.requestAnimationFrame(() => packingBarcodeRef.current?.focus({ preventScroll: true }))
+                          }}
+                        >
                           {/* Шапка модалки поставки */}
                           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
                             <div className="flex items-center gap-3">
