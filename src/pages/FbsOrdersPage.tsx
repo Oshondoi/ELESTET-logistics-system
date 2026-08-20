@@ -4,6 +4,8 @@ import JsBarcode from 'jsbarcode'
 import { supabase } from '../lib/supabase'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { triggerSync as triggerProductSync } from '../services/productService'
+import { invokeFbs } from '../services/fbsApi'
+import { FbsKizScannerModal } from '../components/fbs/FbsKizScannerModal'
 import type { Product, Store } from '../types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -75,6 +77,19 @@ interface WbSupply {
   ordersCount?: number
   done?: boolean
   createdAt?: string
+}
+
+interface FbsArchiveReport {
+  id: string
+  account_id: string
+  store_id: string
+  period_from: string
+  period_to: string
+  rows_count: number
+  order_ids: string[]
+  status: 'ready' | 'failed'
+  created_at: string
+  expires_at: string
 }
 
 interface StickerPrintOptions {
@@ -542,41 +557,56 @@ function buildProductBarcodeSticker(order: FbsOrder, sellerName: string): Sticke
   return losslessStickerPage(canvas, `product-barcode-${stickerVariantKey(order)}`)
 }
 
-async function invokeFbs(storeId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { data: { session } } = await supabase!.auth.getSession()
-  const token = session?.access_token ?? ''
-  const sbUrl = import.meta.env.VITE_SUPABASE_URL as string
-  const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
-  const res = await fetch(`${sbUrl}/functions/v1/wb-fbs`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: sbKey,
-    },
-    body: JSON.stringify({ ...body, store_id: storeId }),
-  })
-  const d = await res.json() as Record<string, unknown>
-  console.log('[wb-fbs]', res.status, d)
-  if (!res.ok || d?.error) throw new Error((d?.error as string) || `HTTP ${res.status}`)
-  return d
-}
-
 // ─── FbsOrdersPage ────────────────────────────────────────────────────────────
 
 type TabKey = 'pending' | 'assembling' | 'delivering' | 'completed' | 'cancelled' | 'archive'
+
+function isFinalFbsOrder(order: Pick<FbsOrder, 'supplierStatus' | 'wbSystemStatus'>): boolean {
+  return order.supplierStatus === 'cancel'
+    || ['sold', 'canceled', 'canceled_by_client', 'declined_by_client', 'defect'].includes(order.wbSystemStatus)
+}
+
+function isOfficialCompletedOrder(order: Pick<FbsOrder, 'supplierStatus' | 'wbSystemStatus' | 'createdAt'>): boolean {
+  if (!isFinalFbsOrder(order)) return false
+  const createdAt = new Date(order.createdAt)
+  if (Number.isNaN(createdAt.getTime())) return true
+  const retentionStart = new Date()
+  retentionStart.setMonth(retentionStart.getMonth() - 3)
+  return createdAt >= retentionStart
+}
+
+function isOfficialCancelledOrder(order: Pick<FbsOrder, 'wbSystemStatus' | 'isInLatestSnapshot'>): boolean {
+  return order.isInLatestSnapshot && order.wbSystemStatus === 'declined_by_client'
+}
+
+function isArchiveEligibleOrder(order: Pick<FbsOrder, 'supplierStatus' | 'wbSystemStatus' | 'createdAt'>): boolean {
+  if (!isFinalFbsOrder(order)) return false
+  const createdAt = new Date(order.createdAt)
+  if (Number.isNaN(createdAt.getTime())) return false
+  const retentionStart = new Date()
+  retentionStart.setMonth(retentionStart.getMonth() - 3)
+  return createdAt < retentionStart
+}
+
+function completedOrderStatusLabel(order: Pick<FbsOrder, 'supplierStatus' | 'wbSystemStatus'>): string {
+  if (order.wbSystemStatus === 'sold') return 'Товар выкуплен'
+  if (order.wbSystemStatus === 'canceled_by_client') return 'Покупатель отказался'
+  if (order.wbSystemStatus === 'declined_by_client') return 'Отменено покупателем'
+  if (order.wbSystemStatus === 'defect') return 'Найдены дефекты'
+  if (order.supplierStatus === 'cancel' || order.wbSystemStatus === 'canceled') return 'Отменено'
+  return 'Завершено'
+}
 
 function tabForOfficialWbStatus(
   supplierStatus: string,
   wbSystemStatus: string,
   isInLatestSnapshot: boolean,
 ): TabKey {
-  if (!isInLatestSnapshot) return 'archive'
   if (supplierStatus === 'new' && wbSystemStatus === 'waiting') return 'pending'
   if (supplierStatus === 'confirm' && wbSystemStatus === 'waiting') return 'assembling'
-  if (supplierStatus === 'cancel' || wbSystemStatus === 'declined_by_client' || wbSystemStatus === 'canceled') return 'cancelled'
+  if (wbSystemStatus === 'declined_by_client') return 'cancelled'
   if (wbSystemStatus === 'sold' || wbSystemStatus === 'canceled_by_client' || wbSystemStatus === 'defect') return 'completed'
-  if (supplierStatus === 'complete') return 'delivering'
+  if (isInLatestSnapshot && supplierStatus === 'complete') return 'delivering'
   return 'archive'
 }
 
@@ -607,11 +637,23 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     return (['pending','assembling','delivering','completed','cancelled','archive'].includes(saved ?? '') ? saved : 'pending') as TabKey
   })
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selectedSupplyIds, setSelectedSupplyIds] = useState<Set<string>>(new Set())
+  const [groupCompletedBySupplies, setGroupCompletedBySupplies] = useState(false)
+  const [archiveReports, setArchiveReports] = useState<FbsArchiveReport[]>([])
+  const [archivePeriodFrom, setArchivePeriodFrom] = useState(() => {
+    const date = new Date()
+    date.setFullYear(date.getFullYear() - 1)
+    return date.toISOString().slice(0, 10)
+  })
+  const [archivePeriodTo, setArchivePeriodTo] = useState(() => new Date().toISOString().slice(0, 10))
+  const [archiveBusy, setArchiveBusy] = useState(false)
+  const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [assembleModal, setAssembleModal] = useState<{ ids: string[]; mode: 'assemble' | 'move'; sourceSupplyIds: string[] } | null>(null)
   const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
   const [newSupplyName, setNewSupplyName] = useState('')
   const [openSupplies, setOpenSupplies] = useState<WbSupply[]>([])
+  const [closedSupplies, setClosedSupplies] = useState<WbSupply[]>([])
   const [loadingSupplies, setLoadingSupplies] = useState(false)
   const [orderMenuId, setOrderMenuId] = useState<string | null>(null)
   const [expandedSupplyIds, setExpandedSupplyIds] = useState<Set<string>>(new Set())
@@ -619,6 +661,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [stickerPrintModal, setStickerPrintModal] = useState<StickerPrintModal | null>(null)
   const [syncingProducts, setSyncingProducts] = useState(false)
   const [productSyncNotice, setProductSyncNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  const [kizScannerOpen, setKizScannerOpen] = useState(false)
   const syncInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
   const selectedStoreIdRef = useRef(selectedStoreId)
   const lastSyncedAtRef = useRef<Date | null>(null)
@@ -641,6 +684,31 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         setWbOffices([])
       })
   }, [selectedStoreId])
+
+  const loadArchiveReports = useCallback(async () => {
+    if (!supabase || !selectedStoreId) return
+    const now = new Date().toISOString()
+    await (supabase as any)
+      .from('fbs_archive_reports')
+      .delete()
+      .eq('store_id', selectedStoreId)
+      .lt('expires_at', now)
+    const { data, error: reportsError } = await (supabase as any)
+      .from('fbs_archive_reports')
+      .select('*')
+      .eq('store_id', selectedStoreId)
+      .gt('expires_at', now)
+      .order('created_at', { ascending: false })
+    if (reportsError) throw reportsError
+    setArchiveReports((data ?? []) as FbsArchiveReport[])
+  }, [selectedStoreId])
+
+  useEffect(() => {
+    if (activeTab !== 'archive') return
+    void loadArchiveReports().catch((reportError) => {
+      setArchiveNotice(`Не удалось загрузить архивные отчёты: ${String(reportError)}`)
+    })
+  }, [activeTab, loadArchiveReports])
 
   const enrichWithCells = useCallback(async (rawOrders: FbsOrder[]): Promise<FbsOrder[]> => {
     if (!supabase || rawOrders.length === 0) return rawOrders
@@ -796,6 +864,19 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       })))
   }, [selectedStoreId])
 
+  const loadClosedSupplies = useCallback(async () => {
+    if (!selectedStoreId) return
+    const d = await invokeFbs(selectedStoreId, { action: 'get_supplies', closed: true, limit: 1000 })
+    const sups = (d.supplies ?? d ?? []) as any[]
+    setClosedSupplies(sups.map((s: any) => ({
+      id: s.id,
+      name: s.name || s.id,
+      ordersCount: s.ordersCount,
+      done: s.done,
+      createdAt: s.createdAt ?? s.created_at,
+    })))
+  }, [selectedStoreId])
+
   // Синк с WB → upsert в fbs_orders → перечитываем из DB
   const doSync = useCallback((): Promise<void> => {
     if (!selectedStoreId) return Promise.resolve()
@@ -808,7 +889,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       setError(null)
       try {
         const result = await invokeFbs(storeId, { action: 'sync_orders' })
-        await Promise.all([readFromDb(), loadOpenSupplies()])
+        await Promise.all([readFromDb(), loadOpenSupplies(), loadClosedSupplies()])
         const serverSyncTime = typeof result.last_synced_at === 'string' ? new Date(result.last_synced_at) : null
         if (result.partial === true) {
           setError(staleDataMessage(serverSyncTime ?? lastSyncedAtRef.current))
@@ -829,7 +910,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       if (syncInFlightRef.current.get(storeId) === syncPromise) syncInFlightRef.current.delete(storeId)
     })
     return syncPromise
-  }, [selectedStoreId, readFromDb, loadOpenSupplies])
+  }, [selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies])
 
   const handleProductSync = async () => {
     if (!selectedStoreId || syncingProducts) return
@@ -856,6 +937,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   useEffect(() => {
     if (!selectedStoreId) return
     void loadOpenSupplies().catch(() => setOpenSupplies([]))
+    void loadClosedSupplies().catch(() => setClosedSupplies([]))
     void readFromDb()
       .then(() => {
         const previousSync = lastSyncedAtRef.current
@@ -954,6 +1036,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       // Статус меняет только WB: сначала передаём целую поставку в доставку.
       await invokeFbs(selectedStoreId, { action: 'deliver_supply', supply_id: supplyId })
       setSelected(new Set())
+      setSelectedSupplyIds(new Set())
       await Promise.all([doSync(), loadOpenSupplies()])
     } catch (e) { alert(String(e)) }
     finally { setBusyIds((s) => { const n = new Set(s); ids.forEach((i) => n.delete(i)); return n }) }
@@ -1223,6 +1306,116 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     )
   }
 
+  const fbsOrdersExportRows = (ordersToExport: FbsOrder[]) => ordersToExport.map((order) => {
+    const warehouse = wbWarehouseInfo(order)
+    return {
+      'Заказ №': order.id,
+      'Дата заказа': order.createdAt ? new Date(order.createdAt).toLocaleString('ru-RU') : '',
+      'Статус': completedOrderStatusLabel(order),
+      'Артикул WB': order.nmId,
+      'Артикул продавца': order.productVendorCode || order.article || '',
+      'Товар': order.productName || '',
+      'Бренд': order.productBrand || '',
+      'Размер': order.productSize || '',
+      'Баркод': order.productBarcode || fbsOrderBarcode(order) || '',
+      'Поставка WB': order.supply_id || '',
+      'Склад продавца': warehouse.sellerName,
+      'Склад приёмки WB': warehouse.officialName,
+    }
+  })
+
+  const downloadFbsOrdersExcel = async (ordersToExport: FbsOrder[], sheetName: string, filename: string) => {
+    const XLSX = await import('xlsx')
+    const rows = fbsOrdersExportRows(ordersToExport)
+    const sheet = rows.length > 0
+      ? XLSX.utils.json_to_sheet(rows)
+      : XLSX.utils.aoa_to_sheet([['Заказ №', 'Дата заказа', 'Статус', 'Артикул WB', 'Артикул продавца', 'Товар', 'Бренд', 'Размер', 'Баркод', 'Поставка WB', 'Склад продавца', 'Склад приёмки WB']])
+    sheet['!cols'] = [
+      { wch: 16 }, { wch: 20 }, { wch: 24 }, { wch: 14 }, { wch: 24 }, { wch: 42 },
+      { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 20 }, { wch: 24 }, { wch: 28 },
+    ]
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, sheetName)
+    XLSX.writeFile(workbook, filename)
+  }
+
+  const downloadCompletedOrdersExcel = async (ordersToExport: FbsOrder[]) => {
+    if (ordersToExport.length === 0) return
+    await downloadFbsOrdersExcel(
+      ordersToExport,
+      'Завершённые',
+      `FBS_Завершённые_${new Date().toLocaleDateString('ru-RU').replace(/\./g, '-')}.xlsx`,
+    )
+  }
+
+  const createArchiveReport = async () => {
+    if (!supabase || !selectedStoreId || archiveBusy) return
+    if (!archivePeriodFrom || !archivePeriodTo || archivePeriodFrom > archivePeriodTo) {
+      setArchiveNotice('Проверьте период: дата начала должна быть не позже даты окончания.')
+      return
+    }
+    if (archiveReports.length >= 100) {
+      setArchiveNotice('Достигнут лимит: одновременно можно хранить не больше 100 отчётов.')
+      return
+    }
+    setArchiveBusy(true)
+    setArchiveNotice(null)
+    try {
+      const reportOrders = orders.filter((order) => {
+        if (!isArchiveEligibleOrder(order) || !order.createdAt) return false
+        const orderDate = new Date(order.createdAt).toISOString().slice(0, 10)
+        return orderDate >= archivePeriodFrom && orderDate <= archivePeriodTo
+      })
+      const { error: insertError } = await (supabase as any)
+        .from('fbs_archive_reports')
+        .insert({
+          account_id: accountId,
+          store_id: selectedStoreId,
+          period_from: archivePeriodFrom,
+          period_to: archivePeriodTo,
+          rows_count: reportOrders.length,
+          order_ids: reportOrders.map((order) => order.id),
+          status: 'ready',
+        })
+      if (insertError) throw insertError
+      await loadArchiveReports()
+      setArchiveNotice(`Отчёт сформирован: ${reportOrders.length} заказов.`)
+    } catch (reportError) {
+      setArchiveNotice(`Не удалось сформировать отчёт: ${String(reportError)}`)
+    } finally {
+      setArchiveBusy(false)
+    }
+  }
+
+  const downloadArchiveReport = async (report: FbsArchiveReport) => {
+    const reportOrderIds = new Set(report.order_ids.map(String))
+    const reportOrders = orders.filter((order) => reportOrderIds.has(order.id))
+    await downloadFbsOrdersExcel(
+      reportOrders,
+      'Архив FBS',
+      `FBS_Архив_${report.period_from}_${report.period_to}.xlsx`,
+    )
+  }
+
+  const deleteArchiveReport = async (reportId: string) => {
+    if (!supabase || archiveBusy) return
+    setArchiveBusy(true)
+    setArchiveNotice(null)
+    try {
+      const { error: deleteError } = await (supabase as any)
+        .from('fbs_archive_reports')
+        .delete()
+        .eq('id', reportId)
+        .eq('store_id', selectedStoreId)
+      if (deleteError) throw deleteError
+      setArchiveReports((current) => current.filter((report) => report.id !== reportId))
+    } catch (reportError) {
+      setArchiveNotice(`Не удалось удалить отчёт: ${String(reportError)}`)
+    } finally {
+      setArchiveBusy(false)
+    }
+  }
+
   // ─── No stores guard ────────────────────────────────────────────────────────
 
   if (storesWithKey.length === 0) {
@@ -1245,26 +1438,47 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     { key: 'cancelled',  label: 'Отменённые' },
     { key: 'archive',    label: 'Архив' },
   ]
-  const tabOrders = orders.filter((o) => o.shipStatus === activeTab)
+  const completedOrders = orders.filter(isOfficialCompletedOrder)
+  const cancelledOrders = orders.filter(isOfficialCancelledOrder)
+  const archiveEligibleOrders = orders.filter(isArchiveEligibleOrder)
+  const tabOrders = activeTab === 'completed'
+    ? completedOrders
+    : activeTab === 'cancelled'
+      ? cancelledOrders
+      : activeTab === 'archive'
+        ? []
+        : orders.filter((o) => o.shipStatus === activeTab)
   const ordersWithoutSize = tabOrders.filter((order) => !order.productSize)
   const selectedTab = tabOrders.filter((o) => selected.has(o.id))
   const allTabSelected = tabOrders.length > 0 && tabOrders.every((o) => selected.has(o.id))
 
-  const toggleSelect = (id: string) => setSelected((s) => {
-    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
-  })
-  const toggleAll = () => setSelected(allTabSelected ? new Set() : new Set(tabOrders.map((o) => o.id)))
-  const toggleSupplySelection = (supplyOrders: FbsOrder[]) => setSelected((previous) => {
-    const ids = supplyOrders.map((order) => order.id)
-    const allSelected = ids.length > 0 && ids.every((id) => previous.has(id))
-    return allSelected ? new Set() : new Set(ids)
-  })
-  const toggleSupplyOrderSelection = (orderId: string, supplyOrders: FbsOrder[]) => setSelected((previous) => {
-    const supplyIds = new Set(supplyOrders.map((order) => order.id))
-    const next = new Set(Array.from(previous).filter((id) => supplyIds.has(id)))
-    next.has(orderId) ? next.delete(orderId) : next.add(orderId)
-    return next
-  })
+  const toggleSelect = (id: string) => {
+    setSelectedSupplyIds(new Set())
+    setSelected((s) => {
+      const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n
+    })
+  }
+  const toggleAll = () => {
+    setSelectedSupplyIds(new Set())
+    setSelected(allTabSelected ? new Set() : new Set(tabOrders.map((o) => o.id)))
+  }
+  const toggleSupplySelection = (supplyOrders: FbsOrder[]) => {
+    setSelectedSupplyIds(new Set())
+    setSelected((previous) => {
+      const ids = supplyOrders.map((order) => order.id)
+      const allSelected = ids.length > 0 && ids.every((id) => previous.has(id))
+      return allSelected ? new Set() : new Set(ids)
+    })
+  }
+  const toggleSupplyOrderSelection = (orderId: string, supplyOrders: FbsOrder[]) => {
+    setSelectedSupplyIds(new Set())
+    setSelected((previous) => {
+      const supplyIds = new Set(supplyOrders.map((order) => order.id))
+      const next = new Set(Array.from(previous).filter((id) => supplyIds.has(id)))
+      next.has(orderId) ? next.delete(orderId) : next.add(orderId)
+      return next
+    })
+  }
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -1274,7 +1488,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
         <select
           value={selectedStoreId}
-          onChange={(e) => { setSelectedStoreId(e.target.value); localStorage.setItem(lsKey, e.target.value); setOrders([]); setOpenSupplies([]); setSelected(new Set()); setProductSyncNotice(null); setError(null); setLastSyncedAt(null); lastSyncedAtRef.current = null }}
+          onChange={(e) => { setSelectedStoreId(e.target.value); localStorage.setItem(lsKey, e.target.value); setOrders([]); setOpenSupplies([]); setClosedSupplies([]); setArchiveReports([]); setArchiveNotice(null); setSelected(new Set()); setSelectedSupplyIds(new Set()); setProductSyncNotice(null); setError(null); setLastSyncedAt(null); lastSyncedAtRef.current = null }}
           className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-violet-400"
         >
           {storesWithKey.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -1286,6 +1500,12 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
             ? <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="31" strokeDashoffset="10"/></svg>
             : <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>}
           {loading ? 'Загрузка...' : 'Обновить'}
+        </button>
+
+        <button type="button" onClick={() => setKizScannerOpen(true)} disabled={!selectedStoreId}
+          className="flex h-8 items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-4 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 disabled:opacity-40">
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 5v4M3 5h4M21 5v4M21 5h-4M3 19v-4M3 19h4M21 19v-4M21 19h-4"/><path d="M7 12h10"/></svg>
+          Сканировать КИЗ
         </button>
 
         {/* Массовые действия */}
@@ -1300,7 +1520,21 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-200 bg-white px-5">
         {tabs.map(({ key, label }) => {
-          const count = orders.filter((o) => o.shipStatus === key).length
+          // WB keeps all non-final complete orders inside "В доставке", but its
+          // tab badge counts only orders not received by Wildberries yet.
+          const count: number | null = key === 'delivering'
+            ? orders.filter((order) => (
+              order.isInLatestSnapshot
+              && order.supplierStatus === 'complete'
+              && order.wbSystemStatus === 'waiting'
+            )).length
+            : key === 'completed'
+              ? completedOrders.length
+              : key === 'cancelled'
+                ? cancelledOrders.length
+                : key === 'archive'
+                  ? null
+                  : orders.filter((order) => order.shipStatus === key).length
           return (
             <button key={key} type="button"
               onClick={() => {
@@ -1308,12 +1542,13 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                 setActiveTab(newTab)
                 localStorage.setItem(tabLsKey, newTab)
                 setSelected(new Set())
+                setSelectedSupplyIds(new Set())
               }}
               className={`flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-xs font-semibold transition ${
                 activeTab === key ? 'border-violet-500 text-violet-600' : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}>
               {label}
-              {count > 0 && (
+              {count !== null && count > 0 && (
                 <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
                   key === 'pending' ? 'bg-blue-100 text-blue-600' :
                   key === 'assembling' ? 'bg-amber-100 text-amber-600' :
@@ -1327,6 +1562,36 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           )
         })}
       </div>
+
+      {activeTab === 'completed' && (
+        <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-3">
+          <label className="flex cursor-pointer items-center gap-2.5 text-xs font-medium text-slate-600">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={groupCompletedBySupplies}
+              onClick={() => {
+                setGroupCompletedBySupplies((current) => !current)
+                setSelected(new Set())
+                setSelectedSupplyIds(new Set())
+              }}
+              className={`relative h-5 w-9 rounded-full transition ${groupCompletedBySupplies ? 'bg-violet-500' : 'bg-slate-300'}`}
+            >
+              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${groupCompletedBySupplies ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+            </button>
+            Сгруппировать по поставкам
+          </label>
+          <button
+            type="button"
+            disabled={completedOrders.length === 0}
+            onClick={() => void downloadCompletedOrdersExcel(completedOrders)}
+            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            Выгрузить в Excel
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="mx-5 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
@@ -1358,26 +1623,171 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         </div>
       )}
 
-      {!loading && tabOrders.length === 0 && !(activeTab === 'assembling' && openSupplies.length > 0) && !error && (
+      {activeTab === 'archive' && (
+        <div className="flex-1 overflow-auto bg-slate-50 p-5">
+          <div className="mx-auto max-w-6xl space-y-4">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">Архив заказов FBS</h2>
+                  <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">
+                    Сформируйте Excel по финальным заказам старше трёх месяцев. Отчёт хранится 7 дней и фиксирует состав заказов на момент создания.
+                  </p>
+                </div>
+                <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
+                  Доступно заказов: <span className="font-bold text-slate-900">{archiveEligibleOrders.length}</span>
+                </div>
+              </div>
+              <div className="mt-5 flex flex-wrap items-end gap-3">
+                <label className="space-y-1.5 text-xs font-semibold text-slate-600">
+                  <span className="block">Дата начала</span>
+                  <input
+                    type="date"
+                    value={archivePeriodFrom}
+                    max={archivePeriodTo}
+                    onChange={(event) => setArchivePeriodFrom(event.target.value)}
+                    className="h-9 rounded-xl border border-slate-200 px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
+                  />
+                </label>
+                <label className="space-y-1.5 text-xs font-semibold text-slate-600">
+                  <span className="block">Дата окончания</span>
+                  <input
+                    type="date"
+                    value={archivePeriodTo}
+                    min={archivePeriodFrom}
+                    max={new Date().toISOString().slice(0, 10)}
+                    onChange={(event) => setArchivePeriodTo(event.target.value)}
+                    className="h-9 rounded-xl border border-slate-200 px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={archiveBusy || archiveReports.length >= 100}
+                  onClick={() => void createArchiveReport()}
+                  className="flex h-9 cursor-pointer items-center gap-2 rounded-xl bg-violet-500 px-4 text-xs font-semibold text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {archiveBusy
+                    ? <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="31" strokeDashoffset="10"/></svg>
+                    : <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  Сформировать файл
+                </button>
+              </div>
+              <p className="mt-3 text-[11px] text-slate-400">
+                Архив содержит данные, которые сервис успел сохранить из API WB. Лимит — 100 действующих отчётов на магазин.
+              </p>
+              {archiveNotice && (
+                <div className="mt-3 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">{archiveNotice}</div>
+              )}
+            </section>
+
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                <h3 className="text-sm font-bold text-slate-900">Сформированные отчёты</h3>
+                <span className="text-xs text-slate-400">{archiveReports.length} из 100</span>
+              </div>
+              {archiveReports.length === 0 ? (
+                <div className="px-5 py-12 text-center text-sm text-slate-400">Пока нет сформированных отчётов</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="px-5 py-3 text-left font-semibold">Статус</th>
+                        <th className="px-5 py-3 text-left font-semibold">Период заказов</th>
+                        <th className="px-5 py-3 text-left font-semibold">Заказов</th>
+                        <th className="px-5 py-3 text-left font-semibold">Создан</th>
+                        <th className="px-5 py-3 text-left font-semibold">Хранение</th>
+                        <th className="px-5 py-3 text-right font-semibold">Действия</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {archiveReports.map((report) => {
+                        const daysLeft = Math.max(1, Math.ceil((new Date(report.expires_at).getTime() - Date.now()) / 86_400_000))
+                        return (
+                          <tr key={report.id} className="border-b border-slate-100 last:border-0">
+                            <td className="px-5 py-3"><span className="rounded-lg bg-emerald-100 px-2.5 py-1 font-semibold text-emerald-700">Готов</span></td>
+                            <td className="px-5 py-3 font-medium text-slate-700">{new Date(`${report.period_from}T00:00:00`).toLocaleDateString('ru-RU')} — {new Date(`${report.period_to}T00:00:00`).toLocaleDateString('ru-RU')}</td>
+                            <td className="px-5 py-3 font-semibold text-slate-900">{report.rows_count}</td>
+                            <td className="px-5 py-3 text-slate-500">{new Date(report.created_at).toLocaleString('ru-RU')}</td>
+                            <td className="px-5 py-3 text-slate-500">Удалится через {daysLeft} дн.</td>
+                            <td className="px-5 py-3">
+                              <div className="flex justify-end gap-2">
+                                <button type="button" title="Скачать XLSX" onClick={() => void downloadArchiveReport(report)} className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 px-3 font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700">
+                                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                  XLSX
+                                </button>
+                                <button type="button" title="Удалить отчёт" disabled={archiveBusy} onClick={() => void deleteArchiveReport(report.id)} className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl border border-slate-200 text-slate-400 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-40">
+                                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 10v6m4-6v6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      )}
+
+      {!loading && activeTab !== 'archive' && tabOrders.length === 0 && !(activeTab === 'assembling' && openSupplies.length > 0) && !error && (
         <div className="flex h-full items-center justify-center text-sm text-slate-400">
           {orders.length === 0 ? 'Загрузка...' : `Нет заказов в статусе "${tabs.find(t => t.key === activeTab)?.label}"`}
         </div>
       )}
 
-      {(tabOrders.length > 0 || openSupplies.length > 0) && activeTab === 'assembling' && (() => {
-        // Основой списка служат поставки WB, включая пустые; заказы вкладываются по supply_id
+      {((activeTab === 'assembling' && (tabOrders.length > 0 || openSupplies.length > 0)) || (activeTab === 'delivering' && tabOrders.length > 0) || (activeTab === 'completed' && groupCompletedBySupplies && tabOrders.length > 0)) && (() => {
+        const isAssemblingTab = activeTab === 'assembling'
+        const isCompletedGroupedTab = activeTab === 'completed'
+        // На сборке показываем и пустые открытые поставки. В доставке — только
+        // активные родительские поставки, найденные у заказов текущей вкладки.
         const supplyGroups = new Map<string, { supply: WbSupply | null; orders: FbsOrder[] }>()
-        openSupplies.forEach((supply) => supplyGroups.set(supply.id, { supply, orders: [] }))
+        if (isAssemblingTab) openSupplies.forEach((supply) => supplyGroups.set(supply.id, { supply, orders: [] }))
         tabOrders.forEach((o) => {
           const key = o.supply_id ?? '__none__'
-          if (!supplyGroups.has(key)) supplyGroups.set(key, { supply: null, orders: [] })
+          const supplyDirectory = isAssemblingTab ? openSupplies : closedSupplies
+          if (!supplyGroups.has(key)) supplyGroups.set(key, {
+            supply: supplyDirectory.find((supply) => supply.id === key) ?? null,
+            orders: [],
+          })
           supplyGroups.get(key)!.orders.push(o)
         })
+        const supplyGroupEntries = Array.from(supplyGroups.entries())
+        const selectableSupplyIds = supplyGroupEntries
+          .map(([supplyId]) => supplyId)
+          .filter((supplyId) => supplyId !== '__none__')
+        const selectedParentCount = selectableSupplyIds.filter((supplyId) => selectedSupplyIds.has(supplyId)).length
+        const selectedParentEntry = selectedParentCount === 1
+          ? supplyGroupEntries.find(([supplyId]) => selectedSupplyIds.has(supplyId))
+          : undefined
+        const allParentsSelected = selectableSupplyIds.length > 0 && selectedParentCount === selectableSupplyIds.length
+        const someParentsSelected = selectedParentCount > 0 && !allParentsSelected
+        const toggleAllParents = () => {
+          setSelected(new Set())
+          setPickingListMenuOpen(false)
+          setSelectedSupplyIds(allParentsSelected ? new Set() : new Set(selectableSupplyIds))
+        }
         return (
           <div className="flex-1 overflow-auto">
-            {Array.from(supplyGroups.entries()).map(([supplyId, group]) => {
+            <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
+              <input
+                type="checkbox"
+                title="Выбрать все поставки"
+                aria-label="Выбрать все поставки"
+                ref={(element) => { if (element) element.indeterminate = someParentsSelected }}
+                checked={allParentsSelected}
+                onChange={toggleAllParents}
+                className="ml-[26px] h-3.5 w-3.5 cursor-pointer rounded accent-violet-500"
+              />
+              <span className="text-xs font-semibold text-slate-500">Поставка</span>
+            </div>
+            {supplyGroupEntries.map(([supplyId, group]) => {
               const { supply, orders: supplyOrders } = group
               const isExpanded = expandedSupplyIds.has(supplyId)
+              const isParentSelected = selectedSupplyIds.has(supplyId)
               const selectedSupplyOrders = supplyOrders.filter((order) => selected.has(order.id))
               const allSupplySelected = supplyOrders.length > 0 && selectedSupplyOrders.length === supplyOrders.length
               const someSupplySelected = selectedSupplyOrders.length > 0 && !allSupplySelected
@@ -1391,16 +1801,37 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                 }
                 setExpandedSupplyIds((prev) => { const n = new Set(prev); n.has(supplyId) ? n.delete(supplyId) : n.add(supplyId); return n })
               }
+              const toggleParentSelection = () => {
+                if (supplyId === '__none__') return
+                setSelected(new Set())
+                setPickingListMenuOpen(false)
+                setSelectedSupplyIds((previous) => {
+                  const next = new Set(previous)
+                  next.has(supplyId) ? next.delete(supplyId) : next.add(supplyId)
+                  return next
+                })
+              }
               const wh = supplyOrders.length > 0
                 ? (wbWarehouses.find((warehouse) => Number(warehouse.id) === Number(supplyOrders[0].warehouseId))?.name || '')
                 : ''
               return (
                 <div key={supplyId} className="border-b border-slate-200">
                   {/* Строка поставки (родитель) */}
-                  <div className="flex cursor-pointer items-center gap-3 bg-white px-4 py-3 hover:bg-slate-50 transition-colors" onClick={toggle}>
+                  <div className={`flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors ${isParentSelected ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'}`} onClick={toggle}>
                     <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 flex-shrink-0 text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M9 18l6-6-6-6" />
                     </svg>
+                    {supplyId !== '__none__' ? (
+                      <input
+                        type="checkbox"
+                        title="Выбрать поставку"
+                        aria-label={`Выбрать поставку ${supply?.name || supplyId}`}
+                        checked={isParentSelected}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={toggleParentSelection}
+                        className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded accent-violet-500"
+                      />
+                    ) : <span className="h-3.5 w-3.5 shrink-0" />}
                     <div className="flex flex-1 items-center gap-4 min-w-0">
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-slate-800 truncate">{supplyId === '__none__' ? 'Без поставки' : (supply?.name || supplyId)}</p>
@@ -1411,7 +1842,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">{supplyOrders.length} зак.</span>
                       {wh && <span className="text-xs text-slate-400">{wh}</span>}
                     </div>
-                    {supplyId !== '__none__' && supplyOrders.length > 0 && (
+                    {!isCompletedGroupedTab && supplyId !== '__none__' && supplyOrders.length > 0 && (
                       <div className="flex items-center gap-2">
                         <button type="button" title="Распечатать стикеры поставки" aria-label="Распечатать стикеры поставки"
                           disabled={busyIds.size > 0}
@@ -1419,14 +1850,16 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                           className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-wait disabled:opacity-40">
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                         </button>
-                        <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
-                          disabled={busyIds.size > 0}
-                          onClick={(e) => { e.stopPropagation(); void handleShip(supplyId, supplyOrders) }}
-                          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-wait disabled:opacity-40">
-                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M5 12h14m-5-5 5 5-5 5" />
-                          </svg>
-                        </button>
+                        {isAssemblingTab && (
+                          <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
+                            disabled={busyIds.size > 0}
+                            onClick={(e) => { e.stopPropagation(); void handleShip(supplyId, supplyOrders) }}
+                            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-wait disabled:opacity-40">
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M5 12h14m-5-5 5 5-5 5" />
+                            </svg>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1455,7 +1888,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                               <th className="px-4 py-2 text-left font-semibold">Адрес товара / Баркод</th>
                               <th className="px-4 py-2 text-left font-semibold">Время</th>
                               <th className="px-4 py-2 text-left font-semibold">Склад FBS</th>
-                              <th className="px-4 py-2 text-left font-semibold">Действия</th>
+                              <th className="px-4 py-2 text-left font-semibold">{isCompletedGroupedTab ? 'Статус' : 'Действия'}</th>
                             </tr>
                           </thead>
                         <tbody>
@@ -1499,7 +1932,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                 <td className="max-w-48 px-4 py-2">{renderWbWarehouseCell(order)}</td>
                                 <td className="px-4 py-2">
                                   <div className="flex items-center gap-1.5">
-                                    {supplyId !== '__none__' && (
+                                    {isAssemblingTab && supplyId !== '__none__' && (
                                       <button
                                         type="button"
                                         title="Перенести в другую поставку"
@@ -1512,10 +1945,23 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                         </svg>
                                       </button>
                                     )}
-                                    <button type="button" title="Выбрать стикеры для печати" disabled={isBusy} onClick={() => openStickerPrintModal([order], null, 'selected')}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
-                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-                                    </button>
+                                    {!isCompletedGroupedTab && (
+                                      <button type="button" title="Выбрать стикеры для печати" disabled={isBusy} onClick={() => openStickerPrintModal([order], null, 'selected')}
+                                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
+                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                                      </button>
+                                    )}
+                                    {isCompletedGroupedTab && (
+                                      <span className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                                        order.wbSystemStatus === 'sold'
+                                          ? 'bg-emerald-100 text-emerald-700'
+                                          : order.wbSystemStatus === 'defect'
+                                            ? 'bg-rose-100 text-rose-700'
+                                            : 'bg-orange-100 text-orange-700'
+                                      }`}>
+                                        {completedOrderStatusLabel(order)}
+                                      </span>
+                                    )}
                                   </div>
                                 </td>
                               </tr>
@@ -1523,7 +1969,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                           })}
                         </tbody>
                         </table>
-                        {selectedSupplyOrders.length > 0 && (
+                        {selectedSupplyOrders.length > 0 && !isCompletedGroupedTab && (
                           <>
                           <div className="pointer-events-none fixed inset-0 z-30 bg-slate-950/10" />
                           <div className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_12px_40px_rgba(15,23,42,0.24)]">
@@ -1539,7 +1985,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                               Печать
                             </button>
-                            {supplyId !== '__none__' && (
+                            {isAssemblingTab && supplyId !== '__none__' && (
                               <button
                                 type="button"
                                 disabled={busyIds.size > 0}
@@ -1586,26 +2032,71 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                 </div>
               )
             })}
+            {selectedParentCount > 0 && (
+              <>
+                <div className="pointer-events-none fixed inset-0 z-30 bg-slate-950/10" />
+                <div className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5 shadow-[0_12px_40px_rgba(15,23,42,0.24)]">
+                  <span className="whitespace-nowrap px-2 text-xs font-semibold text-slate-700">
+                    Выбрано поставок: {selectedParentCount}
+                  </span>
+                  {!isCompletedGroupedTab && selectedParentEntry && selectedParentEntry[1].orders.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={busyIds.size > 0}
+                      onClick={() => {
+                        const [supplyId, group] = selectedParentEntry
+                        openStickerPrintModal(group.orders, group.supply ?? { id: supplyId, name: supplyId }, 'supply')
+                      }}
+                      className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-wait disabled:opacity-40"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                      Печать
+                    </button>
+                  )}
+                  {isAssemblingTab && selectedParentEntry && selectedParentEntry[1].orders.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={busyIds.size > 0}
+                      onClick={() => void handleShip(selectedParentEntry[0], selectedParentEntry[1].orders)}
+                      className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-emerald-200 px-3 text-xs font-semibold text-emerald-600 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-40"
+                    >
+                      Передать в доставку
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    title="Снять выбор поставок"
+                    aria-label="Снять выбор поставок"
+                    onClick={() => setSelectedSupplyIds(new Set())}
+                    className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 6 12 12M18 6 6 18" strokeLinecap="round"/></svg>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )
       })()}
 
-      {tabOrders.length > 0 && activeTab !== 'assembling' && (
+      {tabOrders.length > 0 && activeTab !== 'assembling' && activeTab !== 'delivering' && !(activeTab === 'completed' && groupCompletedBySupplies) && (
         <div className="flex-1 overflow-auto">
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-white">
               <tr>
-                <th className="px-3 py-3">
-                  <input type="checkbox" checked={allTabSelected} onChange={toggleAll}
-                    className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
-                </th>
+                {activeTab !== 'completed' && activeTab !== 'cancelled' && (
+                  <th className="px-3 py-3">
+                    <input type="checkbox" checked={allTabSelected} onChange={toggleAll}
+                      className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
+                  </th>
+                )}
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Заказ / Артикул WB</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Товар</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Адрес товара / Баркод</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-500">Кол-во</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Склад FBS</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Время</th>
-                <th className="px-4 py-3" />
+                <th className="px-4 py-3 text-left font-semibold text-slate-500">{activeTab === 'completed' || activeTab === 'cancelled' ? 'Статус' : ''}</th>
               </tr>
             </thead>
             <tbody>
@@ -1616,10 +2107,12 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                 return (
                   <tr key={order.id}
                     className={`border-b border-slate-100 transition ${isChecked ? 'bg-violet-50' : 'hover:bg-slate-50'}`}>
-                    <td className="px-3 py-2">
-                      <input type="checkbox" checked={isChecked} onChange={() => toggleSelect(order.id)}
-                        className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
-                    </td>
+                    {activeTab !== 'completed' && activeTab !== 'cancelled' && (
+                      <td className="px-3 py-2">
+                        <input type="checkbox" checked={isChecked} onChange={() => toggleSelect(order.id)}
+                          className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <OrderIdentityCell order={order} />
                     </td>
@@ -1653,18 +2146,6 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                     <td className={`px-4 py-3 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
-                        {/* Стикер — скрыт на табе Новые, WB не выдаёт стикеры до перевода в сборку */}
-                        {(activeTab === 'delivering' || activeTab === 'completed') && (
-                          <button type="button" title="Выбрать стикеры для печати" disabled={isBusy}
-                            onClick={() => openStickerPrintModal([order], null, 'selected')}
-                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
-                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                              <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-                              <rect x="6" y="14" width="12" height="8"/>
-                            </svg>
-
-                          </button>
-                        )}
                         {/* Действия для Новых — 3-точечное меню */}
                         {activeTab === 'pending' && (
                           <div className="relative">
@@ -1692,7 +2173,20 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                           </div>
                         )}
                         {activeTab === 'completed' && (
-                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">✓</span>
+                          <span className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                            order.wbSystemStatus === 'sold'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : order.wbSystemStatus === 'defect'
+                                ? 'bg-rose-100 text-rose-700'
+                                : 'bg-orange-100 text-orange-700'
+                          }`}>
+                            {completedOrderStatusLabel(order)}
+                          </span>
+                        )}
+                        {activeTab === 'cancelled' && (
+                          <span className="whitespace-nowrap rounded-lg bg-orange-100 px-2.5 py-1 text-[11px] font-semibold text-orange-700">
+                            Отменено покупателем
+                          </span>
                         )}
                       </div>
                     </td>
@@ -1706,6 +2200,16 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       {/* Клик вне меню — закрываем */}
       {orderMenuId !== null && (
         <div className="fixed inset-0 z-40" onClick={() => setOrderMenuId(null)} />
+      )}
+
+      {kizScannerOpen && selectedStoreId && (
+        <FbsKizScannerModal
+          accountId={accountId}
+          storeId={selectedStoreId}
+          storeName={storesWithKey.find((store) => store.id === selectedStoreId)?.name ?? 'Магазин WB'}
+          orders={orders}
+          onClose={() => setKizScannerOpen(false)}
+        />
       )}
 
       {/* Выбор комплекта стикеров */}

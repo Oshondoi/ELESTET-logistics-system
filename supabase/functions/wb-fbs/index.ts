@@ -55,6 +55,115 @@ async function sbGet(table: string, params: string, serviceRole = false): Promis
   return r.json()
 }
 
+async function sbWrite(
+  table: string,
+  method: 'POST' | 'PATCH',
+  body: unknown,
+  params = '',
+  prefer = 'return=representation',
+): Promise<Record<string, unknown>[]> {
+  const suffix = params ? `?${params}` : ''
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}${suffix}`, {
+    method,
+    headers: {
+      apikey: SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Prefer: prefer,
+    },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`DB ${r.status}: ${await r.text()}`)
+  const text = await r.text()
+  return text ? parseWbJson(text) : []
+}
+
+type WbStickerCatalogRow = {
+  orderId: string | number
+  barcode?: string | number
+  partA?: string | number
+  partB?: string | number
+  file?: string
+}
+
+async function fetchWbStickers(apiKey: string, orderIds: string[], includeFile: boolean) {
+  const response = await wbReadJson(apiKey, '/api/v3/orders/stickers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: wbOrderIdsBody(orderIds),
+  }, { type: 'png', width: '58', height: '40' })
+  const stickers = ((response as { stickers?: WbStickerCatalogRow[] })?.stickers ?? [])
+  return includeFile ? stickers : stickers.map(({ file: _file, ...sticker }) => sticker)
+}
+
+async function cacheWbStickerCatalog(
+  accountId: string,
+  storeId: string,
+  stickers: WbStickerCatalogRow[],
+  supportsSgtin = false,
+) {
+  const rows = stickers.flatMap((sticker) => {
+    const orderId = String(sticker.orderId ?? '')
+    const partA = String(sticker.partA ?? '')
+    const partB = String(sticker.partB ?? '')
+    const qrValue = String(sticker.barcode ?? '') || `${partA}${partB}`
+    return orderId && qrValue ? [{
+      account_id: accountId,
+      store_id: storeId,
+      order_id: orderId,
+      qr_value: qrValue,
+      part_a: partA || null,
+      part_b: partB || null,
+      supports_sgtin: supportsSgtin,
+      fetched_at: new Date().toISOString(),
+    }] : []
+  })
+  if (rows.length > 0) {
+    await sbWrite(
+      'fbs_wb_qr_catalog',
+      'POST',
+      rows,
+      'on_conflict=store_id,order_id',
+      `${supportsSgtin ? 'resolution=merge-duplicates' : 'resolution=ignore-duplicates'},return=minimal`,
+    )
+  }
+}
+
+function metadataOrders(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value as Record<string, unknown>[]
+  const object = value as Record<string, unknown> | null
+  for (const key of ['orders', 'meta', 'data']) {
+    if (Array.isArray(object?.[key])) return object[key] as Record<string, unknown>[]
+  }
+  return []
+}
+
+function metadataOrderId(value: Record<string, unknown>): string {
+  return String(value.orderId ?? value.order_id ?? value.id ?? '')
+}
+
+function currentSgtins(value: Record<string, unknown> | undefined): string[] {
+  if (!value) return []
+  const nested = value.meta && typeof value.meta === 'object' ? value.meta as Record<string, unknown> : value
+  const raw = nested.sgtin ?? nested.sgtins
+  if (Array.isArray(raw)) return raw.map(String)
+  if (raw && typeof raw === 'object') {
+    const inner = (raw as Record<string, unknown>).value
+    if (Array.isArray(inner)) return inner.map(String)
+    if (typeof inner === 'string' && inner) return [inner]
+  }
+  return typeof raw === 'string' && raw ? [raw] : []
+}
+
+function metadataSupportsSgtin(value: Record<string, unknown> | undefined): boolean {
+  if (!value) return false
+  const meta = value.meta && typeof value.meta === 'object' ? value.meta as Record<string, unknown> : {}
+  if (Object.prototype.hasOwnProperty.call(meta, 'sgtin') || Object.prototype.hasOwnProperty.call(value, 'sgtin')) return true
+  const details = Array.isArray(value.metaDetails) ? value.metaDetails as Record<string, unknown>[] : []
+  return details.some((detail) => String(detail.key ?? '') === 'sgtin')
+}
+
 // ── WB helpers ───────────────────────────────────────────────────────────────
 
 function sleep(ms: number) {
@@ -446,8 +555,9 @@ Deno.serve(async (req) => {
     if (!accessRows.length) return err('Нет доступа к магазину', 403)
 
     // Get api_key via service role
-    const storeRows = await sbGet(`stores`, `id=eq.${encodeURIComponent(store_id)}&select=api_key&limit=1`, true)
+    const storeRows = await sbGet(`stores`, `id=eq.${encodeURIComponent(store_id)}&select=api_key,account_id&limit=1`, true)
     const apiKey = storeRows[0]?.api_key as string | undefined
+    const accountId = String(storeRows[0]?.account_id ?? '')
     if (!apiKey) return err('API ключ магазина не указан')
 
     // ── Actions ────────────────────────────────────────────────────────────
@@ -549,6 +659,160 @@ Deno.serve(async (req) => {
       return ok(await wbPostOrderIds(apiKey, '/api/v3/orders/status', order_ids.map(String)))
     }
 
+    if (action === 'get_scan_catalog') {
+      const orderRows = await sbGet(
+        'fbs_orders',
+        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=eq.confirm&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id,data`,
+        true,
+      )
+      const eligibleFromSnapshot = new Set(orderRows.filter((row) => {
+        const raw = (row.data ?? {}) as Record<string, unknown>
+        const required = Array.isArray(raw.requiredMeta) ? raw.requiredMeta.map(String) : []
+        const optional = Array.isArray(raw.optionalMeta) ? raw.optionalMeta.map(String) : []
+        return required.includes('sgtin') || optional.includes('sgtin')
+      }).map((row) => String(row.wb_order_id)))
+      const allConfirmIds = orderRows.map((row) => String(row.wb_order_id))
+      const eligibleIdsSet = new Set(eligibleFromSnapshot)
+      for (let index = 0; index < allConfirmIds.length; index += 100) {
+        const batchIds = allConfirmIds.slice(index, index + 100)
+        const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: wbOrderIdsBody(batchIds),
+        })
+        for (const meta of metadataOrders(metaResponse)) {
+          if (metadataSupportsSgtin(meta)) eligibleIdsSet.add(metadataOrderId(meta))
+        }
+      }
+      const eligibleIds = [...eligibleIdsSet].filter(Boolean)
+      const cachedRows = await sbGet(
+        'fbs_wb_qr_catalog',
+        `store_id=eq.${encodeURIComponent(store_id)}&supports_sgtin=eq.true&select=order_id,qr_value,part_a,part_b`,
+        true,
+      )
+      const cachedByOrder = new Map(cachedRows.map((row) => [String(row.order_id), row]))
+      const missingIds = eligibleIds.filter((orderId) => !cachedByOrder.has(orderId))
+      for (let index = 0; index < missingIds.length; index += 100) {
+        const stickers = await fetchWbStickers(apiKey, missingIds.slice(index, index + 100), false)
+        await cacheWbStickerCatalog(accountId, store_id, stickers, true)
+        for (const sticker of stickers) {
+          const orderId = String(sticker.orderId ?? '')
+          const partA = String(sticker.partA ?? '')
+          const partB = String(sticker.partB ?? '')
+          const qrValue = String(sticker.barcode ?? '') || `${partA}${partB}`
+          if (orderId && qrValue) cachedByOrder.set(orderId, {
+            order_id: orderId,
+            qr_value: qrValue,
+            part_a: partA || null,
+            part_b: partB || null,
+          })
+        }
+      }
+      const catalog = eligibleIds.flatMap((orderId) => {
+        const row = cachedByOrder.get(orderId)
+        return row ? [{
+          orderId,
+          qrValue: String(row.qr_value),
+          partA: row.part_a == null ? '' : String(row.part_a),
+          partB: row.part_b == null ? '' : String(row.part_b),
+        }] : []
+      })
+      return ok({ catalog, eligible: eligibleIds.length, missing: eligibleIds.length - catalog.length })
+    }
+
+    if (action === 'submit_marking_session') {
+      const sessionId = String(body.session_id ?? '')
+      const deviceId = String(body.device_id ?? '')
+      if (!sessionId || !deviceId) return err('session_id и device_id обязательны')
+
+      const existingSessions = await sbGet(
+        'fbs_marking_sessions',
+        `id=eq.${encodeURIComponent(sessionId)}&store_id=eq.${encodeURIComponent(store_id)}&select=*&limit=1`,
+        true,
+      )
+      const existingSession = existingSessions[0]
+      if (!existingSession || existingSession.created_by !== userId || existingSession.device_id !== deviceId) {
+        return err('Сессия этого устройства не найдена', 404)
+      }
+      if (existingSession.pending_order_id) return err('Сначала завершите или сбросьте ожидающую пару')
+      if (existingSession.status === 'completed') return ok({ success: true, sent: 0, failed: 0, alreadyCompleted: true })
+      if (existingSession.status === 'submitting') {
+        const started = new Date(String(existingSession.submit_started_at ?? 0)).getTime()
+        if (Number.isFinite(started) && Date.now() - started < 2 * 60_000) return err('Эта сессия уже отправляется', 409)
+        await sbWrite('fbs_marking_sessions', 'PATCH', { status: 'partial', updated_at: new Date().toISOString() }, `id=eq.${encodeURIComponent(sessionId)}&status=eq.submitting`)
+      }
+
+      const claimed = await sbWrite(
+        'fbs_marking_sessions',
+        'PATCH',
+        { status: 'submitting', submit_started_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        `id=eq.${encodeURIComponent(sessionId)}&store_id=eq.${encodeURIComponent(store_id)}&status=in.(active,partial)&select=*`,
+      )
+      if (claimed.length === 0) return err('Сессию уже завершает другое окно или устройство', 409)
+
+      const pairRows = await sbGet(
+        'fbs_marking_pairs',
+        `session_id=eq.${encodeURIComponent(sessionId)}&status=in.(draft,error)&select=*&order=created_at.asc`,
+        true,
+      )
+      if (pairRows.length === 0) {
+        await sbWrite('fbs_marking_sessions', 'PATCH', { status: 'active', submit_started_at: null, updated_at: new Date().toISOString() }, `id=eq.${encodeURIComponent(sessionId)}`)
+        return err('В сессии нет новых пар для отправки')
+      }
+
+      const orderIds = pairRows.map((pair) => String(pair.order_id))
+      const statusResponse = await wbPostOrderIds(apiKey, '/api/v3/orders/status', orderIds)
+      const statusList = Array.isArray(statusResponse)
+        ? statusResponse as Record<string, unknown>[]
+        : ((statusResponse as { orders?: Record<string, unknown>[] })?.orders ?? [])
+      const statusByOrder = new Map(statusList.map((status) => [String(status.id ?? status.orderId ?? ''), status]))
+      const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: wbOrderIdsBody(orderIds),
+      })
+      const metaByOrder = new Map(metadataOrders(metaResponse).map((meta) => [metadataOrderId(meta), meta]))
+
+      let sent = 0
+      const failures: Array<{ orderId: string; error: string }> = []
+      for (const pair of pairRows) {
+        const pairId = String(pair.id)
+        const orderId = String(pair.order_id)
+        const sgtin = String(pair.sgtin)
+        try {
+          const status = statusByOrder.get(orderId)
+          if (String(status?.supplierStatus ?? '') !== 'confirm' || String(status?.wbStatus ?? '') !== 'waiting') {
+            throw new Error('Заказ уже не находится на сборке')
+          }
+          const existingSgtins = currentSgtins(metaByOrder.get(orderId))
+          if (existingSgtins.length > 0 && !existingSgtins.includes(sgtin)) {
+            throw new Error('В Wildberries у заказа уже указан другой КИЗ')
+          }
+          if (!existingSgtins.includes(sgtin)) {
+            await wbPut(apiKey, `/api/v3/orders/${encodeURIComponent(orderId)}/meta/sgtin`, { sgtins: [sgtin] })
+          }
+          await sbWrite('fbs_marking_pairs', 'PATCH', {
+            status: 'sent', error: null, sent_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+          }, `id=eq.${encodeURIComponent(pairId)}`)
+          sent += 1
+        } catch (pairError) {
+          const message = errorMessage(pairError)
+          failures.push({ orderId, error: message })
+          await sbWrite('fbs_marking_pairs', 'PATCH', {
+            status: 'error', error: message, updated_at: new Date().toISOString(),
+          }, `id=eq.${encodeURIComponent(pairId)}`)
+        }
+      }
+      const finishedAt = new Date().toISOString()
+      await sbWrite('fbs_marking_sessions', 'PATCH', failures.length === 0 ? {
+        status: 'completed', completed_at: finishedAt, submit_started_at: null,
+        last_seen_at: finishedAt, updated_at: finishedAt,
+      } : {
+        status: 'partial', submit_started_at: null, last_seen_at: finishedAt, updated_at: finishedAt,
+      }, `id=eq.${encodeURIComponent(sessionId)}`)
+      return ok({ success: failures.length === 0, sent, failed: failures.length, failures })
+    }
+
     if (action === 'get_sticker') {
       const { order_ids, fmt = 'svg', w = 58, h = 40 } = body as { order_ids: string[]; fmt?: string; w?: number; h?: number }
       if (!order_ids?.length) return err('order_ids обязателен')
@@ -559,7 +823,9 @@ Deno.serve(async (req) => {
       })
       if (r.status === 401 || r.status === 403) throw new Error('no_permission')
       if (!r.ok) throw new Error(`WB ${r.status}: ${await r.text()}`)
-      return ok(parseWbJson(await r.text()))
+      const stickerResponse = parseWbJson(await r.text())
+      await cacheWbStickerCatalog(accountId, store_id, stickerResponse?.stickers ?? [])
+      return ok(stickerResponse)
     }
 
     return err('Неизвестный action')
