@@ -31,6 +31,9 @@ const combinations = [
   ['complete + waiting', 'В доставке'],
   ['complete + sorted', 'WB принял и сортирует'],
   ['complete + ready_for_pickup', 'Заказ ожидает покупателя в ПВЗ'],
+  ['complete + postponed_delivery', 'Курьерская доставка перенесена'],
+  ['complete + accepted_by_carrier', 'Заказ принят перевозчиком в стране продавца'],
+  ['complete + sent_to_carrier', 'Заказ направляется на склад перевозчика'],
   ['complete + sold', 'Завершён успешно'],
   ['complete + canceled_by_client', 'Завершён отказом покупателя'],
   ['complete + defect', 'Завершён из-за брака'],
@@ -67,7 +70,7 @@ export function FbsInfoPage() {
                 а <code className="font-semibold text-blue-700">wbStatus</code> — состояние заказа внутри Wildberries.
               </p>
             </div>
-            <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-[11px] font-medium text-violet-700">Актуально: 19.08.2026</span>
+            <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-[11px] font-medium text-violet-700">Актуально: 20.08.2026</span>
           </div>
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
             Это не 15 последовательных этапов. WB возвращает пару значений, например <strong>complete + waiting</strong>.

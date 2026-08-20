@@ -597,6 +597,81 @@ function completedOrderStatusLabel(order: Pick<FbsOrder, 'supplierStatus' | 'wbS
   return 'Завершено'
 }
 
+const WB_ORDER_STATUS_VIEW: Record<string, { label: string; className: string; description: string }> = {
+  waiting: {
+    label: 'Ожидает приёмки WB',
+    className: 'bg-amber-100 text-amber-700',
+    description: 'Заказ передан продавцом, но Wildberries ещё не завершил приёмку.',
+  },
+  sorted: {
+    label: 'Отсортирован',
+    className: 'bg-indigo-100 text-indigo-700',
+    description: 'Wildberries принял и отсортировал заказ.',
+  },
+  ready_for_pickup: {
+    label: 'Ждёт покупателя',
+    className: 'bg-violet-100 text-violet-700',
+    description: 'Заказ прибыл в ПВЗ и ожидает покупателя.',
+  },
+  postponed_delivery: {
+    label: 'Доставка отложена',
+    className: 'bg-amber-100 text-amber-700',
+    description: 'Курьерская доставка заказа перенесена.',
+  },
+  accepted_by_carrier: {
+    label: 'Принят перевозчиком',
+    className: 'bg-sky-100 text-sky-700',
+    description: 'Заказ принят службой доставки в стране продавца.',
+  },
+  sent_to_carrier: {
+    label: 'Отправлен перевозчику',
+    className: 'bg-blue-100 text-blue-700',
+    description: 'Заказ направляется на склад службы доставки в стране продавца.',
+  },
+  sold: {
+    label: 'Товар выкуплен',
+    className: 'bg-emerald-100 text-emerald-700',
+    description: 'Покупатель получил заказ.',
+  },
+  canceled: {
+    label: 'Отменён',
+    className: 'bg-orange-100 text-orange-700',
+    description: 'Заказ отменён.',
+  },
+  canceled_by_client: {
+    label: 'Покупатель отказался',
+    className: 'bg-orange-100 text-orange-700',
+    description: 'Покупатель отказался от заказа при получении.',
+  },
+  declined_by_client: {
+    label: 'Отменён покупателем',
+    className: 'bg-orange-100 text-orange-700',
+    description: 'Покупатель отменил заказ в первый час.',
+  },
+  defect: {
+    label: 'Обнаружен брак',
+    className: 'bg-rose-100 text-rose-700',
+    description: 'Заказ отменён по причине брака.',
+  },
+}
+
+function WbOrderStatusBadge({ order }: { order: Pick<FbsOrder, 'supplierStatus' | 'wbSystemStatus'> }) {
+  const status = order.wbSystemStatus || 'unknown'
+  const view = WB_ORDER_STATUS_VIEW[status] ?? {
+    label: `Статус WB: ${status}`,
+    className: 'bg-slate-100 text-slate-600',
+    description: 'Wildberries вернул новый статус, которого ещё нет в справочнике интерфейса.',
+  }
+  return (
+    <span
+      title={`${view.description} supplierStatus: ${order.supplierStatus}; wbStatus: ${status}`}
+      className={`inline-flex whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold ${view.className}`}
+    >
+      {view.label}
+    </span>
+  )
+}
+
 function tabForOfficialWbStatus(
   supplierStatus: string,
   wbSystemStatus: string,
@@ -1741,6 +1816,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
       {((activeTab === 'assembling' && (tabOrders.length > 0 || openSupplies.length > 0)) || (activeTab === 'delivering' && tabOrders.length > 0) || (activeTab === 'completed' && groupCompletedBySupplies && tabOrders.length > 0)) && (() => {
         const isAssemblingTab = activeTab === 'assembling'
+        const isDeliveringTab = activeTab === 'delivering'
         const isCompletedGroupedTab = activeTab === 'completed'
         // На сборке показываем и пустые открытые поставки. В доставке — только
         // активные родительские поставки, найденные у заказов текущей вкладки.
@@ -1888,6 +1964,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                               <th className="px-4 py-2 text-left font-semibold">Адрес товара / Баркод</th>
                               <th className="px-4 py-2 text-left font-semibold">Время</th>
                               <th className="px-4 py-2 text-left font-semibold">Склад FBS</th>
+                              {isDeliveringTab && <th className="px-4 py-2 text-left font-semibold">Статус WB</th>}
                               <th className="px-4 py-2 text-left font-semibold">{isCompletedGroupedTab ? 'Статус' : 'Действия'}</th>
                             </tr>
                           </thead>
@@ -1930,6 +2007,11 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                 </td>
                                 <td className={`px-4 py-2 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                                 <td className="max-w-48 px-4 py-2">{renderWbWarehouseCell(order)}</td>
+                                {isDeliveringTab && (
+                                  <td className="px-4 py-2">
+                                    <WbOrderStatusBadge order={order} />
+                                  </td>
+                                )}
                                 <td className="px-4 py-2">
                                   <div className="flex items-center gap-1.5">
                                     {isAssemblingTab && supplyId !== '__none__' && (
