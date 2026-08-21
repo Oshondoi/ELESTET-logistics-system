@@ -59,8 +59,36 @@ function deviceId(): string {
 }
 
 function cleanScan(value: string, trimSpaces: boolean): string {
-  const withoutTerminator = value.replace(/[\r\n]+$/g, '')
+  const withoutTerminator = value.replace(/[\r\n]+$/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '')
   return trimSpaces ? withoutTerminator.trim() : withoutTerminator
+}
+
+const RU_TO_EN_KEYBOARD: Record<string, string> = {
+  'й': 'q', 'ц': 'w', 'у': 'e', 'к': 'r', 'е': 't', 'н': 'y', 'г': 'u', 'ш': 'i', 'щ': 'o', 'з': 'p', 'х': '[', 'ъ': ']',
+  'ф': 'a', 'ы': 's', 'в': 'd', 'а': 'f', 'п': 'g', 'р': 'h', 'о': 'j', 'л': 'k', 'д': 'l', 'ж': ';', 'э': "'",
+  'я': 'z', 'ч': 'x', 'с': 'c', 'м': 'v', 'и': 'b', 'т': 'n', 'ь': 'm', 'б': ',', 'ю': '.', 'ё': '`',
+  'Й': 'Q', 'Ц': 'W', 'У': 'E', 'К': 'R', 'Е': 'T', 'Н': 'Y', 'Г': 'U', 'Ш': 'I', 'Щ': 'O', 'З': 'P', 'Х': '{', 'Ъ': '}',
+  'Ф': 'A', 'Ы': 'S', 'В': 'D', 'А': 'F', 'П': 'G', 'Р': 'H', 'О': 'J', 'Л': 'K', 'Д': 'L', 'Ж': ':', 'Э': '"',
+  'Я': 'Z', 'Ч': 'X', 'С': 'C', 'М': 'V', 'И': 'B', 'Т': 'N', 'Ь': 'M', 'Б': '<', 'Ю': '>', 'Ё': '~',
+}
+
+function scanCandidates(value: string): string[] {
+  const cleaned = cleanScan(value, true)
+  const withoutScannerPrefix = /^\][A-Za-z]\d/.test(cleaned) ? cleaned.slice(3) : cleaned
+  const values = [cleaned, withoutScannerPrefix]
+  for (const candidate of [...values]) {
+    values.push([...candidate].map((char) => RU_TO_EN_KEYBOARD[char] ?? char).join(''))
+  }
+  return [...new Set(values.filter(Boolean))]
+}
+
+function buildCatalogMap(items: CatalogItem[]): Map<string, CatalogItem> {
+  const map = new Map<string, CatalogItem>()
+  for (const item of items) {
+    const aliases = [item.qrValue, item.orderId, `${item.partA ?? ''}${item.partB ?? ''}`]
+    for (const alias of aliases) if (alias) map.set(cleanScan(alias, true), item)
+  }
+  return map
 }
 
 function errorText(error: unknown): string {
@@ -97,19 +125,17 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [cameraOpen, setCameraOpen] = useState(false)
+  const [cameraError, setCameraError] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
+  const cameraStreamRef = useRef<MediaStream | null>(null)
+  const cameraResultRef = useRef<(value: string) => void>(() => undefined)
   const sessionRef = useRef<ScanSession | null>(null)
   sessionRef.current = session
 
   const ordersById = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders])
-  const catalogByScan = useMemo(() => {
-    const map = new Map<string, CatalogItem>()
-    for (const item of catalog) {
-      const aliases = [item.qrValue, item.orderId, `${item.partA ?? ''}${item.partB ?? ''}`]
-      for (const alias of aliases) if (alias) map.set(cleanScan(alias, true), item)
-    }
-    return map
-  }, [catalog])
+  const catalogByScan = useMemo(() => buildCatalogMap(catalog), [catalog])
   const pendingOrder = session?.pending_order_id ? ordersById.get(session.pending_order_id) : null
 
   const loadPairs = useCallback(async (sessionId: string) => {
@@ -145,7 +171,18 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       .neq('id', currentSessionId)
       .lt('last_seen_at', staleBefore)
       .order('last_seen_at', { ascending: false })
-    setRecoverableSessions((data ?? []) as ScanSession[])
+    const candidates = (data ?? []) as ScanSession[]
+    if (candidates.length === 0) {
+      setRecoverableSessions([])
+      return
+    }
+    const { data: pairRows, error: pairsError } = await (supabase as any)
+      .from('fbs_marking_pairs')
+      .select('session_id')
+      .in('session_id', candidates.map((candidate) => candidate.id))
+      .in('status', ['draft', 'error'])
+    const sessionsWithWork = new Set<string>((pairRows ?? []).map((row: { session_id: string }) => row.session_id))
+    setRecoverableSessions(candidates.filter((candidate) => Boolean(candidate.pending_order_id) || (!pairsError && sessionsWithWork.has(candidate.id))))
   }, [storeId])
 
   useEffect(() => {
@@ -209,21 +246,29 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     if (!busy && !loading && session?.status !== 'completed') inputRef.current?.focus()
   }, [busy, loading, session?.pending_order_id, session?.status])
 
-  const handleScan = async () => {
+  const handleScan = async (rawValue?: string) => {
     if (!supabase || !session || busy || session.status === 'completed') return
     setError('')
     setNotice('')
     setBusy(true)
     try {
       if (!session.pending_order_id) {
-        const scannedQr = cleanScan(value, true)
-        const item = catalogByScan.get(scannedQr)
-        if (!item) throw new Error('QR WB не найден среди заказов «На сборке» этого магазина')
+        const candidates = scanCandidates(rawValue ?? value)
+        let item = candidates.map((candidate) => catalogByScan.get(candidate)).find(Boolean)
+        if (!item) {
+          const refreshed = await invokeFbs(storeId, { action: 'get_scan_catalog' })
+          const refreshedCatalog = (refreshed.catalog ?? []) as CatalogItem[]
+          setCatalog(refreshedCatalog)
+          setCatalogMissing(Number(refreshed.missing ?? 0))
+          const refreshedMap = buildCatalogMap(refreshedCatalog)
+          item = candidates.map((candidate) => refreshedMap.get(candidate)).find(Boolean)
+        }
+        if (!item) throw new Error('QR WB не распознан. Проверьте, что это стикер заказа «На сборке». Для USB/BT-сканера включите английскую раскладку.')
         const { data, error: scanError } = await (supabase as any).rpc('scan_fbs_wb_qr', {
           p_session_id: session.id,
           p_device_id: stableDeviceId,
           p_order_id: item.orderId,
-          p_wb_qr: scannedQr,
+          p_wb_qr: item.qrValue,
         })
         if (scanError) throw scanError
         setSession((current) => current ? {
@@ -234,7 +279,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         } : current)
         setNotice(`Заказ №${item.orderId} найден. Теперь сканируйте КИЗ`)
       } else {
-        const scannedKiz = cleanScan(value, false)
+        const scannedKiz = cleanScan(rawValue ?? value, false)
         if (pairs.some((pair) => pair.sgtin === scannedKiz)) throw new Error('Этот КИЗ уже есть в текущей сессии')
         const { error: scanError } = await (supabase as any).rpc('scan_fbs_kiz', {
           p_session_id: session.id,
@@ -255,6 +300,57 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       setBusy(false)
     }
   }
+
+  cameraResultRef.current = (scannedValue: string) => { void handleScan(scannedValue) }
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
+      cameraStreamRef.current = null
+      return
+    }
+
+    let cancelled = false
+    let handled = false
+    let controls: { stop(): void } | null = null
+    setCameraError('')
+    void (async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера не поддерживается браузером')
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false,
+        })
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+        cameraStreamRef.current = stream
+        if (!cameraVideoRef.current) return
+        cameraVideoRef.current.srcObject = stream
+        await cameraVideoRef.current.play()
+        const { BrowserMultiFormatReader } = await import('@zxing/browser')
+        if (cancelled || !cameraVideoRef.current) return
+        const reader = new BrowserMultiFormatReader()
+        controls = await reader.decodeFromStream(stream, cameraVideoRef.current, (result) => {
+          if (!result || handled || cancelled) return
+          handled = true
+          const scannedValue = (result as unknown as { getText(): string }).getText()
+          setCameraOpen(false)
+          cameraResultRef.current(scannedValue)
+        })
+      } catch {
+        if (!cancelled) setCameraError('Не удалось открыть камеру. Разрешите доступ к камере в браузере или используйте сканер.')
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      controls?.stop()
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
+      cameraStreamRef.current = null
+    }
+  }, [cameraOpen])
 
   // Аппаратный сканер работает как клавиатура. Даже если сотрудник случайно
   // кликнул по заголовку, списку или кнопке, первый символ следующего скана
@@ -421,7 +517,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   </div>
                 )}
                 {session?.status !== 'completed' && (
-                  <form className="mx-auto mt-5 flex max-w-2xl gap-2" onSubmit={(event) => { event.preventDefault(); void handleScan() }}>
+                  <form className="mx-auto mt-5 flex max-w-2xl flex-wrap gap-2 sm:flex-nowrap" onSubmit={(event) => { event.preventDefault(); void handleScan() }}>
                     <input
                       ref={inputRef}
                       value={value}
@@ -432,8 +528,28 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       placeholder={session?.pending_order_id ? 'КИЗ' : 'QR заказа WB'}
                       className="min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-5 py-4 font-mono text-base outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:opacity-60"
                     />
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setCameraOpen(true)}
+                      className="flex items-center justify-center gap-2 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-40"
+                      title="Сканировать камерой телефона"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3h5Z"/><circle cx="12" cy="13" r="3"/></svg>
+                      <span className="hidden sm:inline">Камера</span>
+                    </button>
                     <button type="submit" disabled={busy || value.length === 0} className="rounded-2xl bg-violet-600 px-6 py-3 text-sm font-semibold text-white disabled:opacity-40">{busy ? 'Сохраняем…' : 'Принять'}</button>
                   </form>
+                )}
+                {cameraOpen && session?.status !== 'completed' && (
+                  <div className="mx-auto mt-4 max-w-2xl overflow-hidden rounded-2xl border border-violet-200 bg-slate-950 p-2 text-left">
+                    <div className="mb-2 flex items-center justify-between px-2 text-xs font-semibold text-white">
+                      <span>Наведите камеру на {session?.pending_order_id ? 'КИЗ' : 'QR WB'}</span>
+                      <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg bg-white/15 px-2 py-1 hover:bg-white/25">Закрыть</button>
+                    </div>
+                    <video ref={cameraVideoRef} autoPlay muted playsInline className="max-h-72 w-full rounded-xl bg-black object-cover" />
+                    {cameraError && <div className="px-2 py-3 text-center text-xs font-medium text-red-300">{cameraError}</div>}
+                  </div>
                 )}
                 {session?.pending_order_id && session.status !== 'completed' && (
                   <button type="button" onClick={() => void releasePending()} disabled={busy} className="mt-3 text-xs font-medium text-slate-500 underline hover:text-red-600">Сбросить ожидающий заказ</button>

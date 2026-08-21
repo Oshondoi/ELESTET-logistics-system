@@ -113,6 +113,29 @@ interface StickerPageImage {
   alias?: string
 }
 
+const STICKER_PRINT_OPTIONS_KEY = 'elestet_fbs_sticker_print_options_v1'
+
+function loadStickerPrintOptions(accountId: string): StickerPrintOptions {
+  const defaults: StickerPrintOptions = { supply: true, picking: true, locations: true, productBarcode: true, wb: true }
+  try {
+    const saved = JSON.parse(localStorage.getItem(`${STICKER_PRINT_OPTIONS_KEY}:${accountId}`) || '{}') as Partial<StickerPrintOptions>
+    return (Object.keys(defaults) as Array<keyof StickerPrintOptions>).reduce((options, key) => {
+      options[key] = typeof saved[key] === 'boolean' ? saved[key] : defaults[key]
+      return options
+    }, { ...defaults })
+  } catch {
+    return defaults
+  }
+}
+
+function saveStickerPrintOptions(accountId: string, options: StickerPrintOptions) {
+  try {
+    localStorage.setItem(`${STICKER_PRINT_OPTIONS_KEY}:${accountId}`, JSON.stringify(options))
+  } catch {
+    // Печать продолжит работать и при запрещённом браузером localStorage.
+  }
+}
+
 interface PickingListRow {
   orderId: string
   photoUrl: string | null
@@ -1138,11 +1161,12 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const openStickerPrintModal = (ordersToPrint: FbsOrder[], supply: WbSupply | null, mode: StickerPrintModal['mode']) => {
     if (ordersToPrint.length === 0) return
     setPickingListMenuOpen(false)
+    const savedOptions = loadStickerPrintOptions(accountId)
     setStickerPrintModal({
       orders: ordersToPrint,
       supply,
       mode,
-      options: { supply: mode === 'supply', picking: true, locations: true, productBarcode: true, wb: true },
+      options: { ...savedOptions, supply: mode === 'supply' ? savedOptions.supply : false },
     })
   }
 
@@ -2358,10 +2382,16 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                       <input
                         type="checkbox"
                         checked={checked}
-                        onChange={() => setStickerPrintModal((current) => current ? {
-                          ...current,
-                          options: { ...current.options, [option.key]: !current.options[option.key] },
-                        } : null)}
+                        onChange={() => setStickerPrintModal((current) => {
+                          if (!current) return null
+                          const nextValue = !current.options[option.key]
+                          const nextOptions = { ...current.options, [option.key]: nextValue }
+                          saveStickerPrintOptions(accountId, {
+                            ...loadStickerPrintOptions(accountId),
+                            [option.key]: nextValue,
+                          })
+                          return { ...current, options: nextOptions }
+                        })}
                         className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-violet-600"
                       />
                       <span className="min-w-0 flex-1">
