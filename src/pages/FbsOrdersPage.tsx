@@ -1640,22 +1640,22 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
       {activeTab === 'completed' && (
         <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-3">
-          <label className="flex cursor-pointer items-center gap-2.5 text-xs font-medium text-slate-600">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={groupCompletedBySupplies}
-              onClick={() => {
-                setGroupCompletedBySupplies((current) => !current)
-                setSelected(new Set())
-                setSelectedSupplyIds(new Set())
-              }}
-              className={`relative h-5 w-9 rounded-full transition ${groupCompletedBySupplies ? 'bg-violet-500' : 'bg-slate-300'}`}
-            >
-              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${groupCompletedBySupplies ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
-            </button>
-            Сгруппировать по поставкам
-          </label>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={groupCompletedBySupplies}
+            onClick={() => {
+              setGroupCompletedBySupplies((current) => !current)
+              setSelected(new Set())
+              setSelectedSupplyIds(new Set())
+            }}
+            className="group flex cursor-pointer items-center gap-2.5 text-xs font-medium text-slate-600 outline-none"
+          >
+            <span className={`relative h-5 w-9 shrink-0 rounded-full transition-colors duration-200 group-focus-visible:ring-2 group-focus-visible:ring-violet-300 group-focus-visible:ring-offset-2 ${groupCompletedBySupplies ? 'bg-violet-500' : 'bg-slate-300'}`}>
+              <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${groupCompletedBySupplies ? 'translate-x-4' : 'translate-x-0'}`} />
+            </span>
+            <span>Сгруппировать по поставкам</span>
+          </button>
           <button
             type="button"
             disabled={completedOrders.length === 0}
@@ -1699,7 +1699,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       )}
 
       {activeTab === 'archive' && (
-        <div className="flex-1 overflow-auto bg-slate-50 p-5">
+        <div className="flex-1 overflow-auto bg-slate-50 p-5 [scrollbar-gutter:stable]">
           <div className="mx-auto max-w-6xl space-y-4">
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1847,7 +1847,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           setSelectedSupplyIds(allParentsSelected ? new Set() : new Set(selectableSupplyIds))
         }
         return (
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-auto [scrollbar-gutter:stable]">
             <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
               <input
                 type="checkbox"
@@ -2162,14 +2162,14 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       })()}
 
       {tabOrders.length > 0 && activeTab !== 'assembling' && activeTab !== 'delivering' && !(activeTab === 'completed' && groupCompletedBySupplies) && (
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto [scrollbar-gutter:stable]">
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-white">
               <tr>
                 {activeTab !== 'completed' && activeTab !== 'cancelled' && (
                   <th className="px-3 py-3">
                     <input type="checkbox" checked={allTabSelected} onChange={toggleAll}
-                      className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
+                      className="h-3.5 w-3.5 translate-x-[30px] rounded accent-violet-500 cursor-pointer" />
                   </th>
                 )}
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Заказ / Артикул WB</th>
@@ -2192,7 +2192,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                     {activeTab !== 'completed' && activeTab !== 'cancelled' && (
                       <td className="px-3 py-2">
                         <input type="checkbox" checked={isChecked} onChange={() => toggleSelect(order.id)}
-                          className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
+                          className="h-3.5 w-3.5 translate-x-[30px] rounded accent-violet-500 cursor-pointer" />
                       </td>
                     )}
                     <td className="px-4 py-3">
