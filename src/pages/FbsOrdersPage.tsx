@@ -33,6 +33,7 @@ interface FbsOrder {
   productVendorCode: string | null
   productSize: string | null
   productLocations: ProductLocation[]
+  stockAllocation: FbsStockAllocation | null
   shipStatus: TabKey
   supplierStatus: string
   wbSystemStatus: string
@@ -43,6 +44,11 @@ interface FbsOrder {
 interface ProductLocation {
   productBarcode: string
   quantity: number
+  physicalQuantity: number
+  reservedQuantity: number
+  awaitingQuantity: number
+  boxItemId: string
+  boxId: string
   batchNumber: number
   batchName: string
   supplyNumber: number
@@ -56,6 +62,15 @@ interface ProductLocation {
   addressCode: string | null
   addressText: string | null
   isAddressed: boolean
+}
+
+interface FbsStockAllocation {
+  id: string
+  boxItemId: string | null
+  boxId: string | null
+  productBarcode: string
+  quantity: number
+  status: 'reserved' | 'awaiting_wb' | 'consumed' | 'released'
 }
 
 interface WbWarehouse {
@@ -185,11 +200,28 @@ function productSizeByBarcode(product: Product | undefined, barcode: string | nu
   return matchingSize.techSize?.trim() || null
 }
 
-function productLocationQuantity(locations: ProductLocation[]): number {
-  return locations.reduce((total, location) => total + location.quantity, 0)
+function productStockTotals(locations: ProductLocation[]) {
+  return locations.reduce((totals, location) => ({
+    available: totals.available + location.quantity,
+    reserved: totals.reserved + location.reservedQuantity,
+    awaiting: totals.awaiting + location.awaitingQuantity,
+  }), { available: 0, reserved: 0, awaiting: 0 })
+}
+
+function FbsStockQuantityCell({ order }: { order: FbsOrder }) {
+  if (order.productLocations.length === 0) return <span className="text-slate-400">—</span>
+  const totals = productStockTotals(order.productLocations)
+  return (
+    <div className="whitespace-nowrap text-right">
+      <div className="font-semibold text-slate-900">{totals.available} доступно</div>
+      {totals.reserved > 0 && <div className="mt-0.5 text-[11px] font-medium text-violet-600">{totals.reserved} в сборке</div>}
+      {totals.awaiting > 0 && <div className="mt-0.5 text-[11px] font-medium text-amber-600">{totals.awaiting} ждут WB</div>}
+    </div>
+  )
 }
 
 function OrderIdentityCell({ order }: { order: FbsOrder }) {
+  const barcode = order.productBarcode
   return (
     <div className="space-y-0.5 whitespace-nowrap">
       <div className="flex items-baseline gap-1.5">
@@ -206,6 +238,12 @@ function OrderIdentityCell({ order }: { order: FbsOrder }) {
         >
           {order.nmId}
         </a>
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <span className="w-12 shrink-0 text-[11px] text-slate-400">Баркод</span>
+        <span className={`font-mono text-[11px] ${barcode ? 'text-slate-500' : 'text-amber-500'}`}>
+          {barcode || 'Не получен'}
+        </span>
       </div>
     </div>
   )
@@ -227,8 +265,8 @@ function ProductLocationsCell({ order }: { order: FbsOrder }) {
   if (!barcode) {
     return (
       <div>
-        <div className="font-semibold text-amber-500">Баркод не получен</div>
-        <div className="mt-0.5 text-[11px] text-slate-400">Невозможно найти товар на складе</div>
+        <div className="font-semibold text-amber-500">Адрес не найден</div>
+        <div className="mt-0.5 text-[11px] text-slate-400">Нет баркода для поиска на складе</div>
       </div>
     )
   }
@@ -238,37 +276,49 @@ function ProductLocationsCell({ order }: { order: FbsOrder }) {
       <div>
         <div className="font-semibold text-amber-500">Не найден</div>
         <div className="mt-0.5 text-[11px] text-slate-500">Товара нет ни в одном коробе</div>
-        <div className="mt-0.5 font-mono text-[11px] text-slate-400">{barcode}</div>
       </div>
     )
   }
 
-  const renderLocation = (location: ProductLocation) => (
+  const renderLocation = (location: ProductLocation) => {
+    const isSelected = order.stockAllocation?.boxItemId === location.boxItemId
+      && ['reserved', 'awaiting_wb'].includes(order.stockAllocation.status)
+    return (
     <div key={`${location.boxBarcode}-${location.productBarcode}`} className="min-w-0 py-0.5">
-      <div className={`truncate font-semibold ${location.isAddressed ? 'text-violet-700' : 'text-amber-500'}`} title={productLocationAddress(location) ?? 'Короб ещё не размещён в WMS'}>
-        {productLocationAddress(location) ?? 'Без адреса'}
+      <div className="flex min-w-0 items-center gap-1.5">
+        <div className={`truncate font-semibold ${location.isAddressed ? 'text-violet-700' : 'text-amber-500'}`} title={productLocationAddress(location) ?? 'Короб ещё не размещён в WMS'}>
+          {productLocationAddress(location) ?? 'Без адреса'}
+        </div>
+        {isSelected && (
+          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold ${order.stockAllocation?.status === 'awaiting_wb' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+            {order.stockAllocation?.status === 'awaiting_wb' ? 'ЖДЁТ WB' : 'ВЫБРАН'}
+          </span>
+        )}
       </div>
       <div className="truncate text-[11px] text-slate-500" title={`P-${location.batchNumber} · S-${location.supplyNumber} · Короб ${location.boxNumber} · ${location.quantity} шт.`}>
         P-{location.batchNumber} · S-{location.supplyNumber} · Короб {location.boxNumber} · {location.quantity} шт.
       </div>
     </div>
-  )
+    )
+  }
 
-  const visibleLocations = locations.slice(0, 2)
-  const hiddenLocations = locations.slice(2)
+  const selectedBoxItemId = ['reserved', 'awaiting_wb'].includes(order.stockAllocation?.status ?? '')
+    ? order.stockAllocation?.boxItemId
+    : null
+  const orderedLocations = selectedBoxItemId
+    ? [...locations].sort((left, right) => Number(right.boxItemId === selectedBoxItemId) - Number(left.boxItemId === selectedBoxItemId))
+    : locations
+  const visibleLocations = orderedLocations.slice(0, 2)
+  const hiddenLocations = orderedLocations.slice(2)
 
   return (
     <div>
       {visibleLocations.map(renderLocation)}
       {hiddenLocations.length > 0 && (
-        <details className="mt-0.5">
-          <summary className="cursor-pointer select-none text-[11px] font-semibold text-violet-600 hover:text-violet-700">
-            Ещё {hiddenLocations.length} {hiddenLocations.length === 1 ? 'короб' : 'короба'}
-          </summary>
-          <div className="mt-1 border-l border-violet-200 pl-2">{hiddenLocations.map(renderLocation)}</div>
-        </details>
+        <div className="mt-0.5 text-[11px] font-semibold text-violet-600">
+          Ещё {hiddenLocations.length} {boxCountWord(hiddenLocations.length)}
+        </div>
       )}
-      <div className="mt-0.5 font-mono text-[11px] text-slate-400">{barcode}</div>
     </div>
   )
 }
@@ -760,6 +810,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [syncingProducts, setSyncingProducts] = useState(false)
   const [productSyncNotice, setProductSyncNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const [kizScannerOpen, setKizScannerOpen] = useState(false)
+  const [boxSelectionOrder, setBoxSelectionOrder] = useState<FbsOrder | null>(null)
+  const [boxSelectionBusy, setBoxSelectionBusy] = useState(false)
+  const [boxScanValue, setBoxScanValue] = useState('')
   const syncInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
   const selectedStoreIdRef = useRef(selectedStoreId)
   const lastSyncedAtRef = useRef<Date | null>(null)
@@ -848,6 +901,11 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       const location: ProductLocation = {
         productBarcode: barcode,
         quantity: Number(row.quantity ?? 0),
+        physicalQuantity: Number(row.physical_quantity ?? row.quantity ?? 0),
+        reservedQuantity: Number(row.reserved_quantity ?? 0),
+        awaitingQuantity: Number(row.awaiting_quantity ?? 0),
+        boxItemId: String(row.box_item_id ?? ''),
+        boxId: String(row.box_id ?? ''),
         batchNumber: Number(row.batch_number ?? 0),
         batchName: String(row.batch_name ?? ''),
         supplyNumber: Number(row.supply_number ?? 0),
@@ -887,6 +945,20 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       if ((pageRows ?? []).length < 1000) break
     }
 
+    const { data: allocationRows, error: allocationError } = await (supabase as any)
+      .from('fbs_stock_allocations')
+      .select('id, wb_order_id, box_item_id, box_id, product_barcode, quantity, status')
+      .eq('store_id', selectedStoreId)
+    if (allocationError && allocationError.code !== '42P01') throw allocationError
+    const allocationByOrderId = new Map<string, FbsStockAllocation>((allocationRows ?? []).map((row: any) => [String(row.wb_order_id), {
+      id: String(row.id),
+      boxItemId: row.box_item_id ? String(row.box_item_id) : null,
+      boxId: row.box_id ? String(row.box_id) : null,
+      productBarcode: String(row.product_barcode ?? ''),
+      quantity: Number(row.quantity ?? 1),
+      status: row.status as FbsStockAllocation['status'],
+    }]))
+
     const mapped: FbsOrder[] = (rows ?? []).map((row: any) => {
       const d = row.data ?? {}
       const supplierStatus = String(row.supplier_status ?? row.wb_status ?? '')
@@ -917,6 +989,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         productVendorCode: null,
         productSize: null,
         productLocations: [],
+        stockAllocation: allocationByOrderId.get(String(row.wb_order_id)) ?? null,
         shipStatus: tabForOfficialWbStatus(supplierStatus, wbSystemStatus, isInLatestSnapshot),
         supplierStatus,
         wbSystemStatus,
@@ -946,6 +1019,28 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         : null)
     return enriched
   }, [selectedStoreId, enrichWithCells])
+
+  useEffect(() => {
+    if (!supabase || !selectedStoreId) return
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => { void readFromDb() }, 120)
+    }
+    const channel = (supabase as any)
+      .channel(`fbs-stock:${selectedStoreId}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'fbs_stock_allocations', filter: `store_id=eq.${selectedStoreId}`,
+      }, scheduleRefresh)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'fulfillment_box_items', filter: `account_id=eq.${accountId}`,
+      }, scheduleRefresh)
+      .subscribe()
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      void (supabase as any).removeChannel(channel)
+    }
+  }, [accountId, selectedStoreId, readFromDb])
 
   const loadOpenSupplies = useCallback(async () => {
     if (!selectedStoreId) return
@@ -1056,6 +1151,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     convertedPrice: o.convertedPrice ?? 0, currencyCode: o.currencyCode ?? 643,
     photoUrl: null, productBarcode: null, productName: null, productBrand: null, productColor: null,
     productVendorCode: null, productSize: null, productLocations: [], shipStatus: status,
+    stockAllocation: null,
     supplierStatus: status === 'pending' ? 'new' : status === 'assembling' ? 'confirm' : 'complete',
     wbSystemStatus: 'waiting', isInLatestSnapshot: true, supply_id: null,
   }), [])
@@ -1126,13 +1222,76 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     }
   }
 
+  const reserveOrderFromBox = async (order: FbsOrder, location: ProductLocation) => {
+    if (!supabase || boxSelectionBusy) return
+    setBoxSelectionBusy(true)
+    try {
+      const { error: reservationError } = await (supabase as any).rpc('reserve_fbs_order_from_box', {
+        p_store_id: selectedStoreId,
+        p_order_id: order.id,
+        p_box_id: location.boxId,
+      })
+      if (reservationError) throw reservationError
+      setBoxSelectionOrder(null)
+      setBoxScanValue('')
+      await readFromDb()
+    } catch (reservationError: any) {
+      alert(reservationError?.message || 'Не удалось зарезервировать товар из выбранного короба')
+    } finally {
+      setBoxSelectionBusy(false)
+    }
+  }
+
+  const reserveScannedBox = async () => {
+    if (!boxSelectionOrder) return
+    const scanned = boxScanValue.trim()
+    if (!scanned) return
+    const location = boxSelectionOrder.productLocations.find((candidate) => candidate.boxBarcode === scanned)
+    if (!location) {
+      alert('Этот короб не содержит товар выбранного FBS-заказа')
+      setBoxScanValue('')
+      return
+    }
+    await reserveOrderFromBox(boxSelectionOrder, location)
+  }
+
+  const releaseOrderBoxReservation = async (order: FbsOrder) => {
+    if (!supabase || boxSelectionBusy || order.stockAllocation?.status !== 'reserved') return
+    setBoxSelectionBusy(true)
+    try {
+      const { error: releaseError } = await (supabase as any).rpc('release_fbs_order_box_reservation', {
+        p_store_id: selectedStoreId,
+        p_order_id: order.id,
+      })
+      if (releaseError) throw releaseError
+      setBoxSelectionOrder(null)
+      setBoxScanValue('')
+      await readFromDb()
+    } catch (releaseError: any) {
+      alert(releaseError?.message || 'Не удалось снять резерв с короба')
+    } finally {
+      setBoxSelectionBusy(false)
+    }
+  }
+
   const handleShip = async (supplyId: string, orders2ship: FbsOrder[]) => {
     if (!supabase) return
+    const trackedOrders = orders2ship.filter((order) => order.productLocations.length > 0)
+    const ordersWithoutBox = trackedOrders.filter((order) => order.stockAllocation?.status !== 'reserved')
+    if (ordersWithoutBox.length > 0) {
+      alert(`Сначала выберите короб для ${ordersWithoutBox.length} ${ordersWithoutBox.length === 1 ? 'заказа' : 'заказов'} с товаром на складе.`)
+      return
+    }
     const ids = orders2ship.map((o) => o.id)
     setBusyIds((s) => new Set([...s, ...ids]))
     try {
       // Статус меняет только WB: сначала передаём целую поставку в доставку.
       await invokeFbs(selectedStoreId, { action: 'deliver_supply', supply_id: supplyId })
+      const { error: dispatchError } = await (supabase as any).rpc('mark_fbs_supply_dispatched', {
+        p_store_id: selectedStoreId,
+        p_supply_id: supplyId,
+      })
+      if (dispatchError) console.warn('Не удалось сразу перевести резерв FBS в ожидание WB:', dispatchError)
       setSelected(new Set())
       setSelectedSupplyIds(new Set())
       await Promise.all([doSync(), loadOpenSupplies()])
@@ -1983,9 +2142,10 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                   className="h-3.5 w-3.5 cursor-pointer rounded accent-violet-500"
                                 />
                               </th>
-                              <th className="px-4 py-2 text-left font-semibold">Заказ / Артикул WB</th>
+                              <th className="px-4 py-2 text-left font-semibold">Заказ</th>
                               <th className="px-4 py-2 text-left font-semibold">Товар</th>
-                              <th className="px-4 py-2 text-left font-semibold">Адрес товара / Баркод</th>
+                              <th className="px-4 py-2 text-left font-semibold">Адрес товара</th>
+                              <th className="px-4 py-2 text-right font-semibold">Кол-во</th>
                               <th className="px-4 py-2 text-left font-semibold">Время</th>
                               <th className="px-4 py-2 text-left font-semibold">Склад FBS</th>
                               {isDeliveringTab && <th className="px-4 py-2 text-left font-semibold">Статус WB</th>}
@@ -2028,6 +2188,20 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                                 </td>
                                 <td className="px-4 py-2">
                                   <ProductLocationsCell order={order} />
+                                  {isAssemblingTab && order.productLocations.length > 0 && (
+                                    <button
+                                      type="button"
+                                      disabled={isBusy}
+                                      onClick={() => { setBoxScanValue(''); setBoxSelectionOrder(order) }}
+                                      className={`mt-1.5 inline-flex cursor-pointer items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold transition disabled:cursor-wait disabled:opacity-40 ${order.stockAllocation?.status === 'reserved' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'}`}
+                                    >
+                                      <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></svg>
+                                      {order.stockAllocation?.status === 'reserved' ? 'Изменить короб' : 'Выбрать короб'}
+                                    </button>
+                                  )}
+                                </td>
+                                <td className="px-4 py-2">
+                                  <FbsStockQuantityCell order={order} />
                                 </td>
                                 <td className={`px-4 py-2 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                                 <td className="max-w-48 px-4 py-2">{renderWbWarehouseCell(order)}</td>
@@ -2196,9 +2370,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                       className="h-3.5 w-3.5 translate-x-[30px] rounded accent-violet-500 cursor-pointer" />
                   </th>
                 )}
-                <th className="px-4 py-3 text-left font-semibold text-slate-500">Заказ / Артикул WB</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-500">Заказ</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Товар</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-500">Адрес товара / Баркод</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-500">Адрес товара</th>
                 <th className="px-4 py-3 text-right font-semibold text-slate-500">Кол-во</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Склад FBS</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Время</th>
@@ -2247,7 +2421,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                     <td className="px-4 py-3">
                       <ProductLocationsCell order={order} />
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-slate-800">{order.productLocations.length > 0 ? productLocationQuantity(order.productLocations) : '—'}</td>
+                    <td className="px-4 py-3"><FbsStockQuantityCell order={order} /></td>
                     <td className="max-w-48 px-4 py-3">{renderWbWarehouseCell(order)}</td>
                     <td className={`px-4 py-3 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                     <td className="px-4 py-3">
@@ -2306,6 +2480,79 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
       {/* Клик вне меню — закрываем */}
       {orderMenuId !== null && (
         <div className="fixed inset-0 z-40" onClick={() => setOrderMenuId(null)} />
+      )}
+
+      {boxSelectionOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" onClick={() => { if (!boxSelectionBusy) setBoxSelectionOrder(null) }}>
+          <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Выбрать короб</h2>
+                <p className="mt-1 text-sm text-slate-500">Заказ № {boxSelectionOrder.id} · {boxSelectionOrder.productName || `Товар WB ${boxSelectionOrder.nmId}`}</p>
+              </div>
+              <button type="button" disabled={boxSelectionBusy} title="Закрыть" onClick={() => setBoxSelectionOrder(null)} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 disabled:opacity-40">
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 6 12 12M18 6 6 18" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+            <div className="border-b border-slate-100 px-6 py-4">
+              <p className="mb-2 text-xs font-semibold text-slate-600">Можно выбрать мышкой или отсканировать QR короба</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  autoFocus
+                  value={boxScanValue}
+                  onChange={(event) => setBoxScanValue(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void reserveScannedBox() } }}
+                  placeholder="QR короба"
+                  disabled={boxSelectionBusy}
+                  className="min-w-0 flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                />
+                <button type="button" disabled={!boxScanValue.trim() || boxSelectionBusy} onClick={() => void reserveScannedBox()} className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40">
+                  Выбрать
+                </button>
+              </div>
+              {boxSelectionOrder.stockAllocation?.status === 'reserved' && (
+                <button
+                  type="button"
+                  disabled={boxSelectionBusy}
+                  onClick={() => void releaseOrderBoxReservation(boxSelectionOrder)}
+                  className="mt-3 inline-flex cursor-pointer items-center rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-100 disabled:cursor-wait disabled:opacity-40"
+                >
+                  Отменить выбор короба
+                </button>
+              )}
+            </div>
+            <div className="space-y-2 overflow-y-auto px-6 py-5">
+              {boxSelectionOrder.productLocations.map((location) => {
+                const isCurrent = boxSelectionOrder.stockAllocation?.status === 'reserved'
+                  && boxSelectionOrder.stockAllocation.boxItemId === location.boxItemId
+                const canSelect = location.quantity > 0 || isCurrent
+                return (
+                  <button
+                    key={location.boxItemId}
+                    type="button"
+                    disabled={!canSelect || boxSelectionBusy}
+                    onClick={() => void reserveOrderFromBox(boxSelectionOrder, location)}
+                    className={`flex w-full items-center justify-between gap-4 rounded-2xl border p-4 text-left transition ${isCurrent ? 'border-emerald-300 bg-emerald-50' : canSelect ? 'border-slate-200 hover:border-violet-300 hover:bg-violet-50/50' : 'cursor-not-allowed border-slate-100 bg-slate-50 opacity-55'}`}
+                  >
+                    <span className="min-w-0">
+                      <span className={`block truncate font-semibold ${location.isAddressed ? 'text-violet-700' : 'text-amber-600'}`}>{productLocationAddress(location) ?? 'Без адреса'}</span>
+                      <span className="mt-1 block text-xs text-slate-500">P-{location.batchNumber} · S-{location.supplyNumber} · Короб {location.boxNumber}</span>
+                      <span className="mt-0.5 block font-mono text-[11px] text-slate-400">{location.boxBarcode}</span>
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <span className={`block text-sm font-bold ${canSelect ? 'text-slate-900' : 'text-red-500'}`}>{location.quantity} доступно</span>
+                      {isCurrent && <span className="mt-1 block text-[10px] font-bold text-emerald-600">ВЫБРАН ДЛЯ ЗАКАЗА</span>}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="border-t border-slate-100 px-6 py-4 text-xs text-slate-500">
+              После выбора 1 шт. резервируется в этом коробе. Физический остаток спишется только после приёмки заказа Wildberries.
+            </div>
+          </div>
+        </div>
       )}
 
       {kizScannerOpen && selectedStoreId && (

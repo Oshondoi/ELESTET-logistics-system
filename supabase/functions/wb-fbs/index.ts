@@ -79,6 +79,21 @@ async function sbWrite(
   return text ? parseWbJson(text) : []
 }
 
+async function sbRpc<T>(functionName: string, body: unknown): Promise<T> {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${functionName}`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`DB ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
 type WbStickerCatalogRow = {
   orderId: string | number
   barcode?: string | number
@@ -642,6 +657,13 @@ Deno.serve(async (req) => {
     if (action === 'deliver_supply') {
       const { supply_id } = body as { supply_id: string }
       if (!supply_id) return err('supply_id обязателен')
+      const missingReservations = Number(await sbRpc<number>('count_fbs_supply_orders_missing_stock_reservation', {
+        p_store_id: store_id,
+        p_supply_id: supply_id,
+      }))
+      if (missingReservations > 0) {
+        return err(`Сначала выберите короб для ${missingReservations} FBS-заказов с товаром на складе`)
+      }
       await wbPatchNoContent(apiKey, `/api/v3/supplies/${encodeURIComponent(supply_id)}/deliver`)
       return ok({ success: true })
     }

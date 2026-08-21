@@ -32,6 +32,15 @@ type CatalogItem = {
   partB?: string
 }
 
+type ActiveBoxInfo = {
+  boxId: string
+  barcode: string
+  boxNumber: number
+  supplyNumber: number
+  batchNumber: number
+  batchName: string
+}
+
 type OrderView = {
   id: string
   productName: string | null
@@ -119,6 +128,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [pairs, setPairs] = useState<ScanPair[]>([])
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
   const [catalogMissing, setCatalogMissing] = useState(0)
+  const [activeBox, setActiveBox] = useState<ActiveBoxInfo | null>(null)
+  const [selectingBox, setSelectingBox] = useState(false)
   const [recoverableSessions, setRecoverableSessions] = useState<ScanSession[]>([])
   const [value, setValue] = useState('')
   const [loading, setLoading] = useState(true)
@@ -159,6 +170,16 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     if (loadError) throw loadError
     setSession(data as ScanSession)
   }, [])
+
+  const loadActiveBox = useCallback(async (sessionId: string) => {
+    if (!supabase) return
+    const { data, error: loadError } = await (supabase as any).rpc('fbs_marking_box_info', {
+      p_session_id: sessionId,
+      p_device_id: stableDeviceId,
+    })
+    if (loadError) throw loadError
+    setActiveBox((data as ActiveBoxInfo | null) ?? null)
+  }, [stableDeviceId])
 
   const loadRecoverableSessions = useCallback(async (currentSessionId: string) => {
     if (!supabase) return
@@ -206,7 +227,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         setSession(nextSession)
         setCatalog((catalogResult.catalog ?? []) as CatalogItem[])
         setCatalogMissing(Number(catalogResult.missing ?? 0))
-        await Promise.all([loadPairs(nextSession.id), loadRecoverableSessions(nextSession.id)])
+        await Promise.all([loadPairs(nextSession.id), loadRecoverableSessions(nextSession.id), loadActiveBox(nextSession.id)])
       } catch (loadError) {
         if (!cancelled) setError(`Не удалось открыть сканирование: ${errorText(loadError)}`)
       } finally {
@@ -214,7 +235,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       }
     })()
     return () => { cancelled = true }
-  }, [accountId, loadPairs, loadRecoverableSessions, stableDeviceId, storeId])
+  }, [accountId, loadActiveBox, loadPairs, loadRecoverableSessions, stableDeviceId, storeId])
 
   useEffect(() => {
     if (!supabase || !session?.id) return
@@ -225,11 +246,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         void loadPairs(session.id)
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'fbs_marking_sessions', filter: `id=eq.${session.id}` }, () => {
-        void loadSession(session.id)
+        void Promise.all([loadSession(session.id), loadActiveBox(session.id)])
       })
       .subscribe()
     return () => { void client.removeChannel(channel) }
-  }, [loadPairs, loadSession, session?.id])
+  }, [loadActiveBox, loadPairs, loadSession, session?.id])
 
   useEffect(() => {
     if (!supabase || !session?.id || !['active', 'partial'].includes(session.status)) return
@@ -252,8 +273,33 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     setNotice('')
     setBusy(true)
     try {
+      const candidates = scanCandidates(rawValue ?? value)
+      const boxScanMode = !activeBox || selectingBox
+      const looksLikeBox = !session.pending_order_id && candidates.some((candidate) => /^EL_/i.test(candidate))
+      if (boxScanMode || looksLikeBox) {
+        let selectedBox: ActiveBoxInfo | null = null
+        let lastBoxError: unknown = null
+        for (const candidate of candidates) {
+          const result = await (supabase as any).rpc('set_fbs_marking_active_box', {
+            p_session_id: session.id,
+            p_device_id: stableDeviceId,
+            p_box_barcode: candidate,
+          })
+          if (!result.error && result.data) {
+            selectedBox = result.data as ActiveBoxInfo
+            break
+          }
+          lastBoxError = result.error
+        }
+        if (!selectedBox) throw lastBoxError || new Error('Короб не найден')
+        setActiveBox(selectedBox)
+        setSelectingBox(false)
+        setValue('')
+        setNotice(`Активен короб №${selectedBox.boxNumber}. Теперь сканируйте QR WB`)
+        signal(true)
+        return
+      }
       if (!session.pending_order_id) {
-        const candidates = scanCandidates(rawValue ?? value)
         let item = candidates.map((candidate) => catalogByScan.get(candidate)).find(Boolean)
         if (!item) {
           const refreshed = await invokeFbs(storeId, { action: 'get_scan_catalog' })
@@ -476,6 +522,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const draftCount = pairs.filter((pair) => pair.status === 'draft').length
   const sentCount = pairs.filter((pair) => pair.status === 'sent').length
   const errorCount = pairs.filter((pair) => pair.status === 'error').length
+  const boxScanMode = !activeBox || selectingBox
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-3" onClick={onClose}>
@@ -503,13 +550,23 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
             <>
               <section className={`rounded-3xl border-2 p-6 text-center ${session?.pending_order_id ? 'border-emerald-300 bg-emerald-50' : 'border-violet-300 bg-violet-50'}`}>
                 <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  {session?.status === 'completed' ? 'Сессия завершена' : session?.pending_order_id ? 'Шаг 2 из 2' : 'Шаг 1 из 2'}
+                  {session?.status === 'completed' ? 'Сессия завершена' : boxScanMode ? 'Шаг 1 из 3' : session?.pending_order_id ? 'Шаг 3 из 3' : 'Шаг 2 из 3'}
                 </div>
                 <div className="mt-2 text-2xl font-bold text-slate-900">
                   {session?.status === 'completed'
                     ? 'КИЗ отправлены в Wildberries'
-                    : session?.pending_order_id ? 'Сканируйте КИЗ' : 'Сканируйте QR WB'}
+                    : boxScanMode ? 'Сканируйте QR короба' : session?.pending_order_id ? 'Сканируйте КИЗ' : 'Сканируйте QR WB'}
                 </div>
+                {activeBox && !boxScanMode && session?.status !== 'completed' && (
+                  <div className="mx-auto mt-3 flex max-w-2xl items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-violet-600">Активный короб</div>
+                      <div className="mt-0.5 truncate text-sm font-bold text-slate-900">P-{activeBox.batchNumber} · S-{activeBox.supplyNumber} · Короб {activeBox.boxNumber}</div>
+                      <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">{activeBox.barcode}</div>
+                    </div>
+                    <button type="button" disabled={busy || Boolean(session?.pending_order_id)} onClick={() => { setSelectingBox(true); setValue(''); window.requestAnimationFrame(() => inputRef.current?.focus()) }} className="shrink-0 rounded-xl border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40">Сменить</button>
+                  </div>
+                )}
                 {session?.pending_order_id && (
                   <div className="mt-2 text-sm text-slate-600">
                     Заказ № <b>{session.pending_order_id}</b>
@@ -525,7 +582,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       disabled={busy}
                       autoComplete="off"
                       spellCheck={false}
-                      placeholder={session?.pending_order_id ? 'КИЗ' : 'QR заказа WB'}
+                      placeholder={boxScanMode ? 'QR короба' : session?.pending_order_id ? 'КИЗ' : 'QR заказа WB'}
                       className="min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-5 py-4 font-mono text-base outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:opacity-60"
                     />
                     <button
@@ -544,7 +601,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                 {cameraOpen && session?.status !== 'completed' && (
                   <div className="mx-auto mt-4 max-w-2xl overflow-hidden rounded-2xl border border-violet-200 bg-slate-950 p-2 text-left">
                     <div className="mb-2 flex items-center justify-between px-2 text-xs font-semibold text-white">
-                      <span>Наведите камеру на {session?.pending_order_id ? 'КИЗ' : 'QR WB'}</span>
+                      <span>Наведите камеру на {boxScanMode ? 'QR короба' : session?.pending_order_id ? 'КИЗ' : 'QR WB'}</span>
                       <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg bg-white/15 px-2 py-1 hover:bg-white/25">Закрыть</button>
                     </div>
                     <video ref={cameraVideoRef} autoPlay muted playsInline className="max-h-72 w-full rounded-xl bg-black object-cover" />
