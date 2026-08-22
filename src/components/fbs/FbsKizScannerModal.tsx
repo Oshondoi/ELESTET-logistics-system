@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { ensureAuthenticatedSession } from '../../lib/authSession'
 import { invokeFbs } from '../../services/fbsApi'
+import { showToast } from '../ui/Toast'
 
 type ScanSession = {
   id: string
@@ -10,6 +12,7 @@ type ScanSession = {
   pending_wb_qr: string | null
   pending_product_barcode: string | null
   pending_locked_until: string | null
+  box_scan_enabled: boolean
   barcode_scan_enabled: boolean
   started_at: string
   last_seen_at?: string
@@ -103,7 +106,14 @@ function buildCatalogMap(items: CatalogItem[]): Map<string, CatalogItem> {
 }
 
 function errorText(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error)
+  const raw = error instanceof Error
+    ? error.message
+    : typeof error === 'object' && error !== null
+      ? String((error as { message?: unknown; details?: unknown; hint?: unknown }).message
+        ?? (error as { details?: unknown }).details
+        ?? (error as { hint?: unknown }).hint
+        ?? JSON.stringify(error))
+      : String(error)
   return raw.replace(/^.*?message["']?\s*:\s*["']?/i, '').replace(/["'}]+$/g, '')
 }
 
@@ -150,6 +160,14 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const ordersById = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders])
   const catalogByScan = useMemo(() => buildCatalogMap(catalog), [catalog])
   const pendingOrder = session?.pending_order_id ? ordersById.get(session.pending_order_id) : null
+
+  useEffect(() => {
+    if (error) showToast(error, 'error')
+  }, [error])
+
+  useEffect(() => {
+    if (notice) showToast(notice, 'success')
+  }, [notice])
 
   const loadPairs = useCallback(async (sessionId: string) => {
     if (!supabase) return
@@ -214,6 +232,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       if (!supabase) throw new Error('Supabase не настроен')
       setLoading(true)
       try {
+        await ensureAuthenticatedSession()
         const [sessionResult, catalogResult] = await Promise.all([
           (supabase as any).rpc('start_fbs_marking_session', {
             p_account_id: accountId,
@@ -225,7 +244,12 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         ])
         if (sessionResult.error) throw sessionResult.error
         if (cancelled) return
-        const nextSession = sessionResult.data as ScanSession
+        const preferenceResult = await (supabase as any).rpc('apply_fbs_marking_preferences', {
+          p_session_id: (sessionResult.data as ScanSession).id,
+          p_device_id: stableDeviceId,
+        })
+        if (preferenceResult.error) throw preferenceResult.error
+        const nextSession = preferenceResult.data as ScanSession
         setSession(nextSession)
         setCatalog((catalogResult.catalog ?? []) as CatalogItem[])
         setCatalogMissing(Number(catalogResult.missing ?? 0))
@@ -290,6 +314,31 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
+  const setBoxMode = async (enabled: boolean) => {
+    if (!supabase || !session || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const { data, error: modeError } = await (supabase as any).rpc('set_fbs_marking_box_mode', {
+        p_session_id: session.id,
+        p_device_id: stableDeviceId,
+        p_enabled: enabled,
+      })
+      if (modeError) throw modeError
+      setSession(data as ScanSession)
+      if (!enabled) {
+        setActiveBox(null)
+        setSelectingBox(false)
+      }
+      setNotice(enabled ? 'Скан короба включён' : 'Скан короба отключён')
+    } catch (modeError) {
+      setError(errorText(modeError))
+      signal(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleScan = async (rawValue?: string) => {
     if (!supabase || !session || busy || session.status === 'completed') return
     setError('')
@@ -297,7 +346,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     setBusy(true)
     try {
       const candidates = scanCandidates(rawValue ?? value)
-      const boxScanMode = !activeBox || selectingBox
+      const boxScanMode = Boolean((session.box_scan_enabled ?? true) && (!activeBox || selectingBox))
       if (boxScanMode) {
         let selectedBox: ActiveBoxInfo | null = null
         let lastBoxError: unknown = null
@@ -322,7 +371,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         return
       }
       if (session.barcode_scan_enabled && !session.pending_product_barcode && !session.pending_order_id) {
-        let barcodeResult: { barcode: string; available: number } | null = null
+        let barcodeResult: { barcode: string; available: number | null } | null = null
         let lastBarcodeError: unknown = null
         for (const candidate of candidates) {
           const result = await (supabase as any).rpc('scan_fbs_product_barcode', {
@@ -331,7 +380,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
             p_barcode: candidate,
           })
           if (!result.error && result.data) {
-            barcodeResult = result.data as { barcode: string; available: number }
+            barcodeResult = result.data as { barcode: string; available: number | null }
             break
           }
           lastBarcodeError = result.error
@@ -343,7 +392,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           pending_locked_until: new Date(Date.now() + 120_000).toISOString(),
         } : current)
         setValue('')
-        setNotice(`Баркод найден в коробе · доступно ${barcodeResult.available}. Теперь сканируйте QR WB`)
+        setNotice(barcodeResult.available == null
+          ? 'Баркод принят. Теперь сканируйте QR WB'
+          : `Баркод найден в коробе · доступно ${barcodeResult.available}. Теперь сканируйте QR WB`)
         signal(true)
         return
       }
@@ -570,10 +621,17 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const draftCount = pairs.filter((pair) => pair.status === 'draft').length
   const sentCount = pairs.filter((pair) => pair.status === 'sent').length
   const errorCount = pairs.filter((pair) => pair.status === 'error').length
-  const boxScanMode = !activeBox || selectingBox
+  const boxEnabled = session?.box_scan_enabled ?? true
+  const boxScanMode = Boolean(boxEnabled && (!activeBox || selectingBox))
   const barcodeStep = Boolean(session?.barcode_scan_enabled && !session.pending_product_barcode && !session.pending_order_id && !boxScanMode)
-  const totalSteps = session?.barcode_scan_enabled ? 4 : 3
-  const currentStep = boxScanMode ? 1 : session?.pending_order_id ? totalSteps : barcodeStep ? 2 : totalSteps - 1
+  const totalSteps = 2 + (boxEnabled ? 1 : 0) + (session?.barcode_scan_enabled ? 1 : 0)
+  const currentStep = boxScanMode
+    ? 1
+    : session?.pending_order_id
+      ? totalSteps
+      : barcodeStep
+        ? (boxEnabled ? 2 : 1)
+        : totalSteps - 1
   const scanTarget = boxScanMode ? 'QR короба' : barcodeStep ? 'баркод товара' : session?.pending_order_id ? 'КИЗ' : 'QR WB'
 
   return (
@@ -610,21 +668,30 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                     : `Сканируйте ${scanTarget}`}
                 </div>
                 {session?.status !== 'completed' && (
-                  <label className="mx-auto mt-4 flex max-w-2xl items-center justify-between gap-4 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
-                    <span>
-                      <span className="block text-sm font-semibold text-slate-800">Контрольный скан баркода</span>
-                      <span className="mt-0.5 block text-xs text-slate-500">Проверяет товар в коробе перед QR WB и КИЗ</span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(session?.barcode_scan_enabled)}
-                      disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
-                      onChange={(event) => void setBarcodeMode(event.target.checked)}
-                      className="h-5 w-5 shrink-0 accent-violet-600"
-                    />
-                  </label>
+                  <div className="mx-auto mt-4 grid max-w-2xl grid-cols-2 gap-3">
+                    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
+                      <span className="text-sm font-semibold text-slate-800">Короб</span>
+                      <input
+                        type="checkbox"
+                        checked={boxEnabled}
+                        disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
+                        onChange={(event) => void setBoxMode(event.target.checked)}
+                        className="h-5 w-5 shrink-0 accent-violet-600"
+                      />
+                    </label>
+                    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
+                      <span className="text-sm font-semibold text-slate-800">Баркод</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(session?.barcode_scan_enabled)}
+                        disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
+                        onChange={(event) => void setBarcodeMode(event.target.checked)}
+                        className="h-5 w-5 shrink-0 accent-violet-600"
+                      />
+                    </label>
+                  </div>
                 )}
-                {activeBox && !boxScanMode && session?.status !== 'completed' && (
+                {boxEnabled && activeBox && !boxScanMode && session?.status !== 'completed' && (
                   <div className="mx-auto mt-3 flex max-w-2xl items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
                     <div className="min-w-0">
                       <div className="text-xs font-semibold uppercase tracking-wide text-violet-600">Активный короб</div>
@@ -683,8 +750,6 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                 )}
               </section>
 
-              {error && <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div>}
-              {notice && !error && <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">{notice}</div>}
               {catalogMissing > 0 && <div className="mt-3 rounded-xl bg-amber-50 px-4 py-2 text-xs text-amber-700">WB не вернул QR для {catalogMissing} заказов. Остальные доступны для сканирования.</div>}
 
               {recoverableSessions.length > 0 && (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
+import { ensureAuthenticatedSession, SessionExpiredError } from '../lib/authSession'
 
 interface AuthCredentials {
   email: string
@@ -26,12 +27,16 @@ export const useAuth = () => {
 
     let isMounted = true
 
-    void supabase.auth.getSession().then(({ data }) => {
-      if (isMounted) {
-        setSession(data.session)
-        setIsLoading(false)
-      }
-    })
+    void ensureAuthenticatedSession()
+      .then((nextSession) => {
+        if (isMounted) setSession(nextSession)
+      })
+      .catch((error) => {
+        if (isMounted && error instanceof SessionExpiredError) setSession(null)
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false)
+      })
 
     const {
       data: { subscription },

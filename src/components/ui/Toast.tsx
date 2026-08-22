@@ -19,7 +19,7 @@ export const ToastContainer = () => {
   useEffect(() => {
     _addToast = (message, type = 'error') => {
       const id = Date.now()
-      setToasts((prev) => [...prev, { id, message, type }])
+      setToasts((prev) => [{ id, message, type }, ...prev])
       setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000)
     }
     return () => { _addToast = null }
@@ -28,11 +28,11 @@ export const ToastContainer = () => {
   if (toasts.length === 0) return null
 
   return createPortal(
-    <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 max-w-sm">
+    <div className="fixed top-4 right-4 z-[9999] flex flex-col items-end gap-2">
       {toasts.map((t) => (
         <div
           key={t.id}
-          className={`flex items-start gap-3 rounded-xl px-4 py-3 shadow-lg text-sm text-white ${
+          className={`flex w-fit max-w-sm items-start gap-3 rounded-xl px-4 py-3 shadow-lg text-sm text-white ${
             t.type === 'error' ? 'bg-red-500' :
             t.type === 'success' ? 'bg-emerald-500' :
             'bg-slate-700'

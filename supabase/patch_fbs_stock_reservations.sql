@@ -610,13 +610,14 @@ $$;
 revoke all on function public.get_fbs_product_locations(uuid, text[]) from public, anon;
 grant execute on function public.get_fbs_product_locations(uuid, text[]) to authenticated;
 
--- A marking session has one active source box per device. The box must be
--- selected before WB QR / KIZ scanning and remains active until explicitly
--- replaced by another box.
+-- A marking session can optionally use one active source box per device.
+-- When box control is enabled, the box is selected before WB QR / KIZ and
+-- remains active until explicitly replaced.
 alter table public.fbs_marking_sessions
   add column if not exists active_box_id uuid references public.fulfillment_boxes(id) on delete set null;
 
 alter table public.fbs_marking_sessions
+  add column if not exists box_scan_enabled boolean not null default true,
   add column if not exists barcode_scan_enabled boolean not null default false,
   add column if not exists pending_product_barcode text;
 
@@ -743,6 +744,40 @@ begin
 end;
 $$;
 
+create or replace function public.set_fbs_marking_box_mode(
+  p_session_id uuid,
+  p_device_id text,
+  p_enabled boolean
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_session public.fbs_marking_sessions%rowtype;
+begin
+  select * into v_session
+  from public.fbs_marking_sessions
+  where id = p_session_id and created_by = auth.uid() and device_id = p_device_id
+  for update;
+  if v_session.id is null or v_session.status not in ('active', 'partial') then
+    raise exception 'Активная сессия устройства не найдена';
+  end if;
+  if v_session.pending_order_id is not null or v_session.pending_product_barcode is not null then
+    raise exception 'Настройку нельзя менять внутри незавершённой пары';
+  end if;
+
+  update public.fbs_marking_sessions
+  set box_scan_enabled = coalesce(p_enabled, false),
+      active_box_id = case when coalesce(p_enabled, false) then active_box_id else null end,
+      last_seen_at = now(), updated_at = now()
+  where id = v_session.id
+  returning * into v_session;
+  return to_jsonb(v_session);
+end;
+$$;
+
 create or replace function public.scan_fbs_product_barcode(
   p_session_id uuid,
   p_device_id text,
@@ -772,11 +807,20 @@ begin
   if not v_session.barcode_scan_enabled then
     raise exception 'Контрольный скан баркода отключён';
   end if;
-  if v_session.active_box_id is null then
+  if v_session.box_scan_enabled and v_session.active_box_id is null then
     raise exception 'Сначала отсканируйте QR короба';
   end if;
   if v_session.pending_order_id is not null or v_session.pending_product_barcode is not null then
     raise exception 'Сначала завершите или сбросьте текущую пару';
+  end if;
+
+  if not v_session.box_scan_enabled then
+    update public.fbs_marking_sessions
+    set pending_product_barcode = v_barcode,
+        pending_locked_until = now() + interval '2 minutes',
+        last_seen_at = now(), updated_at = now()
+    where id = v_session.id;
+    return jsonb_build_object('barcode', v_barcode, 'available', null, 'box_item_id', null);
   end if;
 
   perform pg_advisory_xact_lock(hashtextextended(v_session.active_box_id::text || ':barcode:' || v_barcode, 0));
@@ -825,7 +869,7 @@ declare
 begin
   if new.pending_order_id is null
      or new.pending_order_id is not distinct from old.pending_order_id then return new; end if;
-  if new.active_box_id is null then
+  if new.box_scan_enabled and new.active_box_id is null then
     raise exception 'Сначала отсканируйте QR короба';
   end if;
 
@@ -848,25 +892,27 @@ begin
     raise exception 'В одном цикле баркод товара и QR WB не могут совпадать';
   end if;
 
-  select item.* into v_item
-  from public.fulfillment_box_items item
-  where item.account_id = v_order.account_id
-    and item.box_id = new.active_box_id
-    and item.barcode in (
-      select value from jsonb_array_elements_text(coalesce(v_order.skus, '[]'::jsonb)) value
-    )
-    and (not new.barcode_scan_enabled or item.barcode = new.pending_product_barcode)
-  order by item.created_at
-  limit 1
-  for update;
-  if not found then
-    raise exception 'В активном коробе нет товара этого FBS-заказа';
-  end if;
-  select coalesce(sum(quantity), 0)::integer into v_active
-  from public.fbs_stock_allocations
-  where box_item_id = v_item.id and status in ('reserved', 'awaiting_wb');
-  if v_item.qty - v_active < 1 then
-    raise exception 'В активном коробе закончился доступный остаток';
+  if new.box_scan_enabled then
+    select item.* into v_item
+    from public.fulfillment_box_items item
+    where item.account_id = v_order.account_id
+      and item.box_id = new.active_box_id
+      and item.barcode in (
+        select value from jsonb_array_elements_text(coalesce(v_order.skus, '[]'::jsonb)) value
+      )
+      and (not new.barcode_scan_enabled or item.barcode = new.pending_product_barcode)
+    order by item.created_at
+    limit 1
+    for update;
+    if not found then
+      raise exception 'В активном коробе нет товара этого FBS-заказа';
+    end if;
+    select coalesce(sum(quantity), 0)::integer into v_active
+    from public.fbs_stock_allocations
+    where box_item_id = v_item.id and status in ('reserved', 'awaiting_wb');
+    if v_item.qty - v_active < 1 then
+      raise exception 'В активном коробе закончился доступный остаток';
+    end if;
   end if;
   return new;
 end;
@@ -886,17 +932,21 @@ as $$
 declare
   v_box_id uuid;
   v_product_barcode text;
+  v_box_scan_enabled boolean;
 begin
-  select active_box_id, pending_product_barcode into v_box_id, v_product_barcode
+  select active_box_id, pending_product_barcode, box_scan_enabled
+  into v_box_id, v_product_barcode, v_box_scan_enabled
   from public.fbs_marking_sessions
   where id = new.session_id for update;
-  if v_box_id is null then raise exception 'Сначала отсканируйте QR короба'; end if;
+  if v_box_scan_enabled and v_box_id is null then raise exception 'Сначала отсканируйте QR короба'; end if;
   if new.sgtin = new.wb_qr or (v_product_barcode is not null and new.sgtin = v_product_barcode) then
     raise exception 'В одном цикле баркод, QR WB и КИЗ должны отличаться';
   end if;
-  perform public.reserve_fbs_order_from_box(new.store_id, new.order_id, v_box_id);
-  new.product_snapshot := coalesce(new.product_snapshot, '{}'::jsonb)
-    || jsonb_build_object('source_box_id', v_box_id);
+  if v_box_scan_enabled then
+    perform public.reserve_fbs_order_from_box(new.store_id, new.order_id, v_box_id);
+    new.product_snapshot := coalesce(new.product_snapshot, '{}'::jsonb)
+      || jsonb_build_object('source_box_id', v_box_id);
+  end if;
   return new;
 end;
 $$;
@@ -1011,6 +1061,8 @@ revoke all on function public.set_fbs_marking_active_box(uuid, text, text) from 
 grant execute on function public.set_fbs_marking_active_box(uuid, text, text) to authenticated;
 revoke all on function public.set_fbs_marking_barcode_mode(uuid, text, boolean) from public, anon;
 grant execute on function public.set_fbs_marking_barcode_mode(uuid, text, boolean) to authenticated;
+revoke all on function public.set_fbs_marking_box_mode(uuid, text, boolean) from public, anon;
+grant execute on function public.set_fbs_marking_box_mode(uuid, text, boolean) to authenticated;
 revoke all on function public.scan_fbs_product_barcode(uuid, text, text) from public, anon;
 grant execute on function public.scan_fbs_product_barcode(uuid, text, text) to authenticated;
 revoke all on function public.validate_fbs_marking_active_box() from public, anon, authenticated;
