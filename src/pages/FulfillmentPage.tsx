@@ -95,6 +95,11 @@ import { createStoreInSupabase } from '../services/storeService'
 import { supabase } from '../lib/supabase'
 import { buildFulfillmentBoxBarcode } from '../lib/fulfillmentBoxBarcode'
 import { buildFulfillmentBoxQrPdf } from '../lib/fulfillmentBoxQrPdf'
+import {
+  buildFulfillmentBoxContentsPdf,
+  type FulfillmentBoxContentsFormat,
+  type FulfillmentBoxContentsPageSource,
+} from '../lib/fulfillmentBoxContentsPdf'
 
 // ── Вспомогательные константы ─────────────────────────────────
 const STAGE_LABELS: Record<FulfillmentStage, string> = {
@@ -387,6 +392,116 @@ const openBoxQrPdf = (labels: ReturnType<typeof createBoxQrLabels>) => {
     throw new Error('Браузер заблокировал PDF. Разрешите всплывающие окна для сайта.')
   }
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+const buildBoxContentsSources = async ({
+  accountId,
+  batch,
+  supplies,
+}: {
+  accountId: string
+  batch: FulfillmentBatchWithItems
+  supplies: FulfillmentSupplyWithBoxes[]
+}): Promise<FulfillmentBoxContentsPageSource[]> => {
+  const boxes = supplies.flatMap((supply) => supply.boxes)
+  const barcodes = [...new Set(boxes.flatMap((box) => box.items.map((item) => item.barcode)).filter(Boolean))]
+  const productInfo = await fetchProductInfoByBarcodes(accountId, batch.store_id, barcodes)
+
+  return [...supplies]
+    .sort((left, right) => left.supply_number - right.supply_number)
+    .flatMap((supply) => [...supply.boxes]
+      .sort((left, right) => left.box_number - right.box_number)
+      .filter((box) => box.items.length > 0)
+      .map((box) => ({
+        batchNumber: batch.short_id,
+        batchName: batch.name,
+        supplyNumber: supply.supply_number,
+        warehouseName: supply.warehouse_name,
+        boxNumber: box.box_number,
+        rows: box.items.map((item) => ({
+          barcode: item.barcode,
+          wbArticle: String(productInfo[item.barcode]?.nm_id ?? item._info?.nm_id ?? '—'),
+          quantity: item.qty,
+        })),
+      })))
+}
+
+const openBoxContentsPdf = async (
+  accountId: string,
+  batch: FulfillmentBatchWithItems,
+  supplies: FulfillmentSupplyWithBoxes[],
+  format: FulfillmentBoxContentsFormat,
+) => {
+  const preview = window.open('', '_blank')
+  if (!preview) {
+    throw new Error('Браузер заблокировал PDF. Разрешите всплывающие окна для сайта.')
+  }
+  try {
+    const sources = await buildBoxContentsSources({ accountId, batch, supplies })
+    const url = URL.createObjectURL(buildFulfillmentBoxContentsPdf(sources, format))
+    preview.location.href = url
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (error) {
+    preview.close()
+    throw error
+  }
+}
+
+function BoxContentsFormatModal({
+  description,
+  onClose,
+  onPrint,
+}: {
+  description: string
+  onClose: () => void
+  onPrint: (format: FulfillmentBoxContentsFormat) => Promise<void>
+}) {
+  const [busy, setBusy] = useState<FulfillmentBoxContentsFormat | null>(null)
+  const [error, setError] = useState('')
+  const print = async (format: FulfillmentBoxContentsFormat) => {
+    if (busy) return
+    setBusy(format)
+    setError('')
+    try {
+      await onPrint(format)
+      onClose()
+    } catch (printError) {
+      setError(printError instanceof Error ? printError.message : 'Не удалось подготовить PDF')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!busy) onClose() }}>
+      <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-base font-semibold text-slate-800">Печать содержимого коробов</p>
+            <p className="mt-1 text-sm text-slate-400">{description}</p>
+          </div>
+          <button type="button" disabled={Boolean(busy)} onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 disabled:opacity-40" aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">Размер печати</p>
+        <div className="mt-2 grid grid-cols-2 gap-3">
+          <button type="button" disabled={Boolean(busy)} onClick={() => void print('a4')} className="rounded-2xl border border-slate-200 px-4 py-5 text-left transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50">
+            <span className="block text-lg font-bold text-slate-900">A4</span>
+            <span className="mt-1 block text-xs text-slate-500">Лист для обычного принтера</span>
+            {busy === 'a4' && <span className="mt-2 block text-xs font-semibold text-blue-600">Подготовка…</span>}
+          </button>
+          <button type="button" disabled={Boolean(busy)} onClick={() => void print('120x75')} className="rounded-2xl border border-slate-200 px-4 py-5 text-left transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50">
+            <span className="block text-lg font-bold text-slate-900">120×75</span>
+            <span className="mt-1 block text-xs text-slate-500">Стикер для термопринтера</span>
+            {busy === '120x75' && <span className="mt-2 block text-xs font-semibold text-blue-600">Подготовка…</span>}
+          </button>
+        </div>
+        {error && <p className="mt-4 rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-600">{error}</p>}
+      </div>
+    </div>,
+    document.body,
+  )
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -783,6 +898,7 @@ const BatchDetailModal = ({
   const [boxExportSelectedOptionalColumns, setBoxExportSelectedOptionalColumns] = useState<OptionalBoxExportColumnKey[]>(getStoredBoxExportColumns)
   const [boxExportDialog, setBoxExportDialog] = useState<{ supplyId: string; boxId?: string } | null>(null)
   const [boxQrDialog, setBoxQrDialog] = useState<{ supplyId: string; boxId: string } | null>(null)
+  const [boxContentsDialog, setBoxContentsDialog] = useState<{ supplies: FulfillmentSupplyWithBoxes[]; description: string } | null>(null)
   const [isExportingBoxesExcel, setIsExportingBoxesExcel] = useState(false)
   const [boxExportError, setBoxExportError] = useState<string | null>(null)
   const [packingItemEdits, setPackingItemEdits] = useState<Record<string, string>>({})
@@ -951,6 +1067,23 @@ const BatchDetailModal = ({
     } catch (printError) {
       setError(printError instanceof Error ? printError.message : 'Не удалось подготовить PDF')
     }
+  }
+
+  const openSupplyBoxContents = (supply: FulfillmentSupplyWithBoxes) => {
+    setBoxContentsDialog({
+      supplies: [supply],
+      description: `${supply.warehouse_name} · Все короба поставки`,
+    })
+  }
+
+  const openSingleBoxContents = (
+    supply: FulfillmentSupplyWithBoxes,
+    box: FulfillmentSupplyWithBoxes['boxes'][number],
+  ) => {
+    setBoxContentsDialog({
+      supplies: [{ ...supply, boxes: [box] }],
+      description: `${supply.warehouse_name} · Короб №${box.box_number}`,
+    })
   }
 
   // Фото товаров для таблицы приёмки (barcode → photo_url)
@@ -5611,6 +5744,15 @@ const BatchDetailModal = ({
                                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
                                   </svg>
                                 </button>
+                                <button
+                                  type="button"
+                                  disabled={totalItems === 0}
+                                  onClick={() => openSupplyBoxContents(supply)}
+                                  className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
+                                  title={totalItems === 0 ? 'В коробах нет товаров' : 'Распечатать содержимое коробов поставки'}
+                                >
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
+                                </button>
                               </div>
                               {canTransferLateSupply && (
                                 <button
@@ -5639,6 +5781,15 @@ const BatchDetailModal = ({
                         )
                       })}
                     </div>
+                  )}
+
+                  {/* QR-код системного ШК короба */}
+                  {boxContentsDialog && (
+                    <BoxContentsFormatModal
+                      description={boxContentsDialog.description}
+                      onClose={() => setBoxContentsDialog(null)}
+                      onPrint={(format) => openBoxContentsPdf(accountId, { ...batch, items }, boxContentsDialog.supplies, format)}
+                    />
                   )}
 
                   {/* QR-код системного ШК короба */}
@@ -6021,6 +6172,16 @@ const BatchDetailModal = ({
                                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                                           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
                                         </svg>
+                                      </button>
+                                    )}
+                                    {box.items.length > 0 && (
+                                      <button
+                                        type="button"
+                                        title="Распечатать содержимое этого короба"
+                                        onClick={() => openSingleBoxContents(supply, box)}
+                                        className="flex items-center rounded-full p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                                      >
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
                                       </button>
                                     )}
                                     {/* Авто-добавление (если есть право) */}
@@ -8888,11 +9049,16 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
   const [linkCopiedId, setLinkCopiedId] = useState<string | null>(null)
   const [batchSearch, setBatchSearch] = useState('')
   const [isPreparingBatchExportId, setIsPreparingBatchExportId] = useState<string | null>(null)
-  const [isPreparingBatchExportAction, setIsPreparingBatchExportAction] = useState<'excel' | 'qr' | null>(null)
+  const [isPreparingBatchExportAction, setIsPreparingBatchExportAction] = useState<'excel' | 'qr' | 'contents' | null>(null)
   const [batchExportSource, setBatchExportSource] = useState<{
     batch: FulfillmentBatchWithItems
     supplies: FulfillmentSupplyWithBoxes[]
-    action: 'excel' | 'qr'
+    action: 'excel' | 'qr' | 'contents'
+  } | null>(null)
+  const [batchContentsDialog, setBatchContentsDialog] = useState<{
+    batch: FulfillmentBatchWithItems
+    supplies: FulfillmentSupplyWithBoxes[]
+    description: string
   } | null>(null)
   const [batchExportSelectedSupplyIds, setBatchExportSelectedSupplyIds] = useState<string[]>([])
   const [batchExportTarget, setBatchExportTarget] = useState<{ batch: FulfillmentBatchWithItems; supplies: FulfillmentSupplyWithBoxes[]; archiveMode: 'ALL' | 'CUSTOM' | null } | null>(null)
@@ -8993,7 +9159,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     setBatchExportTarget({ batch, supplies, archiveMode })
   }
 
-  const handleOpenBatchBoxesExport = async (batch: FulfillmentBatch, action: 'excel' | 'qr' = 'excel') => {
+  const handleOpenBatchBoxesExport = async (batch: FulfillmentBatch, action: 'excel' | 'qr' | 'contents' = 'excel') => {
     if (isPreparingBatchExportId) return
     setIsPreparingBatchExportId(batch.id)
     setIsPreparingBatchExportAction(action)
@@ -9014,7 +9180,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     }
   }
 
-  const isBatchExportSupplyEmpty = (supply: FulfillmentSupplyWithBoxes, action: 'excel' | 'qr' = 'excel') =>
+  const isBatchExportSupplyEmpty = (supply: FulfillmentSupplyWithBoxes, action: 'excel' | 'qr' | 'contents' = 'excel') =>
     action === 'qr' ? supply.boxes.length === 0 : !supply.boxes.some((box) => box.items.length > 0)
 
   const toggleBatchExportSupply = (supplyId: string) => {
@@ -9058,6 +9224,16 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
       } catch (printError) {
         setBatchExportError(printError instanceof Error ? printError.message : 'Не удалось подготовить PDF')
       }
+      return
+    }
+    if (batchExportSource.action === 'contents') {
+      setBatchContentsDialog({
+        batch: batchExportSource.batch,
+        supplies: sortedSelected,
+        description: `${sortedSelected.length} поставки · ${sortedSelected.reduce((sum, supply) => sum + supply.boxes.length, 0)} коробов`,
+      })
+      setBatchExportSource(null)
+      setBatchExportSelectedSupplyIds([])
       return
     }
 
@@ -9300,13 +9476,24 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
       {createOpen && <CreateBatchModal stores={stores} accountId={accountId} settings={settings} hasPipeline={hasPipeline} pipelineStages={accountPipelineStages} onClose={() => setCreateOpen(false)} onSubmit={handleCreate} onStoreCreated={(s) => onStoreCreated?.(s)} />}
       {editTarget && <EditBatchModal batch={editTarget} stores={stores} onClose={() => setEditTarget(null)} onSave={async (values) => { const updated = await updateBatch(editTarget.id, values); handleBatchUpdated(updated); setEditTarget(null) }} />}
       {settingsOpen && <SettingsModal settings={settings} accountId={accountId} accountName={accountName} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
+      {batchContentsDialog && (
+        <BoxContentsFormatModal
+          description={batchContentsDialog.description}
+          onClose={() => setBatchContentsDialog(null)}
+          onPrint={(format) => openBoxContentsPdf(accountId, batchContentsDialog.batch, batchContentsDialog.supplies, format)}
+        />
+      )}
       {batchExportSource && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onClick={() => setBatchExportSource(null)}>
           <div className="w-full max-w-xl space-y-4 rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-base font-semibold text-slate-800">
-                  {batchExportSource.action === 'qr' ? 'Выберите поставки для печати QR' : 'Выберите поставки'}
+                  {batchExportSource.action === 'qr'
+                    ? 'Выберите поставки для печати QR'
+                    : batchExportSource.action === 'contents'
+                      ? 'Выберите поставки для печати содержимого'
+                      : 'Выберите поставки'}
                 </p>
                 <p className="mt-0.5 flex items-baseline gap-1.5 text-xs">
                   <span className="font-bold text-slate-900">
@@ -10056,6 +10243,19 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                           </button>
                           <button
                             type="button"
+                            title="Распечатать содержимое коробов партии"
+                            disabled={isPreparingBatchExportId != null}
+                            onClick={() => void handleOpenBatchBoxesExport(b, 'contents')}
+                            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500 disabled:cursor-wait disabled:opacity-50"
+                          >
+                            {isPreparingBatchExportId === b.id && isPreparingBatchExportAction === 'contents' ? (
+                              <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
+                            )}
+                          </button>
+                          <button
+                            type="button"
                             title="Скачать все короба партии"
                             disabled={isPreparingBatchExportId != null}
                             onClick={() => void handleOpenBatchBoxesExport(b, 'excel')}
@@ -10472,6 +10672,19 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                                   <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
                                 ) : (
                                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/><path d="M18 12h.01"/></svg>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                title="Распечатать содержимое коробов партии"
+                                disabled={isPreparingBatchExportId != null}
+                                onClick={() => void handleOpenBatchBoxesExport(b, 'contents')}
+                                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-xl text-slate-300 transition hover:bg-blue-50 hover:text-blue-500 disabled:cursor-wait disabled:opacity-50"
+                              >
+                                {isPreparingBatchExportId === b.id && isPreparingBatchExportAction === 'contents' ? (
+                                  <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                                ) : (
+                                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
                                 )}
                               </button>
                               <button

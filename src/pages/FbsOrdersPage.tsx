@@ -446,6 +446,29 @@ function drawWrappedText(
   return y + lines.length * lineHeight
 }
 
+function wrappedLineCount(
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxLines = 2,
+): number {
+  const words = String(text || '—').trim().split(/\s+/)
+  let lines = 0
+  let line = ''
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word
+    if (context.measureText(candidate).width <= maxWidth || !line) {
+      line = candidate
+    } else {
+      lines += 1
+      line = word
+      if (lines === maxLines - 1) break
+    }
+  }
+  if (line && lines < maxLines) lines += 1
+  return lines
+}
+
 function stickerVariantKey(order: FbsOrder): string {
   return `${fbsOrderBarcode(order) ?? ''}|${order.chrtId || ''}|${order.nmId}`
 }
@@ -552,41 +575,59 @@ function buildPickingSticker(order: FbsOrder, quantity: number): StickerPageImag
 }
 
 function buildLocationStickers(order: FbsOrder): StickerPageImage[] {
-  const locations = printableProductLocations(order)
+  const selectedBoxItemId = ['reserved', 'awaiting_wb'].includes(order.stockAllocation?.status ?? '')
+    ? order.stockAllocation?.boxItemId
+    : null
+  const locations = selectedBoxItemId
+    ? printableProductLocations(order).sort((left, right) => Number(right.boxItemId === selectedBoxItemId) - Number(left.boxItemId === selectedBoxItemId))
+    : printableProductLocations(order)
   const { canvas, context } = createStickerCanvas()
   context.font = '700 34px Arial, sans-serif'
   context.fillText('Адрес товара', 24, 18)
-  context.font = '700 23px Arial, sans-serif'
-  const titleEnd = drawWrappedText(context, order.productName || `Товар WB ${order.nmId}`, 24, 66, 532, 27, 2)
-  context.font = '400 20px Arial, sans-serif'
-  const metaEnd = drawWrappedText(context, `Баркод: ${fbsOrderBarcode(order) || '—'} · Арт. WB: ${order.nmId}`, 24, titleEnd + 3, 532, 23, 2)
-  const y = metaEnd + 20
 
   if (locations.length === 0) {
     context.font = '700 28px Arial, sans-serif'
-    context.fillText('Не найден на складе', 24, y + 25)
-    context.font = '400 22px Arial, sans-serif'
-    context.fillText('Товара нет ни в одном актуальном коробе', 24, y + 67)
+    context.fillText('Не найден на складе', 24, 82)
     return [textStickerPage(canvas)]
   }
 
-  const bestLocation = locations[0]
-  context.font = '700 28px Arial, sans-serif'
-  const addressEnd = drawWrappedText(context, productLocationAddress(bestLocation) ?? 'Без адреса', 24, y, 532, 32, 2)
-  context.font = '400 22px Arial, sans-serif'
-  const detailsEnd = drawWrappedText(
-    context,
-    `P-${bestLocation.batchNumber} · S-${bestLocation.supplyNumber} · Короб ${bestLocation.boxNumber} · ${bestLocation.quantity} шт.`,
-    24,
-    addressEnd + 5,
-    532,
-    26,
-    2,
-  )
-  const remainingBoxes = locations.length - 1
+  let y = 66
+  let rendered = 0
+  const bottomLimit = STICKER_HEIGHT_PX - 24
+  for (const [index, location] of locations.entries()) {
+    const address = productLocationAddress(location)
+    let estimatedHeight = 12
+    if (address) {
+      context.font = '700 28px Arial, sans-serif'
+      estimatedHeight += wrappedLineCount(context, address, 532, 2) * 32 + 5
+    }
+    context.font = '400 22px Arial, sans-serif'
+    const details = `P-${location.batchNumber} · S-${location.supplyNumber} · Короб ${location.boxNumber} · ${location.quantity} шт.`
+    estimatedHeight += wrappedLineCount(context, details, 532, 2) * 26
+    const footerReserve = index < locations.length - 1 ? 34 : 0
+    if (y + estimatedHeight + footerReserve > bottomLimit) break
+
+    if (address) {
+      context.font = '700 28px Arial, sans-serif'
+      y = drawWrappedText(context, address, 24, y, 532, 32, 2) + 5
+    }
+    context.font = '400 22px Arial, sans-serif'
+    y = drawWrappedText(
+      context,
+      details,
+      24,
+      y,
+      532,
+      26,
+      2,
+    ) + 12
+    rendered += 1
+  }
+
+  const remainingBoxes = locations.length - rendered
   if (remainingBoxes > 0) {
     context.font = '700 25px Arial, sans-serif'
-    context.fillText(`Ещё ${remainingBoxes} ${boxCountWord(remainingBoxes)}`, 24, detailsEnd + 22)
+    context.fillText(`Ещё ${remainingBoxes} ${boxCountWord(remainingBoxes)}`, 24, Math.min(y + 2, bottomLimit - 30))
   }
   return [textStickerPage(canvas)]
 }

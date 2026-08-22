@@ -8,7 +8,9 @@ type ScanSession = {
   device_id: string
   pending_order_id: string | null
   pending_wb_qr: string | null
+  pending_product_barcode: string | null
   pending_locked_until: string | null
+  barcode_scan_enabled: boolean
   started_at: string
   last_seen_at?: string
   device_name?: string
@@ -203,7 +205,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       .in('session_id', candidates.map((candidate) => candidate.id))
       .in('status', ['draft', 'error'])
     const sessionsWithWork = new Set<string>((pairRows ?? []).map((row: { session_id: string }) => row.session_id))
-    setRecoverableSessions(candidates.filter((candidate) => Boolean(candidate.pending_order_id) || (!pairsError && sessionsWithWork.has(candidate.id))))
+    setRecoverableSessions(candidates.filter((candidate) => Boolean(candidate.pending_order_id || candidate.pending_product_barcode) || (!pairsError && sessionsWithWork.has(candidate.id))))
   }, [storeId])
 
   useEffect(() => {
@@ -265,7 +267,28 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
   useEffect(() => {
     if (!busy && !loading && session?.status !== 'completed') inputRef.current?.focus()
-  }, [busy, loading, session?.pending_order_id, session?.status])
+  }, [busy, loading, session?.pending_order_id, session?.pending_product_barcode, session?.status])
+
+  const setBarcodeMode = async (enabled: boolean) => {
+    if (!supabase || !session || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const { data, error: modeError } = await (supabase as any).rpc('set_fbs_marking_barcode_mode', {
+        p_session_id: session.id,
+        p_device_id: stableDeviceId,
+        p_enabled: enabled,
+      })
+      if (modeError) throw modeError
+      setSession(data as ScanSession)
+      setNotice(enabled ? 'Контрольный скан баркода включён' : 'Контрольный скан баркода отключён')
+    } catch (modeError) {
+      setError(errorText(modeError))
+      signal(false)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const handleScan = async (rawValue?: string) => {
     if (!supabase || !session || busy || session.status === 'completed') return
@@ -275,8 +298,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     try {
       const candidates = scanCandidates(rawValue ?? value)
       const boxScanMode = !activeBox || selectingBox
-      const looksLikeBox = !session.pending_order_id && candidates.some((candidate) => /^EL_/i.test(candidate))
-      if (boxScanMode || looksLikeBox) {
+      if (boxScanMode) {
         let selectedBox: ActiveBoxInfo | null = null
         let lastBoxError: unknown = null
         for (const candidate of candidates) {
@@ -295,7 +317,33 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         setActiveBox(selectedBox)
         setSelectingBox(false)
         setValue('')
-        setNotice(`Активен короб №${selectedBox.boxNumber}. Теперь сканируйте QR WB`)
+        setNotice(`Активен короб №${selectedBox.boxNumber}. Теперь сканируйте ${session.barcode_scan_enabled ? 'баркод товара' : 'QR WB'}`)
+        signal(true)
+        return
+      }
+      if (session.barcode_scan_enabled && !session.pending_product_barcode && !session.pending_order_id) {
+        let barcodeResult: { barcode: string; available: number } | null = null
+        let lastBarcodeError: unknown = null
+        for (const candidate of candidates) {
+          const result = await (supabase as any).rpc('scan_fbs_product_barcode', {
+            p_session_id: session.id,
+            p_device_id: stableDeviceId,
+            p_barcode: candidate,
+          })
+          if (!result.error && result.data) {
+            barcodeResult = result.data as { barcode: string; available: number }
+            break
+          }
+          lastBarcodeError = result.error
+        }
+        if (!barcodeResult) throw lastBarcodeError || new Error('Баркод товара не найден в активном коробе')
+        setSession((current) => current ? {
+          ...current,
+          pending_product_barcode: barcodeResult!.barcode,
+          pending_locked_until: new Date(Date.now() + 120_000).toISOString(),
+        } : current)
+        setValue('')
+        setNotice(`Баркод найден в коробе · доступно ${barcodeResult.available}. Теперь сканируйте QR WB`)
         signal(true)
         return
       }
@@ -334,7 +382,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         })
         if (scanError) throw scanError
         await Promise.all([loadPairs(session.id), loadSession(session.id)])
-        setNotice('Пара сохранена. Сканируйте следующий QR WB')
+        setNotice(`Пара сохранена. Сканируйте следующий ${session.barcode_scan_enabled ? 'баркод товара' : 'QR WB'}`)
       }
       setValue('')
       signal(true)
@@ -487,8 +535,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
   const finish = async () => {
     if (!session || busy) return
-    if (session.pending_order_id) {
-      setError('Сначала отсканируйте КИЗ или сбросьте ожидающий заказ')
+    if (session.pending_order_id || session.pending_product_barcode) {
+      setError('Сначала завершите текущую пару или сбросьте её')
       signal(false)
       return
     }
@@ -523,6 +571,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const sentCount = pairs.filter((pair) => pair.status === 'sent').length
   const errorCount = pairs.filter((pair) => pair.status === 'error').length
   const boxScanMode = !activeBox || selectingBox
+  const barcodeStep = Boolean(session?.barcode_scan_enabled && !session.pending_product_barcode && !session.pending_order_id && !boxScanMode)
+  const totalSteps = session?.barcode_scan_enabled ? 4 : 3
+  const currentStep = boxScanMode ? 1 : session?.pending_order_id ? totalSteps : barcodeStep ? 2 : totalSteps - 1
+  const scanTarget = boxScanMode ? 'QR короба' : barcodeStep ? 'баркод товара' : session?.pending_order_id ? 'КИЗ' : 'QR WB'
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-3" onClick={onClose}>
@@ -550,13 +602,28 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
             <>
               <section className={`rounded-3xl border-2 p-6 text-center ${session?.pending_order_id ? 'border-emerald-300 bg-emerald-50' : 'border-violet-300 bg-violet-50'}`}>
                 <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  {session?.status === 'completed' ? 'Сессия завершена' : boxScanMode ? 'Шаг 1 из 3' : session?.pending_order_id ? 'Шаг 3 из 3' : 'Шаг 2 из 3'}
+                  {session?.status === 'completed' ? 'Сессия завершена' : `Шаг ${currentStep} из ${totalSteps}`}
                 </div>
                 <div className="mt-2 text-2xl font-bold text-slate-900">
                   {session?.status === 'completed'
                     ? 'КИЗ отправлены в Wildberries'
-                    : boxScanMode ? 'Сканируйте QR короба' : session?.pending_order_id ? 'Сканируйте КИЗ' : 'Сканируйте QR WB'}
+                    : `Сканируйте ${scanTarget}`}
                 </div>
+                {session?.status !== 'completed' && (
+                  <label className="mx-auto mt-4 flex max-w-2xl items-center justify-between gap-4 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
+                    <span>
+                      <span className="block text-sm font-semibold text-slate-800">Контрольный скан баркода</span>
+                      <span className="mt-0.5 block text-xs text-slate-500">Проверяет товар в коробе перед QR WB и КИЗ</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(session?.barcode_scan_enabled)}
+                      disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
+                      onChange={(event) => void setBarcodeMode(event.target.checked)}
+                      className="h-5 w-5 shrink-0 accent-violet-600"
+                    />
+                  </label>
+                )}
                 {activeBox && !boxScanMode && session?.status !== 'completed' && (
                   <div className="mx-auto mt-3 flex max-w-2xl items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
                     <div className="min-w-0">
@@ -564,8 +631,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       <div className="mt-0.5 truncate text-sm font-bold text-slate-900">P-{activeBox.batchNumber} · S-{activeBox.supplyNumber} · Короб {activeBox.boxNumber}</div>
                       <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">{activeBox.barcode}</div>
                     </div>
-                    <button type="button" disabled={busy || Boolean(session?.pending_order_id)} onClick={() => { setSelectingBox(true); setValue(''); window.requestAnimationFrame(() => inputRef.current?.focus()) }} className="shrink-0 rounded-xl border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40">Сменить</button>
+                    <button type="button" disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)} onClick={() => { setSelectingBox(true); setValue(''); window.requestAnimationFrame(() => inputRef.current?.focus()) }} className="shrink-0 rounded-xl border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40">Сменить</button>
                   </div>
+                )}
+                {session?.pending_product_barcode && !session.pending_order_id && (
+                  <div className="mt-2 text-sm text-slate-600">Баркод товара: <b className="font-mono">{session.pending_product_barcode}</b></div>
                 )}
                 {session?.pending_order_id && (
                   <div className="mt-2 text-sm text-slate-600">
@@ -582,7 +652,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       disabled={busy}
                       autoComplete="off"
                       spellCheck={false}
-                      placeholder={boxScanMode ? 'QR короба' : session?.pending_order_id ? 'КИЗ' : 'QR заказа WB'}
+                      placeholder={boxScanMode ? 'QR короба' : barcodeStep ? 'Баркод товара' : session?.pending_order_id ? 'КИЗ' : 'QR заказа WB'}
                       className="min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-5 py-4 font-mono text-base outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:opacity-60"
                     />
                     <button
@@ -601,15 +671,15 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                 {cameraOpen && session?.status !== 'completed' && (
                   <div className="mx-auto mt-4 max-w-2xl overflow-hidden rounded-2xl border border-violet-200 bg-slate-950 p-2 text-left">
                     <div className="mb-2 flex items-center justify-between px-2 text-xs font-semibold text-white">
-                      <span>Наведите камеру на {boxScanMode ? 'QR короба' : session?.pending_order_id ? 'КИЗ' : 'QR WB'}</span>
+                      <span>Наведите камеру на {scanTarget}</span>
                       <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg bg-white/15 px-2 py-1 hover:bg-white/25">Закрыть</button>
                     </div>
                     <video ref={cameraVideoRef} autoPlay muted playsInline className="max-h-72 w-full rounded-xl bg-black object-cover" />
                     {cameraError && <div className="px-2 py-3 text-center text-xs font-medium text-red-300">{cameraError}</div>}
                   </div>
                 )}
-                {session?.pending_order_id && session.status !== 'completed' && (
-                  <button type="button" onClick={() => void releasePending()} disabled={busy} className="mt-3 text-xs font-medium text-slate-500 underline hover:text-red-600">Сбросить ожидающий заказ</button>
+                {(session?.pending_order_id || session?.pending_product_barcode) && session.status !== 'completed' && (
+                  <button type="button" onClick={() => void releasePending()} disabled={busy} className="mt-3 text-xs font-medium text-slate-500 underline hover:text-red-600">Сбросить текущую пару</button>
                 )}
               </section>
 
@@ -665,7 +735,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         </div>
 
         <footer className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
-          <span className="text-xs text-slate-500">Каждый QR WB и каждый КИЗ можно использовать только один раз.</span>
+          <span className="text-xs text-slate-500">QR WB и КИЗ уникальны. Товарный баркод можно повторять в следующей паре.</span>
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Закрыть</button>
             {session?.status !== 'completed' && <button type="button" onClick={() => void finish()} disabled={busy || loading || pairs.length === 0} className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Завершить и отправить в WB</button>}
