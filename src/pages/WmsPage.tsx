@@ -1465,9 +1465,11 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
   canInventory?: boolean
 }) {
   const [warehouses, setWarehouses] = useState<WmsWarehouse[]>([])
+  const [warehousesAccountId, setWarehousesAccountId] = useState<string | null>(null)
   const [zonesByWarehouse, setZonesByWarehouse] = useState<Record<string, WmsZone[]>>({})
   const [cells, setCells] = useState<WmsCell[]>([])
   const [expandedWarehouseIds, setExpandedWarehouseIds] = useState<Set<string>>(new Set())
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null)
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -1506,6 +1508,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     const { data } = await (supabase as any)
       .from('wms_warehouses').select('*').eq('account_id', accountId).order('created_at')
     setWarehouses(data ?? [])
+    setWarehousesAccountId(accountId)
     setLoading(false)
   }, [accountId])
 
@@ -1681,8 +1684,10 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     autoOpenedAccountRef.current = null
     setLoading(true)
     setWarehouses([])
+    setWarehousesAccountId(null)
     setZonesByWarehouse({})
     setExpandedWarehouseIds(new Set())
+    setSelectedWarehouseId(null)
     setSelectedZoneId(null)
     setSelectedCellCoord(null)
     setCells([])
@@ -1714,12 +1719,23 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  const handleSelectZone = useCallback(async (id: string) => {
+  const rememberSelectedWarehouse = useCallback((warehouseId: string) => {
+    setSelectedWarehouseId(warehouseId)
+    try {
+      localStorage.setItem(`wms_warehouse_${accountId}`, warehouseId)
+    } catch {
+      // WMS remains usable when browser storage is unavailable.
+    }
+  }, [accountId])
+
+  const handleSelectZone = useCallback(async (id: string, warehouseId?: string) => {
+    if (warehouseId) rememberSelectedWarehouse(warehouseId)
     setSelectedZoneId(id); setCells([]); setSelectedCellCoord(null)
     await loadCells(id)
-  }, [loadCells])
+  }, [loadCells, rememberSelectedWarehouse])
 
   const handleSelectWarehouse = useCallback(async (id: string) => {
+    rememberSelectedWarehouse(id)
     setExpandedWarehouseIds((prev) => new Set([...prev, id]))
     let zones = zonesByWarehouse[id]
     if (!zones) {
@@ -1736,14 +1752,28 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
       }))
       setZonesByWarehouse((prev) => ({ ...prev, [id]: zones! }))
     }
-    if (zones.length > 0) await handleSelectZone(zones[0].id)
-  }, [handleSelectZone, zonesByWarehouse])
+    if (zones.length > 0) await handleSelectZone(zones[0].id, id)
+    else {
+      setSelectedZoneId(null)
+      setCells([])
+      setSelectedCellCoord(null)
+    }
+  }, [handleSelectZone, rememberSelectedWarehouse, zonesByWarehouse])
 
   useEffect(() => {
-    if (loading || warehouses.length === 0 || autoOpenedAccountRef.current === accountId) return
+    if (loading || warehousesAccountId !== accountId || warehouses.length === 0 || autoOpenedAccountRef.current === accountId) return
     autoOpenedAccountRef.current = accountId
-    void handleSelectWarehouse(warehouses[0].id)
-  }, [accountId, handleSelectWarehouse, loading, warehouses])
+    let savedWarehouseId: string | null = null
+    try {
+      savedWarehouseId = localStorage.getItem(`wms_warehouse_${accountId}`)
+    } catch {
+      // Fall back to the first available warehouse.
+    }
+    const warehouseId = savedWarehouseId && warehouses.some((warehouse) => warehouse.id === savedWarehouseId)
+      ? savedWarehouseId
+      : warehouses[0].id
+    void handleSelectWarehouse(warehouseId)
+  }, [accountId, handleSelectWarehouse, loading, warehouses, warehousesAccountId])
 
   const resetScan = useCallback(() => {
     setScanLocation(null)
@@ -1821,6 +1851,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
       }
       const location = await withScanNumberingDirection(data as WmsScanLocation)
       setScanLocation(location)
+      rememberSelectedWarehouse(location.warehouseId)
       setSelectedZoneId(location.rackId)
       setExpandedWarehouseIds((previous) => new Set([...previous, location.warehouseId]))
       await loadZones(location.warehouseId)
@@ -1833,7 +1864,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     } finally {
       setScanBusy(false)
     }
-  }, [loadCells, loadZones, placeScannedBox, resetScan, scanBox, scanBusy, scanLocation, withScanNumberingDirection])
+  }, [loadCells, loadZones, placeScannedBox, rememberSelectedWarehouse, resetScan, scanBox, scanBusy, scanLocation, withScanNumberingDirection])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1971,6 +2002,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     if (selectedZoneId && (zonesByWarehouse[id] ?? []).some((z) => z.id === selectedZoneId)) {
       setSelectedZoneId(null); setCells([])
     }
+    if (selectedWarehouseId === id) autoOpenedAccountRef.current = null
     await loadWarehouses()
   }
 
@@ -2113,7 +2145,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
                     {(zonesByWarehouse[wh.id] ?? []).map((zone) => (
                       <div key={zone.id}
                         className={`group flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-slate-50 ${selectedZoneId === zone.id ? 'bg-violet-50' : ''}`}
-                        onClick={() => void handleSelectZone(zone.id)}
+                        onClick={() => void handleSelectZone(zone.id, wh.id)}
                       >
                         <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.8">
                           <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -2408,6 +2440,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
                                     type="button"
                                     onClick={() => {
                                       if (!result.is_addressed || !result.warehouse_id || !result.rack_id || !result.side_id || !result.col || result.row == null) return
+                                      rememberSelectedWarehouse(result.warehouse_id)
                                       setExpandedWarehouseIds((previous) => new Set([...previous, result.warehouse_id as string]))
                                       setSelectedZoneId(result.rack_id)
                                       void loadZones(result.warehouse_id)

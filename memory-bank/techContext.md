@@ -1,7 +1,8 @@
 # Tech Context
 
-## Current feature files — 16.08.2026
+## Current feature files — 24.08.2026
 - `src/pages/FbsOrdersPage.tsx` — FBS cache UI, поставки/заказы, синк, перенос, печать, лист подбора, товарное обогащение.
+- `src/pages/ProductsPage.tsx` — каталог товаров, поиск с очисткой, редактирование себестоимости и Excel с обязательными/выборочными колонками по точному варианту.
 - `supabase/functions/wb-fbs/index.ts` — прокси и синхронизация WB Marketplace FBS API.
 - `supabase/patch_fbs_reliable_sync.sql` — int64-safe статусы, журнал и атомарный полный снимок FBS; применён в production.
 - `supabase/patch_fbs_product_locations.sql` — пакетный read-only поиск товара FBS по содержимому коробов с партией, поставкой и текущим WMS-адресом; применён в production.
@@ -17,8 +18,9 @@
 ## Packages used by current FBS/export/WMS work
 - `jspdf` — PDF; `xlsx` — Excel; `jszip` — ZIP нескольких поставок; `qrcode.react` — QR физического короба; `@supabase/supabase-js` — DB/Functions.
 
-## Validation/deploy state — 16.08.2026
-- Полный `npm run build` проходит: 648 модулей; остаются только прежние предупреждения Vite о размере чанков и `xlsx`.
+## Validation/deploy state — 24.08.2026
+- Полный `npm run build` проходит: 658 модулей; остаются только прежние предупреждения Vite о размере чанков и `xlsx`. После последней кнопки очистки поиска отдельно проходит `npx tsc -b --pretty false`.
+- Локальные frontend-изменения WMS/FBS/Products используют только `localStorage` и существующие read-запросы; новых SQL/RPC и изменений production Supabase нет.
 - Рабочая ветка — `main`; последний commit перед текущими локальными изменениями — `9bd1554`. Vercel production автоматически собирает push в `main`.
 - Production Supabase уже содержит надёжную FBS-синхронизацию, новую WMS-планировку/RPC и стороны `F1/F2`. Миграция сохранила UUID и все 53 текущих размещения; потерянных связей — 0. Fulfillment-поставки не менялись и сохраняют `S` в ШК всех 2212 коробов.
 - Supabase CLI linked project: `jzucxqakvgzpgtvagsnq`.

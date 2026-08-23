@@ -86,6 +86,14 @@ interface WbOffice {
   city?: string
 }
 
+interface FbsInternalWarehouse {
+  id: string
+  name: string
+  wb_warehouse_id: string
+}
+
+const ALL_WAREHOUSES_FILTER = 'all'
+
 interface WbSupply {
   id: string
   name: string
@@ -818,6 +826,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [orders, setOrders] = useState<FbsOrder[]>([])
   const [wbWarehouses, setWbWarehouses] = useState<WbWarehouse[]>([])
   const [wbOffices, setWbOffices] = useState<WbOffice[]>([])
+  const [wbDirectoryStoreId, setWbDirectoryStoreId] = useState<string | null>(null)
+  const [internalWarehouses, setInternalWarehouses] = useState<FbsInternalWarehouse[]>([])
+  const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState(ALL_WAREHOUSES_FILTER)
   const [loading, setLoading] = useState(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -863,19 +874,80 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     setPickingListMenuOpen(false)
   }, [selected])
 
+  useEffect(() => {
+    if (!selectedStoreId) {
+      setSelectedWarehouseFilter(ALL_WAREHOUSES_FILTER)
+      return
+    }
+    try {
+      setSelectedWarehouseFilter(
+        localStorage.getItem(`fbs_warehouse_filter_${accountId}_${selectedStoreId}`) || ALL_WAREHOUSES_FILTER,
+      )
+    } catch {
+      setSelectedWarehouseFilter(ALL_WAREHOUSES_FILTER)
+    }
+    setSelected(new Set())
+    setSelectedSupplyIds(new Set())
+  }, [accountId, selectedStoreId])
+
+  useEffect(() => {
+    if (!supabase || !accountId) return
+    let cancelled = false
+    setInternalWarehouses([])
+    void (supabase as any)
+      .from('wms_warehouses')
+      .select('id,name,wb_warehouse_id')
+      .eq('account_id', accountId)
+      .eq('fbs_enabled', true)
+      .then(({ data }: { data: FbsInternalWarehouse[] | null }) => {
+        if (cancelled) return
+        setInternalWarehouses((data ?? []).filter((warehouse) => warehouse.wb_warehouse_id))
+      })
+    return () => { cancelled = true }
+  }, [accountId])
+
   // Склад продавца и связанный официальный пункт приёмки FBS загружаются одним запросом.
   useEffect(() => {
     if (!selectedStoreId) return
+    let cancelled = false
+    setWbDirectoryStoreId(null)
+    setWbWarehouses([])
+    setWbOffices([])
     void invokeFbs(selectedStoreId, { action: 'get_wb_warehouse_directory' })
       .then((data) => {
+        if (cancelled) return
         setWbWarehouses((data.warehouses ?? []) as WbWarehouse[])
         setWbOffices((data.offices ?? []) as WbOffice[])
+        setWbDirectoryStoreId(selectedStoreId)
       })
       .catch(() => {
+        if (cancelled) return
         setWbWarehouses([])
         setWbOffices([])
+        setWbDirectoryStoreId(selectedStoreId)
       })
+    return () => { cancelled = true }
   }, [selectedStoreId])
+
+  useEffect(() => {
+    if (
+      !selectedStoreId
+      || wbDirectoryStoreId !== selectedStoreId
+      || selectedWarehouseFilter === ALL_WAREHOUSES_FILTER
+      || wbWarehouses.some((warehouse) => String(warehouse.id) === selectedWarehouseFilter)
+    ) return
+    setSelectedWarehouseFilter(ALL_WAREHOUSES_FILTER)
+    try {
+      localStorage.setItem(`fbs_warehouse_filter_${accountId}_${selectedStoreId}`, ALL_WAREHOUSES_FILTER)
+    } catch {
+      // Filtering remains available without persistence.
+    }
+  }, [accountId, selectedStoreId, selectedWarehouseFilter, wbDirectoryStoreId, wbWarehouses])
+
+  const orderMatchesWarehouseFilter = useCallback((order: FbsOrder) => (
+    selectedWarehouseFilter === ALL_WAREHOUSES_FILTER
+    || String(order.warehouseId) === selectedWarehouseFilter
+  ), [selectedWarehouseFilter])
 
   const loadArchiveReports = useCallback(async () => {
     if (!supabase || !selectedStoreId) return
@@ -1586,14 +1658,29 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   }
   const wbWarehouseInfo = (order: FbsOrder) => {
     const sellerWarehouse = wbWarehouses.find((warehouse) => Number(warehouse.id) === Number(order.warehouseId))
+    const internalWarehouse = internalWarehouses.find((warehouse) => Number(warehouse.wb_warehouse_id) === Number(order.warehouseId))
     const officeId = order.officeId || sellerWarehouse?.officeId || 0
     const office = wbOffices.find((item) => Number(item.id) === Number(officeId))
     return {
       officialName: office?.name || (officeId ? `Склад WB #${officeId}` : 'Склад WB не определён'),
-      sellerName: sellerWarehouse?.name || (order.warehouseId ? `Склад продавца #${order.warehouseId}` : 'Склад продавца не определён'),
+      sellerName: internalWarehouse?.name || sellerWarehouse?.name || (order.warehouseId ? `Склад продавца #${order.warehouseId}` : 'Склад продавца не определён'),
       address: office?.address || null,
     }
   }
+
+  const warehouseFilterOptions = Array.from(
+    new Map(wbWarehouses.map((warehouse) => [String(warehouse.id), warehouse])).values(),
+  ).map((warehouse) => {
+    const internalWarehouse = internalWarehouses.find((item) => Number(item.wb_warehouse_id) === Number(warehouse.id))
+    const orderOfficeId = orders.find((order) => Number(order.warehouseId) === Number(warehouse.id))?.officeId || 0
+    const officeId = warehouse.officeId || orderOfficeId
+    const office = wbOffices.find((item) => Number(item.id) === Number(officeId))
+    return {
+      id: String(warehouse.id),
+      officialName: office?.name || (officeId ? `Склад WB #${officeId}` : 'Склад WB не определён'),
+      sellerName: internalWarehouse?.name || warehouse.name || `Склад продавца #${warehouse.id}`,
+    }
+  })
 
   const renderWbWarehouseCell = (order: FbsOrder) => {
     const warehouse = wbWarehouseInfo(order)
@@ -1661,7 +1748,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     setArchiveNotice(null)
     try {
       const reportOrders = orders.filter((order) => {
-        if (!isArchiveEligibleOrder(order) || !order.createdAt) return false
+        if (!orderMatchesWarehouseFilter(order) || !isArchiveEligibleOrder(order) || !order.createdAt) return false
         const orderDate = new Date(order.createdAt).toISOString().slice(0, 10)
         return orderDate >= archivePeriodFrom && orderDate <= archivePeriodTo
       })
@@ -1737,16 +1824,19 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     { key: 'cancelled',  label: 'Отменённые' },
     { key: 'archive',    label: 'Архив' },
   ]
-  const completedOrders = orders.filter(isOfficialCompletedOrder)
-  const cancelledOrders = orders.filter(isOfficialCancelledOrder)
-  const archiveEligibleOrders = orders.filter(isArchiveEligibleOrder)
+  const allCompletedOrders = orders.filter(isOfficialCompletedOrder)
+  const allCancelledOrders = orders.filter(isOfficialCancelledOrder)
+  const completedOrders = allCompletedOrders.filter(orderMatchesWarehouseFilter)
+  const cancelledOrders = allCancelledOrders.filter(orderMatchesWarehouseFilter)
+  const archiveEligibleOrders = orders.filter((order) => orderMatchesWarehouseFilter(order) && isArchiveEligibleOrder(order))
   const tabOrders = activeTab === 'completed'
     ? completedOrders
     : activeTab === 'cancelled'
       ? cancelledOrders
       : activeTab === 'archive'
         ? []
-        : orders.filter((o) => o.shipStatus === activeTab)
+        : orders.filter((o) => o.shipStatus === activeTab && orderMatchesWarehouseFilter(o))
+  const showEmptyOpenSupplies = selectedWarehouseFilter === ALL_WAREHOUSES_FILTER
   const ordersWithoutSize = tabOrders.filter((order) => !order.productSize)
   const selectedTab = tabOrders.filter((o) => selected.has(o.id))
   const allTabSelected = tabOrders.length > 0 && tabOrders.every((o) => selected.has(o.id))
@@ -1793,6 +1883,31 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           {storesWithKey.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
 
+        <select
+          value={selectedWarehouseFilter}
+          onChange={(event) => {
+            const warehouseId = event.target.value
+            setSelectedWarehouseFilter(warehouseId)
+            setSelected(new Set())
+            setSelectedSupplyIds(new Set())
+            try {
+              localStorage.setItem(`fbs_warehouse_filter_${accountId}_${selectedStoreId}`, warehouseId)
+            } catch {
+              // Filtering remains available without persistence.
+            }
+          }}
+          aria-label="Фильтр по складу FBS"
+          title="Фильтр по складу FBS"
+          className="max-w-[360px] rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-violet-400"
+        >
+          <option value={ALL_WAREHOUSES_FILTER}>Все склады</option>
+          {warehouseFilterOptions.map((warehouse) => (
+            <option key={warehouse.id} value={warehouse.id}>
+              {warehouse.sellerName} — Склад WB: {warehouse.officialName}
+            </option>
+          ))}
+        </select>
+
         <button type="button" onClick={() => void doSync()} disabled={loading || !selectedStoreId}
           className="flex h-8 items-center gap-1.5 rounded-xl bg-violet-500 px-4 text-xs font-semibold text-white hover:bg-violet-600 disabled:opacity-50 transition">
           {loading
@@ -1828,9 +1943,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
               && order.wbSystemStatus === 'waiting'
             )).length
             : key === 'completed'
-              ? completedOrders.length
+              ? allCompletedOrders.length
               : key === 'cancelled'
-                ? cancelledOrders.length
+                ? allCancelledOrders.length
                 : key === 'archive'
                   ? null
                   : orders.filter((order) => order.shipStatus === key).length
@@ -2032,20 +2147,20 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
         </div>
       )}
 
-      {!loading && activeTab !== 'archive' && tabOrders.length === 0 && !(activeTab === 'assembling' && openSupplies.length > 0) && !error && (
+      {!loading && activeTab !== 'archive' && tabOrders.length === 0 && !(activeTab === 'assembling' && showEmptyOpenSupplies && openSupplies.length > 0) && !error && (
         <div className="flex h-full items-center justify-center text-sm text-slate-400">
           {orders.length === 0 ? 'Загрузка...' : `Нет заказов в статусе "${tabs.find(t => t.key === activeTab)?.label}"`}
         </div>
       )}
 
-      {((activeTab === 'assembling' && (tabOrders.length > 0 || openSupplies.length > 0)) || (activeTab === 'delivering' && tabOrders.length > 0) || (activeTab === 'completed' && groupCompletedBySupplies && tabOrders.length > 0)) && (() => {
+      {((activeTab === 'assembling' && (tabOrders.length > 0 || (showEmptyOpenSupplies && openSupplies.length > 0))) || (activeTab === 'delivering' && tabOrders.length > 0) || (activeTab === 'completed' && groupCompletedBySupplies && tabOrders.length > 0)) && (() => {
         const isAssemblingTab = activeTab === 'assembling'
         const isDeliveringTab = activeTab === 'delivering'
         const isCompletedGroupedTab = activeTab === 'completed'
         // На сборке показываем и пустые открытые поставки. В доставке — только
         // активные родительские поставки, найденные у заказов текущей вкладки.
         const supplyGroups = new Map<string, { supply: WbSupply | null; orders: FbsOrder[] }>()
-        if (isAssemblingTab) openSupplies.forEach((supply) => supplyGroups.set(supply.id, { supply, orders: [] }))
+        if (isAssemblingTab && showEmptyOpenSupplies) openSupplies.forEach((supply) => supplyGroups.set(supply.id, { supply, orders: [] }))
         tabOrders.forEach((o) => {
           const key = o.supply_id ?? '__none__'
           const supplyDirectory = isAssemblingTab ? openSupplies : closedSupplies

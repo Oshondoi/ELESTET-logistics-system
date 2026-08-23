@@ -20,6 +20,13 @@ The product is being created to manage logistics operations for shipments going 
 - Product row must answer: what product, which seller article, which size, which barcode, and where it lies.
 - Missing variant data is an explicit warning with a synchronization action.
 
+## Products operator UX
+- Поиск по товарам очищается отдельным крестиком внутри правой части поля; кнопка появляется только при непустом запросе.
+- Excel на странице товаров сначала открывает выбор колонок, аналогичный выгрузке коробов фулфилмента.
+- `Артикул WB`, `Баркод`, `Себестоимость` и `Артикул продавца` — системные обязательные колонки, которые нельзя снять.
+- Размер, название, бренд, цвет, состав, страна, предмет и категория — выборочные колонки; по умолчанию включены, пользовательский выбор запоминается локально.
+- Одна строка Excel соответствует конкретному баркоду/размеру. Выгрузка сохраняет все известные `products.barcodes` и сопоставляет размер по `sizes[].skus` без случайного fallback.
+
 ## WMS operator UX
 - The warehouse tree opens a whole rack; columns are pallet positions, rows are tiers, and visible uprights match the real metal structure.
 - A rack has one or two sides. Their stable WMS codes are `F1/F2`, while the visible default names are `Сторона 1/Сторона 2`; fulfillment supplies keep their separate `S` prefix. Every pallet position shows the side's box places as a physical grid; the default is `2 × 4`.

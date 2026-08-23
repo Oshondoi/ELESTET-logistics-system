@@ -218,6 +218,8 @@ Deletion is intentionally conservative; FK use restrict.
 - Trip rows expand inline to show trip_lines
 - Modal forms for creation flows
 - Russian copy throughout the interface
+- Настройки, принадлежащие конкретному браузеру, не записывать в БД: активный WMS-склад хранится как `wms_warehouse_{accountId}`, FBS-фильтр — как `fbs_warehouse_filter_{accountId}_{storeId}`, выбор дополнительных колонок товаров — как `products_export_optional_columns`.
+- Любое сохранённое значение, зависящее от серверного справочника, валидируется после загрузки данных: недоступный WMS-склад заменяется первым доступным, недоступный FBS-склад — вариантом `Все склады`.
 
 ## SQL Files Order (для нового проекта применять по порядку)
 1. `supabase/schema.sql`

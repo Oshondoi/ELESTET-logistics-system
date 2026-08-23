@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import * as XLSX from 'xlsx'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -80,6 +81,56 @@ function getSizeRows(product: Product): SizeRow[] {
   return rows.sort((a, b) => sizeWeight(a.techSize) - sizeWeight(b.techSize))
 }
 
+function getProductExportSizeRows(product: Product): SizeRow[] {
+  const sizeRows = getSizeRows(product)
+  const sizeByBarcode = new Map(sizeRows.filter((row) => row.barcode !== '—').map((row) => [row.barcode, row.techSize]))
+  const barcodes = [...new Set([
+    ...product.barcodes.filter(Boolean),
+    ...sizeRows.map((row) => row.barcode).filter((barcode) => barcode !== '—'),
+  ])]
+  if (barcodes.length === 0) return [{ techSize: sizeRows[0]?.techSize ?? '—', barcode: '—', rowKey: `${product.id}-export-0` }]
+  return barcodes.map((barcode, index) => ({
+    techSize: sizeByBarcode.get(barcode) ?? '—',
+    barcode,
+    rowKey: `${product.id}-export-${index}`,
+  }))
+}
+
+const PRODUCT_EXPORT_COLUMNS = [
+  { key: 'wbArticle', label: 'Артикул WB', required: true },
+  { key: 'barcode', label: 'Баркод', required: true },
+  { key: 'costPrice', label: 'Себестоимость', required: true },
+  { key: 'sellerArticle', label: 'Артикул продавца', required: true },
+  { key: 'size', label: 'Размер', required: false },
+  { key: 'productName', label: 'Название', required: false },
+  { key: 'brand', label: 'Бренд', required: false },
+  { key: 'color', label: 'Цвет', required: false },
+  { key: 'composition', label: 'Состав', required: false },
+  { key: 'country', label: 'Страна', required: false },
+  { key: 'subject', label: 'Предмет', required: false },
+  { key: 'category', label: 'Категория', required: false },
+] as const
+
+type ProductExportColumnKey = typeof PRODUCT_EXPORT_COLUMNS[number]['key']
+type OptionalProductExportColumnKey = Extract<typeof PRODUCT_EXPORT_COLUMNS[number], { required: false }>['key']
+
+const PRODUCT_EXPORT_OPTIONAL_COLUMNS = PRODUCT_EXPORT_COLUMNS
+  .filter((column): column is Extract<typeof PRODUCT_EXPORT_COLUMNS[number], { required: false }> => !column.required)
+const PRODUCT_EXPORT_STORAGE_KEY = 'products_export_optional_columns'
+
+function getStoredProductExportColumns(): OptionalProductExportColumnKey[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PRODUCT_EXPORT_STORAGE_KEY) ?? 'null')
+    if (!Array.isArray(saved)) return PRODUCT_EXPORT_OPTIONAL_COLUMNS.map((column) => column.key)
+    const allowed = new Set(PRODUCT_EXPORT_OPTIONAL_COLUMNS.map((column) => column.key))
+    return saved.filter((key): key is OptionalProductExportColumnKey => (
+      typeof key === 'string' && allowed.has(key as OptionalProductExportColumnKey)
+    ))
+  } catch {
+    return PRODUCT_EXPORT_OPTIONAL_COLUMNS.map((column) => column.key)
+  }
+}
+
 export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStoreChange }: ProductsPageProps) => {
   const storesWithKey = stores.filter((s) => s.api_key)
 
@@ -99,6 +150,8 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [expandAll, setExpandAll] = useState(() => localStorage.getItem('elestet-products-expand-all') === 'true')
   const [anyExpanded, setAnyExpanded] = useState(false)
+  const [productExportOpen, setProductExportOpen] = useState(false)
+  const [productExportSelectedOptionalColumns, setProductExportSelectedOptionalColumns] = useState<OptionalProductExportColumnKey[]>(getStoredProductExportColumns)
   const storeDropdownRef = useRef<HTMLDivElement | null>(null)
 
   // Браки
@@ -117,6 +170,14 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
   useEffect(() => {
     if (!defectStoreId && stores.length > 0) setDefectStoreId(stores[0].id)
   }, [stores, defectStoreId])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PRODUCT_EXPORT_STORAGE_KEY, JSON.stringify(productExportSelectedOptionalColumns))
+    } catch {
+      // Export remains available when browser storage is unavailable.
+    }
+  }, [productExportSelectedOptionalColumns])
 
   const toggle = (id: string) =>
     setExpandedIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); setAnyExpanded(n.size > 0); return n })
@@ -293,24 +354,33 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
   }
 
   const handleDownloadCosts = () => {
-    const rows = orderedProducts.flatMap((product) => {
-      const barcodes = product.barcodes.length > 0 ? product.barcodes : ['']
+    const selectedOptionalColumns = new Set<ProductExportColumnKey>(productExportSelectedOptionalColumns)
+    const columns = PRODUCT_EXPORT_COLUMNS.filter((column) => column.required || selectedOptionalColumns.has(column.key))
+    const dataRows = orderedProducts.flatMap((product) => {
       const draftCost = costDrafts[product.id] ?? formatCostDraft(product.cost_price)
-      return barcodes.map((barcode) => ({
-        'Артикул WB': String(product.nm_id),
-        'Баркод': barcode,
-        'Себестоимость': draftCost,
-        'Артикул продавца': product.vendor_code ?? '',
+      const categoryParent = (product as Product & { category_parent?: string | null }).category_parent ?? ''
+      return getProductExportSizeRows(product).map((sizeRow) => columns.map((column): string => {
+        switch (column.key) {
+          case 'wbArticle': return String(product.nm_id)
+          case 'barcode': return sizeRow.barcode === '—' ? '' : sizeRow.barcode
+          case 'costPrice': return draftCost
+          case 'sellerArticle': return product.vendor_code ?? ''
+          case 'size': return sizeRow.techSize === '—' ? '' : sizeRow.techSize
+          case 'productName': return product.name ?? ''
+          case 'brand': return product.brand ?? ''
+          case 'color': return product.color ?? ''
+          case 'composition': return product.composition ?? ''
+          case 'country': return product.country ?? ''
+          case 'subject': return product.category ?? ''
+          case 'category': return categoryParent
+        }
       }))
     })
 
-    const sheet = XLSX.utils.json_to_sheet(rows)
-    const headers = ['Артикул WB', 'Баркод', 'Себестоимость', 'Артикул продавца'] as const
-    const colWidths = headers.map((header) => {
-      const maxContent = rows.reduce((max, row) => {
-        const value = row[header] ?? ''
-        return Math.max(max, String(value).length)
-      }, header.length)
+    const data = [columns.map((column) => column.label), ...dataRows]
+    const sheet = XLSX.utils.aoa_to_sheet(data)
+    const colWidths = columns.map((column, columnIndex) => {
+      const maxContent = dataRows.reduce((max, row) => Math.max(max, String(row[columnIndex] ?? '').length), column.label.length)
       return { wch: Math.min(Math.max(maxContent + 2, 12), 48) }
     })
     sheet['!cols'] = colWidths
@@ -321,6 +391,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
     const now = new Date()
     const datePart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     XLSX.writeFile(workbook, `cost_prices_${datePart}.xlsx`)
+    setProductExportOpen(false)
   }
 
   return (
@@ -555,8 +626,21 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                 placeholder="Поиск по названию, артикулу, бренду, баркоду..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-10 w-full rounded-2xl border border-transparent bg-slate-100 pl-9 pr-4 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
+                className="h-10 w-full rounded-2xl border border-transparent bg-slate-100 pl-9 pr-10 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
               />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  title="Очистить поиск"
+                  aria-label="Очистить поиск"
+                  className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
 
@@ -634,7 +718,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                   type="button"
                   variant="secondary"
                   className="rounded-xl px-3 py-2 text-xs"
-                  onClick={handleDownloadCosts}
+                  onClick={() => setProductExportOpen(true)}
                   disabled={isSavingCosts}
                   title="Скачать Excel"
                   aria-label="Скачать Excel"
@@ -835,6 +919,94 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
           </div>
         )}
       </Card>
+
+      {productExportOpen && createPortal(
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setProductExportOpen(false)}
+        >
+          <div
+            className="max-h-[calc(100vh-2rem)] w-full max-w-md space-y-4 overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-base font-semibold text-slate-800">Выберите колонки Excel</p>
+                <p className="mt-1 text-sm text-slate-400">
+                  Товары · {orderedProducts.length} арт. · {orderedProducts.flatMap((product) => getProductExportSizeRows(product)).length} строк
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProductExportOpen(false)}
+                className="flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100"
+                aria-label="Закрыть"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              {PRODUCT_EXPORT_COLUMNS.map((column) => {
+                const selected = column.required || productExportSelectedOptionalColumns.includes(column.key as OptionalProductExportColumnKey)
+                if (column.required) {
+                  return (
+                    <label
+                      key={column.key}
+                      title="Обязательная колонка"
+                      className="flex h-9 w-full cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-3 text-xs font-medium text-slate-600"
+                    >
+                      <input type="checkbox" checked disabled readOnly className="h-4 w-4 cursor-not-allowed rounded accent-blue-500" />
+                      {column.label}
+                    </label>
+                  )
+                }
+                return (
+                  <button
+                    key={column.key}
+                    type="button"
+                    onClick={() => {
+                      const key = column.key as OptionalProductExportColumnKey
+                      setProductExportSelectedOptionalColumns((previous) => previous.includes(key)
+                        ? previous.filter((candidate) => candidate !== key)
+                        : [...previous, key])
+                    }}
+                    className={`flex h-9 w-full cursor-pointer items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-colors ${
+                      selected
+                        ? 'border-blue-200 bg-blue-50 text-blue-700 hover:border-blue-300 hover:bg-blue-100/70'
+                        : 'border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600'
+                    }`}
+                  >
+                    <span className={`flex h-4 w-4 items-center justify-center rounded border ${selected ? 'border-blue-500 bg-blue-500 text-white' : 'border-slate-300 bg-white'}`}>
+                      {selected && <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m2 6 2.5 2.5L10 3"/></svg>}
+                    </span>
+                    {column.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setProductExportOpen(false)}
+                className="cursor-pointer rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadCosts}
+                className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                Скачать Excel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {/* Превью фото при наведении */}
       </> }
       </> }
