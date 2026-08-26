@@ -75,20 +75,21 @@ const RoleRow = ({ role, onEdit, onDelete, canManage = true }: RoleRowProps) => 
         </div>
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-slate-900">{role.name}</p>
-          {/* Назначенный пользователь */}
-          {(role.assigned_user_name || role.assigned_user_short_id) && (
-            <p className="mt-0.5 flex items-center gap-1 text-xs text-slate-500">
+          {role.assigned_users.length > 0 ? (
+            <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-slate-500">
               <svg viewBox="0 0 24 24" className="h-3 w-3 flex-shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="8" r="4" />
                 <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
               </svg>
-              {role.assigned_user_name && <span className="font-medium">{role.assigned_user_name}</span>}
-              {role.assigned_user_short_id && (
-                <span className="rounded bg-slate-100 px-1 font-mono text-[10px] text-slate-400">
-                  U{role.assigned_user_short_id}
+              <span className="mr-0.5 text-slate-400">{role.assigned_users.length}:</span>
+              {role.assigned_users.map((user) => (
+                <span key={user.user_id} className="rounded-md bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-600">
+                  {user.full_name || (user.short_id ? `U${user.short_id}` : 'Сотрудник')}
                 </span>
-              )}
-            </p>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-0.5 text-xs text-slate-400">Сотрудники не назначены</p>
           )}
           {enabledPerms.length > 0 ? (
             <div className="mt-1 flex flex-wrap gap-1">

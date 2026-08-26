@@ -30,19 +30,21 @@ export const useMyPermissions = (
 
     setIsLoading(true)
     try {
-      const { data } = await supabase
-        .from('roles')
-        .select('permissions')
+      const { data, error } = await (supabase as any)
+        .from('role_assignments')
+        .select('roles!inner(permissions, account_id)')
         .eq('account_id', accountId)
-        .eq('assigned_user_id', userId)
-        .limit(1)
-        .maybeSingle()
+        .eq('user_id', userId)
 
-      if (data?.permissions) {
-        setPermissions({
-          ...DEFAULT_PERMISSIONS,
-          ...(data.permissions as Partial<RolePermissions>),
-        })
+      if (error) throw error
+      if (data?.length) {
+        const combined = { ...DEFAULT_PERMISSIONS }
+        for (const assignment of data as Array<{ roles: { permissions: Partial<RolePermissions> } }>) {
+          for (const [key, enabled] of Object.entries(assignment.roles.permissions ?? {})) {
+            if (enabled && key in combined) combined[key as keyof RolePermissions] = true
+          }
+        }
+        setPermissions(combined)
       } else {
         setPermissions(DEFAULT_PERMISSIONS)
       }

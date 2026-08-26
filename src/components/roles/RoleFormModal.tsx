@@ -340,13 +340,13 @@ export const RoleFormModal = ({
   const [cloneOpen, setCloneOpen] = useState(false)
   const [extendedGroup, setExtendedGroup] = useState<PermGroup | null>(null)
 
-  // ─── Назначение пользователя ─────────────────────────────────
+  // ─── Назначения пользователей ────────────────────────────────
   const [emailInput, setEmailInput] = useState('')
   const [userIdInput, setUserIdInput] = useState('')
   const [resolvedUser, setResolvedUser] = useState<ResolvedUser | null>(null)
+  const [assignedUsers, setAssignedUsers] = useState<ResolvedUser[]>([])
   const [resolveError, setResolveError] = useState<string | null>(null)
   const [isResolving, setIsResolving] = useState(false)
-  const lastResolved = useRef<string | null>(null)
   const userIdDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -355,19 +355,15 @@ export const RoleFormModal = ({
       setPermissions(initialValues ? { ...DEFAULT_PERMISSIONS, ...initialValues.permissions } : { ...DEFAULT_PERMISSIONS })
       setError(null)
       setEmailInput('')
-      setUserIdInput(initialValues?.assigned_user_id ? `U...` : '')
+      setUserIdInput('')
       setResolvedUser(null)
+      setAssignedUsers(initialValues?.assigned_users ?? [])
       setResolveError(null)
-      lastResolved.current = null
-      // При редактировании — сразу резолвим если есть user_id
-      if (initialValues?.assigned_user_id) {
-        void doResolve({ userId: initialValues.assigned_user_id })
-      }
     }
-  }, [open, initialValues]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, initialValues])
 
-  const doResolve = async (params: { email?: string; userId?: string; shortId?: number }, otherValue?: string) => {
-    const key = params.email ?? params.userId ?? ''
+  const doResolve = async (params: { email?: string; userId?: string; shortId?: number }) => {
+    const key = params.email ?? params.userId ?? (params.shortId !== undefined ? String(params.shortId) : '')
     if (!key) return
     setIsResolving(true)
     setResolveError(null)
@@ -375,24 +371,15 @@ export const RoleFormModal = ({
     try {
       const found = await resolveAccountUser(currentAccountId, params)
       if (found) {
-        // Если второе поле тоже заполнено — проверяем совпадение
-        if (otherValue) {
-          const mismatch = params.email
-            ? found.user_id !== otherValue
-            : found.email.toLowerCase() !== otherValue.toLowerCase()
-          if (mismatch) {
-            setResolveError('Email и ID не совпадают: в базе это разные аккаунты')
-            lastResolved.current = null
-            return
-          }
-        }
         setResolvedUser(found)
         setEmailInput(found.email)
         setUserIdInput(found.short_id ? `U${found.short_id}` : found.user_id)
-        lastResolved.current = key
+        if (assignedUsers.some((user) => user.user_id === found.user_id)) {
+          setResolveError('Этот сотрудник уже добавлен к роли')
+          setResolvedUser(null)
+        }
       } else {
         setResolveError('Пользователь не найден в этой компании')
-        lastResolved.current = null
       }
     } catch (err) {
       setResolveError(err instanceof Error ? err.message : 'Ошибка поиска')
@@ -404,7 +391,7 @@ export const RoleFormModal = ({
   const handleEmailBlur = () => {
     const val = emailInput.trim()
     if (val && val !== resolvedUser?.email) {
-      void doResolve({ email: val }, userIdInput.trim() || undefined)
+      void doResolve({ email: val })
     }
   }
 
@@ -412,9 +399,9 @@ export const RoleFormModal = ({
     if (!val || val === (resolvedUser ? `U${resolvedUser.short_id ?? ''}` : '') || val === resolvedUser?.user_id) return
     const shortMatch = /^[Uu](\d+)$/.exec(val)
     if (shortMatch) {
-      void doResolve({ shortId: parseInt(shortMatch[1]) }, emailInput.trim() || undefined)
+      void doResolve({ shortId: parseInt(shortMatch[1]) })
     } else if (val.length === 36) {
-      void doResolve({ userId: val }, emailInput.trim() || undefined)
+      void doResolve({ userId: val })
     }
   }
 
@@ -432,12 +419,23 @@ export const RoleFormModal = ({
     triggerUserIdResolve(userIdInput.trim())
   }
 
-  const clearUser = () => {
+  const clearCandidate = () => {
     setEmailInput('')
     setUserIdInput('')
     setResolvedUser(null)
     setResolveError(null)
-    lastResolved.current = null
+  }
+
+  const addResolvedUser = () => {
+    if (!resolvedUser) return
+    setAssignedUsers((current) => current.some((user) => user.user_id === resolvedUser.user_id)
+      ? current
+      : [...current, resolvedUser])
+    clearCandidate()
+  }
+
+  const removeAssignedUser = (userId: string) => {
+    setAssignedUsers((current) => current.filter((user) => user.user_id !== userId))
   }
 
   const setPerm = (key: keyof RolePermissions, value: boolean) => {
@@ -447,23 +445,23 @@ export const RoleFormModal = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) { setError('Введите название роли'); return }
-    // Проверка: хотя бы одно поле заполнено → должен быть resolved пользователь
+    // Незавершённый поиск не должен случайно назначить несуществующего человека.
     const hasInput = Boolean(emailInput.trim() || userIdInput.trim())
     if (hasInput && !resolvedUser) {
       setError('Пользователь не найден или данные не совпадают. Проверьте email или ID.')
       return
     }
-    if (!resolvedUser) {
-      setError('Укажите email или ID пользователя')
-      return
-    }
+    const assignedUserIds = [...new Set([
+      ...assignedUsers.map((user) => user.user_id),
+      ...(resolvedUser ? [resolvedUser.user_id] : []),
+    ])]
     setIsSubmitting(true)
     setError(null)
     try {
       await onSubmit({
         name: name.trim(),
         permissions,
-        assigned_user_id: resolvedUser.user_id,
+        assigned_user_ids: assignedUserIds,
       })
       onClose()
     } catch (err) {
@@ -514,47 +512,67 @@ export const RoleFormModal = ({
 
           {error ? <p className="text-sm text-rose-500">{error}</p> : null}
 
-          {/* ─── Назначение пользователя ───────────────────── */}
+          {/* ─── Назначения пользователей ──────────────────── */}
           <div className="grid gap-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Назначить пользователю</span>
-              <span className="text-xs text-rose-400">обязательно одно из двух</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Сотрудники с этой ролью</span>
+              <span className="text-xs text-slate-400">необязательно · можно несколько</span>
             </div>
 
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+            <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+              {assignedUsers.length > 0 && (
+                <div className="grid gap-2">
+                  {assignedUsers.map((user) => (
+                    <div key={user.user_id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-blue-50 text-xs font-bold text-blue-600">
+                          {(user.full_name || user.email || 'U').slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-900">
+                            {user.full_name || user.email || 'Сотрудник'}
+                          </p>
+                          <p className="font-mono text-[10px] text-slate-400">
+                            {user.short_id ? `U${user.short_id}` : user.user_id}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeAssignedUser(user.user_id)}
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
+                        title="Убрать сотрудника из роли"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M18 6 6 18M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {resolvedUser ? (
-                /* Пользователь найден */
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-xs font-bold text-emerald-600">
-                      {(resolvedUser.full_name || resolvedUser.email).slice(0, 1).toUpperCase()}
-                    </div>
-                    <div>
-                      {resolvedUser.full_name && (
-                        <p className="text-sm font-medium text-slate-900">{resolvedUser.full_name}</p>
-                      )}
-                      <p className="text-xs text-slate-500">{resolvedUser.email}</p>
-                      <p className="mt-0.5 font-mono text-[10px] text-slate-400">
-                        {resolvedUser.short_id ? `U${resolvedUser.short_id}` : resolvedUser.user_id}
-                      </p>
-                    </div>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-emerald-800">
+                      {resolvedUser.full_name || resolvedUser.email}
+                    </p>
+                    <p className="truncate text-xs text-emerald-600">{resolvedUser.email}</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={clearUser}
-                    className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-xl text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
-                    title="Убрать пользователя"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M18 6 6 18M6 6l12 12" />
-                    </svg>
-                  </button>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={clearCandidate} className="rounded-lg px-2.5 py-1.5 text-xs text-slate-500 hover:bg-white">
+                      Отмена
+                    </button>
+                    <button type="button" onClick={addResolvedUser} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
+                      Добавить
+                    </button>
+                  </div>
                 </div>
               ) : (
-                /* Поля ввода */
                 <div className="grid gap-2.5">
                   <div className="grid gap-1">
-                    <label className="text-xs font-medium text-slate-500">Email (почта)</label>
+                    <label className="text-xs font-medium text-slate-500">Добавить по email</label>
                     <input
                       type="email"
                       value={emailInput}
@@ -570,7 +588,7 @@ export const RoleFormModal = ({
                     <div className="h-px flex-1 bg-slate-200" />
                   </div>
                   <div className="grid gap-1">
-                    <label className="text-xs font-medium text-slate-500">ID пользователя (U1, U2, ...)</label>
+                    <label className="text-xs font-medium text-slate-500">Или по ID пользователя (U1, U2, ...)</label>
                     <input
                       type="text"
                       value={userIdInput}
@@ -585,7 +603,7 @@ export const RoleFormModal = ({
                     <p className="text-xs text-rose-500">{resolveError}</p>
                   )}
                   <p className="text-xs text-slate-400">
-                    Укажите email <span className="font-medium">или</span> ID — второе поле заполнится автоматически. Если оба заполнены, они должны совпадать в базе.
+                    Роль можно сохранить без сотрудников. Позже откройте её на редактирование и добавьте одного или нескольких человек.
                   </p>
                 </div>
               )}

@@ -13,26 +13,43 @@ export const fetchRolesFromSupabase = async (accountId: string): Promise<Role[]>
   if (error) throw new Error(error.message)
   const roles = (data ?? []) as unknown as Role[]
 
-  // Подтягиваем профили назначенных пользователей
-  const userIds = roles.map((r) => r.assigned_user_id).filter(Boolean) as string[]
-  if (userIds.length === 0) return roles
+  const roleIds = roles.map((role) => role.id)
+  if (roleIds.length === 0) return roles
 
-  const { data: profiles } = await supabase
-    .from('profiles')
-    .select('user_id, full_name, short_id')
-    .in('user_id', userIds)
+  const { data: assignments, error: assignmentsError } = await supabase.rpc('get_role_assignments', {
+    p_account_id: accountId,
+  })
 
-  const profileMap = new Map((profiles ?? []).map((p) => [p.user_id, p]))
+  if (assignmentsError) throw new Error(assignmentsError.message)
+  if (!assignments?.length) return roles.map((role) => ({ ...role, assigned_users: [] }))
+  const assignmentsByRole = new Map<string, ResolvedUser[]>()
+  for (const assignment of assignments ?? []) {
+    assignmentsByRole.set(assignment.role_id, [
+      ...(assignmentsByRole.get(assignment.role_id) ?? []),
+      {
+        user_id: assignment.user_id,
+        email: assignment.email,
+        full_name: assignment.full_name,
+        short_id: assignment.short_id,
+      },
+    ])
+  }
 
   return roles.map((role) => {
-    if (!role.assigned_user_id) return role
-    const profile = profileMap.get(role.assigned_user_id)
     return {
       ...role,
-      assigned_user_name: profile?.full_name ?? null,
-      assigned_user_short_id: (profile?.short_id as number | undefined) ?? null,
+      assigned_users: assignmentsByRole.get(role.id) ?? [],
     }
   })
+}
+
+const setRoleAssignments = async (roleId: string, userIds: string[]): Promise<void> => {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.rpc('set_role_assignments', {
+    p_role_id: roleId,
+    p_user_ids: userIds,
+  })
+  if (error) throw new Error(error.message)
 }
 
 export const createRoleInSupabase = async (accountId: string, values: RoleFormValues): Promise<Role> => {
@@ -44,13 +61,19 @@ export const createRoleInSupabase = async (accountId: string, values: RoleFormVa
       account_id: accountId,
       name: values.name.trim(),
       permissions: values.permissions as unknown as import('../types/supabase').Json,
-      assigned_user_id: values.assigned_user_id ?? null,
     })
     .select()
     .single()
 
   if (error) throw new Error(error.message)
-  return data as unknown as Role
+  const role = data as unknown as Role
+  try {
+    await setRoleAssignments(role.id, values.assigned_user_ids ?? [])
+  } catch (assignmentError) {
+    await supabase.from('roles').delete().eq('id', role.id)
+    throw assignmentError
+  }
+  return { ...role, assigned_users: [] }
 }
 
 export const updateRoleInSupabase = async (roleId: string, values: Partial<RoleFormValues>): Promise<Role> => {
@@ -59,7 +82,6 @@ export const updateRoleInSupabase = async (roleId: string, values: Partial<RoleF
   const payload = {
     ...(values.name !== undefined ? { name: values.name.trim() } : {}),
     ...(values.permissions !== undefined ? { permissions: values.permissions as unknown as import('../types/supabase').Json } : {}),
-    ...('assigned_user_id' in values ? { assigned_user_id: values.assigned_user_id ?? null } : {}),
   }
 
   const { data, error } = await supabase
@@ -70,7 +92,10 @@ export const updateRoleInSupabase = async (roleId: string, values: Partial<RoleF
     .single()
 
   if (error) throw new Error(error.message)
-  return data as unknown as Role
+  if (values.assigned_user_ids !== undefined) {
+    await setRoleAssignments(roleId, values.assigned_user_ids)
+  }
+  return { ...(data as unknown as Role), assigned_users: [] }
 }
 
 export const deleteRoleFromSupabase = async (roleId: string): Promise<void> => {
@@ -94,7 +119,7 @@ export const cloneRoleToAccountInSupabase = async (
     .single()
 
   if (error) throw new Error(error.message)
-  return data as unknown as Role
+  return { ...(data as unknown as Role), assigned_users: [] }
 }
 
 // Ищет пользователя по email, UUID или U{n} (короткий ID)

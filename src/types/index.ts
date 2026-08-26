@@ -244,24 +244,21 @@ export interface Role {
   account_id: string
   name: string
   permissions: RolePermissions
-  assigned_user_id?: string | null
-  assigned_user_name?: string | null
-  assigned_user_email?: string | null
-  assigned_user_short_id?: number | null
+  assigned_users: ResolvedUser[]
   created_at: string
 }
 
 export interface RoleFormValues {
   name: string
   permissions: RolePermissions
-  assigned_user_id?: string | null
+  assigned_user_ids?: string[]
 }
 
 export interface ResolvedUser {
   user_id: string
   email: string
   full_name: string
-  short_id: number
+  short_id: number | null
 }
 
 export type ShipmentStatus =

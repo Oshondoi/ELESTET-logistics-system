@@ -43,12 +43,14 @@ export const useRoles = (accountId: string | null) => {
     if (!accountId) throw new Error('Компания не выбрана')
     const role = await createRoleInSupabase(accountId, values)
     setRoles((prev) => [...prev, role])
+    await reload()
     return role
   }
 
   const updateRole = async (roleId: string, values: Partial<RoleFormValues>): Promise<Role> => {
     const updated = await updateRoleInSupabase(roleId, values)
     setRoles((prev) => prev.map((r) => (r.id === roleId ? updated : r)))
+    await reload()
     return updated
   }
 

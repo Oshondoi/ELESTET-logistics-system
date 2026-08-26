@@ -685,6 +685,12 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     { key: 'wb', label: 'QR заказа WB' },
     { key: 'kiz', label: 'КИЗ' },
   ]
+  const allScanSteps = [
+    { key: 'box', label: 'Короб', visible: boxEnabled },
+    { key: 'barcode', label: 'Баркод товара', visible: Boolean(session?.barcode_scan_enabled) },
+    { key: 'wb', label: 'QR заказа WB', visible: true },
+    { key: 'kiz', label: 'КИЗ', visible: true },
+  ]
 
   return (
     <div className="fixed inset-0 z-[70] flex bg-white" onClick={onClose}>
@@ -712,13 +718,18 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
             <>
               <section className={`rounded-3xl border-2 p-6 text-center ${session?.pending_order_id ? 'border-emerald-300 bg-emerald-50' : 'border-violet-300 bg-violet-50'}`}>
                 <div className="mx-auto mb-5 max-w-2xl px-2">
-                  <div key={scanSteps.map((step) => step.key).join('-')} className="fbs-scan-steps-change flex items-start">
-                    {scanSteps.map((step, index) => {
-                      const completed = session?.status === 'completed' || index + 1 < currentStep
-                      const current = session?.status !== 'completed' && index + 1 === currentStep
+                  <div className="fbs-scan-steps flex items-start">
+                    {allScanSteps.map((step) => {
+                      const visibleIndex = scanSteps.findIndex((visibleStep) => visibleStep.key === step.key)
+                      const completed = step.visible && (session?.status === 'completed' || visibleIndex + 1 < currentStep)
+                      const current = step.visible && session?.status !== 'completed' && visibleIndex + 1 === currentStep
                       return (
-                        <div key={step.key} className="relative flex min-w-0 flex-1 flex-col items-center">
-                          {index < scanSteps.length - 1 && (
+                        <div
+                          key={step.key}
+                          className={`fbs-scan-step relative flex min-w-0 flex-col items-center ${step.visible ? 'fbs-scan-step-visible' : 'fbs-scan-step-hidden'}`}
+                          aria-hidden={!step.visible}
+                        >
+                          {step.visible && visibleIndex < scanSteps.length - 1 && (
                             <div className={`absolute left-[calc(50%+18px)] right-[calc(-50%+18px)] top-[17px] h-1 rounded-full transition-colors ${
                               completed ? 'bg-emerald-400' : 'bg-blue-200'
                             }`} />
@@ -736,7 +747,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                               </svg>
                             ) : current ? (
                               <span className="h-2.5 w-2.5 rounded-full bg-white" />
-                            ) : index + 1}
+                            ) : visibleIndex + 1}
                           </div>
                           <span className={`mt-2 max-w-[120px] text-[11px] font-semibold leading-tight sm:text-xs ${
                             completed ? 'text-emerald-600' : current ? 'text-blue-700' : 'text-blue-500'

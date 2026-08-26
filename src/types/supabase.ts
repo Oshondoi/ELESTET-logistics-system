@@ -323,7 +323,6 @@ export interface Database {
           account_id: string
           name: string
           permissions: Json
-          assigned_user_id: string | null
           created_at: string
         }
         Insert: {
@@ -331,10 +330,25 @@ export interface Database {
           account_id: string
           name: string
           permissions?: Json
-          assigned_user_id?: string | null
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['roles']['Insert']>
+        Relationships: []
+      }
+      role_assignments: {
+        Row: {
+          role_id: string
+          user_id: string
+          account_id: string
+          created_at: string
+        }
+        Insert: {
+          role_id: string
+          user_id: string
+          account_id: string
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['role_assignments']['Insert']>
         Relationships: []
       }
       products: {
@@ -565,6 +579,25 @@ export interface Database {
           p_short_id?: number | null
         }
         Returns: Array<{
+          user_id: string
+          email: string
+          full_name: string
+          short_id: number | null
+        }>
+      }
+      set_role_assignments: {
+        Args: {
+          p_role_id: string
+          p_user_ids?: string[]
+        }
+        Returns: undefined
+      }
+      get_role_assignments: {
+        Args: {
+          p_account_id: string
+        }
+        Returns: Array<{
+          role_id: string
           user_id: string
           email: string
           full_name: string
