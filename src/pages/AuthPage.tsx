@@ -113,29 +113,29 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10">
+    <div className="flex h-[100dvh] min-h-[100svh] w-full items-center justify-center overflow-hidden bg-slate-50 p-3 sm:p-4">
       {success ? (
-        <div className="fixed left-1/2 top-5 z-50 w-[min(640px,calc(100%-32px))] -translate-x-1/2 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-800 shadow-sm">
+        <div className="fixed left-1/2 top-[max(0.75rem,env(safe-area-inset-top))] z-50 w-[min(640px,calc(100%-24px))] -translate-x-1/2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm sm:top-5 sm:w-[min(640px,calc(100%-32px))] sm:px-5 sm:py-4">
           Подтвердите почту, чтобы завершить регистрацию и войти в систему.
         </div>
       ) : null}
       {error ? (
-        <div className="fixed right-5 top-5 z-50 max-w-sm rounded-2xl bg-red-600 px-5 py-4 text-sm font-medium text-white shadow-lg">
+        <div className="fixed left-3 right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-50 rounded-2xl bg-red-600 px-4 py-3 text-sm font-medium text-white shadow-lg sm:left-auto sm:right-5 sm:top-5 sm:max-w-sm sm:px-5 sm:py-4">
           {toUserMessage(error, 'error')}
           <button type="button" onClick={() => setError(null)} className="ml-3 opacity-70 hover:opacity-100">✕</button>
         </div>
       ) : null}
 
-      <div className="flex w-full max-w-[440px] flex-col rounded-[28px] border border-slate-200 bg-white p-7 shadow-sm" style={{minHeight: '600px'}}>
-        <div className="mb-6">
-          <div className="text-[30px] font-black uppercase leading-none tracking-tight text-slate-900">ELESTET</div>
+      <div className="flex max-h-full w-full max-w-[440px] flex-col overflow-y-auto overscroll-contain rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm sm:p-7 [@media(max-height:700px)]:rounded-2xl [@media(max-height:700px)]:p-4">
+        <div className="mb-5 [@media(max-height:700px)]:mb-3">
+          <div className="text-[28px] font-black uppercase leading-none tracking-tight text-slate-900 sm:text-[30px]">ELESTET</div>
         </div>
 
         {/* ── Режим: Забыли пароль ── */}
         {mode === 'forgot' && (
           <div className="flex flex-1 flex-col">
             <h2 className="mb-1 text-lg font-semibold text-slate-800">Восстановление пароля</h2>
-            <p className="mb-5 text-sm text-slate-400">Введите email — отправим ссылку для сброса</p>
+            <p className="mb-5 text-sm text-slate-400 [@media(max-height:700px)]:mb-3">Введите email — отправим ссылку для сброса</p>
             {forgotSent ? (
               <div className="rounded-2xl bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-800">
                 Письмо отправлено на <strong>{forgotEmail}</strong>. Проверьте почту и перейдите по ссылке.
@@ -168,7 +168,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         {/* ── Режим: Вход / Регистрация ── */}
         {mode !== 'forgot' && (<>
 
-        <div className="mb-5 flex rounded-2xl bg-slate-100 p-1">
+        <div className="mb-5 flex rounded-2xl bg-slate-100 p-1 [@media(max-height:700px)]:mb-3">
           <button
             type="button"
             onClick={() => {
@@ -202,10 +202,10 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         </div>
 
         <form className="flex flex-1 flex-col" onSubmit={handleSubmit}>
-          <div className="grid content-start gap-4">
+          <div className="grid content-start gap-4 [@media(max-height:700px)]:gap-3">
 
-            {/* Имя — только регистрация, скрыто при входе (Email/Пароль не смещаются) */}
-            <div className={mode === 'sign-up' ? undefined : 'invisible pointer-events-none'}>
+            {/* Имя занимает место только в регистрации — форма входа остаётся компактной. */}
+            <div className={mode === 'sign-up' ? undefined : 'hidden'}>
               <Input
                 label="Имя"
                 placeholder="Как к вам обращаться"
@@ -261,8 +261,8 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
               <span className="text-xs text-slate-500">Только буквы и цифры. Хотя бы 1 цифра. Регистр не учитывается.</span>
             </label>
 
-            {/* Подтверждение пароля — только регистрация, скрыто при входе */}
-            <div className={mode === 'sign-up' ? undefined : 'invisible pointer-events-none'}>
+            {/* Подтверждение пароля занимает место только в регистрации. */}
+            <div className={mode === 'sign-up' ? undefined : 'hidden'}>
               <label className="flex min-w-0 flex-col gap-2 text-sm text-slate-700">
                 <span className="font-medium">Подтвердите пароль</span>
                 <div className="relative">
@@ -299,7 +299,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
             </div>
           </div>
 
-          <Button type="submit" className="mt-auto w-full" disabled={isSubmitting}>
+          <Button type="submit" className="mt-5 w-full [@media(max-height:700px)]:mt-3" disabled={isSubmitting}>
             {isSubmitting
               ? 'Подождите...'
               : mode === 'sign-in'

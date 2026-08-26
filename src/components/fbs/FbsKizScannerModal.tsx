@@ -717,7 +717,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           ) : (
             <>
               <section className={`rounded-3xl border-2 p-6 text-center ${session?.pending_order_id ? 'border-emerald-300 bg-emerald-50' : 'border-violet-300 bg-violet-50'}`}>
-                <div className="mx-auto mb-5 max-w-2xl px-2">
+                <div className="mx-auto mb-4 max-w-xl px-2">
                   <div className="fbs-scan-steps flex items-start">
                     {allScanSteps.map((step) => {
                       const visibleIndex = scanSteps.findIndex((visibleStep) => visibleStep.key === step.key)
@@ -730,26 +730,26 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                           aria-hidden={!step.visible}
                         >
                           {step.visible && visibleIndex < scanSteps.length - 1 && (
-                            <div className={`absolute left-[calc(50%+18px)] right-[calc(-50%+18px)] top-[17px] h-1 rounded-full transition-colors ${
+                            <div className={`absolute left-[calc(50%+16px)] right-[calc(-50%+16px)] top-[15px] h-[3px] rounded-full transition-colors ${
                               completed ? 'bg-emerald-400' : 'bg-blue-200'
                             }`} />
                           )}
-                          <div className={`relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold transition-all ${
+                          <div className={`relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-[11px] font-bold transition-all ${
                             completed
                               ? 'border-emerald-500 bg-emerald-500 text-white shadow-sm shadow-emerald-200'
                               : current
-                                ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-200 ring-4 ring-blue-100'
+                                ? 'border-blue-600 bg-blue-600 text-white shadow-sm shadow-blue-200 ring-[3px] ring-blue-100'
                                 : 'border-blue-300 bg-blue-50 text-blue-500'
                           }`}>
                             {completed ? (
-                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                                 <polyline points="20 6 9 17 4 12" />
                               </svg>
                             ) : current ? (
-                              <span className="h-2.5 w-2.5 rounded-full bg-white" />
+                              <span className="h-2 w-2 rounded-full bg-white" />
                             ) : visibleIndex + 1}
                           </div>
-                          <span className={`mt-2 max-w-[120px] text-[11px] font-semibold leading-tight sm:text-xs ${
+                          <span className={`mt-1.5 max-w-[110px] text-[11px] font-semibold leading-tight ${
                             completed ? 'text-emerald-600' : current ? 'text-blue-700' : 'text-blue-500'
                           }`}>
                             {step.label}
