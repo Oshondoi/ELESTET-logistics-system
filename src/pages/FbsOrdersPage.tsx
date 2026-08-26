@@ -6,6 +6,7 @@ import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { triggerSync as triggerProductSync } from '../services/productService'
 import { invokeFbs } from '../services/fbsApi'
 import { FbsKizScannerModal } from '../components/fbs/FbsKizScannerModal'
+import { FbsStocksPanel } from '../components/fbs/FbsStocksPanel'
 import type { Product, Store } from '../types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -810,9 +811,10 @@ function tabForOfficialWbStatus(
 interface Props {
   stores: Store[]
   accountId: string
+  canManageStocks: boolean
 }
 
-export function FbsOrdersPage({ stores, accountId }: Props) {
+export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   const storesWithKey = useMemo(() => stores.filter((s) => s.api_key), [stores])
 
   const lsKey = `fbs_store_${accountId}`
@@ -829,6 +831,9 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [wbDirectoryStoreId, setWbDirectoryStoreId] = useState<string | null>(null)
   const [internalWarehouses, setInternalWarehouses] = useState<FbsInternalWarehouse[]>([])
   const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState(ALL_WAREHOUSES_FILTER)
+  const [pageSection, setPageSection] = useState<'orders' | 'stocks'>(() => (
+    localStorage.getItem(`fbs_section_${accountId}`) === 'stocks' ? 'stocks' : 'orders'
+  ))
   const [loading, setLoading] = useState(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -849,6 +854,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
   const [archiveBusy, setArchiveBusy] = useState(false)
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  const [supplyQrBusyIds, setSupplyQrBusyIds] = useState<Set<string>>(new Set())
   const [assembleModal, setAssembleModal] = useState<{ ids: string[]; mode: 'assemble' | 'move'; sourceSupplyIds: string[] } | null>(null)
   const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
   const [newSupplyName, setNewSupplyName] = useState('')
@@ -1430,6 +1436,35 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
     return filesByOrderId
   }
 
+  const handleSupplyQrPrint = async (supplyId: string) => {
+    if (activeTab !== 'delivering' || supplyQrBusyIds.has(supplyId)) return
+    const previewWindow = window.open('', '_blank')
+    if (previewWindow) previewWindow.document.body.innerHTML = '<div style="font:14px Arial;padding:24px;color:#475569">Получаем QR поставки из Wildberries…</div>'
+    setSupplyQrBusyIds((current) => new Set(current).add(supplyId))
+    try {
+      const response = await invokeFbs(selectedStoreId, { action: 'get_supply_qr', supply_id: supplyId })
+      const file = typeof response.file === 'string' ? response.file : ''
+      if (!file) throw new Error('Wildberries не вернул файл QR поставки')
+      const url = buildStickerPdfUrl([{
+        data: `data:image/png;base64,${file}`,
+        format: 'PNG',
+        alias: `wb-supply-${supplyId}`,
+      }])
+      if (previewWindow) previewWindow.location.href = url
+      else window.open(url, '_blank')
+    } catch (printError) {
+      previewWindow?.close()
+      const message = printError instanceof Error ? printError.message : String(printError)
+      alert(`Не удалось распечатать QR поставки: ${message}`)
+    } finally {
+      setSupplyQrBusyIds((current) => {
+        const next = new Set(current)
+        next.delete(supplyId)
+        return next
+      })
+    }
+  }
+
   const openStickerPrintModal = (ordersToPrint: FbsOrder[], supply: WbSupply | null, mode: StickerPrintModal['mode']) => {
     if (ordersToPrint.length === 0) return
     setPickingListMenuOpen(false)
@@ -1873,6 +1908,27 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      <div className="flex items-center gap-1 border-b border-slate-200 bg-white px-5 pt-2">
+        {([
+          { key: 'orders' as const, label: 'Заказы' },
+          { key: 'stocks' as const, label: 'Остатки FBS' },
+        ]).map((section) => (
+          <button
+            key={section.key}
+            type="button"
+            onClick={() => {
+              setPageSection(section.key)
+              localStorage.setItem(`fbs_section_${accountId}`, section.key)
+              setSelected(new Set())
+              setSelectedSupplyIds(new Set())
+            }}
+            className={`border-b-2 px-4 py-2.5 text-sm font-semibold transition ${pageSection === section.key ? 'border-violet-500 text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
+
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
         <select
@@ -1883,6 +1939,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           {storesWithKey.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
 
+        {pageSection === 'orders' && <>
         <select
           value={selectedWarehouseFilter}
           onChange={(event) => {
@@ -1929,8 +1986,18 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
             Взять в сборку ({selectedTab.length})
           </button>
         )}
+        </>}
       </div>
 
+      {pageSection === 'stocks' ? (
+        <FbsStocksPanel
+          key={`${accountId}:${selectedStoreId}`}
+          accountId={accountId}
+          storeId={selectedStoreId}
+          warehouses={wbWarehouses}
+          canManage={canManageStocks}
+        />
+      ) : <>
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-200 bg-white px-5">
         {tabs.map(({ key, label }) => {
@@ -2265,6 +2332,25 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
                           className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-wait disabled:opacity-40">
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                         </button>
+                        {isDeliveringTab && (
+                          <button
+                            type="button"
+                            title="Распечатать официальный QR поставки WB"
+                            aria-label="Распечатать официальный QR поставки WB"
+                            disabled={supplyQrBusyIds.has(supplyId)}
+                            onClick={(event) => { event.stopPropagation(); void handleSupplyQrPrint(supplyId) }}
+                            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-700 transition hover:bg-violet-100 disabled:cursor-wait disabled:opacity-40"
+                          >
+                            {supplyQrBusyIds.has(supplyId) ? (
+                              <svg viewBox="0 0 24 24" className="h-4 w-4 animate-spin" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" strokeDasharray="28" strokeDashoffset="8" /></svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3z" />
+                                <path d="M15 15h2v2h-2zM19 15h2v6h-6v-2M15 19h2" />
+                              </svg>
+                            )}
+                          </button>
+                        )}
                         {isAssemblingTab && (
                           <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
                             disabled={busyIds.size > 0}
@@ -2897,6 +2983,7 @@ export function FbsOrdersPage({ stores, accountId }: Props) {
           </div>
         </div>
       )}
+      </>}
     </div>
   )
 }

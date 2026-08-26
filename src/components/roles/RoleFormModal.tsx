@@ -42,6 +42,12 @@ const PERMISSION_GROUPS: PermGroup[] = [
     ],
   },
   {
+    label: 'FBS Заказы',
+    items: [
+      { key: 'fbs_stocks_manage', label: 'Управление остатками на складах WB' },
+    ],
+  },
+  {
     label: 'Логистика',
     items: [
       { key: 'shipments_view', label: 'Просмотр отправлений' },

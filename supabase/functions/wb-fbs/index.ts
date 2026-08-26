@@ -313,6 +313,56 @@ function chunks<T>(values: T[], size: number): T[][] {
   return result
 }
 
+type WbStockValue = { chrtId: number; amount: number }
+
+async function fetchWbStocks(apiKey: string, warehouseId: number, chrtIds: number[]) {
+  const result = new Map<number, number>()
+  for (const part of chunks(Array.from(new Set(chrtIds)), 1000)) {
+    if (!part.length) continue
+    const response = await wbReadJson(apiKey, `/api/v3/stocks/${warehouseId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chrtIds: part }),
+    }) as { stocks?: WbStockValue[] }
+    for (const stock of response?.stocks ?? []) {
+      result.set(Number(stock.chrtId), Number(stock.amount) || 0)
+    }
+  }
+  return result
+}
+
+async function canManageFbsStocks(accountId: string, userId: string, isServiceRole: boolean) {
+  if (isServiceRole) return true
+  const members = await sbGet(
+    'account_members',
+    `account_id=eq.${encodeURIComponent(accountId)}&user_id=eq.${encodeURIComponent(userId)}&select=role&limit=1`,
+    true,
+  )
+  if (members.some((member) => ['owner', 'admin'].includes(String(member.role ?? '')))) return true
+
+  const assignments = await sbGet(
+    'role_assignments',
+    `account_id=eq.${encodeURIComponent(accountId)}&user_id=eq.${encodeURIComponent(userId)}&select=roles!inner(permissions)`,
+    true,
+  )
+  return assignments.some((assignment) => {
+    const role = assignment.roles as { permissions?: Record<string, unknown> } | undefined
+    return role?.permissions?.fbs_stocks_manage === true
+  })
+}
+
+function stockUpdateError(error: unknown) {
+  const message = errorMessage(error)
+  if (message.includes('WB 400')) return { message: 'Wildberries отклонил данные остатков. Проверьте товары и количества.', status: 400 }
+  if (message.includes('WB 402')) return { message: 'Wildberries требует оплату или ограничил работу магазина.', status: 402 }
+  if (message.includes('WB 404')) return { message: 'Склад продавца не найден в Wildberries.', status: 404 }
+  if (message.includes('WB 406')) return { message: 'Wildberries временно заблокировал обновление остатков этого склада.', status: 406 }
+  if (message.includes('WB 409')) return { message: 'Wildberries не принял остатки. Проверьте доступность товаров для FBS.', status: 409 }
+  if (message.includes('WB 429')) return { message: 'Слишком много запросов к Wildberries. Повторите попытку немного позже.', status: 429 }
+  if (message.includes('no_permission')) return { message: 'API-ключ магазина не имеет права управлять остатками. Добавьте категорию «Маркетплейс».', status: 403 }
+  return { message: 'Не удалось обновить остатки в Wildberries. Повторите попытку.', status: 502 }
+}
+
 function normalizeWbOrderStatus(status: Record<string, unknown>): WbOrderStatus {
   const supplierStatus = String(status.supplierStatus ?? '').trim()
   const wbStatus = String(status.wbStatus ?? '').trim()
@@ -595,11 +645,141 @@ Deno.serve(async (req) => {
       return ok({ warehouses, offices })
     }
 
+    if (action === 'get_stocks') {
+      const warehouseId = Number(wb_warehouse_id)
+      const rawChrtIds = Array.isArray(body.chrt_ids) ? body.chrt_ids : []
+      const chrtIds = Array.from(new Set(rawChrtIds.map(Number).filter((value) => Number.isSafeInteger(value) && value > 0)))
+      if (!Number.isSafeInteger(warehouseId) || warehouseId <= 0) return err('Выберите склад продавца Wildberries')
+      if (!chrtIds.length) return ok({ stocks: [] })
+      try {
+        const values = await fetchWbStocks(apiKey, warehouseId, chrtIds)
+        return ok({ stocks: chrtIds.map((chrtId) => ({ chrtId, amount: values.get(chrtId) ?? 0 })) })
+      } catch (stockError) {
+        const readable = stockUpdateError(stockError)
+        return err(readable.message, readable.status)
+      }
+    }
+
     if (action === 'update_stocks') {
-      if (!wb_warehouse_id) return err('wb_warehouse_id обязателен')
-      if (!stocks || !Array.isArray(stocks)) return err('stocks обязателен (массив)')
-      await wbPut(apiKey, `/api/v3/stocks/${wb_warehouse_id}`, { stocks })
-      return ok({ success: true })
+      const warehouseId = Number(wb_warehouse_id)
+      if (!Number.isSafeInteger(warehouseId) || warehouseId <= 0) return err('Выберите склад продавца Wildberries')
+      if (!Array.isArray(stocks) || stocks.length === 0) return err('Добавьте хотя бы одно изменение остатка')
+      if (stocks.length > 5000) return err('За одну операцию можно изменить не более 5000 позиций')
+      if (!await canManageFbsStocks(accountId, userId, isServiceRole)) {
+        return err('У вас нет права изменять остатки FBS', 403)
+      }
+
+      const normalized = stocks.map((stock: unknown) => {
+        const value = stock as Record<string, unknown>
+        return {
+          chrtId: Number(value?.chrtId),
+          amount: Number(value?.amount),
+          productBarcode: String(value?.productBarcode ?? '').trim() || null,
+        }
+      })
+      if (normalized.some((stock) => (
+        !Number.isSafeInteger(stock.chrtId)
+        || stock.chrtId <= 0
+        || !Number.isSafeInteger(stock.amount)
+        || stock.amount < 0
+        || stock.amount > 1_000_000_000
+      ))) return err('Остатки должны быть целыми числами от 0 до 1 000 000 000')
+      if (new Set(normalized.map((stock) => stock.chrtId)).size !== normalized.length) {
+        return err('В списке изменений есть повторяющиеся размеры товара')
+      }
+
+      const warehouses = await wbGet(apiKey, '/api/v3/warehouses') as Array<{ id?: number }>
+      if (!Array.isArray(warehouses) || !warehouses.some((warehouse) => Number(warehouse.id) === warehouseId)) {
+        return err('Выбранный склад не найден среди складов продавца Wildberries', 404)
+      }
+
+      const requestedChrtIds = normalized.map((stock) => stock.chrtId)
+      const validRows = await sbRpc<Array<{ chrt_id: number }>>('get_store_fbs_chrt_ids', {
+        p_store_id: store_id,
+        p_chrt_ids: requestedChrtIds,
+      })
+      const validChrtIds = new Set(validRows.map((row) => Number(row.chrt_id)))
+      const unknown = requestedChrtIds.filter((chrtId) => !validChrtIds.has(chrtId))
+      if (unknown.length) {
+        return err(`Не найдены в товарах выбранного магазина размеры chrtId: ${unknown.slice(0, 5).join(', ')}`, 409)
+      }
+
+      const operationId = crypto.randomUUID()
+      let previous = new Map<number, number>()
+      try {
+        previous = await fetchWbStocks(apiKey, warehouseId, requestedChrtIds)
+        for (const [index, part] of chunks(normalized, 1000).entries()) {
+          await wbPut(apiKey, `/api/v3/stocks/${warehouseId}`, {
+            stocks: part.map(({ chrtId, amount }) => ({ chrtId, amount })),
+          })
+          if (index < Math.ceil(normalized.length / 1000) - 1) await sleep(220)
+        }
+
+        await sleep(350)
+        let confirmed = await fetchWbStocks(apiKey, warehouseId, requestedChrtIds)
+        let hasMismatch = normalized.some((stock) => confirmed.get(stock.chrtId) !== stock.amount)
+        if (hasMismatch) {
+          await sleep(700)
+          confirmed = await fetchWbStocks(apiKey, warehouseId, requestedChrtIds)
+          hasMismatch = normalized.some((stock) => confirmed.get(stock.chrtId) !== stock.amount)
+        }
+
+        const results = normalized.map((stock) => ({
+          chrtId: stock.chrtId,
+          requestedAmount: stock.amount,
+          previousAmount: previous.get(stock.chrtId) ?? 0,
+          confirmedAmount: confirmed.get(stock.chrtId) ?? 0,
+          status: confirmed.get(stock.chrtId) === stock.amount ? 'confirmed' : 'mismatch',
+        }))
+        try {
+          await sbWrite('fbs_stock_updates', 'POST', normalized.map((stock) => {
+            const result = results.find((item) => item.chrtId === stock.chrtId)!
+            return {
+              operation_id: operationId,
+              account_id: accountId,
+              store_id,
+              wb_warehouse_id: warehouseId,
+              chrt_id: stock.chrtId,
+              product_barcode: stock.productBarcode,
+              previous_amount: result.previousAmount,
+              requested_amount: stock.amount,
+              confirmed_amount: result.confirmedAmount,
+              status: result.status,
+              changed_by: isServiceRole ? null : userId,
+            }
+          }), '', 'return=minimal')
+        } catch (auditError) {
+          console.error(JSON.stringify({ scope: 'wb-fbs', event: 'stock_audit_failed', operation_id: operationId, error: String(auditError) }))
+        }
+        return ok({
+          success: !hasMismatch,
+          operation_id: operationId,
+          updated: results.filter((result) => result.status === 'confirmed').length,
+          mismatched: results.filter((result) => result.status === 'mismatch').length,
+          results,
+        })
+      } catch (stockError) {
+        const readable = stockUpdateError(stockError)
+        try {
+          await sbWrite('fbs_stock_updates', 'POST', normalized.map((stock) => ({
+            operation_id: operationId,
+            account_id: accountId,
+            store_id,
+            wb_warehouse_id: warehouseId,
+            chrt_id: stock.chrtId,
+            product_barcode: stock.productBarcode,
+            previous_amount: previous.get(stock.chrtId) ?? null,
+            requested_amount: stock.amount,
+            confirmed_amount: null,
+            status: 'failed',
+            error_message: readable.message,
+            changed_by: isServiceRole ? null : userId,
+          })), '', 'return=minimal')
+        } catch (auditError) {
+          console.error(JSON.stringify({ scope: 'wb-fbs', event: 'stock_failure_audit_failed', operation_id: operationId, error: String(auditError) }))
+        }
+        return err(readable.message, readable.status)
+      }
     }
 
     if (action === 'get_orders_all') {
@@ -673,6 +853,36 @@ Deno.serve(async (req) => {
       const { closed = false, limit = 50 } = body as { closed?: boolean; limit?: number }
       const supplies = await getAllSupplies(apiKey, closed, limit)
       return ok({ supplies, next: '0' })
+    }
+
+    if (action === 'get_supply_qr') {
+      const supplyId = String(body.supply_id ?? '').trim()
+      if (!supplyId) return err('ID поставки обязателен')
+
+      // QR разрешён только для поставки, которая прямо сейчас отображается
+      // в ELESTET на вкладке «В доставке».
+      const supplyOrders = await sbGet(
+        'fbs_orders',
+        `store_id=eq.${encodeURIComponent(store_id)}&supply_id=eq.${encodeURIComponent(supplyId)}&supplier_status=eq.complete&is_in_latest_snapshot=eq.true&select=wb_system_status`,
+        true,
+      )
+      const finalStatuses = new Set(['sold', 'canceled', 'canceled_by_client', 'declined_by_client', 'defect'])
+      if (!supplyOrders.some((order) => !finalStatuses.has(String(order.wb_system_status ?? '')))) {
+        return err('QR поставки можно печатать только на вкладке «В доставке»', 409)
+      }
+
+      try {
+        const qr = await wbGet(apiKey, `/api/v3/supplies/${encodeURIComponent(supplyId)}/barcode`, { type: 'png' })
+        const file = String(qr?.file ?? '')
+        if (!file) return err('Wildberries не вернул файл QR поставки', 502)
+        return ok({ barcode: String(qr?.barcode ?? supplyId), file })
+      } catch (qrError) {
+        const message = errorMessage(qrError)
+        if (message.includes('WB 404')) return err('Поставка не найдена в Wildberries', 404)
+        if (message.includes('WB 409')) return err('QR поставки ещё не готов. Обновите данные и повторите попытку.', 409)
+        if (message.includes('WB 400')) return err('Wildberries не может сформировать QR этой поставки', 400)
+        throw qrError
+      }
     }
 
     if (action === 'get_orders_status') {

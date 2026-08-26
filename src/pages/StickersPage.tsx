@@ -874,9 +874,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
               </div>
             ) : (
               <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
+              <div className="max-h-[calc(100vh-16rem)] overflow-auto [scrollbar-gutter:stable]">
+                <table className="w-full min-w-[1500px] text-sm">
+                  <thead className="sticky top-0 z-20">
                     <tr className="border-b border-slate-100 bg-slate-50">
                       <th className="w-8 px-3 py-2.5" />
                       <th className="w-9 px-3 py-2.5">
@@ -900,12 +900,12 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Страна</th>
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Предмет</th>
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Категория</th>
-                      <th className="w-20 px-3 py-2.5">
+                      <th className="sticky right-0 z-30 w-20 border-l border-slate-200 bg-slate-50 px-3 py-2.5 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]">
                         {importSelected.size > 0 && (
                           <div className="flex items-center gap-0.5">
                             <button
                               type="button"
-                              title={`Предпросмотр выбранных (${importSelected.size})`}
+                              title={`Открыть для печати выбранные (${importSelected.size})`}
                               onClick={() => {
                               const s = buildSelectedStickers()
                               if (s.length === 0) return
@@ -916,8 +916,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                             }}
                               className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                             >
-                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v7H6z" /><path d="M18 12h.01" />
                               </svg>
                             </button>
                             <button
@@ -1032,7 +1032,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                           <td className="px-4 py-3 text-xs text-slate-500">{product.country ?? '—'}</td>
                           <td className="px-4 py-3 text-xs text-slate-400">{product.category ?? '—'}</td>
                           <td className="px-4 py-3 text-xs text-slate-400">{(product as any).category_parent ?? '—'}</td>
-                          <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                          <td className="sticky right-0 z-10 border-l border-slate-100 bg-white px-3 py-3 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]" onClick={(e) => e.stopPropagation()}>
                             {(() => {
                               const productStickers: StickerTemplate[] = sizeRows
                                 .filter((r) => r.barcode !== '—')
@@ -1063,19 +1063,19 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                 <div className="flex items-center gap-0.5">
                                   <button
                                     type="button"
-                                    title={`Предпросмотр (${productStickers.length} стикеров)`}
+                                    title={`Открыть для печати (${productStickers.length} стикеров)`}
                                     onClick={() => previewWithCheck(productStickers, previewStickerPdf)}
-                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                   >
-                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
-                                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v7H6z" /><path d="M18 12h.01" />
                                     </svg>
                                   </button>
                                   <button
                                     type="button"
                                     title={`Скачать PDF (${productStickers.length} стикеров)`}
                                     onClick={() => downloadStickerPdf(productStickers)}
-                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                   >
                                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
                                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -1099,7 +1099,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                         <th className="w-9 px-3 py-2" />
                                         <th className="px-4 py-2 font-semibold" colSpan={2}>Размер</th>
                                         <th className="px-4 py-2 font-semibold" colSpan={2}>Баркод</th>
-                                        <th className="w-20 px-3 py-2" />
+                                        <th className="sticky right-0 z-10 w-20 border-l border-slate-200 bg-slate-50 px-3 py-2" />
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100/80">
@@ -1124,7 +1124,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                             )}
                                           </td>
                                           <td colSpan={2} className="px-4 py-2 font-mono text-xs text-slate-500">{row.barcode}</td>
-                                          <td className="px-3 py-2">
+                                          <td className="sticky right-0 z-10 border-l border-slate-100 bg-slate-50 px-3 py-2 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.35)]">
                                             {row.barcode !== '—' && (() => {
                                               const tempSticker: StickerTemplate = {
                                                 id: row.rowKey,
@@ -1152,19 +1152,19 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                                 <div className="flex items-center gap-0.5">
                                                   <button
                                                     type="button"
-                                                    title="Предпросмотр стикера"
+                                                    title="Открыть стикер для печати"
                                                     onClick={(e) => { e.stopPropagation(); previewWithCheck([tempSticker], previewStickerPdf) }}
-                                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                                   >
-                                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
-                                                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                                                      <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v7H6z" /><path d="M18 12h.01" />
                                                     </svg>
                                                   </button>
                                                   <button
                                                     type="button"
                                                     title="Скачать PDF"
                                                     onClick={(e) => { e.stopPropagation(); downloadStickerPdf([tempSticker]) }}
-                                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                                                    className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                                   >
                                                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
                                                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -1199,9 +1199,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
             Стикеров нет. Создайте первый.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-[13px]">
-              <thead className="border-b border-slate-100 text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+          <div className="max-h-[calc(100vh-16rem)] overflow-auto [scrollbar-gutter:stable]">
+            <table className="w-full min-w-[1100px] text-[13px]">
+              <thead className="sticky top-0 z-20 border-b border-slate-100 bg-white text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
                 <tr>
                   <th className="w-9 px-3 py-2">
                     <input
@@ -1217,8 +1217,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                   <th className="px-3 py-2">Бренд</th>
                   <th className="px-3 py-2">Размер / Цвет</th>
                   <th className="px-3 py-2">Копий</th>
-                  <th className="w-20 px-3 py-2" />
-                  <th className="w-10 px-2 py-2">
+                  <th className="sticky right-12 z-30 min-w-[124px] border-l border-slate-100 bg-white px-3 py-2 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.4)]" />
+                  <th className="sticky right-0 z-30 w-12 bg-white px-2 py-2">
                     <button
                       type="button"
                       title="Удалить выбранные"
@@ -1260,24 +1260,23 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                       {[s.size, s.color].filter(Boolean).join(' / ') || '—'}
                     </td>
                     <td className="px-3 py-2.5 text-center text-slate-500">{s.copies}</td>
-                    <td className="px-3 py-2.5">
+                    <td className={`sticky right-12 z-10 border-l border-slate-100 px-3 py-2.5 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.4)] ${selected.has(s.id) ? 'bg-blue-50' : 'bg-white'}`}>
                       <div className="flex items-center justify-end gap-0.5">
                         <button
                           type="button"
-                          title="Предпросмотр"
+                          title="Открыть для печати"
                           onClick={() => previewStickerPdf([{ ...s, production_date: globalProductionDate || s.production_date }])}
-                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                         >
-                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                            <circle cx="12" cy="12" r="3" />
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v7H6z" /><path d="M18 12h.01" />
                           </svg>
                         </button>
                         <button
                           type="button"
                           title="Скачать PDF"
                           onClick={() => downloadStickerPdf([{ ...s, production_date: globalProductionDate || s.production_date }])}
-                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                         >
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -1299,7 +1298,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                         )}
                       </div>
                     </td>
-                    <td className="px-2 py-2.5">
+                    <td className={`sticky right-0 z-10 px-2 py-2.5 ${selected.has(s.id) ? 'bg-blue-50' : 'bg-white'}`}>
                       {canDelete && (
                       <button
                         type="button"
@@ -1327,15 +1326,15 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
               Наборов нет. Создайте первый набор.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-[13px]">
-                <thead className="border-b border-slate-100 text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+            <div className="max-h-[calc(100vh-16rem)] overflow-auto [scrollbar-gutter:stable]">
+              <table className="w-full min-w-[800px] text-[13px]">
+                <thead className="sticky top-0 z-20 border-b border-slate-100 bg-white text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
                   <tr>
                     <th className="px-4 py-2">Название</th>
                     <th className="px-4 py-2">Стикеров</th>
                     <th className="px-4 py-2">Копий итого</th>
                     <th className="px-4 py-2">Создан</th>
-                    <th className="w-32 px-4 py-2" />
+                    <th className="sticky right-0 z-30 min-w-[168px] border-l border-slate-100 bg-white px-4 py-2 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.4)]" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1347,24 +1346,23 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                         <td className="px-4 py-2.5 text-slate-500">{b.items.length}</td>
                         <td className="px-4 py-2.5 text-slate-500">{totalCopies}</td>
                         <td className="px-4 py-2.5 text-xs text-slate-400">{new Date(b.created_at).toLocaleDateString('ru-RU')}</td>
-                        <td className="px-4 py-2.5">
+                        <td className="sticky right-0 z-10 border-l border-slate-100 bg-white px-4 py-2.5 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.4)]">
                           <div className="flex items-center justify-end gap-0.5">
                             <button
                               type="button"
-                              title="Предпросмотр"
+                              title="Открыть для печати"
                               onClick={() => handlePreviewBundle(b)}
-                              className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                              className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                             >
-                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                                <circle cx="12" cy="12" r="3" />
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v7H6z" /><path d="M18 12h.01" />
                               </svg>
                             </button>
                             <button
                               type="button"
                               title="Скачать PDF"
                               onClick={() => handlePrintBundle(b)}
-                              className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+                              className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                             >
                               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
                                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />

@@ -1055,7 +1055,11 @@ function App() {
                 ) : isSuperAdmin && fbsSection === 'info' ? (
                   <FbsInfoPage />
                 ) : (
-                  <FbsOrdersPage stores={stores} accountId={activeAccount?.id ?? ''} />
+                  <FbsOrdersPage
+                    stores={stores}
+                    accountId={activeAccount?.id ?? ''}
+                    canManageStocks={(isOwnerOrAdmin || permissions.fbs_stocks_manage) && !isReadOnly}
+                  />
                 )
               ) : effectivePage === 'diary' ? (
                 <DiaryPage

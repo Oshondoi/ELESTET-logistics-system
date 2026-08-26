@@ -162,6 +162,8 @@ export interface RolePermissions {
   wms_manage: boolean
   wms_history: boolean
   wms_inventory: boolean
+  // FBS заказы
+  fbs_stocks_manage: boolean
   // Администрирование
   roles_manage: boolean
   members_manage: boolean
@@ -199,6 +201,7 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   wms_manage: false,
   wms_history: false,
   wms_inventory: false,
+  fbs_stocks_manage: false,
   roles_manage: false,
   members_manage: false,
 }
@@ -235,6 +238,7 @@ export const FULL_PERMISSIONS: RolePermissions = {
   wms_manage: true,
   wms_history: true,
   wms_inventory: true,
+  fbs_stocks_manage: true,
   roles_manage: true,
   members_manage: true,
 }
