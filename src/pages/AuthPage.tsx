@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { supabase } from '../lib/supabase'
-import { validatePassword } from '../lib/passwordUtils'
+import { passwordsMatch, validatePassword } from '../lib/passwordUtils'
+import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 
 interface AuthPageProps {
   isSupabaseConfigured: boolean
@@ -36,7 +37,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
   // Автоскрытие тоста ошибки через 4 сек
   useEffect(() => {
     if (!error) return
-    const t = setTimeout(() => setError(null), 4000)
+    const t = setTimeout(() => setError(null), USER_MESSAGE_DURATION.error)
     return () => clearTimeout(t)
   }, [error])
 
@@ -65,7 +66,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         return
       }
 
-      if (mode === 'sign-up' && values.password !== values.confirmPassword) {
+      if (mode === 'sign-up' && !passwordsMatch(values.password, values.confirmPassword)) {
         setError('Пароли не совпадают')
         return
       }
@@ -120,7 +121,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
       ) : null}
       {error ? (
         <div className="fixed right-5 top-5 z-50 max-w-sm rounded-2xl bg-red-600 px-5 py-4 text-sm font-medium text-white shadow-lg">
-          {error}
+          {toUserMessage(error, 'error')}
           <button type="button" onClick={() => setError(null)} className="ml-3 opacity-70 hover:opacity-100">✕</button>
         </div>
       ) : null}

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
-import { validatePassword, normalizePassword } from '../lib/passwordUtils'
+import { validatePassword, normalizePassword, passwordsMatch } from '../lib/passwordUtils'
+import { ensureAuthenticatedSession, refreshAuthenticatedSession } from '../lib/authSession'
+import { toUserMessage } from '../lib/userMessage'
 import { Card } from '../components/ui/Card'
 import { SearchableSelect } from '../components/ui/SearchableSelect'
 import { getBillingStatus, trialDaysLeft, graceDaysLeft } from '../lib/plans'
@@ -219,19 +221,33 @@ export const AdminPage = ({
     setResetPwdError(null)
     const validationError = validatePassword(resetPwdValue)
     if (validationError) { setResetPwdError(validationError); return }
-    if (resetPwdValue !== resetPwdConfirm) { setResetPwdError('Пароли не совпадают'); return }
+    if (!passwordsMatch(resetPwdValue, resetPwdConfirm)) { setResetPwdError('Пароли не совпадают'); return }
     setIsResettingPwd(true)
     try {
-      const { data, error: fnErr } = await supabase.functions.invoke('admin-reset-password', {
-        body: { userId: resetPwdUser.id, newPassword: normalizePassword(resetPwdValue) },
+      const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-reset-password`
+      const requestBody = JSON.stringify({ userId: resetPwdUser.id, newPassword: normalizePassword(resetPwdValue) })
+      const send = (token: string) => fetch(functionUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: requestBody,
       })
-      if (fnErr) throw fnErr
-      if (data?.error) throw new Error(data.error)
+      let session = await ensureAuthenticatedSession()
+      let response = await send(session.access_token)
+      if (response.status === 401) {
+        session = await refreshAuthenticatedSession()
+        response = await send(session.access_token)
+      }
+      const data = await response.json().catch(() => ({})) as { success?: boolean; error?: string }
+      if (!response.ok || data.error || !data.success) throw new Error(data.error || `HTTP ${response.status}`)
       setResetPwdSuccess(true)
       setResetPwdValue('')
       setResetPwdConfirm('')
     } catch (e) {
-      setResetPwdError(e instanceof Error ? e.message : 'Ошибка')
+      setResetPwdError(toUserMessage(e, 'error'))
     } finally {
       setIsResettingPwd(false)
     }
@@ -763,9 +779,10 @@ export const AdminPage = ({
                     type="password"
                     value={resetPwdValue}
                     onChange={(e) => setResetPwdValue(e.target.value)}
-                    placeholder="Минимум 6 символов"
+                    placeholder="Минимум 6 символов и 1 цифра"
                     className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                   />
+                  <p className="mt-1 text-[11px] leading-snug text-slate-400">Только латинские буквы и цифры, минимум одна цифра. Регистр не учитывается.</p>
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-500">Повторите пароль</label>

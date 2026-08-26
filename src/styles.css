@@ -1,5 +1,26 @@
 @import "tailwindcss";
 
+@keyframes fbs-scan-steps-change {
+  from {
+    opacity: 0.45;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.fbs-scan-steps-change {
+  animation: fbs-scan-steps-change 220ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fbs-scan-steps-change {
+    animation: none;
+  }
+}
+
 :root {
   color: #0f172a;
   background-color: #f8fafc;

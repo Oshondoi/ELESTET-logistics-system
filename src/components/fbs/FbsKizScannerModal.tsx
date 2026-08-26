@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { ensureAuthenticatedSession } from '../../lib/authSession'
 import { invokeFbs } from '../../services/fbsApi'
+import { kizMatchesProductBarcode, kizValidationError, normalizeKizCode } from '../../lib/kizCode'
 import { showToast } from '../ui/Toast'
 
 type ScanSession = {
@@ -99,7 +100,7 @@ function scanCandidates(value: string): string[] {
 function buildCatalogMap(items: CatalogItem[]): Map<string, CatalogItem> {
   const map = new Map<string, CatalogItem>()
   for (const item of items) {
-    const aliases = [item.qrValue, item.orderId, `${item.partA ?? ''}${item.partB ?? ''}`]
+    const aliases = [item.qrValue, `${item.partA ?? ''}${item.partB ?? ''}`]
     for (const alias of aliases) if (alias) map.set(cleanScan(alias, true), item)
   }
   return map
@@ -115,6 +116,14 @@ function errorText(error: unknown): string {
         ?? JSON.stringify(error))
       : String(error)
   return raw.replace(/^.*?message["']?\s*:\s*["']?/i, '').replace(/["'}]+$/g, '')
+}
+
+function scanErrorText(error: unknown, contextualFallback: string): string {
+  const message = errorText(error).trim()
+  const unreadable = !message
+    || /\?{2,}|�|(?:Р.|С.){4,}/u.test(message)
+    || (!/[А-Яа-яЁё]/u.test(message) && /[A-Za-z]/.test(message))
+  return unreadable ? contextualFallback : message
 }
 
 function signal(success: boolean) {
@@ -159,6 +168,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
   const ordersById = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders])
   const catalogByScan = useMemo(() => buildCatalogMap(catalog), [catalog])
+  const knownProductBarcodes = useMemo(() => new Set(catalog.flatMap((item) => {
+    const barcode = cleanScan(ordersById.get(item.orderId)?.productBarcode ?? '', true)
+    return barcode ? [barcode] : []
+  })), [catalog, ordersById])
   const pendingOrder = session?.pending_order_id ? ordersById.get(session.pending_order_id) : null
 
   useEffect(() => {
@@ -346,8 +359,13 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     setBusy(true)
     try {
       const candidates = scanCandidates(rawValue ?? value)
+      const isKnownOrderQr = candidates.some((candidate) => catalogByScan.has(candidate))
+      const isActiveBoxQr = Boolean(activeBox && candidates.includes(cleanScan(activeBox.barcode, true)))
+      const isKnownProductBarcode = candidates.some((candidate) => knownProductBarcodes.has(candidate))
       const boxScanMode = Boolean((session.box_scan_enabled ?? true) && (!activeBox || selectingBox))
       if (boxScanMode) {
+        if (isKnownOrderQr) throw new Error('Вы отсканировали QR заказа WB. Сейчас нужен QR короба.')
+        if (isKnownProductBarcode) throw new Error('Вы отсканировали баркод товара. Сейчас нужен QR короба.')
         let selectedBox: ActiveBoxInfo | null = null
         let lastBoxError: unknown = null
         for (const candidate of candidates) {
@@ -362,7 +380,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           }
           lastBoxError = result.error
         }
-        if (!selectedBox) throw lastBoxError || new Error('Короб не найден')
+        if (!selectedBox) throw new Error(scanErrorText(
+          lastBoxError,
+          'QR короба не найден. Сейчас нужен QR действующего короба ELESTET. Проверьте код или выберите другой короб.',
+        ))
         setActiveBox(selectedBox)
         setSelectingBox(false)
         setValue('')
@@ -371,6 +392,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         return
       }
       if (session.barcode_scan_enabled && !session.pending_product_barcode && !session.pending_order_id) {
+        if (isKnownOrderQr) throw new Error('Вы отсканировали QR заказа WB. Сейчас нужен баркод товара.')
+        if (isActiveBoxQr) throw new Error('Вы повторно отсканировали QR короба. Сейчас нужен баркод товара.')
         let barcodeResult: { barcode: string; available: number | null } | null = null
         let lastBarcodeError: unknown = null
         for (const candidate of candidates) {
@@ -385,7 +408,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           }
           lastBarcodeError = result.error
         }
-        if (!barcodeResult) throw lastBarcodeError || new Error('Баркод товара не найден в активном коробе')
+        if (!barcodeResult) throw new Error(scanErrorText(
+          lastBarcodeError,
+          'Баркод товара не найден в активном коробе. Сейчас нужен баркод товара из выбранного короба.',
+        ))
         setSession((current) => current ? {
           ...current,
           pending_product_barcode: barcodeResult!.barcode,
@@ -399,6 +425,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         return
       }
       if (!session.pending_order_id) {
+        if (!isKnownOrderQr && isActiveBoxQr) throw new Error('Вы повторно отсканировали QR короба. Сейчас нужен QR заказа WB.')
+        if (!isKnownOrderQr && isKnownProductBarcode) throw new Error('Вы отсканировали баркод товара. Сейчас нужен QR заказа WB.')
         let item = candidates.map((candidate) => catalogByScan.get(candidate)).find(Boolean)
         if (!item) {
           const refreshed = await invokeFbs(storeId, { action: 'get_scan_catalog' })
@@ -415,7 +443,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           p_order_id: item.orderId,
           p_wb_qr: item.qrValue,
         })
-        if (scanError) throw scanError
+        if (scanError) throw new Error(scanErrorText(
+          scanError,
+          'QR заказа WB не принят. Проверьте, что заказ находится «На сборке» и соответствует отсканированному товару и коробу.',
+        ))
         setSession((current) => current ? {
           ...current,
           pending_order_id: String(data.order_id),
@@ -424,14 +455,29 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         } : current)
         setNotice(`Заказ №${item.orderId} найден. Теперь сканируйте КИЗ`)
       } else {
-        const scannedKiz = cleanScan(rawValue ?? value, false)
+        const scannedKiz = normalizeKizCode(rawValue ?? value)
+        if (isKnownOrderQr || scannedKiz === session.pending_wb_qr) {
+          throw new Error('Вы повторно отсканировали QR заказа WB. Сейчас нужен КИЗ товара.')
+        }
+        if (isActiveBoxQr) throw new Error('Вы отсканировали QR короба. Сейчас нужен КИЗ товара.')
+        if (isKnownProductBarcode || scannedKiz === session.pending_product_barcode) {
+          throw new Error('Вы отсканировали баркод товара. Сейчас нужен КИЗ товара.')
+        }
+        const validationError = kizValidationError(scannedKiz)
+        if (validationError) throw new Error(validationError)
+        if (!kizMatchesProductBarcode(scannedKiz, pendingOrder?.productBarcode)) {
+          throw new Error('Этот КИЗ выпущен для другого товара: GTIN в DataMatrix не совпадает с баркодом выбранного FBS-заказа.')
+        }
         if (pairs.some((pair) => pair.sgtin === scannedKiz)) throw new Error('Этот КИЗ уже есть в текущей сессии')
         const { error: scanError } = await (supabase as any).rpc('scan_fbs_kiz', {
           p_session_id: session.id,
           p_device_id: stableDeviceId,
           p_sgtin: scannedKiz,
         })
-        if (scanError) throw scanError
+        if (scanError) throw new Error(scanErrorText(
+          scanError,
+          'КИЗ не принят. Сейчас нужен КИЗ товара для выбранного заказа WB. Проверьте код и повторите сканирование.',
+        ))
         await Promise.all([loadPairs(session.id), loadSession(session.id)])
         setNotice(`Пара сохранена. Сканируйте следующий ${session.barcode_scan_enabled ? 'баркод товара' : 'QR WB'}`)
       }
@@ -633,11 +679,17 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         ? (boxEnabled ? 2 : 1)
         : totalSteps - 1
   const scanTarget = boxScanMode ? 'QR короба' : barcodeStep ? 'баркод товара' : session?.pending_order_id ? 'КИЗ' : 'QR WB'
+  const scanSteps = [
+    ...(boxEnabled ? [{ key: 'box', label: 'Короб' }] : []),
+    ...(session?.barcode_scan_enabled ? [{ key: 'barcode', label: 'Баркод товара' }] : []),
+    { key: 'wb', label: 'QR заказа WB' },
+    { key: 'kiz', label: 'КИЗ' },
+  ]
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-3" onClick={onClose}>
+    <div className="fixed inset-0 z-[70] flex bg-white" onClick={onClose}>
       <div
-        className="flex h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white"
         onClick={(event) => event.stopPropagation()}
         onPointerDownCapture={(event) => {
           const target = event.target as HTMLElement
@@ -659,16 +711,45 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           ) : (
             <>
               <section className={`rounded-3xl border-2 p-6 text-center ${session?.pending_order_id ? 'border-emerald-300 bg-emerald-50' : 'border-violet-300 bg-violet-50'}`}>
-                <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  {session?.status === 'completed' ? 'Сессия завершена' : `Шаг ${currentStep} из ${totalSteps}`}
-                </div>
-                <div className="mt-2 text-2xl font-bold text-slate-900">
-                  {session?.status === 'completed'
-                    ? 'КИЗ отправлены в Wildberries'
-                    : `Сканируйте ${scanTarget}`}
+                <div className="mx-auto mb-5 max-w-2xl px-2">
+                  <div key={scanSteps.map((step) => step.key).join('-')} className="fbs-scan-steps-change flex items-start">
+                    {scanSteps.map((step, index) => {
+                      const completed = session?.status === 'completed' || index + 1 < currentStep
+                      const current = session?.status !== 'completed' && index + 1 === currentStep
+                      return (
+                        <div key={step.key} className="relative flex min-w-0 flex-1 flex-col items-center">
+                          {index < scanSteps.length - 1 && (
+                            <div className={`absolute left-[calc(50%+18px)] right-[calc(-50%+18px)] top-[17px] h-1 rounded-full transition-colors ${
+                              completed ? 'bg-emerald-400' : 'bg-blue-200'
+                            }`} />
+                          )}
+                          <div className={`relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold transition-all ${
+                            completed
+                              ? 'border-emerald-500 bg-emerald-500 text-white shadow-sm shadow-emerald-200'
+                              : current
+                                ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-200 ring-4 ring-blue-100'
+                                : 'border-blue-300 bg-blue-50 text-blue-500'
+                          }`}>
+                            {completed ? (
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            ) : current ? (
+                              <span className="h-2.5 w-2.5 rounded-full bg-white" />
+                            ) : index + 1}
+                          </div>
+                          <span className={`mt-2 max-w-[120px] text-[11px] font-semibold leading-tight sm:text-xs ${
+                            completed ? 'text-emerald-600' : current ? 'text-blue-700' : 'text-blue-500'
+                          }`}>
+                            {step.label}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
                 {session?.status !== 'completed' && (
-                  <div className="mx-auto mt-4 grid max-w-2xl grid-cols-2 gap-3">
+                  <div className="mx-auto grid max-w-2xl grid-cols-2 gap-3">
                     <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
                       <span className="text-sm font-semibold text-slate-800">Короб</span>
                       <input

@@ -3,7 +3,7 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
 import { supabase } from '../../lib/supabase'
-import { validatePassword, normalizePassword } from '../../lib/passwordUtils'
+import { validatePassword, normalizePassword, passwordsMatch } from '../../lib/passwordUtils'
 
 interface ProfileModalProps {
   open: boolean
@@ -82,7 +82,7 @@ export const ProfileModal = ({
     }
     const validationError = validatePassword(newPassword)
     if (validationError) { setPasswordError(validationError); return }
-    if (newPassword !== confirmPassword) {
+    if (!passwordsMatch(newPassword, confirmPassword)) {
       setPasswordError('Пароли не совпадают')
       return
     }

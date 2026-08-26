@@ -2,6 +2,7 @@
 import { createPortal } from 'react-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
+import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 import type { Store } from '../types'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
@@ -404,7 +405,10 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   function showAction(type: 'ok' | 'err', msg: string) {
     if (actionTimerRef.current) clearTimeout(actionTimerRef.current)
     setActionResult({ type, msg })
-    actionTimerRef.current = setTimeout(() => setActionResult(null), 4000)
+    actionTimerRef.current = setTimeout(
+      () => setActionResult(null),
+      USER_MESSAGE_DURATION[type === 'ok' ? 'success' : 'error'],
+    )
   }
 
   // Password visibility
@@ -837,7 +841,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
             ? <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-emerald-600" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5"/></svg>
             : <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-red-500" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
           }
-          {actionResult.msg}
+          {toUserMessage(actionResult.msg, actionResult.type === 'ok' ? 'success' : 'error')}
         </div>
       )}
 

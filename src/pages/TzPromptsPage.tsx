@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { Modal } from '../components/ui/Modal'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -16,8 +17,72 @@ interface TzTask {
   id: string
   text: string
   is_done: boolean
+  section_key: string
   position: number
+  completed_at: string | null
   created_at: string
+  created_timezone: string
+}
+
+const TASK_SECTIONS = [
+  { key: 'general', label: 'Общая' },
+  { key: 'home', label: 'Главная' },
+  { key: 'fulfillment', label: 'Фулфилмент' },
+  { key: 'shipments', label: 'Логистика' },
+  { key: 'wms', label: 'Склад / WMS' },
+  { key: 'fbs', label: 'FBS Заказы' },
+  { key: 'stores', label: 'Магазины' },
+  { key: 'products', label: 'Товары' },
+  { key: 'directories', label: 'Справочники' },
+  { key: 'stickers', label: 'Стикеры и КИЗы' },
+  { key: 'reviews', label: 'Отзывы' },
+  { key: 'invoices', label: 'Счета' },
+  { key: 'roles', label: 'Роли' },
+  { key: 'promotion', label: 'Продвижение' },
+  { key: 'subscription', label: 'Подписка' },
+  { key: 'finance_report', label: 'Фин-отчёт' },
+  { key: 'diary', label: 'Дневник' },
+  { key: 'glossary', label: 'Словарь' },
+  { key: 'admin', label: 'Админ' },
+  { key: 'tz_prompts', label: 'Промпты ТЗ' },
+] as const
+
+type TaskSectionKey = typeof TASK_SECTIONS[number]['key']
+type TaskStatusFilter = 'all' | 'active' | 'done'
+type TaskOrder = 'active_first' | 'done_first' | 'newest' | 'oldest'
+
+const TASK_ADD_SECTION_STORAGE_KEY = 'elestet-tz-tasks-add-section'
+const taskSectionKeys = new Set<string>(TASK_SECTIONS.map((section) => section.key))
+const taskSectionLabels = new Map<string, string>(TASK_SECTIONS.map((section) => [section.key, section.label]))
+
+const getSavedTaskSection = (): TaskSectionKey => {
+  const saved = window.localStorage.getItem(TASK_ADD_SECTION_STORAGE_KEY)
+  return saved && taskSectionKeys.has(saved) ? saved as TaskSectionKey : 'general'
+}
+
+const getBrowserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Bishkek'
+
+const formatTaskCreatedAt = (value: string, timeZone: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  try {
+    const localDate = new Intl.DateTimeFormat('ru-RU', {
+      timeZone,
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date).replace(',', '')
+    const offsetPart = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      timeZoneName: 'longOffset',
+    }).formatToParts(date).find((part) => part.type === 'timeZoneName')?.value
+    const offset = offsetPart?.replace('GMT', 'UTC').replace(':00', '') ?? timeZone
+    return `${localDate} · ${timeZone} (${offset})`
+  } catch {
+    return `${date.toLocaleString('ru-RU').replace(',', '')} · ${timeZone}`
+  }
 }
 
 function TasksTab() {
@@ -25,7 +90,17 @@ function TasksTab() {
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+  const [editingText, setEditingText] = useState('')
+  const [editingSaving, setEditingSaving] = useState(false)
   const [error, setError] = useState('')
+  const [addSection, setAddSection] = useState<TaskSectionKey>(getSavedTaskSection)
+  const [sectionFilter, setSectionFilter] = useState<'all' | TaskSectionKey>('all')
+  const [statusFilter, setStatusFilter] = useState<TaskStatusFilter>('all')
+  const [taskOrder, setTaskOrder] = useState<TaskOrder>('active_first')
+  const [sortOpen, setSortOpen] = useState(false)
+  const [sectionModalOpen, setSectionModalOpen] = useState(false)
+  const sortRef = useRef<HTMLDivElement>(null)
 
   const loadTasks = useCallback(async () => {
     if (!supabase) {
@@ -42,11 +117,28 @@ function TasksTab() {
       .order('created_at', { ascending: true })
 
     if (loadError) setError(loadError.message || 'Не удалось загрузить задачи')
-    else setTasks((data || []) as TzTask[])
+    else setTasks((data || []).map((task: TzTask) => ({
+      ...task,
+      section_key: taskSectionKeys.has(task.section_key) ? task.section_key : 'general',
+      created_timezone: task.created_timezone || 'Asia/Bishkek',
+    })))
     setLoading(false)
   }, [])
 
   useEffect(() => { void loadTasks() }, [loadTasks])
+
+  useEffect(() => {
+    window.localStorage.setItem(TASK_ADD_SECTION_STORAGE_KEY, addSection)
+  }, [addSection])
+
+  useEffect(() => {
+    if (!sortOpen) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!sortRef.current?.contains(event.target as Node)) setSortOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [sortOpen])
 
   const addTask = async () => {
     const cleanText = text.trim()
@@ -59,7 +151,12 @@ function TasksTab() {
       : 0
     const { data, error: saveError } = await (supabase as any)
       .from('tz_tasks')
-      .insert({ text: cleanText, position: maxPosition })
+      .insert({
+        text: cleanText,
+        section_key: addSection,
+        position: maxPosition,
+        created_timezone: getBrowserTimeZone(),
+      })
       .select('*')
       .single()
 
@@ -106,13 +203,78 @@ function TasksTab() {
     else setTasks((prev) => prev.filter((item) => item.id !== task.id))
   }
 
+  const startEditingTask = (task: TzTask) => {
+    setEditingTaskId(task.id)
+    setEditingText(task.text)
+    setError('')
+  }
+
+  const cancelEditingTask = () => {
+    if (editingSaving) return
+    setEditingTaskId(null)
+    setEditingText('')
+  }
+
+  const saveEditedTask = async (task: TzTask) => {
+    const cleanText = editingText.trim()
+    if (!supabase || !cleanText || editingSaving) return
+
+    setEditingSaving(true)
+    setError('')
+    const { error: updateError } = await (supabase as any)
+      .from('tz_tasks')
+      .update({ text: cleanText, updated_at: new Date().toISOString() })
+      .eq('id', task.id)
+
+    if (updateError) setError(updateError.message || 'Не удалось изменить задачу')
+    else {
+      setTasks((prev) => prev.map((item) => item.id === task.id ? { ...item, text: cleanText } : item))
+      setEditingTaskId(null)
+      setEditingText('')
+    }
+    setEditingSaving(false)
+  }
+
   const activeCount = tasks.filter((task) => !task.is_done).length
   const doneCount = tasks.length - activeCount
+  const sectionTasks = useMemo(() => (
+    sectionFilter === 'all' ? tasks : tasks.filter((task) => task.section_key === sectionFilter)
+  ), [sectionFilter, tasks])
+  const sectionActiveCount = sectionTasks.filter((task) => !task.is_done).length
+  const sectionDoneCount = sectionTasks.length - sectionActiveCount
+  const sectionFilterLabel = sectionFilter === 'all'
+    ? 'Все разделы'
+    : taskSectionLabels.get(sectionFilter) ?? sectionFilter
+  const visibleTasks = useMemo(() => {
+    const filtered = sectionTasks.filter((task) => (
+      statusFilter === 'all' || (statusFilter === 'done' ? task.is_done : !task.is_done)
+    ))
+    return [...filtered].sort((left, right) => {
+      if (taskOrder === 'active_first' && left.is_done !== right.is_done) return left.is_done ? 1 : -1
+      if (taskOrder === 'done_first' && left.is_done !== right.is_done) return left.is_done ? -1 : 1
+      if (taskOrder === 'newest') return new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+      if (taskOrder === 'oldest') return new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
+      return left.position - right.position || left.created_at.localeCompare(right.created_at)
+    })
+  }, [sectionTasks, statusFilter, taskOrder])
+
+  const statusFilterLabel = statusFilter === 'active'
+    ? 'Только активные'
+    : statusFilter === 'done'
+      ? 'Только выполненные'
+      : 'Все задачи'
+  const taskOrderLabel = taskOrder === 'done_first'
+    ? 'Выполненные сначала'
+    : taskOrder === 'newest'
+      ? 'Новые сначала'
+      : taskOrder === 'oldest'
+        ? 'Старые сначала'
+        : 'Активные сначала'
 
   return (
     <div className="flex flex-col gap-3">
       <div className="rounded-2xl border border-slate-200 bg-white p-3.5">
-        <div className="flex items-end gap-3">
+        <div className="flex flex-wrap items-end gap-3">
           <textarea
             id="new-tz-task"
             value={text}
@@ -125,18 +287,75 @@ function TasksTab() {
             }}
             rows={1}
             placeholder="Напишите задачу..."
-            className="min-h-[44px] flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+            className="min-h-[44px] min-w-[260px] flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
           />
+          <select
+            value={addSection}
+            onChange={(event) => setAddSection(event.target.value as TaskSectionKey)}
+            title="Раздел новой задачи"
+            aria-label="Раздел новой задачи"
+            className="h-10 w-44 shrink-0 cursor-pointer rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+          >
+            {TASK_SECTIONS.map((section) => <option key={section.key} value={section.key}>{section.label}</option>)}
+          </select>
           <button
             type="button"
-            title="Сортировка задач — скоро"
-            aria-label="Сортировка задач — скоро"
-            className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-slate-200 text-slate-400 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600"
+            onClick={() => setSectionModalOpen(true)}
+            title="Фильтр задач по разделу"
+            className={`flex h-10 max-w-48 shrink-0 cursor-pointer items-center gap-2 rounded-xl border px-3 text-sm font-medium transition ${
+              sectionFilter === 'all'
+                ? 'border-slate-200 bg-white text-slate-600 hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700'
+                : 'border-violet-200 bg-violet-50 text-violet-700'
+            }`}
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 6h12M4 6h.01M12 12h8M4 12h4M16 18h4M4 18h8" />
+            <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 6h16M7 12h10M10 18h4" />
             </svg>
+            <span className="truncate">{sectionFilterLabel}</span>
           </button>
+          <div ref={sortRef} className="relative shrink-0">
+            <button
+              type="button"
+              title="Фильтр и порядок задач"
+              aria-label="Фильтр и порядок задач"
+              onClick={() => setSortOpen((current) => !current)}
+              className={`flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl border transition ${
+                sortOpen || statusFilter !== 'all' || taskOrder !== 'active_first'
+                  ? 'border-violet-200 bg-violet-50 text-violet-600'
+                  : 'border-slate-200 text-slate-400 hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600'
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 6h12M4 6h.01M12 12h8M4 12h4M16 18h4M4 18h8" />
+              </svg>
+            </button>
+            {sortOpen && (
+              <div className="absolute right-0 top-12 z-30 w-60 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Показывать</div>
+                {([
+                  ['all', 'Все задачи'],
+                  ['active', 'Только активные'],
+                  ['done', 'Только выполненные'],
+                ] as const).map(([value, label]) => (
+                  <button key={value} type="button" onClick={() => setStatusFilter(value)} className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition ${statusFilter === value ? 'bg-violet-50 font-semibold text-violet-700' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    {label}{statusFilter === value && <span>✓</span>}
+                  </button>
+                ))}
+                <div className="my-1 border-t border-slate-100" />
+                <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Порядок</div>
+                {([
+                  ['active_first', 'Активные сначала'],
+                  ['done_first', 'Выполненные сначала'],
+                  ['newest', 'Новые сначала'],
+                  ['oldest', 'Старые сначала'],
+                ] as const).map(([value, label]) => (
+                  <button key={value} type="button" onClick={() => setTaskOrder(value)} className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition ${taskOrder === value ? 'bg-violet-50 font-semibold text-violet-700' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    {label}{taskOrder === value && <span>✓</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => void addTask()}
@@ -148,9 +367,12 @@ function TasksTab() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between px-1 text-xs text-slate-500">
-        <span>{activeCount} активных</span>
-        <span>{doneCount} выполненных</span>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+        <span className="text-xs text-slate-400">{sectionFilterLabel} · {statusFilterLabel} · {taskOrderLabel}</span>
+        <div className="flex items-center gap-4 text-xs text-slate-500">
+          <span>{sectionFilter === 'all' ? activeCount : sectionActiveCount} активных</span>
+          <span>{sectionFilter === 'all' ? doneCount : sectionDoneCount} выполненных</span>
+        </div>
       </div>
 
       {error && (
@@ -159,15 +381,61 @@ function TasksTab() {
         </div>
       )}
 
+      <Modal
+        open={sectionModalOpen}
+        onClose={() => setSectionModalOpen(false)}
+        title="Раздел задач"
+        description="Выберите страницу, задачи которой нужно показать."
+        className="max-w-4xl"
+      >
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          <button
+            type="button"
+            onClick={() => { setSectionFilter('all'); setSectionModalOpen(false) }}
+            className={`rounded-xl border px-3 py-3 text-left transition ${
+              sectionFilter === 'all'
+                ? 'border-violet-300 bg-violet-50 shadow-sm'
+                : 'border-slate-200 bg-white hover:border-violet-200 hover:bg-violet-50/50'
+            }`}
+          >
+            <span className={`block text-sm font-semibold ${sectionFilter === 'all' ? 'text-violet-700' : 'text-slate-700'}`}>Все разделы</span>
+            <span className="mt-1 block text-xs text-slate-400">{tasks.length} задач</span>
+          </button>
+          {TASK_SECTIONS.map((section) => {
+            const count = tasks.filter((task) => task.section_key === section.key).length
+            const selected = sectionFilter === section.key
+            return (
+              <button
+                key={section.key}
+                type="button"
+                onClick={() => { setSectionFilter(section.key); setSectionModalOpen(false) }}
+                className={`rounded-xl border px-3 py-3 text-left transition ${
+                  selected
+                    ? 'border-violet-300 bg-violet-50 shadow-sm'
+                    : 'border-slate-200 bg-white hover:border-violet-200 hover:bg-violet-50/50'
+                }`}
+              >
+                <span className={`block truncate text-sm font-semibold ${selected ? 'text-violet-700' : 'text-slate-700'}`}>{section.label}</span>
+                <span className="mt-1 block text-xs text-slate-400">{count} задач</span>
+              </button>
+            )
+          })}
+        </div>
+      </Modal>
+
       {loading ? (
         <div className="py-10 text-center text-sm text-slate-400">Загрузка...</div>
       ) : tasks.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-400">
           Задач пока нет. Добавьте первую задачу выше.
         </div>
+      ) : visibleTasks.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-400">
+          По выбранным фильтрам задач нет.
+        </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          {tasks.map((task) => (
+          {visibleTasks.map((task) => (
             <div
               key={task.id}
               className={`group flex items-start gap-2.5 rounded-xl border px-3 py-1.5 transition ${
@@ -193,17 +461,91 @@ function TasksTab() {
                 )}
               </button>
 
-              <p className={`min-w-0 flex-1 whitespace-pre-wrap text-sm leading-5 ${
-                task.is_done ? 'text-slate-400 line-through' : 'text-slate-800'
-              }`}>
-                {task.text}
-              </p>
+              <div className="flex min-w-0 flex-1 items-start gap-2">
+                {task.section_key !== 'general' && (
+                  <span className={`mt-0.5 inline-flex shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${task.is_done ? 'bg-slate-200 text-slate-400' : 'bg-violet-50 text-violet-600'}`}>
+                    {taskSectionLabels.get(task.section_key) ?? task.section_key}
+                  </span>
+                )}
+                {editingTaskId === task.id ? (
+                  <textarea
+                    autoFocus
+                    rows={1}
+                    value={editingText}
+                    disabled={editingSaving}
+                    onChange={(event) => setEditingText(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        cancelEditingTask()
+                      } else if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault()
+                        void saveEditedTask(task)
+                      }
+                    }}
+                    className="min-h-8 min-w-0 flex-1 resize-none rounded-lg border border-violet-300 bg-white px-2.5 py-1 text-sm leading-5 text-slate-800 outline-none ring-2 ring-violet-100 disabled:opacity-60"
+                  />
+                ) : (
+                  <p className={`min-w-0 flex-1 whitespace-pre-wrap text-sm leading-5 ${
+                    task.is_done ? 'text-slate-400 line-through' : 'text-slate-800'
+                  }`}>
+                    {task.text}
+                  </p>
+                )}
+              </div>
+
+              <span
+                title={`Создана: ${formatTaskCreatedAt(task.created_at, task.created_timezone)}`}
+                className={`shrink-0 self-center whitespace-nowrap text-[11px] tabular-nums ${task.is_done ? 'text-slate-300' : 'text-slate-400'}`}
+              >
+                {formatTaskCreatedAt(task.created_at, task.created_timezone)}
+              </span>
+
+              {editingTaskId === task.id ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={!editingText.trim() || editingSaving}
+                    onClick={() => void saveEditedTask(task)}
+                    title="Сохранить изменения"
+                    className="flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-emerald-500 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={editingSaving}
+                    onClick={cancelEditingTask}
+                    title="Отменить редактирование"
+                    className="flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:opacity-40"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="m6 6 12 12M18 6 6 18" />
+                    </svg>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => startEditingTask(task)}
+                  title="Редактировать задачу"
+                  className="flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-300 opacity-0 transition hover:bg-violet-50 hover:text-violet-500 group-hover:opacity-100 focus:opacity-100"
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" />
+                  </svg>
+                </button>
+              )}
 
               <button
                 type="button"
+                disabled={editingTaskId === task.id}
                 onClick={() => void deleteTask(task)}
                 title="Удалить задачу"
-                className="flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 focus:opacity-100"
+                className="flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-20 group-hover:opacity-100 focus:opacity-100"
               >
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                   <polyline points="3 6 5 6 21 6" />

@@ -7,3 +7,7 @@ export const validatePassword = (password: string): string | null => {
 }
 
 export const normalizePassword = (password: string): string => password.toLowerCase()
+
+export const passwordsMatch = (password: string, confirmation: string): boolean => (
+  normalizePassword(password) === normalizePassword(confirmation)
+)

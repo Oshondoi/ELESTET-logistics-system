@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { ensureAuthenticatedSession, SessionExpiredError } from '../lib/authSession'
+import { normalizePassword } from '../lib/passwordUtils'
 
 interface AuthCredentials {
   email: string
@@ -11,8 +12,6 @@ interface AuthCredentials {
 interface SignUpCredentials extends AuthCredentials {
   fullName: string
 }
-
-const normalizePassword = (password: string) => password.toLowerCase()
 
 export const useAuth = () => {
   const [session, setSession] = useState<Session | null>(null)

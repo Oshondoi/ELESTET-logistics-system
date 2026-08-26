@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { toUserMessage, USER_MESSAGE_DURATION } from '../../lib/userMessage'
 
 export interface ToastItem {
   id: number
@@ -19,8 +20,8 @@ export const ToastContainer = () => {
   useEffect(() => {
     _addToast = (message, type = 'error') => {
       const id = Date.now()
-      setToasts((prev) => [{ id, message, type }, ...prev])
-      setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000)
+      setToasts((prev) => [{ id, message: toUserMessage(message, type), type }, ...prev])
+      setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), USER_MESSAGE_DURATION[type])
     }
     return () => { _addToast = null }
   }, [])
@@ -38,7 +39,7 @@ export const ToastContainer = () => {
             'bg-slate-700'
           }`}
         >
-          <span className="flex-1 leading-snug">{t.message}</span>
+          <span className="min-w-0 flex-1 whitespace-pre-line break-words leading-snug">{t.message}</span>
           <button
             type="button"
             onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}

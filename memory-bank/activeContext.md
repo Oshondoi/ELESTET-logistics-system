@@ -1,6 +1,48 @@
 # Active Context
 
-## CURRENT FOCUS — 24.08.2026: локальные настройки WMS/FBS и Excel товаров
+## CURRENT FOCUS — 26.08.2026: строгие типы кодов FBS-сканера
+
+- Каждый этап принимает только свой код: существующий QR короба ELESTET, SKU активного заказа, официальный QR из каталога WB или структурно валидный GS1 DataMatrix КИЗ.
+- КИЗ нормализуется для аппаратных и камерных сканеров, проверяет AI `01/21`, GTIN-14, контрольную цифру, serial/GS-криптохвост и соответствие GTIN товару FBS-заказа.
+- Защита реализована и во frontend, и в production RPC через `supabase/patch_fbs_strict_scan_types.sql`.
+- Production-проверка: валидный/`]d2`/`(01)…(21)…` КИЗ принимаются; повреждённый GTIN и вспомогательный код WB отклоняются. Ошибочных ожидающих баркодов после cleanup — 0.
+
+### Файлы
+- `src/lib/kizCode.ts`
+- `src/components/fbs/FbsKizScannerModal.tsx`
+- `supabase/patch_fbs_strict_scan_types.sql`
+- `memory-bank/components/fbs-orders.md`
+
+## PREVIOUS FOCUS — 26.08.2026: админский сброс и единая политика паролей
+
+- Production `admin-reset-password` обновлена до версии 2: устранён `BOOT_ERROR`, функция не зависит от внешнего import CDN, CORS preflight проверен реальным запросом (`200 OK`).
+- Админка отправляет запрос с актуальным JWT и повторяет его после refresh при `401`; сброс доступен и для собственного пользователя администратора.
+- Единая политика во всех формах аккаунта: 6+ символов, только латинские буквы и цифры, минимум одна цифра, регистр не учитывается; сервер админского сброса повторяет проверку независимо от UI.
+
+### Файлы
+- `src/lib/passwordUtils.ts`
+- `src/pages/AdminPage.tsx`
+- `src/pages/AuthPage.tsx`
+- `src/pages/ResetPasswordPage.tsx`
+- `src/components/accounts/ProfileModal.tsx`
+- `supabase/functions/admin-reset-password/index.ts`
+
+## PREVIOUS FOCUS — 26.08.2026: разделы, фильтры и сортировка коротких задач
+
+### Реализовано
+- В `/tz-prompts` короткая задача получает раздел страницы; существующие записи и первый выбор относятся к `Общая`.
+- Последний выбранный раздел добавления хранится в `localStorage`, сохраняется после Enter/кнопки и восстанавливается после обновления страницы.
+- Добавлены кнопка фильтра по разделу в строке ввода, модальная сетка разделов с количествами, фильтр состояния и четыре порядка отображения; default — все задачи, активные сначала.
+- Enter/Shift+Enter и компактный список сохранены. Необщие задачи показывают небольшой бейдж в одной строке с текстом; отсутствующий legacy-раздел трактуется как `Общая` без пустой строки.
+- SQL `supabase/patch_tz_task_sections.sql` применён в production. Проверено: колонка, CHECK и индекс существуют; все 26 прежних задач имеют `section_key='general'`, NULL — 0.
+- SQL `supabase/patch_tz_task_timezone.sql` применён в production. Все 26 прежних задач получили `created_timezone='Asia/Bishkek'`, NULL — 0.
+
+### Файлы
+- `src/pages/TzPromptsPage.tsx`
+- `supabase/patch_tz_task_sections.sql`
+- `memory-bank/components/tz-tasks.md`
+
+## PREVIOUS FOCUS — 24.08.2026: локальные настройки WMS/FBS и Excel товаров
 
 ### Реализовано
 - `/wms` сохраняет выбранный склад в `localStorage` отдельно для каждой компании (`wms_warehouse_{accountId}`). При повторном входе открывается сохранённый склад и его первый стеллаж; если склад удалён или недоступен, выбирается первый доступный.

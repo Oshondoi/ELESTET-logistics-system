@@ -12,6 +12,8 @@
 - `supabase/patch_wms_scanning.sql`, `supabase/patch_wms_operations.sql`, `supabase/patch_wms_sensitive_search.sql` — WMS QR/сканирование, операции и чувствительный поиск; новые адреса используют `F`, старые WMS QR с `S1/S2` остаются читаемыми.
 - `src/pages/TzPromptsPage.tsx` — CRUD промптов и компактный `TasksTab`.
 - `supabase/patch_tz_tasks.sql` — `tz_tasks`, индексы, RLS superadmin; применён.
+- `supabase/patch_tz_task_sections.sql` — раздел страницы для коротких задач и индекс раздела; применён в production 26.08.2026.
+- `supabase/patch_tz_task_timezone.sql` — часовой пояс браузера, из которого создана короткая задача; применён в production 26.08.2026.
 - `supabase/seed_tz_tasks_20260809.sql` — идемпотентный сид девяти задач; применён.
 - `memory-bank/components/fbs-orders.md`, `wms.md` и `tz-tasks.md` — подробная актуальная документация.
 

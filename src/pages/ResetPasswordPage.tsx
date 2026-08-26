@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { validatePassword, normalizePassword } from '../lib/passwordUtils'
+import { validatePassword, normalizePassword, passwordsMatch } from '../lib/passwordUtils'
 
 interface ResetPasswordPageProps {
   onSuccess: () => void
@@ -20,7 +20,7 @@ export const ResetPasswordPage = ({ onSuccess }: ResetPasswordPageProps) => {
 
     const validationError = validatePassword(newPassword)
     if (validationError) { setError(validationError); return }
-    if (newPassword !== confirmPassword) { setError('Пароли не совпадают'); return }
+    if (!passwordsMatch(newPassword, confirmPassword)) { setError('Пароли не совпадают'); return }
     if (!supabase) return
 
     setIsSubmitting(true)
