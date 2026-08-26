@@ -11,6 +11,15 @@ export function normalizeKizCode(value: string): string {
   // Некоторые приложения камеры возвращают человекочитаемые AI в скобках.
   const humanReadable = /^\(01\)(\d{14})\(21\)([\s\S]+)$/.exec(code)
   if (humanReadable) code = `01${humanReadable[1]}21${humanReadable[2]}`
+
+  // Часть GS1 DataMatrix, выпускаемых для товаров лёгкой промышленности,
+  // сканеры ZXing возвращают как напечатанный под кодом идентификатор:
+  // 14 цифр GTIN + 13 символов серийного номера, без текстовых AI 01 и 21.
+  // Восстанавливаем каноническую форму только для этой точной структуры.
+  const compactIdentificationCode = /^(\d{14})([!-~]{13})$/.exec(code)
+  if (compactIdentificationCode) {
+    code = `01${compactIdentificationCode[1]}21${compactIdentificationCode[2]}`
+  }
   return code
 }
 
