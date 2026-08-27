@@ -16,6 +16,14 @@ export function normalizeKizCode(value: string): string {
   const humanReadable = /^\(01\)(\d{14})\(21\)([\s\S]+)$/.exec(code)
   if (humanReadable) code = `01${humanReadable[1]}21${humanReadable[2]}`
 
+  // Некоторые аппаратные сканеры удаляют внутренние GS (ASCII 29) и отдают
+  // российский КМ одной плоской строкой. Для точной структуры LP RF безопасно
+  // восстанавливаем разделители: serial(13) + 91 + key(4) + 92 + crypto.
+  const flattenedRussianCode = /^01(\d{14})21([!-~]{13})91([!-~]{4})92([!-~]+)$/.exec(code)
+  if (flattenedRussianCode) {
+    code = `01${flattenedRussianCode[1]}21${flattenedRussianCode[2]}${GS}91${flattenedRussianCode[3]}${GS}92${flattenedRussianCode[4]}`
+  }
+
   // Часть GS1 DataMatrix, выпускаемых для товаров лёгкой промышленности,
   // сканеры ZXing возвращают как напечатанный под кодом идентификатор:
   // 14 цифр GTIN + 13 символов серийного номера, без текстовых AI 01 и 21.

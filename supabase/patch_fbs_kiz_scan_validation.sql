@@ -30,6 +30,13 @@ begin
   while left(v_code, 1) = chr(29) loop v_code := substring(v_code from 2); end loop;
   v_match := regexp_match(v_code, E'^\\(01\\)([0-9]{14})\\(21\\)(.+)$');
   if v_match is not null then v_code := '01' || v_match[1] || '21' || v_match[2]; end if;
+  -- Аппаратный сканер может удалить внутренние GS и вернуть российский КМ
+  -- плоской строкой: serial(13) + 91 + key(4) + 92 + crypto.
+  v_match := regexp_match(v_code, E'^01([0-9]{14})21([!-~]{13})91([!-~]{4})92([!-~]+)$');
+  if v_match is not null then
+    v_code := '01' || v_match[1] || '21' || v_match[2]
+      || chr(29) || '91' || v_match[3] || chr(29) || '92' || v_match[4];
+  end if;
   v_match := regexp_match(v_code, E'^([0-9]{14})([!-~]{13})$');
   if v_match is not null then v_code := '01' || v_match[1] || '21' || v_match[2]; end if;
   return v_code;
