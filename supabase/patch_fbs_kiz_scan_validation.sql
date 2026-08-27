@@ -59,7 +59,9 @@ begin
      or v_parts[1] !~ '^[!-~]+$' then return false; end if;
   if coalesce(array_length(v_parts, 1), 0) > 1 then
     for v_index in 2..array_length(v_parts, 1) loop
-      if v_parts[v_index] !~ '^[0-9]{2,4}[!-~]+$' then return false; end if;
+      -- The cryptographic tail is verified by Wildberries. Here we only reject
+      -- an empty section or scanner control garbage after a GS separator.
+      if v_parts[v_index] = '' or v_parts[v_index] !~ '^[!-~]+$' then return false; end if;
     end loop;
   end if;
   return true;

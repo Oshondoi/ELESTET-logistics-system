@@ -59,8 +59,10 @@ export function kizValidationError(value: string): string | null {
   if (serial.length < 1 || serial.length > 20 || !/^[!-~]+$/.test(serial)) {
     return 'КИЗ содержит некорректный серийный номер. Повторите сканирование DataMatrix.'
   }
-  if (parts.slice(1).some((part) => !/^\d{2,4}[!-~]+$/.test(part))) {
-    return 'КИЗ содержит повреждённый криптографический хвост. Повторите сканирование DataMatrix.'
+  // WB is the source of truth for the cryptographic part. Locally we only make
+  // sure a scanner did not lose a GS separator or insert control garbage.
+  if (parts.slice(1).some((part) => part.length === 0 || !/^[!-~]+$/.test(part))) {
+    return 'КИЗ передан не полностью: проверьте GS-разделители и повторите сканирование DataMatrix.'
   }
   return null
 }

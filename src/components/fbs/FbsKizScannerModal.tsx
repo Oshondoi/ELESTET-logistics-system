@@ -160,6 +160,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [cameraOpen, setCameraOpen] = useState(false)
   const [cameraError, setCameraError] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const altNumpadDigitsRef = useRef('')
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const cameraResultRef = useRef<(value: string) => void>(() => undefined)
@@ -547,27 +548,60 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     if (busy || loading || session?.status === 'completed') return
 
     const focusInput = () => inputRef.current?.focus({ preventScroll: true })
+    const appendScannerValue = (chunk: string) => {
+      focusInput()
+      setValue((current) => current + chunk)
+    }
     const handleWindowFocus = () => window.requestAnimationFrame(focusInput)
     const handleDocumentKeyDown = (event: KeyboardEvent) => {
       const input = inputRef.current
-      if (!input || input.disabled || document.activeElement === input) return
-      if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return
+      if (!input || input.disabled || event.isComposing) return
+
+      // WB-compatible GS1 scanner modes. WB accepts the group separator as
+      // either F8 or Alt+0029 and converts it to ASCII 29.
+      if (event.key === 'F8') {
+        event.preventDefault()
+        event.stopPropagation()
+        appendScannerValue('\u001d')
+        return
+      }
+      if (event.altKey && /^Numpad\d$/.test(event.code)) {
+        event.preventDefault()
+        event.stopPropagation()
+        altNumpadDigitsRef.current += event.code.slice(-1)
+        return
+      }
+
+      if (document.activeElement === input) return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
 
       if (event.key.length === 1) {
         event.preventDefault()
-        input.focus({ preventScroll: true })
-        setValue((current) => current + event.key)
+        appendScannerValue(event.key)
       } else if (event.key === 'Enter') {
         event.preventDefault()
-        input.focus({ preventScroll: true })
+        focusInput()
+      }
+    }
+    const handleDocumentKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Alt' || altNumpadDigitsRef.current.length === 0) return
+      const digits = altNumpadDigitsRef.current
+      altNumpadDigitsRef.current = ''
+      if (digits.replace(/^0+/, '') === '29') {
+        event.preventDefault()
+        event.stopPropagation()
+        appendScannerValue('\u001d')
       }
     }
 
     window.addEventListener('focus', handleWindowFocus)
     document.addEventListener('keydown', handleDocumentKeyDown, true)
+    document.addEventListener('keyup', handleDocumentKeyUp, true)
     return () => {
       window.removeEventListener('focus', handleWindowFocus)
       document.removeEventListener('keydown', handleDocumentKeyDown, true)
+      document.removeEventListener('keyup', handleDocumentKeyUp, true)
+      altNumpadDigitsRef.current = ''
     }
   }, [busy, loading, session?.status])
 
