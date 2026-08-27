@@ -33,6 +33,38 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
   const [forgotEmail, setForgotEmail] = useState('')
   const [forgotSent, setForgotSent] = useState(false)
   const [isForgotSubmitting, setIsForgotSubmitting] = useState(false)
+  const [visualViewport, setVisualViewport] = useState(() => ({
+    height: typeof window === 'undefined' ? 0 : window.visualViewport?.height ?? window.innerHeight,
+    offsetTop: typeof window === 'undefined' ? 0 : window.visualViewport?.offsetTop ?? 0,
+  }))
+
+  // На части мобильных браузеров CSS 100dvh не уменьшается при открытии
+  // клавиатуры. Берём фактически видимую область, чтобы скроллилась карточка,
+  // а не скрытая за клавиатурой страница.
+  useEffect(() => {
+    const viewport = window.visualViewport
+    const updateViewport = () => {
+      setVisualViewport({
+        height: viewport?.height ?? window.innerHeight,
+        offsetTop: viewport?.offsetTop ?? 0,
+      })
+    }
+    updateViewport()
+    viewport?.addEventListener('resize', updateViewport)
+    viewport?.addEventListener('scroll', updateViewport)
+    window.addEventListener('resize', updateViewport)
+    return () => {
+      viewport?.removeEventListener('resize', updateViewport)
+      viewport?.removeEventListener('scroll', updateViewport)
+      window.removeEventListener('resize', updateViewport)
+    }
+  }, [])
+
+  const keepFocusedFieldVisible = (event: React.FocusEvent<HTMLDivElement>) => {
+    const target = event.target
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) return
+    window.setTimeout(() => target.scrollIntoView({ block: 'nearest', inline: 'nearest' }), 180)
+  }
 
   // Автоскрытие тоста ошибки через 4 сек
   useEffect(() => {
@@ -113,7 +145,13 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
   }
 
   return (
-    <div className="flex h-[100dvh] min-h-[100svh] w-full items-center justify-center overflow-hidden bg-slate-50 p-3 sm:p-4">
+    <div
+      className="fixed inset-x-0 top-0 flex w-full items-center justify-center overflow-hidden bg-slate-50 p-3 sm:p-4"
+      style={{
+        height: visualViewport.height ? `${visualViewport.height}px` : '100dvh',
+        transform: visualViewport.offsetTop ? `translateY(${visualViewport.offsetTop}px)` : undefined,
+      }}
+    >
       {success ? (
         <div className="fixed left-1/2 top-[max(0.75rem,env(safe-area-inset-top))] z-50 w-[min(640px,calc(100%-24px))] -translate-x-1/2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm sm:top-5 sm:w-[min(640px,calc(100%-32px))] sm:px-5 sm:py-4">
           Подтвердите почту, чтобы завершить регистрацию и войти в систему.
@@ -126,7 +164,10 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         </div>
       ) : null}
 
-      <div className="flex max-h-full w-full max-w-[440px] flex-col overflow-y-auto overscroll-contain rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm sm:p-7 [@media(max-height:700px)]:rounded-2xl [@media(max-height:700px)]:p-4">
+      <div
+        onFocusCapture={keepFocusedFieldVisible}
+        className="flex max-h-full min-h-0 w-full max-w-[440px] touch-pan-y flex-col overflow-x-hidden overflow-y-auto overscroll-contain scroll-py-4 rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm [-webkit-overflow-scrolling:touch] sm:p-7 [@media(max-height:700px)]:rounded-2xl [@media(max-height:700px)]:p-4"
+      >
         <div className="mb-5 [@media(max-height:700px)]:mb-3">
           <div className="text-[28px] font-black uppercase leading-none tracking-tight text-slate-900 sm:text-[30px]">ELESTET</div>
         </div>

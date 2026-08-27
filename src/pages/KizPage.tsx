@@ -1367,11 +1367,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                     value={emitQty}
                     onChange={(e) => setEmitQty(e.target.value)}
                     min="1"
-                    max="10000"
+                    max="1000"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     required
                   />
-                  <p className="mt-1 text-xs text-slate-400">Макс. 10 000. Спишется {emitQty || 0} единиц с баланса.</p>
+                  <p className="mt-1 text-xs text-slate-400">Макс. 1 000. Спишется {emitQty || 0} единиц с баланса.</p>
                 </div>
                 {emitError && (
                   <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">{emitError}</p>

@@ -1,493 +1,338 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   Энциклопедия КИЗ-процесса — содержимое
-───────────────────────────────────────────────────────────────────────────── */
-
-interface EncStage {
+interface Source { label: string; href: string }
+interface Stage {
   num: number
   icon: string
   title: string
   subtitle: string
   description: string
   details: string[]
-  api?: string[]
+  technical?: string[]
   tip?: string
   warning?: string
+  sources: Source[]
 }
 
-const STAGES: EncStage[] = [
+const MANUAL = 'https://main.teksher.kg/files/rukovodstva-polzovatelyz-mzkm-v0.8.pdf'
+const FAQ = 'https://main.teksher.kg/faq.html'
+const BUSINESS = 'https://main.teksher.kg/business.html'
+const GS1 = 'https://www.gs1.org/standards/gs1-datamatrix-guideline/25'
+const WB = 'https://dev.wildberries.ru/openapi/orders-fbs/'
+
+const STAGES: Stage[] = [
   {
-    num: 1,
-    icon: '🏭',
-    title: 'Регистрация в системе Teksher',
-    subtitle: 'Подключение организации к национальной системе маркировки',
-    description:
-      'Прежде чем работать с КИЗами, организация должна быть зарегистрирована в системе Teksher — государственной платформе Кыргызстана для маркировки товаров. После регистрации выдаются логин и пароль.',
+    num: 1, icon: '🧭', title: 'Определить схему маркировки', subtitle: 'Для какого рынка выпускается код',
+    description: 'Сначала определяется рынок назначения, а не только страна производства. Товар может быть произведён в Кыргызстане, а российский код для него — выпущен через Teksher.',
     details: [
-      'Подать заявку на сайте label.teksher.kg (физлицо-ИП или юрлицо)',
-      'Дождаться подтверждения и получить учётные данные (логин + пароль)',
-      'Убедиться, что организация является официальным участником маркировки в КР',
-      'Пополнить баланс: в системе два типа баланса — балл-коды (единицы маркировки) и денежные средства',
-      'Пополнение денежного баланса: прямо в ELESTET — кнопка «+ Пополнить» на вкладке КИЗы → QR-код MegaPay',
-      'Подключить магазин в настройках ELESTET: Settings → Teksher → Введите логин/пароль → Подключить',
+      'Внутренняя маркировка применяется для оборота товара в Кыргызстане.',
+      'Внешняя маркировка применяется при выпуске кодов страны назначения, например России.',
+      'Страна производства не определяет формат КИЗ сама по себе: важны товарная группа, рынок назначения и правила его системы маркировки.',
+      'Для лёгкой промышленности, отправляемой в Россию, выбирается соответствующая российская товарная группа (в системе встречается обозначение LP RF).',
+      'До заказа кодов согласуйте с получателем, кто создаёт трансгран и кто принимает его в стране назначения.',
     ],
-    tip: 'После подключения в ELESTET выполните «Синхронизировать» — данные о товарах, кодах и операциях загрузятся автоматически.',
+    warning: 'Не выбирайте товарную группу «по похожему названию»: неверные группа или ТН ВЭД делают дальнейшую работу с кодами невозможной.',
+    sources: [{ label: 'FAQ Teksher', href: FAQ }, { label: 'Руководство Teksher', href: MANUAL }],
   },
   {
-    num: 2,
-    icon: '🔑',
-    title: 'Идентификаторы участника: GCP и GLN',
-    subtitle: 'Глобальный префикс компании и номер местоположения',
-    description:
-      'GCP (Global Company Prefix) — это уникальный числовой префикс, который GS1 присваивает вашей организации. Он является основой для генерации всех ваших штрихкодов (GTIN). GLN (Global Location Number) — числовой идентификатор конкретного места (склад, офис, магазин).',
+    num: 2, icon: '🏢', title: 'Подключить участника Teksher', subtitle: 'Учётная запись и магазин ELESTET',
+    description: 'Для работы нужна активная учётная запись участника оборота. ELESTET обращается к Teksher от имени выбранного магазина и показывает его товары, коды, операции и баланс.',
     details: [
-      'GCP выдаётся организации при регистрации в GS1 Kyrgyzstan или через Teksher',
-      'Длина GCP: обычно 9–12 цифр (чем короче, тем больше товаров можно зарегистрировать)',
-      'GTIN-13 = GCP + код товара + контрольная цифра',
-      'GLN = GCP + код местоположения (00 для головного офиса) + контрольная цифра',
-      'Посмотреть свои GCP и GLN: страница КИЗы → вкладка «Товары (GTIN)» → кнопка «Инфо об участнике»',
+      'Получите у оператора Teksher данные авторизации зарегистрированного участника.',
+      'При первом входе смените выданный пароль. Он должен содержать не менее 8 символов, строчные и заглавные латинские буквы, цифру и специальный символ.',
+      'Откройте «Стикеры и КИЗы» → «КИЗы», выберите магазин и подключите нужного участника.',
+      'Сверьте имя участника рядом с индикатором «Teksher подключён», чтобы не заказать коды на другую организацию.',
+      'После смены пароля Teksher переподключите магазин в ELESTET.',
     ],
-    api: [
-      'GET /api/v1/participants/{participantId}/identifiers',
-      'Возвращает массив: [{gcp, gln, ...}]',
-    ],
-    tip: 'GCP и GLN нужны при создании нового товара (GTIN). Без них нельзя зарегистрировать продукт.',
+    tip: 'Перед крупной операцией всегда сверяйте магазин ELESTET, участника Teksher и товарную группу.',
+    sources: [{ label: 'Вход и пароль Teksher', href: MANUAL }],
   },
   {
-    num: 3,
-    icon: '📦',
-    title: 'Регистрация товара (GTIN)',
-    subtitle: 'Создание и публикация позиции в реестре Teksher',
-    description:
-      'Для каждого уникального товара (артикул + размер + цвет) необходимо создать отдельную запись в Teksher с уникальным GTIN-13 (13-значный штрихкод EAN). Это обязательное условие перед заказом КИЗ-кодов.',
+    num: 3, icon: '🔑', title: 'Проверить GCP и GLN', subtitle: 'Идентификаторы компании и места производства',
+    description: 'GCP и GLN — идентификаторы GS1, связывающие товар с организацией и местом производства. Они должны принадлежать участнику, от имени которого ведётся работа.',
     details: [
-      'GTIN-13: 13 цифр, генерируется на основе GCP. Пример: 4600000000000',
-      'Каждая уникальная комбинация «товар + размер + цвет» = отдельный GTIN',
-      'В ELESTET: вкладка «Товары (GTIN)» → кнопка «Новый товар» → заполнить форму',
-      'Обязательные поля формы: GTIN, Полное наименование, Код ТН ВЭД, Страна производства',
-      'Производитель: Наименование + ИНН (опционально, но рекомендуется)',
-      'Страна производства: берётся из кэша Supabase — список стран синхронизируется кнопкой «Обновить ТН ВЭД»',
-      'Атрибуты (обязательны): Вид товара, Размер одежды, Цвет, Состав, Целевой пол, Модель/артикул, Номер регламента',
-      'Атрибуты появляются после выбора кода ТН ВЭД — зависят от категории товара',
-      'Состав: свободный текст, пример «Полиэстер 80% Эластан 20%»',
-      'Размер: числовое значение + тип (МЕЖДУНАРОДНЫЙ, РОССИЯ, ЕВРОПА, КИТАЙ и др.)',
-      'Статус после создания: DRAFT (черновик)',
-      'Публикация: статус меняется DRAFT → PUBLISHED — кнопка «Опубликовать» в списке товаров',
-      'Только PUBLISHED товары допускаются к эмиссии кодов',
-      'Если GTIN уже существует в Teksher — система вернёт ошибку «Карточка товара с GTIN уже существует»',
+      'GCP — префикс компании GS1, используемый при формировании идентификаторов товаров.',
+      'GLN — идентификатор организации или места: производства, склада либо подразделения.',
+      'Организация получает идентификаторы через GS1 Kyrgyzstan; Teksher использует уже присвоенные данные.',
+      'В ELESTET откройте «Товары (GTIN)» → «Инфо об участнике» и сверьте GCP, GLN, ИНН и наименование.',
+      'Нельзя использовать GCP или GLN другой организации.',
     ],
-    api: [
-      'POST /api/v1/products/create — создать товар (статус DRAFT)',
-      'PATCH /api/v1/products/{id} — опубликовать товар (DRAFT → PUBLISHED)',
-      'GET /api/v1/products?page=0&size=N — список всех товаров',
-      'GET /api/v1/countries — справочник стран производства (кэшируется в таблице countries)',
-    ],
-    warning: 'Нельзя использовать один GTIN для разных товаров. Каждый GTIN = ровно один SKU. Список стран и ТН ВЭД кодов нужно синхронизировать через кнопку «Обновить ТН ВЭД» перед первым созданием товара.',
+    technical: ['ELESTET получает идентификаторы из Teksher и подставляет их при создании карточки товара.'],
+    sources: [{ label: 'GTIN и GS1 — Teksher', href: FAQ }, { label: 'Руководство Teksher', href: MANUAL }],
   },
   {
-    num: 4,
-    icon: '🎫',
-    title: 'Заказ КИЗ-кодов (Эмиссия)',
-    subtitle: 'Запрос на генерацию уникальных кодов маркировки',
-    description:
-      'После того как товар зарегистрирован и опубликован, можно заказать КИЗ-коды (коды идентификации). Каждый КИЗ — это уникальный код DataMatrix, который наносится на одну единицу товара.',
+    num: 4, icon: '📦', title: 'Создать и опубликовать товар', subtitle: 'Отдельный GTIN для каждого варианта',
+    description: 'До заказа КИЗов товар регистрируется в Teksher. У каждого уникального варианта должен быть собственный GTIN и корректные характеристики.',
     details: [
-      'Максимум 10 000 кодов за одну операцию',
-      'extension: "lp" — лёгкая промышленность (LP)',
-      'countryId: 199 — Кыргызстан',
-      'dataSupplier: "AUTO" — система сама назначает поставщика данных',
-      'template: "SHORT" — короткий шаблон DataMatrix',
-      'После запроса создаётся операция со статусом PENDING',
-      'Каждый заказ списывает с баланса соответствующее количество балл-кодов',
+      'Создайте карточку через «Товары (GTIN)» → «Новый товар». После сохранения она получает статус «Черновик».',
+      'Заполните GTIN, наименование, ТН ВЭД, страну производства, производителя и обязательные атрибуты категории.',
+      'Размер, цвет и другие признаки варианта должны соответствовать именно этому GTIN.',
+      'Черновик можно исправить или удалить. После публикации редактирование ограничено.',
+      'Проверьте данные и опубликуйте карточку: для эмиссии доступен только опубликованный товар.',
+      'При ошибке публикации исправьте GTIN и обязательные данные, затем опубликуйте снова.',
+      'GTIN-13 внутри GS1 DataMatrix записывается как 14 цифр с ведущим нулём. Это тот же товар.',
     ],
-    api: [
-      'POST /facade/order/api/v1/operations/multi',
-      'Body: { extension, countryId, items: [{gtin, markingCodesAmount, dataSupplier, template}] }',
-      'Ответ: { data: { [gtin]: operationId } }',
-    ],
-    tip: 'После создания операции сразу выполните синхронизацию — новая операция появится в списке.',
+    warning: 'Один GTIN нельзя использовать для разных размеров или цветов; дубликаты карточек запрещены.',
+    sources: [{ label: 'Операции с товарами — Teksher', href: MANUAL }],
   },
   {
-    num: 5,
-    icon: '⏳',
-    title: 'Ожидание генерации кодов',
-    subtitle: 'Система генерирует уникальные коды DataMatrix',
-    description:
-      'После заказа система Teksher асинхронно генерирует коды. Это занимает от нескольких секунд до нескольких минут в зависимости от количества. Необходимо дождаться статуса COMPLETED.',
+    num: 5, icon: '💳', title: 'Проверить баланс', subtitle: 'КИЗ-единицы и денежный баланс',
+    description: 'До эмиссии проверьте баланс кодов нужной товарной группы и денежный баланс участника. ELESTET показывает оба значения на главной вкладке КИЗов.',
     details: [
-      'Статусы операции: PENDING → IN_PROGRESS → COMPLETED (или FAILED)',
-      'Проверка готовности: GET /facade/order/api/v1/operations/{orderId}/ready',
-      'Поле ready: true означает, что коды готовы к нанесению',
-      'При попытке нанесения до готовности — система вернёт ошибку',
-      'Обновляйте список операций через кнопку «Синхронизировать»',
+      'Баланс КИЗ-единиц показывает доступное количество кодов.',
+      'Денежный баланс показывает средства участника в Teksher.',
+      'Кнопка пополнения получает у Teksher единый платёжный QR выбранной товарной группы.',
+      'Отсканируйте QR банковским приложением, укажите сумму и подтвердите платёж.',
+      'После оплаты обновите данные и убедитесь, что баланс реально изменился.',
+      'Используйте курс, который Teksher показывает в момент оплаты: не фиксируйте его вручную.',
     ],
-    api: [
-      'GET /facade/order/api/v1/operations/{orderId}/ready',
-      'Ответ: { ready: true | false }',
-    ],
-    tip: 'Обычно 100 кодов генерируются за 30–60 секунд. 10 000 кодов могут занять 5–10 минут.',
+    sources: [{ label: 'Баланс и пополнение — Teksher', href: MANUAL }],
   },
   {
-    num: 6,
-    icon: '📄',
-    title: 'Скачивание PDF с кодами',
-    subtitle: 'Получение файла с DataMatrix-этикетками для печати',
-    description:
-      'Когда операция переходит в статус COMPLETED, можно скачать PDF-файл с готовыми этикетками DataMatrix. Каждая страница содержит несколько кодов для наклеивания на товар.',
+    num: 6, icon: '🎟️', title: 'Заказать КИЗы — эмиссия', subtitle: 'Автоматический серийный номер или CSV',
+    description: 'Эмиссия создаёт уникальные коды для опубликованных товаров. Для обычной работы надёжнее автоматическое формирование серийных номеров.',
     details: [
-      'PDF содержит DataMatrix-коды (не обычные штрихкоды EAN)',
-      'Каждый код уникален и привязан к одной единице товара',
-      'Размер этикетки зависит от шаблона (SHORT / FULL)',
-      'PDF формируется на основе operationId операции',
-      'Коды в PDF ещё имеют статус EMITTED (эмиттированы, но не нанесены)',
+      'Актуальный лимит: до 1000 КМ и до 10 GTIN одной товарной группы и одного ТН ВЭД в заказе.',
+      'Выберите опубликованный товар, количество и способ формирования серийного номера.',
+      'В автоматическом режиме серийные номера создаёт система.',
+      'Собственные номера загружаются CSV: один уникальный номер в строке, без заголовка, UTF-8.',
+      'Для указанных в руководстве групп лёгкой промышленности собственный серийный номер имеет 12 символов. Это правило входного файла, не длина полного КМ.',
+      'После сохранения дождитесь фактической готовности операции; фиксированного времени генерации нет.',
+      'При отказе исправьте указанную причину, не создавая подряд одинаковые заказы.',
     ],
-    api: [
-      'GET /api/v1/marking-codes-pdf?operationId={id}',
-      'Ответ: binary PDF file',
-    ],
-    tip: 'Скачивайте PDF сразу после получения статуса COMPLETED — в системе он хранится ограниченное время.',
+    technical: ['В живых данных Teksher операции встречаются со статусами ACCEPTED и REJECTED. ELESTET должен показывать фактический ответ, а не выдуманную цепочку статусов.'],
+    warning: 'Лимит руководства Teksher — 1000 КМ на заказ и на PDF, не 10 000.',
+    sources: [{ label: 'Заказ КМ — Teksher', href: MANUAL }],
   },
   {
-    num: 7,
-    icon: '🏷️',
-    title: 'Нанесение КИЗ-кодов (Утилизация)',
-    subtitle: 'Регистрация факта нанесения кодов на физический товар',
-    description:
-      'После физической наклейки кодов на товар необходимо зарегистрировать этот факт в системе — выполнить «утилизацию» (utilisation). Это переводит коды из статуса EMITTED в APPLIED.',
+    num: 7, icon: '🧩', title: 'Понимать состав КИЗ', subtitle: 'Идентификация, криптохвост и разделители',
+    description: 'Полный российский КМ содержит идентификационную часть и блок проверки. DataMatrix также несёт служебные признаки GS1, которые сканер может передать управляющими символами.',
     details: [
-      'Операция нанесения называется "утилизация" (utilisation)',
-      'Выполняется PER операция (по orderId)',
-      'Перед нанесением система проверяет: /operations/{orderId}/ready',
-      'dataSupplier: "AUTO" — режим автоматической поставки',
-      'extension: "lp" — для лёгкой промышленности',
-      'После нанесения статус кодов меняется: EMITTED → APPLIED',
-      'Только APPLIED коды можно включать в трансгран',
+      'Идентификационная часть: AI 01 + GTIN из 14 цифр + AI 21 + серийный номер.',
+      'Полный КМ дополнительно содержит AI 91 с ключом и AI 92 с криптографической подписью.',
+      'Поля переменной длины разделяет GS — ASCII 29. Он не печатается как обычный символ, но является частью структуры.',
+      'FNC1 обозначает GS1 DataMatrix. Сканер может показать его как префикс ]d2 либо не выводить вовсе.',
+      'API может возвращать короткую идентификационную часть, а CSV печати — полный КМ. Они могут относиться к одному коду, но применяются для разных задач.',
+      'Не удаляйте управляющие разделители из исходного файла и не заменяйте их пробелами.',
+      'Ручная перепечатка текста с этикетки не равна скану DataMatrix: служебные символы потеряются.',
     ],
-    api: [
-      'GET /facade/order/api/v1/operations/{orderId}/ready — проверка готовности',
-      'POST /facade/order/api/v1/operations/utilisation',
-      'Body: { extension: "lp", dataSupplier: "AUTO", orderId }',
-    ],
-    warning: 'Не выполняйте нанесение без физической наклейки кодов. После утилизации отменить факт нанесения нельзя.',
+    tip: 'Используйте сканер с поддержкой GS1 DataMatrix и передачей ASCII 29. В интерфейсе разделитель можно визуализировать, но отправлять нужно исходный символ.',
+    sources: [{ label: 'Состав КМ — Teksher', href: BUSINESS }, { label: 'GS1 DataMatrix Guideline', href: GS1 }],
   },
   {
-    num: 8,
-    icon: '📊',
-    title: 'Журнал операций и статусы кодов',
-    subtitle: 'Контроль всех операций с маркировкой',
-    description:
-      'В системе ведётся полный журнал всех операций: заказы кодов, нанесения, трансграны. Каждая операция имеет тип и статус. КИЗ-коды также имеют свои статусы жизненного цикла.',
+    num: 8, icon: '🖨️', title: 'Первичная печать и нанесение', subtitle: 'Первая выгрузка создаёт операцию нанесения',
+    description: 'При первичной печати действие «Печать и нанесение» формирует файл, автоматически создаёт операцию нанесения и отправляет отчёт системе-эмитенту.',
     details: [
-      'Типы операций: EMISSION (заказ кодов), UTILISATION (нанесение), TRANSGRAN (трансграничная)',
-      'Статусы операций: PENDING → IN_PROGRESS → COMPLETED / FAILED / CANCELLED',
-      'Статусы кодов: EMITTED (заказан) → APPLIED (нанесён) → IN_CIRCULATION (в обороте)',
-      'Поле kmsCount — количество кодов маркировки в операции',
-      'Поле operationId — уникальный идентификатор операции в Teksher',
-      'Синхронизация в ELESTET: загружает все операции и коды в локальную БД',
+      'Дождитесь готовности заказа и откройте его.',
+      'При первой выгрузке выберите «Печать и нанесение», затем PDF или CSV.',
+      'Из заказа выгружаются сразу все коды; частичная первичная печать не предусмотрена.',
+      'PDF — готовая печатная форма. CSV содержит полные КМ для оборудования, своего шаблона и последующих операций.',
+      'После скачивания проверьте созданную операцию «Нанесение»: получение файла ещё не гарантирует успешный отчёт.',
+      'Каждую этикетку нанесите ровно на одну единицу соответствующего товара без повторов.',
     ],
-    api: [
-      'GET /api/v1/operations/filter?page=0&size=N — список операций',
-      'GET /api/v1/marking_codes/filter?page=0&size=N — список КИЗ-кодов',
-      'Параметры фильтра кодов: status, productGroupCode',
-    ],
+    warning: 'Не запускайте «Печать и нанесение», пока не готовы обработать весь заказ: действие регистрирует нанесение.',
+    sources: [{ label: 'Первичная печать — Teksher', href: MANUAL }],
   },
   {
-    num: 9,
-    icon: '🌍',
-    title: 'Трансгран (Трансграничная операция)',
-    subtitle: 'Вывод товара из страны — регистрация экспортной отгрузки',
-    description:
-      'Трансгран — это операция, которая регистрирует факт вывоза маркированного товара за пределы Кыргызстана. Обязательна при экспорте товаров, промаркированных КИЗами. Проводится в 3 шага.',
+    num: 9, icon: '📄', title: 'CSV и повторная печать', subtitle: 'Как сохранить полный код без повреждения',
+    description: 'Вторичная печать повторно выгружает уже полученные коды и не создаёт новую операцию нанесения. CSV остаётся техническим файлом с точной структурой КМ.',
     details: [
-      'ШАГ 1: Загрузка файла с кодами — CSV/TXT с одним КМ-кодом на строку',
-      'ШАГ 2: Создание операции трансграна с реквизитами получателя',
-      'Обязательные поля: fileId, documentNumber, documentDate, recipientInn, recipientName, shipmentDate',
-      'countryCode: код страны-получателя (например, "RU" для России)',
-      'recipientKpp: КПП получателя (обязательно для юрлиц РФ)',
-      'ШАГ 3: Операция подтверждается системой (PENDING → COMPLETED)',
-      'При ошибке — отмена: POST /operations/cancel',
-      'В коды включаются только APPLIED (нанесённые) коды',
+      'Для повторной выгрузки откройте исходный заказ на эмиссию и выберите PDF или CSV.',
+      'Повторная печать не разрешает наносить один КИЗ на несколько единиц товара.',
+      'Не открывайте и не пересохраняйте исходный CSV в Excel: он может изменить длинные строки, кавычки и управляющие символы.',
+      'Для просмотра используйте текстовый редактор с сохранением UTF-8 и управляющих символов.',
+      'Внешние кавычки могут быть обычным CSV-экранированием. Парсер снимает оболочку, но не изменяет данные КМ.',
+      'Для трансграна и повторной регистрации нанесения берите выгрузку Teksher, а не текст с экрана.',
     ],
-    api: [
-      'POST /facade/transgran/api/v1/files/marking_code — загрузка CSV с кодами',
-      'Ответ: { id: fileId }',
-      'POST /facade/transgran/api/v1/operations/create — создание трансграна',
-      'POST /facade/transgran/api/v1/operations/cancel — отмена операции',
-    ],
-    warning: 'Нельзя включать в трансгран коды со статусом EMITTED (не нанесённые). Только APPLIED.',
+    tip: 'Храните оригинальный CSV неизменным, а для просмотра делайте копию.',
+    sources: [{ label: 'Вторичная печать — Teksher', href: MANUAL }],
   },
   {
-    num: 10,
-    icon: '💰',
-    title: 'Баланс и тарификация',
-    subtitle: 'Управление балансом кодов и денежным балансом',
-    description:
-      'В системе Teksher существует два типа баланса: балл-коды (единицы маркировки, списываются при заказе кодов) и денежный баланс (для оплаты за сервис). Необходимо следить за оба видами баланса.',
+    num: 10, icon: '🛠️', title: 'Проверить нанесение и исправить отказ', subtitle: 'История и повторная регистрация',
+    description: 'После первичной печати проверьте операцию нанесения. При отказе Teksher позволяет повторно зарегистрировать нанесение через исходный CSV.',
     details: [
-      'Балл-коды (product_groups/balance): основная единица оплаты за КИЗы',
-      'Денежный баланс (participants/billing/balance): деньги на лицевом счёте',
-      'Стоимость одного КИЗ-кода зависит от тарифного плана организации',
-      'При нулевом балансе кодов заказ эмиссии будет отклонён',
-      'Пополнение денежного баланса — прямо в ELESTET: кнопка «+ Пополнить» → QR-код MegaPay (сканировать любым банковским приложением)',
-      'Альтернативно: пополнение через личный кабинет на label.teksher.kg',
-      'В ELESTET: блок «Баланс» на главной вкладке КИЗы',
+      'Найдите операцию нанесения и откройте общие данные, список кодов и историю.',
+      'Смотрите фактический статус и сообщение обработки; технические значения могут быть ACCEPTED и REJECTED.',
+      'Сначала устраните причину: неверный товар, повреждённый файл, статус или структура КМ.',
+      'Скачайте CSV из первоначального заказа на эмиссию.',
+      'Создайте «Регистрацию нанесения», выберите товарную группу и загрузите исходный CSV.',
+      'После сохранения снова проверьте результат и историю проблемных кодов.',
+      'Не подменяйте полный КМ его короткой идентификационной частью.',
     ],
-    api: [
-      'GET /api/v1/product_groups/balance — баланс кодов',
-      'GET /api/v1/participants/billing/balance — денежный баланс',
-      'POST /api/v1/qrcode?productGroupAlias=lp — QR-код для пополнения (MegaPay)',
-    ],
-    tip: 'Пополняйте баланс прямо в ELESTET через QR — не нужно заходить на сайт Teksher. Курс обмена (сом → КИЗ) отображается в карточке пополнения.',
+    warning: 'Не повторяйте операцию вслепую: сначала прочитайте причину отказа.',
+    sources: [{ label: 'Нанесение и исправление — Teksher', href: MANUAL }],
   },
   {
-    num: 11,
-    icon: '🔄',
-    title: 'Полная синхронизация данных',
-    subtitle: 'Обновление всех данных из Teksher в ELESTET',
-    description:
-      'ELESTET хранит локальную копию данных из Teksher в БД Supabase. Для актуализации данных (новые товары, коды, операции) необходимо выполнять синхронизацию — как ручную, так и настроить автоматическую.',
+    num: 11, icon: '🌍', title: 'Подготовить трансгран', subtitle: 'Полные нанесённые КМ и получатель',
+    description: 'Трансгран передаёт сведения о маркированном товаре между странами. Для него нужен CSV с полными кодами, успешно зарегистрированными как нанесённые.',
     details: [
-      'sync (быстрая) — обновляет только первую страницу товаров и кодов',
-      'sync_full (полная) — загружает ВСЕ страницы товаров, кодов и операций',
-      'Поддерживает пагинацию: за раз загружается по 200 записей, параллельно до 5 страниц',
-      'После синхронизации обновляется: participantName, balance, balanceMoney, synced_at',
-      'Данные хранятся в таблицах: teksher_products, teksher_codes, teksher_operations',
-      'Конфликты разрешаются через upsert по ключу store_id + уникальный ID',
+      'Возьмите CSV из первичной или вторичной печати исходного заказа.',
+      'Файл должен содержать полный КМ с блоком проверки, а не только 01 + GTIN + 21 + серийный номер.',
+      'Проверьте принадлежность кодов партии и успешное нанесение.',
+      'Подготовьте номер и дату документа, дату отгрузки, страну и реквизиты получателя.',
+      'Для российского юрлица заполните КПП, когда это требует форма.',
+      'Не объединяйте в одном файле разные фактические отгрузки или получателей.',
+      'Сохраните неизменную резервную копию CSV.',
     ],
-    api: [
-      'Edge Function action: "sync" — быстрая синхронизация',
-      'Edge Function action: "sync_full" — полная синхронизация всех страниц',
+    sources: [{ label: 'Подготовка трансграна — Teksher', href: MANUAL }],
+  },
+  {
+    num: 12, icon: '🚚', title: 'Создать и завершить трансгран', subtitle: 'От отправителя до принятия импортёром',
+    description: 'Создание отправителем — первая половина процесса. Получатель вручную принимает трансграничную операцию, поэтому её нужно передать ему и контролировать итог.',
+    details: [
+      'Загрузите CSV, заполните документ, отгрузку и получателя, затем создайте операцию.',
+      'Проверьте принятые и отклонённые коды внутри операции.',
+      'Сообщите импортёру об операции: автоматическое принятие руководством не предусмотрено.',
+      'При поставке на маркетплейс дождитесь фактической приёмки складом.',
+      'Отмена доступна только пока операция имеет статус «ВЫПОЛНЯЕТСЯ».',
+      'Храните документ, исходный CSV и идентификатор операции вместе.',
     ],
-    tip: 'Рекомендуется выполнять полную синхронизацию после каждой крупной операции (заказ 1000+ кодов).',
+    warning: 'Трансгран не завершён сразу после отправки формы: нужны успешная обработка и действие импортёра.',
+    sources: [{ label: 'Полный цикл трансграна — Teksher', href: MANUAL }],
+  },
+  {
+    num: 13, icon: '🔎', title: 'Контроль в ELESTET и работа с WB', subtitle: 'Как проверять и передавать КИЗ в FBS',
+    description: 'ELESTET показывает данные Teksher и использует их в рабочих процессах. Источником статуса маркировки остаётся Teksher, а требования к заказу определяет Wildberries.',
+    details: [
+      'Перед проверкой важного результата обновите вкладки товаров, КИЗ-кодов и операций.',
+      'Сверьте магазин, участника, GTIN, серийный номер, статус и связанную операцию.',
+      'Для маркируемого FBS-товара WB ожидает КИЗ именно этого товара. Нельзя использовать чужой или уже переданный код.',
+      'Не путайте EAN товара, QR заказа WB и DataMatrix КИЗ — это разные идентификаторы и этапы.',
+      'Если камера не распознала КИЗ, сравните результат с оригинальным CSV: сохранились ли 01, 21, 91, 92 и разделители.',
+      'При расхождении с кабинетом Teksher сначала обновите данные и откройте исходную операцию. Не исправляйте КМ вручную.',
+    ],
+    technical: ['В API WB поле sgtins передаёт КИЗы FBS-заказа; допустимость определяется метаданными конкретного задания.'],
+    tip: 'Диагностика: этикетка → результат сканера → оригинальный CSV → операция Teksher → требование заказа WB.',
+    sources: [{ label: 'Документация WB FBS', href: WB }, { label: 'GS1 DataMatrix Guideline', href: GS1 }],
   },
 ]
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   Компонент энциклопедии
-───────────────────────────────────────────────────────────────────────────── */
+const Sources = ({ items }: { items: Source[] }) => (
+  <div>
+    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Проверенные источники</p>
+    <div className="flex flex-wrap gap-2">
+      {items.map((item) => (
+        <a key={item.href + item.label} href={item.href} target="_blank" rel="noreferrer" className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-blue-700 hover:border-blue-300 hover:bg-blue-50">
+          {item.label} ↗
+        </a>
+      ))}
+    </div>
+  </div>
+)
 
-const EncyclopediaModal = ({ onClose }: { onClose: () => void }) => {
-  const [activeStage, setActiveStage] = useState<number>(1)
-  const stage = STAGES.find((s) => s.num === activeStage) ?? STAGES[0]
+const GuideModal = ({ initialStage, onClose }: { initialStage: number; onClose: () => void }) => {
+  const [active, setActive] = useState(initialStage)
+  const stage = STAGES[active - 1]
+
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    const oldOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', keydown)
+    return () => {
+      document.body.style.overflow = oldOverflow
+      document.removeEventListener('keydown', keydown)
+    }
+  }, [onClose])
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3"
-      onClick={onClose}
-    >
-      <div
-        className="relative flex h-full max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-3xl bg-white shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* ── Боковая навигация */}
-        <div className="flex w-64 shrink-0 flex-col border-r border-slate-100 bg-slate-50">
-          <div className="px-5 pt-6 pb-4 border-b border-slate-200">
-            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Энциклопедия КИЗов</p>
-            <p className="mt-1 text-lg font-bold text-slate-800">Путь до Трансграна</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-0 md:p-3" onClick={onClose}>
+      <div className="flex h-full w-full max-w-6xl overflow-hidden bg-white shadow-2xl md:max-h-[92vh] md:rounded-3xl" onClick={(event) => event.stopPropagation()}>
+        <aside className="hidden w-72 shrink-0 flex-col border-r border-slate-100 bg-slate-50 md:flex">
+          <div className="border-b border-slate-200 px-5 pb-4 pt-6">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Практический справочник</p>
+            <p className="mt-1 text-lg font-bold text-slate-800">Полный цикл маркировки</p>
+            <p className="mt-1 text-xs text-slate-500">От схемы до трансграна и WB</p>
           </div>
           <nav className="flex-1 overflow-y-auto py-2">
-            {STAGES.map((s) => (
-              <button
-                key={s.num}
-                type="button"
-                onClick={() => setActiveStage(s.num)}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                  activeStage === s.num
-                    ? 'bg-blue-50 text-blue-700'
-                    : 'text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                <span className="text-base leading-none">{s.icon}</span>
-                <span className="flex-1 text-xs font-medium leading-tight">{s.title}</span>
-                <span
-                  className={`shrink-0 flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
-                    activeStage === s.num ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'
-                  }`}
-                >
-                  {s.num}
-                </span>
+            {STAGES.map((item) => (
+              <button key={item.num} type="button" onClick={() => setActive(item.num)} className={`flex w-full items-center gap-3 px-4 py-2.5 text-left ${active === item.num ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-100'}`}>
+                <span>{item.icon}</span><span className="flex-1 text-xs font-medium leading-tight">{item.title}</span>
+                <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${active === item.num ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'}`}>{item.num}</span>
               </button>
             ))}
           </nav>
-        </div>
+        </aside>
 
-        {/* ── Основное содержимое */}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Шапка */}
-          <div className="flex items-start justify-between gap-4 px-8 pt-7 pb-5 border-b border-slate-100">
-            <div className="flex items-center gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-3xl">
-                {stage.icon}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded-lg bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
-                    Этап {stage.num}
-                  </span>
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <header className="border-b border-slate-100 px-4 pb-4 pt-4 sm:px-6 md:px-8 md:pb-5 md:pt-7">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-2xl md:h-14 md:w-14 md:text-3xl">{stage.icon}</div>
+                <div className="min-w-0">
+                  <span className="rounded-lg bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-700">Раздел {stage.num}</span>
+                  <h2 className="mt-1 text-lg font-bold leading-tight text-slate-900 md:text-xl">{stage.title}</h2>
+                  <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">{stage.subtitle}</p>
                 </div>
-                <h2 className="mt-1 text-xl font-bold text-slate-900">{stage.title}</h2>
-                <p className="text-sm text-slate-500">{stage.subtitle}</p>
               </div>
+              <button type="button" onClick={onClose} aria-label="Закрыть справочник" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200">
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12" /></svg>
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-1 shrink-0 flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+            <select value={active} onChange={(event) => setActive(Number(event.target.value))} aria-label="Раздел справочника" className="mt-4 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-medium text-slate-700 md:hidden">
+              {STAGES.map((item) => <option key={item.num} value={item.num}>{item.num}. {item.title}</option>)}
+            </select>
+          </header>
 
-          {/* Контент */}
-          <div className="flex-1 overflow-y-auto px-8 py-6 space-y-5">
-            {/* Описание */}
+          <div className="flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6 md:px-8 md:py-6">
             <p className="text-sm leading-relaxed text-slate-700">{stage.description}</p>
-
-            {/* Пошаговые детали */}
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Подробности
-              </p>
-              <ul className="space-y-2">
-                {stage.details.map((d, i) => (
-                  <li key={i} className="flex items-start gap-2.5">
-                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-bold text-blue-700">
-                      {i + 1}
-                    </span>
-                    <span className="text-sm text-slate-700 leading-snug">{d}</span>
+            <section>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Что делать и учитывать</p>
+              <ul className="space-y-2.5">
+                {stage.details.map((detail, index) => (
+                  <li key={detail} className="flex items-start gap-2.5">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-bold text-blue-700">{index + 1}</span>
+                    <span className="text-sm leading-relaxed text-slate-700">{detail}</span>
                   </li>
                 ))}
               </ul>
-            </div>
-
-            {/* API */}
-            {stage.api && stage.api.length > 0 && (
-              <div>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  API-эндпоинты
-                </p>
-                <div className="rounded-xl bg-slate-900 px-4 py-3 space-y-1.5">
-                  {stage.api.map((line, i) => (
-                    <p key={i} className="font-mono text-xs text-emerald-400 leading-relaxed">
-                      {line}
-                    </p>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Совет */}
-            {stage.tip && (
-              <div className="flex items-start gap-3 rounded-2xl bg-blue-50 px-4 py-3">
-                <span className="text-base">💡</span>
-                <p className="text-sm text-blue-800 leading-relaxed">{stage.tip}</p>
-              </div>
-            )}
-
-            {/* Предупреждение */}
-            {stage.warning && (
-              <div className="flex items-start gap-3 rounded-2xl bg-amber-50 px-4 py-3">
-                <span className="text-base">⚠️</span>
-                <p className="text-sm text-amber-800 leading-relaxed">{stage.warning}</p>
-              </div>
-            )}
+            </section>
+            {stage.technical && <section><p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Техническая справка</p><div className="space-y-2 rounded-2xl bg-slate-900 px-4 py-3.5">{stage.technical.map((line) => <p key={line} className="text-xs leading-relaxed text-emerald-300">{line}</p>)}</div></section>}
+            {stage.tip && <div className="flex gap-3 rounded-2xl bg-blue-50 px-4 py-3"><span>💡</span><p className="text-sm leading-relaxed text-blue-800">{stage.tip}</p></div>}
+            {stage.warning && <div className="flex gap-3 rounded-2xl bg-amber-50 px-4 py-3"><span>⚠️</span><p className="text-sm leading-relaxed text-amber-800">{stage.warning}</p></div>}
+            <Sources items={stage.sources} />
           </div>
 
-          {/* Навигация между этапами */}
-          <div className="flex items-center justify-between border-t border-slate-100 px-8 py-4">
-            <button
-              type="button"
-              disabled={activeStage === 1}
-              onClick={() => setActiveStage((p) => p - 1)}
-              className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-30"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="m15 18-6-6 6-6" />
-              </svg>
-              Назад
-            </button>
-            <span className="text-xs text-slate-400">
-              {activeStage} / {STAGES.length}
-            </span>
-            <button
-              type="button"
-              disabled={activeStage === STAGES.length}
-              onClick={() => setActiveStage((p) => p + 1)}
-              className="flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-30"
-            >
-              Вперёд
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="m9 18 6-6-6-6" />
-              </svg>
-            </button>
-          </div>
-        </div>
+          <footer className="flex items-center justify-between border-t border-slate-100 px-4 py-3 sm:px-6 md:px-8">
+            <button type="button" disabled={active === 1} onClick={() => setActive((value) => value - 1)} className="rounded-xl px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-30">← Назад</button>
+            <span className="text-xs text-slate-400">{active} / {STAGES.length}</span>
+            <button type="button" disabled={active === STAGES.length} onClick={() => setActive((value) => value + 1)} className="rounded-xl px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-30">Вперёд →</button>
+          </footer>
+        </main>
       </div>
     </div>
   )
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   Основной компонент КИЗы 2
-───────────────────────────────────────────────────────────────────────────── */
-
 export const KizGuidePage = () => {
-  const [encyclopediaOpen, setEncyclopediaOpen] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [selected, setSelected] = useState(1)
+  const openStage = (stage: number) => { setSelected(stage); setOpen(true) }
 
   return (
     <div className="flex flex-col gap-6">
-      {/* ── Заголовок страницы */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">Гайд</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Расширенные инструменты работы с кодами маркировки
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setEncyclopediaOpen(true)}
-          className="flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 active:scale-95 transition-transform"
-        >
-          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
-            <path d="M12 16v-4" />
-            <path d="M12 8h.01" />
-          </svg>
-          Энциклопедия КИЗов
-        </button>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div><h1 className="text-xl font-bold text-slate-900">Гайд по КИЗам</h1><p className="mt-0.5 text-sm text-slate-500">Полный цикл Teksher: от GTIN до трансграна и WB</p></div>
+        <button type="button" onClick={() => openStage(1)} className="rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">Открыть полный справочник</button>
       </div>
 
-      {/* ── Обзорные карточки этапов */}
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 sm:px-5">
+        <div className="flex items-start gap-3"><span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" /><div><p className="text-sm font-semibold text-emerald-900">Сведения проверены по актуальному процессу</p><p className="mt-1 text-xs leading-relaxed text-emerald-800">Руководство Teksher V1.2 от 21.08.2025; фактическая интеграция ELESTET и Teksher проверена 27.08.2026. Правила GS1 и WB отмечены отдельно.</p></div></div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {[['GTIN', 'вариант товара'], ['КИЗ / КМ', 'код одной единицы'], ['GS / FNC1', 'служебные признаки GS1'], ['Трансгран', 'передача между странами']].map(([term, text]) => <div key={term} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"><p className="text-sm font-bold text-slate-900">{term}</p><p className="mt-1 text-xs text-slate-500">{text}</p></div>)}
+      </div>
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {STAGES.map((s) => (
-          <button
-            key={s.num}
-            type="button"
-            onClick={() => { setEncyclopediaOpen(true) }}
-            className="group flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-blue-300 hover:shadow-md transition-all"
-          >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-xl group-hover:bg-blue-50 transition-colors">
-              {s.icon}
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">
-                  Этап {s.num}
-                </span>
-              </div>
-              <p className="mt-0.5 text-sm font-semibold text-slate-800 leading-snug">{s.title}</p>
-              <p className="mt-0.5 text-xs text-slate-500 leading-snug line-clamp-2">{s.subtitle}</p>
-            </div>
+        {STAGES.map((stage) => (
+          <button key={stage.num} type="button" onClick={() => openStage(stage.num)} className="group flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:border-blue-300 hover:shadow-md">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-xl group-hover:bg-blue-50">{stage.icon}</div>
+            <div className="min-w-0"><span className="text-[10px] font-bold uppercase tracking-wider text-blue-500">Раздел {stage.num}</span><p className="mt-0.5 text-sm font-semibold leading-snug text-slate-800">{stage.title}</p><p className="mt-0.5 line-clamp-2 text-xs leading-snug text-slate-500">{stage.subtitle}</p></div>
           </button>
         ))}
       </div>
-
-      {/* ── Энциклопедия (модалка) */}
-      {encyclopediaOpen && <EncyclopediaModal onClose={() => setEncyclopediaOpen(false)} />}
+      {open && <GuideModal initialStage={selected} onClose={() => setOpen(false)} />}
     </div>
   )
 }

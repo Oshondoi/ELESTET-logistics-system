@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { ensureAuthenticatedSession } from '../../lib/authSession'
 import { invokeFbs } from '../../services/fbsApi'
-import { kizMatchesProductBarcode, kizValidationError, normalizeKizCode } from '../../lib/kizCode'
+import { kizValidationError, normalizeKizCode } from '../../lib/kizCode'
 import { showToast } from '../ui/Toast'
 
 type ScanSession = {
@@ -465,9 +465,6 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         }
         const validationError = kizValidationError(scannedKiz)
         if (validationError) throw new Error(validationError)
-        if (!kizMatchesProductBarcode(scannedKiz, pendingOrder?.productBarcode)) {
-          throw new Error('Этот КИЗ выпущен для другого товара: GTIN в DataMatrix не совпадает с баркодом выбранного FBS-заказа.')
-        }
         if (pairs.some((pair) => pair.sgtin === scannedKiz)) throw new Error('Этот КИЗ уже есть в текущей сессии')
         const { error: scanError } = await (supabase as any).rpc('scan_fbs_kiz', {
           p_session_id: session.id,

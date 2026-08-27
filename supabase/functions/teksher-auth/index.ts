@@ -226,7 +226,7 @@ Deno.serve(async (req: Request) => {
     const gtin = body.gtin as string
     const quantity = Number(body.quantity)
     if (!gtin) return err('gtin обязателен')
-    if (!quantity || quantity < 1 || quantity > 10000) return err('quantity: 1–10000')
+    if (!quantity || quantity < 1 || quantity > 1000) return err('Количество КИЗов должно быть от 1 до 1000')
     const r = await fetch(`${ORDER_BASE}/operations/multi`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

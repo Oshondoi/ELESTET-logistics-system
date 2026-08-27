@@ -8,6 +8,10 @@ export function normalizeKizCode(value: string): string {
   // Стандартный идентификатор типа символики, который добавляют USB/BT-сканеры.
   if (/^\][A-Za-z]\d/.test(code)) code = code.slice(3)
 
+  // Часть сканеров передаёт стартовый FNC1 как ведущий ASCII 29. Это метка
+  // символики, а не разделитель внутри полезных GS1-данных.
+  code = code.replace(/^\u001d+/, '')
+
   // Некоторые приложения камеры возвращают человекочитаемые AI в скобках.
   const humanReadable = /^\(01\)(\d{14})\(21\)([\s\S]+)$/.exec(code)
   if (humanReadable) code = `01${humanReadable[1]}21${humanReadable[2]}`
@@ -56,11 +60,4 @@ export function kizValidationError(value: string): string | null {
 export function kizGtin(value: string): string | null {
   const match = /^01(\d{14})21/.exec(normalizeKizCode(value))
   return match?.[1] ?? null
-}
-
-export function kizMatchesProductBarcode(kiz: string, barcode: string | null | undefined): boolean {
-  if (!barcode || !/^\d{13,14}$/.test(barcode)) return true
-  const gtin = kizGtin(kiz)
-  if (!gtin) return false
-  return barcode.length === 13 ? gtin === `0${barcode}` : gtin === barcode
 }
