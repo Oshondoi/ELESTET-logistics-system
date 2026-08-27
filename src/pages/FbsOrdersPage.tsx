@@ -40,6 +40,8 @@ interface FbsOrder {
   wbSystemStatus: string
   isInLatestSnapshot: boolean
   supply_id: string | null
+  requiresKiz: boolean
+  kizStatus: 'draft' | 'sent' | 'error' | null
 }
 
 interface ProductLocation {
@@ -72,6 +74,28 @@ interface FbsStockAllocation {
   productBarcode: string
   quantity: number
   status: 'reserved' | 'awaiting_wb' | 'consumed' | 'released'
+}
+
+function KizStatusBadge({ order }: { order: FbsOrder }) {
+  if (order.shipStatus === 'pending' || (!order.requiresKiz && !order.kizStatus)) return null
+  const sent = order.kizStatus === 'sent'
+  const title = sent
+    ? 'КИЗ отправлен в Wildberries'
+    : 'КИЗ не отправлен в Wildberries'
+  return (
+    <div className="mt-1 flex">
+      <span
+        title={title}
+        aria-label={title}
+        className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-bold leading-none ${sent
+          ? 'bg-emerald-100 text-emerald-700 ring-1 ring-inset ring-emerald-300'
+          : 'bg-slate-200 text-slate-500 ring-1 ring-inset ring-slate-300'}`}
+      >
+        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10" /></svg>
+        КИЗ
+      </span>
+    </div>
+  )
 }
 
 interface WbWarehouse {
@@ -1078,6 +1102,34 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       status: row.status as FbsStockAllocation['status'],
     }]))
 
+    const markingRows: any[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data: pageRows, error: markingError } = await (supabase as any)
+        .from('fbs_marking_pairs')
+        .select('order_id,status,updated_at')
+        .eq('store_id', selectedStoreId)
+        .order('updated_at', { ascending: false })
+        .range(from, from + 999)
+      if (markingError && markingError.code !== '42P01') throw markingError
+      markingRows.push(...(pageRows ?? []))
+      if (markingError?.code === '42P01' || (pageRows ?? []).length < 1000) break
+    }
+    const markingStatusByOrderId = new Map<string, FbsOrder['kizStatus']>()
+    for (const row of (markingRows ?? [])) {
+      const orderId = String(row.order_id ?? '')
+      if (!orderId || markingStatusByOrderId.has(orderId)) continue
+      const status = String(row.status ?? '')
+      markingStatusByOrderId.set(orderId, status === 'sent' || status === 'error' ? status : 'draft')
+    }
+
+    const { data: kizCatalogRows, error: kizCatalogError } = await (supabase as any)
+      .from('fbs_wb_qr_catalog')
+      .select('order_id')
+      .eq('store_id', selectedStoreId)
+      .eq('supports_sgtin', true)
+    if (kizCatalogError && kizCatalogError.code !== '42P01') throw kizCatalogError
+    const kizEligibleOrderIds = new Set((kizCatalogRows ?? []).map((row: any) => String(row.order_id ?? '')))
+
     const mapped: FbsOrder[] = (rows ?? []).map((row: any) => {
       const d = row.data ?? {}
       const supplierStatus = String(row.supplier_status ?? row.wb_status ?? '')
@@ -1114,6 +1166,10 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         wbSystemStatus,
         isInLatestSnapshot,
         supply_id: row.supply_id ?? null,
+        requiresKiz: kizEligibleOrderIds.has(String(row.wb_order_id))
+          || (Array.isArray(d.requiredMeta) && d.requiredMeta.includes('sgtin'))
+          || (Array.isArray(d.optionalMeta) && d.optionalMeta.includes('sgtin')),
+        kizStatus: markingStatusByOrderId.get(String(row.wb_order_id)) ?? null,
       } as FbsOrder
     })
     const enriched = await enrichWithCells(mapped)
@@ -1154,12 +1210,29 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'fulfillment_box_items', filter: `account_id=eq.${accountId}`,
       }, scheduleRefresh)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'fbs_marking_pairs', filter: `store_id=eq.${selectedStoreId}`,
+      }, scheduleRefresh)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'fbs_wb_qr_catalog', filter: `store_id=eq.${selectedStoreId}`,
+      }, scheduleRefresh)
       .subscribe()
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer)
       void (supabase as any).removeChannel(channel)
     }
   }, [accountId, selectedStoreId, readFromDb])
+
+  useEffect(() => {
+    if (!selectedStoreId || activeTab !== 'assembling') return
+    let cancelled = false
+    void invokeFbs(selectedStoreId, { action: 'get_scan_catalog' })
+      .then(() => {
+        if (!cancelled) return readFromDb()
+      })
+      .catch(() => undefined)
+    return () => { cancelled = true }
+  }, [activeTab, selectedStoreId, readFromDb])
 
   const loadOpenSupplies = useCallback(async () => {
     if (!selectedStoreId) return
@@ -1273,6 +1346,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     stockAllocation: null,
     supplierStatus: status === 'pending' ? 'new' : status === 'assembling' ? 'confirm' : 'complete',
     wbSystemStatus: 'waiting', isInLatestSnapshot: true, supply_id: null,
+    requiresKiz: false, kizStatus: null,
   }), [])
 
   // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -2425,6 +2499,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                                           ? <>Р-р {order.productSize}</>
                                           : <span className="font-semibold text-red-500">Размер не определён</span>}
                                       </div>
+                                      <KizStatusBadge order={order} />
                                     </div>
                                   </div>
                                 </td>
@@ -2657,6 +2732,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                               ? <>Р-р {order.productSize}</>
                               : <span className="font-semibold text-red-500">Размер не определён</span>}
                           </div>
+                          <KizStatusBadge order={order} />
                         </div>
                       </div>
                     </td>
