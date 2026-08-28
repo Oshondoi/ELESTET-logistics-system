@@ -6183,7 +6183,15 @@ const BatchDetailModal = ({
 
                           {/* Табы коробов */}
                           {supply.boxes.length > 0 && (
-                            <div className="flex gap-1 overflow-x-auto border-b border-slate-100 px-5 py-2 scrollbar-none">
+                            <div
+                              className="flex w-full min-w-0 shrink-0 gap-1 overflow-x-scroll border-b border-slate-100 px-5 pb-2 pt-2 [scrollbar-color:theme(colors.slate.300)_transparent] [scrollbar-width:thin]"
+                              onWheel={(event) => {
+                                const tabs = event.currentTarget
+                                if (tabs.scrollWidth <= tabs.clientWidth || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return
+                                event.preventDefault()
+                                tabs.scrollLeft += event.deltaY
+                              }}
+                            >
                               {supply.boxes.map((box) => {
                                 const isActive = packingOpenBoxId === box.id
                                 const boxTotal = box.items.reduce((s, i) => s + i.qty, 0)
