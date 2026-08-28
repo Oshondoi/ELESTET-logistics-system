@@ -47,23 +47,15 @@ export function isValidGtin14(gtin: string): boolean {
 export function kizValidationError(value: string): string | null {
   const code = normalizeKizCode(value)
   if (code.length < 19 || code.length > 135) {
-    return 'Это не КИЗ: код должен содержать GS1-данные товара и серийный номер.'
+    return 'Это не КИЗ: отсканируйте GS1 DataMatrix с товара.'
   }
 
   const match = /^01(\d{14})21([\s\S]+)$/.exec(code)
-  if (!match) return 'Это не КИЗ: ожидается DataMatrix в формате 01 + GTIN + 21 + серийный номер.'
+  if (!match) return 'Это не КИЗ: отсканируйте GS1 DataMatrix с товара.'
   if (!isValidGtin14(match[1])) return 'КИЗ содержит некорректный GTIN товара. Проверьте DataMatrix и повторите сканирование.'
-
-  const parts = match[2].split(GS)
-  const serial = parts[0]
-  if (serial.length < 1 || serial.length > 20 || !/^[!-~]+$/.test(serial)) {
-    return 'КИЗ содержит некорректный серийный номер. Повторите сканирование DataMatrix.'
-  }
-  // WB is the source of truth for the cryptographic part. Locally we only make
-  // sure a scanner did not lose a GS separator or insert control garbage.
-  if (parts.slice(1).some((part) => part.length === 0 || !/^[!-~]+$/.test(part))) {
-    return 'КИЗ передан не полностью: проверьте GS-разделители и повторите сканирование DataMatrix.'
-  }
+  // Scanner models represent the serial number, GS separators and the
+  // cryptographic tail differently. WB is the source of truth for those parts;
+  // locally we only distinguish a GS1 marking code from unrelated scan types.
   return null
 }
 

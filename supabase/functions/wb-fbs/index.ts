@@ -168,15 +168,56 @@ function currentSgtins(value: Record<string, unknown> | undefined): string[] {
     if (Array.isArray(inner)) return inner.map(String)
     if (typeof inner === 'string' && inner) return [inner]
   }
-  return typeof raw === 'string' && raw ? [raw] : []
+  if (typeof raw === 'string' && raw) return [raw]
+  const detail = metadataDetail(value, 'sgtin')
+  const detailValue = detail?.value
+  if (Array.isArray(detailValue)) return detailValue.map(String).filter(Boolean)
+  return typeof detailValue === 'string' && detailValue ? [detailValue] : []
+}
+
+function metadataDetail(value: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  if (!value) return undefined
+  const details = Array.isArray(value.metaDetails) ? value.metaDetails as Record<string, unknown>[] : []
+  return details.find((detail) => String(detail.key ?? detail.type ?? '').toLowerCase() === key.toLowerCase())
 }
 
 function metadataSupportsSgtin(value: Record<string, unknown> | undefined): boolean {
   if (!value) return false
   const meta = value.meta && typeof value.meta === 'object' ? value.meta as Record<string, unknown> : {}
   if (Object.prototype.hasOwnProperty.call(meta, 'sgtin') || Object.prototype.hasOwnProperty.call(value, 'sgtin')) return true
-  const details = Array.isArray(value.metaDetails) ? value.metaDetails as Record<string, unknown>[] : []
-  return details.some((detail) => String(detail.key ?? '') === 'sgtin')
+  return Boolean(metadataDetail(value, 'sgtin'))
+}
+
+function metadataSgtinSent(value: Record<string, unknown> | undefined): boolean {
+  if (currentSgtins(value).length > 0) return true
+  return String(metadataDetail(value, 'sgtin')?.decision ?? '').toLowerCase() === 'filled'
+}
+
+async function cacheKizOrderStates(
+  accountId: string,
+  storeId: string,
+  metadata: Record<string, unknown>[],
+) {
+  const rows = metadata.flatMap((meta) => {
+    const orderId = metadataOrderId(meta)
+    if (!orderId) return []
+    return [{
+      account_id: accountId,
+      store_id: storeId,
+      order_id: orderId,
+      requires_kiz: metadataSupportsSgtin(meta),
+      sent_to_wb: metadataSgtinSent(meta),
+      checked_at: new Date().toISOString(),
+    }]
+  })
+  if (rows.length === 0) return
+  await sbWrite(
+    'fbs_kiz_order_states',
+    'POST',
+    rows,
+    'on_conflict=store_id,order_id',
+    'resolution=merge-duplicates,return=minimal',
+  )
 }
 
 // ── WB helpers ───────────────────────────────────────────────────────────────
@@ -912,7 +953,9 @@ Deno.serve(async (req) => {
           headers: { 'Content-Type': 'application/json' },
           body: wbOrderIdsBody(batchIds),
         })
-        for (const meta of metadataOrders(metaResponse)) {
+        const metadata = metadataOrders(metaResponse)
+        await cacheKizOrderStates(accountId, store_id, metadata)
+        for (const meta of metadata) {
           if (metadataSupportsSgtin(meta)) eligibleIdsSet.add(metadataOrderId(meta))
         }
       }
@@ -950,6 +993,27 @@ Deno.serve(async (req) => {
         }] : []
       })
       return ok({ catalog, eligible: eligibleIds.length, missing: eligibleIds.length - catalog.length })
+    }
+
+    if (action === 'get_kiz_order_states') {
+      const orderRows = await sbGet(
+        'fbs_orders',
+        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=eq.complete&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id&limit=1000`,
+        true,
+      )
+      const orderIds = orderRows.map((row) => String(row.wb_order_id ?? '')).filter(Boolean)
+      let checked = 0
+      for (let index = 0; index < orderIds.length; index += 100) {
+        const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: wbOrderIdsBody(orderIds.slice(index, index + 100)),
+        })
+        const metadata = metadataOrders(metaResponse)
+        await cacheKizOrderStates(accountId, store_id, metadata)
+        checked += metadata.length
+      }
+      return ok({ checked, requested: orderIds.length })
     }
 
     if (action === 'submit_marking_session') {

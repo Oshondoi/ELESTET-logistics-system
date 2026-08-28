@@ -1130,6 +1130,13 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     if (kizCatalogError && kizCatalogError.code !== '42P01') throw kizCatalogError
     const kizEligibleOrderIds = new Set((kizCatalogRows ?? []).map((row: any) => String(row.order_id ?? '')))
 
+    const { data: kizStateRows, error: kizStateError } = await (supabase as any)
+      .from('fbs_kiz_order_states')
+      .select('order_id,requires_kiz,sent_to_wb')
+      .eq('store_id', selectedStoreId)
+    if (kizStateError && kizStateError.code !== '42P01') throw kizStateError
+    const kizStateByOrderId = new Map<string, any>((kizStateRows ?? []).map((row: any) => [String(row.order_id ?? ''), row]))
+
     const mapped: FbsOrder[] = (rows ?? []).map((row: any) => {
       const d = row.data ?? {}
       const supplierStatus = String(row.supplier_status ?? row.wb_status ?? '')
@@ -1166,10 +1173,13 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         wbSystemStatus,
         isInLatestSnapshot,
         supply_id: row.supply_id ?? null,
-        requiresKiz: kizEligibleOrderIds.has(String(row.wb_order_id))
+        requiresKiz: kizStateByOrderId.get(String(row.wb_order_id))?.requires_kiz === true
+          || kizEligibleOrderIds.has(String(row.wb_order_id))
           || (Array.isArray(d.requiredMeta) && d.requiredMeta.includes('sgtin'))
           || (Array.isArray(d.optionalMeta) && d.optionalMeta.includes('sgtin')),
-        kizStatus: markingStatusByOrderId.get(String(row.wb_order_id)) ?? null,
+        kizStatus: kizStateByOrderId.get(String(row.wb_order_id))?.sent_to_wb === true
+          ? 'sent'
+          : (markingStatusByOrderId.get(String(row.wb_order_id)) ?? null),
       } as FbsOrder
     })
     const enriched = await enrichWithCells(mapped)
@@ -1216,6 +1226,9 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'fbs_wb_qr_catalog', filter: `store_id=eq.${selectedStoreId}`,
       }, scheduleRefresh)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'fbs_kiz_order_states', filter: `store_id=eq.${selectedStoreId}`,
+      }, scheduleRefresh)
       .subscribe()
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer)
@@ -1224,9 +1237,10 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }, [accountId, selectedStoreId, readFromDb])
 
   useEffect(() => {
-    if (!selectedStoreId || activeTab !== 'assembling') return
+    if (!selectedStoreId || (activeTab !== 'assembling' && activeTab !== 'delivering')) return
     let cancelled = false
-    void invokeFbs(selectedStoreId, { action: 'get_scan_catalog' })
+    const action = activeTab === 'assembling' ? 'get_scan_catalog' : 'get_kiz_order_states'
+    void invokeFbs(selectedStoreId, { action })
       .then(() => {
         if (!cancelled) return readFromDb()
       })
