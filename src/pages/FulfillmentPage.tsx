@@ -913,6 +913,8 @@ const BatchDetailModal = ({
     nonce: number
   } | null>(null)
   const packingScanFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [packingCopiedValue, setPackingCopiedValue] = useState<{ field: 'barcode' | 'sellerArticle' | 'wb' | 'brand'; itemId: string } | null>(null)
+  const packingCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [deleteBoxItemConfirm, setDeleteBoxItemConfirm] = useState<{ supplyId: string; boxId: string; itemId: string } | null>(null)
   const [packingProductCache, setPackingProductCache] = useState<Record<string, ProductInfo | null>>({})
   const [packingPhotoPreview, setPackingPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
@@ -935,6 +937,7 @@ const BatchDetailModal = ({
 
   useEffect(() => () => {
     if (packingScanFeedbackTimerRef.current) clearTimeout(packingScanFeedbackTimerRef.current)
+    if (packingCopiedTimerRef.current) clearTimeout(packingCopiedTimerRef.current)
   }, [])
 
   useEffect(() => {
@@ -2221,6 +2224,20 @@ const BatchDetailModal = ({
       message: 'Баркод не принят: требуется EAN-13 из 13 цифр.',
     })
   }, [showPackingScanFeedback])
+
+  const copyPackingValue = useCallback(async (field: 'barcode' | 'sellerArticle' | 'wb' | 'brand', value: string, itemId: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      if (packingCopiedTimerRef.current) clearTimeout(packingCopiedTimerRef.current)
+      setPackingCopiedValue({ field, itemId })
+      packingCopiedTimerRef.current = setTimeout(() => {
+        setPackingCopiedValue(null)
+        packingCopiedTimerRef.current = null
+      }, 1600)
+    } catch {
+      setError('Не удалось скопировать значение. Разрешите сайту доступ к буферу обмена и повторите попытку.')
+    }
+  }, [])
 
   // Добавить товар в короб: сначала write в DB, потом обновляем state точечно (без _opt_)
   const addItemToBoxDirect = useCallback((supplyId: string, boxId: string, bc: string, qty: number) => {
@@ -6276,7 +6293,7 @@ const BatchDetailModal = ({
                                             key={item.id}
                                             className={`rounded-xl px-3 py-2.5 text-sm transition-all duration-300 ${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? 'bg-emerald-50 ring-2 ring-emerald-400 ring-inset' : 'bg-slate-50'}`}
                                           >
-                                            <div className="flex items-start justify-between gap-3">
+                                            <div className="flex items-stretch justify-between gap-3">
                                               {/* Фото товара */}
                                               <div className="flex-shrink-0 self-center">
                                                 {info?.photo_url ? (
@@ -6306,17 +6323,100 @@ const BatchDetailModal = ({
                                               <div className="flex-1 min-w-0">
                                                 <div className="flex items-center gap-1.5 flex-wrap">
                                                   <span className="font-medium text-slate-800 truncate max-w-[280px]">{displayName ?? '—'}</span>
-                                                  {displaySize && <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 flex-shrink-0">{displaySize}</span>}
-                                                  {info?.color && <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 flex-shrink-0">{info.color}</span>}
-                                                  {info?.category && <span className="text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 flex-shrink-0">{info.category}</span>}
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                                  <span className="font-mono text-xs text-slate-400">{item.barcode}</span>
-                                                  {displayArticle && <span className="text-xs text-slate-500">{displayArticle}</span>}
-                                                  {info?.nm_id && <span className="text-xs text-slate-400">WB&nbsp;{info.nm_id}</span>}
-                                                  {info?.brand && <span className="text-xs text-slate-400">{info.brand}</span>}
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => void copyPackingValue('barcode', item.barcode, item.id)}
+                                                    title="Скопировать баркод товара"
+                                                    aria-label={`Скопировать баркод товара ${item.barcode}`}
+                                                    className={`group inline-flex cursor-copy items-center gap-1 rounded px-1 py-0.5 font-mono text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-blue-200 ${packingCopiedValue?.field === 'barcode' && packingCopiedValue.itemId === item.id ? 'bg-emerald-100 text-emerald-700' : 'text-slate-400 hover:bg-blue-50 hover:text-blue-600'}`}
+                                                  >
+                                                    <span>{item.barcode}</span>
+                                                    {packingCopiedValue?.field === 'barcode' && packingCopiedValue.itemId === item.id ? (
+                                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m5 12 4 4L19 6" /></svg>
+                                                    ) : (
+                                                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+                                                    )}
+                                                  </button>
+                                                  {displayArticle && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => void copyPackingValue('sellerArticle', displayArticle, item.id)}
+                                                      title="Скопировать артикул продавца"
+                                                      aria-label={`Скопировать артикул продавца ${displayArticle}`}
+                                                      className={`group inline-flex cursor-copy items-center gap-1 rounded px-1 py-0.5 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-blue-200 ${packingCopiedValue?.field === 'sellerArticle' && packingCopiedValue.itemId === item.id ? 'bg-emerald-100 text-emerald-700' : 'text-slate-500 hover:bg-blue-50 hover:text-blue-600'}`}
+                                                    >
+                                                      <span>{displayArticle}</span>
+                                                      {packingCopiedValue?.field === 'sellerArticle' && packingCopiedValue.itemId === item.id ? (
+                                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m5 12 4 4L19 6" /></svg>
+                                                      ) : (
+                                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+                                                      )}
+                                                    </button>
+                                                  )}
+                                                  {info?.nm_id && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => void copyPackingValue('wb', String(info.nm_id), item.id)}
+                                                      title="Скопировать артикул WB"
+                                                      aria-label={`Скопировать артикул WB ${info.nm_id}`}
+                                                      className={`group inline-flex cursor-copy items-center gap-1 rounded px-1 py-0.5 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-blue-200 ${packingCopiedValue?.field === 'wb' && packingCopiedValue.itemId === item.id ? 'bg-emerald-100 text-emerald-700' : 'text-slate-400 hover:bg-blue-50 hover:text-blue-600'}`}
+                                                    >
+                                                      <span>WB&nbsp;{info.nm_id}</span>
+                                                      {packingCopiedValue?.field === 'wb' && packingCopiedValue.itemId === item.id ? (
+                                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m5 12 4 4L19 6" /></svg>
+                                                      ) : (
+                                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+                                                      )}
+                                                    </button>
+                                                  )}
+                                                  {info?.brand && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => void copyPackingValue('brand', info.brand!, item.id)}
+                                                      title="Скопировать бренд"
+                                                      aria-label={`Скопировать бренд ${info.brand}`}
+                                                      className={`group inline-flex cursor-copy items-center gap-1 rounded px-1 py-0.5 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-blue-200 ${packingCopiedValue?.field === 'brand' && packingCopiedValue.itemId === item.id ? 'bg-emerald-100 text-emerald-700' : 'text-slate-400 hover:bg-blue-50 hover:text-blue-600'}`}
+                                                    >
+                                                      <span>{info.brand}</span>
+                                                      {packingCopiedValue?.field === 'brand' && packingCopiedValue.itemId === item.id ? (
+                                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m5 12 4 4L19 6" /></svg>
+                                                      ) : (
+                                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+                                                      )}
+                                                    </button>
+                                                  )}
                                                 </div>
                                               </div>
+                                              {(displaySize || info?.color || info?.category) && (
+                                                <div className="flex min-w-[250px] flex-shrink-0 self-stretch items-center justify-center gap-2 px-3 py-1.5">
+                                                  {displaySize && (
+                                                    <span
+                                                      title={`Размер: ${displaySize}`}
+                                                      className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-xl bg-blue-100 px-3 py-2 text-base font-extrabold leading-none text-blue-700"
+                                                    >
+                                                      {displaySize}
+                                                    </span>
+                                                  )}
+                                                  {info?.color && (
+                                                    <span
+                                                      title={`Цвет: ${info.color}`}
+                                                      className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-xl bg-purple-100 px-3 py-2 text-sm font-bold leading-tight text-purple-700"
+                                                    >
+                                                      {info.color}
+                                                    </span>
+                                                  )}
+                                                  {info?.category && (
+                                                    <span
+                                                      title={`Категория: ${info.category}`}
+                                                      className="inline-flex min-h-10 items-center justify-center whitespace-nowrap rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold leading-tight text-slate-600"
+                                                    >
+                                                      {info.category}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              )}
                                               <div className="flex items-center gap-2 flex-shrink-0 pt-0.5">
                                                 {packingItemEdits[item.id] !== undefined ? (
                                                   <input
