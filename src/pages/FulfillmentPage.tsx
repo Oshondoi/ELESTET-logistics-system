@@ -904,6 +904,15 @@ const BatchDetailModal = ({
   const [packingItemEdits, setPackingItemEdits] = useState<Record<string, string>>({})
   const [savingPackingItemId, setSavingPackingItemId] = useState<string | null>(null)
   const [deletingPackingItemId, setDeletingPackingItemId] = useState<string | null>(null)
+  const [packingScanFeedback, setPackingScanFeedback] = useState<{
+    kind: 'success' | 'error'
+    boxId: string
+    barcode?: string
+    qty?: number
+    message: string
+    nonce: number
+  } | null>(null)
+  const packingScanFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [deleteBoxItemConfirm, setDeleteBoxItemConfirm] = useState<{ supplyId: string; boxId: string; itemId: string } | null>(null)
   const [packingProductCache, setPackingProductCache] = useState<Record<string, ProductInfo | null>>({})
   const [packingPhotoPreview, setPackingPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
@@ -923,6 +932,10 @@ const BatchDetailModal = ({
   useEffect(() => {
     localStorage.setItem(packingAutoAddStorageKey, String(packingAutoAdd))
   }, [packingAutoAdd, packingAutoAddStorageKey])
+
+  useEffect(() => () => {
+    if (packingScanFeedbackTimerRef.current) clearTimeout(packingScanFeedbackTimerRef.current)
+  }, [])
 
   useEffect(() => {
     localStorage.setItem(BOX_EXPORT_STORAGE_KEY, JSON.stringify(boxExportSelectedOptionalColumns))
@@ -2186,6 +2199,29 @@ const BatchDetailModal = ({
     setPackingProductCache((prev) => ({ ...prev, [bc]: info }))
   }, [packingProductCache, accountId, batch.store_id])
 
+  const showPackingScanFeedback = useCallback((feedback: {
+    kind: 'success' | 'error'
+    boxId: string
+    barcode?: string
+    qty?: number
+    message: string
+  }) => {
+    if (packingScanFeedbackTimerRef.current) clearTimeout(packingScanFeedbackTimerRef.current)
+    setPackingScanFeedback({ ...feedback, nonce: Date.now() })
+    packingScanFeedbackTimerRef.current = setTimeout(() => {
+      setPackingScanFeedback(null)
+      packingScanFeedbackTimerRef.current = null
+    }, feedback.kind === 'success' ? 1800 : 5000)
+  }, [])
+
+  const rejectInvalidPackingBarcode = useCallback((boxId: string) => {
+    showPackingScanFeedback({
+      kind: 'error',
+      boxId,
+      message: 'Баркод не принят: требуется EAN-13 из 13 цифр.',
+    })
+  }, [showPackingScanFeedback])
+
   // Добавить товар в короб: сначала write в DB, потом обновляем state точечно (без _opt_)
   const addItemToBoxDirect = useCallback((supplyId: string, boxId: string, bc: string, qty: number) => {
     const matched = items.find((it) => it.barcode === bc)
@@ -2218,14 +2254,28 @@ const BatchDetailModal = ({
             return { ...bx, items: nextItems }
           }),
         }))
+        showPackingScanFeedback({
+          kind: 'success',
+          boxId,
+          barcode: bc,
+          qty,
+          message: `Добавлено в короб: +${qty} ед.`,
+        })
       })
       .catch((err) => {
-        setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось добавить товар в короб')
+        const reason = (err instanceof Error ? err.message : (err as any)?.message) as string | undefined
+        setError(reason ?? 'Не удалось добавить товар в короб')
+        showPackingScanFeedback({
+          kind: 'error',
+          boxId,
+          barcode: bc,
+          message: reason ? `Товар не добавлен: ${reason}` : 'Товар не добавлен в короб. Повторите сканирование.',
+        })
         void fetchSupplies(batch.id).then(setSupplies)
       })
 
     void lookupAndCacheBarcode(bc)
-  }, [items, accountId, batch.id, lookupAndCacheBarcode])
+  }, [items, accountId, batch.id, lookupAndCacheBarcode, showPackingScanFeedback])
 
   // Preload info для всех баркодов в активной поставке
   useEffect(() => {
@@ -6222,7 +6272,10 @@ const BatchDetailModal = ({
                                         const displaySize = info?.size ?? batchItem?.size
                                         const displayArticle = info?.vendor_code ?? batchItem?.article
                                         return (
-                                          <div key={item.id} className="rounded-xl bg-slate-50 px-3 py-2.5 text-sm">
+                                          <div
+                                            key={item.id}
+                                            className={`rounded-xl px-3 py-2.5 text-sm transition-all duration-300 ${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? 'bg-emerald-50 ring-2 ring-emerald-400 ring-inset' : 'bg-slate-50'}`}
+                                          >
                                             <div className="flex items-start justify-between gap-3">
                                               {/* Фото товара */}
                                               <div className="flex-shrink-0 self-center">
@@ -6275,7 +6328,13 @@ const BatchDetailModal = ({
                                                     autoFocus
                                                   />
                                                 ) : (
-                                                  <span className="text-slate-700 font-medium text-xs">{item.qty}&nbsp;ед.</span>
+                                                  <span
+                                                    key={`${item.id}-${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? packingScanFeedback.nonce : 'idle'}`}
+                                                    className={`inline-flex min-w-[76px] items-baseline justify-center rounded-xl px-3 py-1.5 tabular-nums transition-colors ${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? 'animate-[pulse_450ms_ease-out_1] bg-emerald-100 text-emerald-800' : 'bg-white text-slate-800 ring-1 ring-slate-200'}`}
+                                                  >
+                                                    <span className="text-xl font-extrabold leading-none">{item.qty}</span>
+                                                    <span className="ml-1 text-xs font-semibold">ед.</span>
+                                                  </span>
                                                 )}
                                                 {canManageStageData && !item.id.startsWith('_opt_') && (
                                                   <>
@@ -6349,7 +6408,20 @@ const BatchDetailModal = ({
 
                                   {/* Форма добавления позиции (только открытый короб) */}
                                   {canManageStageData && (
-                                    <div className="border-t border-slate-100 px-5 py-4 space-y-3">
+                                    <div className={`border-t px-5 py-4 space-y-3 transition-colors ${packingScanFeedback?.boxId === box.id && packingScanFeedback.kind === 'error' ? 'border-red-300 bg-red-50/70' : 'border-slate-100'}`}>
+                                      {packingScanFeedback?.boxId === box.id && (
+                                        <div
+                                          key={packingScanFeedback.nonce}
+                                          role="status"
+                                          className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold animate-[pulse_400ms_ease-out_1] ${packingScanFeedback.kind === 'success' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}`}
+                                        >
+                                          <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${packingScanFeedback.kind === 'success' ? 'bg-emerald-500' : 'bg-red-500'}`}>
+                                            {packingScanFeedback.kind === 'success' ? '✓' : '!'}
+                                          </span>
+                                          <span>{packingScanFeedback.message}</span>
+                                          {packingScanFeedback.barcode && <span className="ml-auto font-mono text-xs opacity-70">{packingScanFeedback.barcode}</span>}
+                                        </div>
+                                      )}
                                       <div className="flex items-center gap-2">
                                         <div className="relative flex-1">
                                         <input
@@ -6362,7 +6434,10 @@ const BatchDetailModal = ({
                                           onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
                                               const bc = (packingBoxBarcode[box.id] ?? '').trim()
-                                              if (!bc || !/^\d{13}$/.test(bc)) return
+                                              if (!bc || !/^\d{13}$/.test(bc)) {
+                                                rejectInvalidPackingBarcode(box.id)
+                                                return
+                                              }
                                               if (packingAutoAdd) {
                                                 // Авто-режим: добавляем сразу в DB
                                                 const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
@@ -6404,7 +6479,10 @@ const BatchDetailModal = ({
                                             if (e.key === 'Enter') {
                                               const bc = (packingBoxBarcode[box.id] ?? '').trim()
                                               const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
-                                              if (!bc || !/^\d{13}$/.test(bc)) return
+                                              if (!bc || !/^\d{13}$/.test(bc)) {
+                                                rejectInvalidPackingBarcode(box.id)
+                                                return
+                                              }
                                               addItemToBoxDirect(supply.id, box.id, bc, qty)
                                               setPackingBoxBarcode((p) => ({ ...p, [box.id]: '' }))
                                               setPackingBoxQty((p) => ({ ...p, [box.id]: '1' }))
@@ -6418,7 +6496,10 @@ const BatchDetailModal = ({
                                           onClick={() => {
                                             const bc = (packingBoxBarcode[box.id] ?? '').trim()
                                             const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
-                                            if (!bc) return
+                                            if (!bc || !/^\d{13}$/.test(bc)) {
+                                              rejectInvalidPackingBarcode(box.id)
+                                              return
+                                            }
                                             addItemToBoxDirect(supply.id, box.id, bc, qty)
                                             setPackingBoxBarcode((p) => ({ ...p, [box.id]: '' }))
                                             setPackingBoxQty((p) => ({ ...p, [box.id]: '1' }))
