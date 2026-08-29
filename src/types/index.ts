@@ -503,6 +503,8 @@ export interface TripLine {
   store_id: string
   shipment_number: number
   destination_warehouse: string
+  transfer_to_account_id: string | null
+  transfer_created_at: string | null
   box_qty: number
   units_qty: number
   units_total: number
@@ -551,6 +553,7 @@ export interface TripFormValues {
 export interface TripLineFormValues {
   store_id: string
   destination_warehouse: string
+  transfer_to_account_id?: string | null
   box_qty: number
   units_qty: number
   units_total: number
@@ -563,6 +566,24 @@ export interface TripLineFormValues {
   status: ShipmentStatus
   payment_status: PaymentStatus
   comment: string
+}
+
+export interface IncomingTripLineTransfer {
+  line_id: string
+  sender_account_id: string
+  sender_account_name: string
+  sender_account_short_id: number | null
+  trip_id: string
+  trip_label: string
+  store_name: string
+  store_code: string | null
+  shipment_number: number
+  box_qty: number
+  units_qty: number
+  weight: number | null
+  reception_date: string | null
+  comment: string
+  transfer_created_at: string
 }
 
 // ─── Стикеры ─────────────────────────────────────────────────

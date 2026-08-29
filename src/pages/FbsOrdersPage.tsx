@@ -7,6 +7,7 @@ import { triggerSync as triggerProductSync } from '../services/productService'
 import { invokeFbs } from '../services/fbsApi'
 import { FbsKizScannerModal } from '../components/fbs/FbsKizScannerModal'
 import { FbsStocksPanel } from '../components/fbs/FbsStocksPanel'
+import { FbsDispatchReport } from '../components/fbs/FbsDispatchReport'
 import type { Product, Store } from '../types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -855,9 +856,10 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   const [wbDirectoryStoreId, setWbDirectoryStoreId] = useState<string | null>(null)
   const [internalWarehouses, setInternalWarehouses] = useState<FbsInternalWarehouse[]>([])
   const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState(ALL_WAREHOUSES_FILTER)
-  const [pageSection, setPageSection] = useState<'orders' | 'stocks'>(() => (
-    localStorage.getItem(`fbs_section_${accountId}`) === 'stocks' ? 'stocks' : 'orders'
-  ))
+  const [pageSection, setPageSection] = useState<'orders' | 'stocks' | 'dispatches'>(() => {
+    const savedSection = localStorage.getItem(`fbs_section_${accountId}`)
+    return savedSection === 'stocks' || savedSection === 'dispatches' ? savedSection : 'orders'
+  })
   const [loading, setLoading] = useState(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -1992,6 +1994,22 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     })
   }
 
+  const handleStoreChange = (nextStoreId: string) => {
+    setSelectedStoreId(nextStoreId)
+    localStorage.setItem(lsKey, nextStoreId)
+    setOrders([])
+    setOpenSupplies([])
+    setClosedSupplies([])
+    setArchiveReports([])
+    setArchiveNotice(null)
+    setSelected(new Set())
+    setSelectedSupplyIds(new Set())
+    setProductSyncNotice(null)
+    setError(null)
+    setLastSyncedAt(null)
+    lastSyncedAtRef.current = null
+  }
+
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   return (
@@ -2000,6 +2018,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         {([
           { key: 'orders' as const, label: 'Заказы' },
           { key: 'stocks' as const, label: 'Остатки FBS' },
+          { key: 'dispatches' as const, label: 'Отгрузки FBS' },
         ]).map((section) => (
           <button
             key={section.key}
@@ -2018,10 +2037,11 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       </div>
 
       {/* Toolbar */}
+      {pageSection !== 'dispatches' && (
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
         <select
           value={selectedStoreId}
-          onChange={(e) => { setSelectedStoreId(e.target.value); localStorage.setItem(lsKey, e.target.value); setOrders([]); setOpenSupplies([]); setClosedSupplies([]); setArchiveReports([]); setArchiveNotice(null); setSelected(new Set()); setSelectedSupplyIds(new Set()); setProductSyncNotice(null); setError(null); setLastSyncedAt(null); lastSyncedAtRef.current = null }}
+          onChange={(event) => handleStoreChange(event.target.value)}
           className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-violet-400"
         >
           {storesWithKey.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -2076,6 +2096,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         )}
         </>}
       </div>
+      )}
 
       {pageSection === 'stocks' ? (
         <FbsStocksPanel
@@ -2084,6 +2105,14 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           storeId={selectedStoreId}
           warehouses={wbWarehouses}
           canManage={canManageStocks}
+        />
+      ) : pageSection === 'dispatches' ? (
+        <FbsDispatchReport
+          key={`${accountId}:${selectedStoreId}`}
+          accountId={accountId}
+          storeId={selectedStoreId}
+          stores={storesWithKey}
+          onStoreChange={handleStoreChange}
         />
       ) : <>
       {/* Tabs */}

@@ -10,6 +10,7 @@ import type {
   TripStatus,
   ShipmentStatus,
   PaymentStatus,
+  IncomingTripLineTransfer,
 } from '../types'
 
 const buildTripLineWithStore = (line: TripLine, stores: Store[]): TripLineWithStore => ({
@@ -79,11 +80,12 @@ export const addTripLine = async (
   fulfillmentSupplyId: string | null = null,
 ): Promise<TripLine> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase.rpc('add_trip_line', {
+  const isPartnerTransfer = Boolean(values.transfer_to_account_id)
+  const rpcName = isPartnerTransfer ? 'add_partner_trip_line' : 'add_trip_line'
+  const params = {
     p_trip_id: tripId,
     p_account_id: accountId,
     p_store_id: values.store_id,
-    p_destination_warehouse: values.destination_warehouse,
     p_box_qty: values.box_qty,
     p_units_qty: values.units_qty,
     p_units_total: values.units_total,
@@ -96,11 +98,29 @@ export const addTripLine = async (
     p_status: values.status,
     p_payment_status: values.payment_status,
     p_comment: values.comment,
-    p_fulfillment_supply_id: fulfillmentSupplyId,
-  })
+    ...(isPartnerTransfer
+      ? { p_transfer_to_account_id: values.transfer_to_account_id }
+      : {
+          p_destination_warehouse: values.destination_warehouse,
+          p_fulfillment_supply_id: fulfillmentSupplyId,
+        }),
+  }
+  // Новые RPC добавляются миграцией и могут отсутствовать в статическом снимке типов Supabase.
+  const { data, error } = await (supabase as any).rpc(rpcName, params)
 
   if (error) throw error
   return data as TripLine
+}
+
+export const fetchIncomingTripLineTransfers = async (
+  accountId: string,
+): Promise<IncomingTripLineTransfer[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('get_incoming_trip_line_transfers', {
+    p_account_id: accountId,
+  })
+  if (error) throw error
+  return (data ?? []) as IncomingTripLineTransfer[]
 }
 
 export const deleteTripLine = async (accountId: string, lineId: string): Promise<void> => {

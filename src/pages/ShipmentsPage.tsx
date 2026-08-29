@@ -7,13 +7,15 @@ import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
 import { Modal } from '../components/ui/Modal'
 import { Select } from '../components/ui/Select'
-import type { Store, TripFormValues, TripLineFormValues, TripStatus, ShipmentStatus, PaymentStatus, TripWithLines, TripLineWithStore } from '../types'
+import type { ExecutorOption, IncomingTripLineTransfer, Store, TripFormValues, TripLineFormValues, TripStatus, ShipmentStatus, PaymentStatus, TripWithLines, TripLineWithStore } from '../types'
 import {
   ColumnConfig,
   DEFAULT_COLUMN_CONFIG,
   fetchColumnConfig,
   upsertColumnConfig,
 } from '../services/columnConfigService'
+import { fetchExecutorOptions } from '../services/outsourceService'
+import { fetchIncomingTripLineTransfers } from '../services/tripService'
 
 const pluralize = (count: number, one: string, few: string, many: string) => {
   const mod10 = count % 10
@@ -162,6 +164,36 @@ export const ShipmentsPage = ({
   const [isBulkMoving, setIsBulkMoving] = useState(false)
   const [bulkMoveError, setBulkMoveError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [transferPartners, setTransferPartners] = useState<ExecutorOption[]>([])
+  const [incomingTransfers, setIncomingTransfers] = useState<IncomingTripLineTransfer[]>([])
+  const [incomingTransfersLoading, setIncomingTransfersLoading] = useState(false)
+
+  useEffect(() => {
+    if (!accountId) {
+      setTransferPartners([])
+      setIncomingTransfers([])
+      return
+    }
+
+    let cancelled = false
+    setIncomingTransfersLoading(true)
+    void Promise.all([
+      fetchExecutorOptions(accountId),
+      fetchIncomingTripLineTransfers(accountId),
+    ]).then(([partners, incoming]) => {
+      if (cancelled) return
+      setTransferPartners(partners.filter((partner) => partner.option_type === 'partner'))
+      setIncomingTransfers(incoming)
+    }).catch(() => {
+      if (cancelled) return
+      setTransferPartners([])
+      setIncomingTransfers([])
+    }).finally(() => {
+      if (!cancelled) setIncomingTransfersLoading(false)
+    })
+
+    return () => { cancelled = true }
+  }, [accountId])
 
   // ── Фильтр по дате ───────────────────────────────────────────
   type DateFilterField = 'created_at' | 'departure_date' | 'arrived_at' | 'planned_mp' | 'wb_acceptance'
@@ -627,11 +659,50 @@ export const ShipmentsPage = ({
           </div>
         </Card>
 
+        {(incomingTransfersLoading || incomingTransfers.length > 0) && (
+          <Card className="overflow-hidden rounded-3xl p-0">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-800">Передано вашей компании</h3>
+                <p className="mt-0.5 text-xs text-slate-400">Склад отправителем не назначается</p>
+              </div>
+              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-600">
+                {incomingTransfers.length}
+              </span>
+            </div>
+            {incomingTransfersLoading ? (
+              <div className="px-5 py-5 text-sm text-slate-400">Загрузка передач…</div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {incomingTransfers.map((transfer) => (
+                  <div key={transfer.line_id} className="grid gap-2 px-5 py-3 text-sm md:grid-cols-[minmax(220px,1.4fr)_minmax(180px,1fr)_auto] md:items-center">
+                    <div>
+                      <div className="font-semibold text-slate-800">
+                        C-{transfer.sender_account_short_id ?? '—'} · {transfer.sender_account_name}
+                      </div>
+                      <div className="text-xs text-slate-400">{transfer.trip_label} · Поставка {transfer.shipment_number}</div>
+                    </div>
+                    <div>
+                      <div className="font-medium text-slate-700">{transfer.store_name}</div>
+                      {transfer.store_code && <div className="text-xs text-slate-400">{transfer.store_code}</div>}
+                    </div>
+                    <div className="flex gap-3 text-xs text-slate-600 md:justify-end">
+                      <span><strong className="text-slate-800">{transfer.box_qty}</strong> кор.</span>
+                      <span><strong className="text-slate-800">{transfer.units_qty}</strong> ед.</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        )}
+
         <TripTable
           trips={filteredTrips}
           stores={stores}
           carrierNames={carrierNames}
           warehouseNames={warehouseNames}
+          transferPartners={transferPartners}
           expandAll={expandAllTrips || searchQuery.trim().length > 0}
           hoverAddMode={hoverAddMode}
           showSupplier={showSupplier}
@@ -743,6 +814,7 @@ export const ShipmentsPage = ({
         stores={stores}
         warehouseNames={warehouseNames}
         trips={trips}
+        transferPartners={transferPartners}
         onClose={() => setAddLineOpen(false)}
         onSubmit={async () => {}}
         onSubmitWithTrip={async (tripId, values) => {
@@ -823,4 +895,3 @@ export const ShipmentsPage = ({
     </>
   )
 }
-

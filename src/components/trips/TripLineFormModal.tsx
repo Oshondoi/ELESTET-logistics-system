@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { shipmentStatuses, paymentStatuses } from '../../lib/constants'
-import type { Store, TripLineFormValues, TripWithLines } from '../../types'
+import type { ExecutorOption, Store, TripLineFormValues, TripWithLines } from '../../types'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
@@ -21,11 +21,13 @@ interface TripLineFormModalProps {
   initialTripId?: string
   /** ID партии фулфилмента — если задан, ключевые поля заблокированы (управляются фулфилментом) */
   fulfillmentBatchId?: string | null
+  transferPartners?: ExecutorOption[]
 }
 
 const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues => ({
   store_id: stores[0]?.id ?? '',
   destination_warehouse: warehouses[0] ?? '',
+  transfer_to_account_id: null,
   box_qty: 0,
   units_qty: 0,
   units_total: 0,
@@ -40,7 +42,7 @@ const makeDefaults = (stores: Store[], warehouses: string[]): TripLineFormValues
   comment: '',
 })
 
-export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames, trips, onSubmitWithTrip, fulfillmentBatchId, initialTripId }: TripLineFormModalProps) => {
+export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValues, warehouseNames, trips, onSubmitWithTrip, fulfillmentBatchId, initialTripId, transferPartners = [] }: TripLineFormModalProps) => {
   const isEdit = Boolean(initialValues)
   const isFulfillment = Boolean(fulfillmentBatchId)
   const warehouses = warehouseNames ?? []
@@ -48,6 +50,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
   const [selectedTripId, setSelectedTripId] = useState<string>(() => initialTripId ?? trips?.[0]?.id ?? '')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const isPartnerTransfer = Boolean(values.transfer_to_account_id)
 
   useEffect(() => {
     if (open) {
@@ -60,13 +63,25 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
   const set = <K extends keyof TripLineFormValues>(key: K, value: TripLineFormValues[K]) =>
     setValues((prev) => ({ ...prev, [key]: value }))
 
+  const setPartnerTransfer = (enabled: boolean) => {
+    setValues((prev) => ({
+      ...prev,
+      transfer_to_account_id: enabled ? (transferPartners[0]?.account_id ?? '') : null,
+      // Отправитель не назначает склад компании-получателю.
+      destination_warehouse: '',
+    }))
+  }
+
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
     setIsSubmitting(true)
     setSubmitError(null)
+    const normalizedValues = isPartnerTransfer
+      ? { ...values, destination_warehouse: '' }
+      : values
     const submit = trips && onSubmitWithTrip
-      ? onSubmitWithTrip(selectedTripId, values)
-      : onSubmit(values)
+      ? onSubmitWithTrip(selectedTripId, normalizedValues)
+      : onSubmit(normalizedValues)
     void submit
       .then(() => {
         setValues(makeDefaults(stores, warehouses))
@@ -99,7 +114,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
           <Button type="button" variant="secondary" onClick={onClose} disabled={isSubmitting}>
             Отмена
           </Button>
-          <Button type="submit" form="trip-line-form" disabled={isSubmitting || !values.store_id || (Boolean(trips) && !selectedTripId)}>
+          <Button type="submit" form="trip-line-form" disabled={isSubmitting || !values.store_id || (isPartnerTransfer && !values.transfer_to_account_id) || (Boolean(trips) && !selectedTripId)}>
             {isSubmitting ? 'Сохранение…' : (isEdit ? 'Сохранить' : 'Добавить поставку')}
           </Button>
         </div>
@@ -130,6 +145,46 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
         )}
         {/* В режиме редактирования без trips-пропа — показываем поле рейса если initialTripId задан */}
         {!trips && initialTripId === undefined && null}
+        {!isFulfillment && !isEdit && (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-slate-800">Передать другой компании</p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Доступны только подтверждённые партнёры. Склад получатель определит самостоятельно.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isPartnerTransfer}
+                disabled={transferPartners.length === 0}
+                onClick={() => setPartnerTransfer(!isPartnerTransfer)}
+                className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${isPartnerTransfer ? 'bg-blue-600' : 'bg-slate-300'} disabled:cursor-not-allowed disabled:opacity-50`}
+              >
+                <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${isPartnerTransfer ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+            {transferPartners.length === 0 && (
+              <p className="mt-2 text-xs text-amber-600">Нет подтверждённых партнёров. Сначала подключите компанию в разделе «Роли» → «Аутсорс».</p>
+            )}
+          </div>
+        )}
+        {isPartnerTransfer && (
+          <Select
+            label="Компания-получатель"
+            value={values.transfer_to_account_id ?? ''}
+            onChange={(e) => {
+              set('transfer_to_account_id', e.target.value)
+              set('destination_warehouse', '')
+            }}
+            options={transferPartners.map((partner) => ({
+              label: `C-${partner.account_short_id} · ${partner.account_name}`,
+              value: partner.account_id,
+            }))}
+            disabled={isEdit}
+          />
+        )}
         <div className="grid min-w-0 gap-4 md:grid-cols-2">
           <Select
             label="Магазин"
@@ -142,8 +197,10 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
             label="Склад назначения"
             value={values.destination_warehouse}
             onChange={(e) => set('destination_warehouse', e.target.value)}
-            options={warehouses.map((w) => ({ label: w, value: w }))}
-            disabled={isFulfillment}
+            options={isPartnerTransfer
+              ? [{ label: 'Склад выберет компания-получатель', value: '' }]
+              : warehouses.map((w) => ({ label: w, value: w }))}
+            disabled={isFulfillment || isPartnerTransfer}
           />
           <Input
             label="Коробов"

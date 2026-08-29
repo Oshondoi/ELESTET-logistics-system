@@ -893,6 +893,8 @@ const BatchDetailModal = ({
   const [isSavingBox, setIsSavingBox] = useState<string | null>(null)
   const packingBarcodeRef = useRef<HTMLInputElement>(null)
   const packingQtyRef = useRef<HTMLInputElement>(null)
+  const packingItemsScrollRef = useRef<HTMLDivElement>(null)
+  const packingItemRowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const packingAutoAddStorageKey = 'fulfillment_packing_auto_add'
   const [packingAutoAdd, setPackingAutoAdd] = useState(() => localStorage.getItem(packingAutoAddStorageKey) === 'true')
   const [boxExportSelectedOptionalColumns, setBoxExportSelectedOptionalColumns] = useState<OptionalBoxExportColumnKey[]>(getStoredBoxExportColumns)
@@ -2239,6 +2241,28 @@ const BatchDetailModal = ({
     }
   }, [])
 
+  const scrollPackingItemIntoView = useCallback((boxId: string, barcode: string) => {
+    // Два кадра дают React время заменить оптимистичную строку ответом базы.
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const container = packingItemsScrollRef.current
+      const row = packingItemRowRefs.current.get(`${boxId}:${barcode}`)
+      if (!container || !row) return
+
+      const containerRect = container.getBoundingClientRect()
+      const rowRect = row.getBoundingClientRect()
+      const rowIsVisible = rowRect.top >= containerRect.top && rowRect.bottom <= containerRect.bottom
+
+      if (!rowIsVisible) {
+        const centeredTop = container.scrollTop
+          + (rowRect.top - containerRect.top)
+          - ((container.clientHeight - rowRect.height) / 2)
+        container.scrollTo({ top: Math.max(0, centeredTop), behavior: 'smooth' })
+      }
+
+      packingBarcodeRef.current?.focus({ preventScroll: true })
+    }))
+  }, [])
+
   // Добавить товар в короб: сначала write в DB, потом обновляем state точечно (без _opt_)
   const addItemToBoxDirect = useCallback((supplyId: string, boxId: string, bc: string, qty: number) => {
     const matched = items.find((it) => it.barcode === bc)
@@ -2278,6 +2302,7 @@ const BatchDetailModal = ({
           qty,
           message: `Добавлено в короб: +${qty} ед.`,
         })
+        scrollPackingItemIntoView(boxId, bc)
       })
       .catch((err) => {
         const reason = (err instanceof Error ? err.message : (err as any)?.message) as string | undefined
@@ -2292,7 +2317,7 @@ const BatchDetailModal = ({
       })
 
     void lookupAndCacheBarcode(bc)
-  }, [items, accountId, batch.id, lookupAndCacheBarcode, showPackingScanFeedback])
+  }, [items, accountId, batch.id, lookupAndCacheBarcode, scrollPackingItemIntoView, showPackingScanFeedback])
 
   // Preload info для всех баркодов в активной поставке
   useEffect(() => {
@@ -6286,7 +6311,7 @@ const BatchDetailModal = ({
                                   </div>
 
                                   {/* Список позиций */}
-                                  <div className="flex-1 overflow-y-scroll px-5 py-3 space-y-1" style={{ scrollbarGutter: 'stable' }}>
+                                  <div ref={packingItemsScrollRef} className="flex-1 overflow-y-scroll px-5 py-3 space-y-1" style={{ scrollbarGutter: 'stable' }}>
                                     {box.items.length === 0 ? (
                                       <p className="text-sm text-slate-400 py-4 text-center">Позиций нет</p>
                                     ) : (
@@ -6299,6 +6324,11 @@ const BatchDetailModal = ({
                                         return (
                                           <div
                                             key={item.id}
+                                            ref={(node) => {
+                                              const rowKey = `${box.id}:${item.barcode}`
+                                              if (node) packingItemRowRefs.current.set(rowKey, node)
+                                              else packingItemRowRefs.current.delete(rowKey)
+                                            }}
                                             className={`rounded-xl px-3 py-2.5 text-sm transition-all duration-300 ${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? 'bg-emerald-50 ring-2 ring-emerald-400 ring-inset' : 'bg-slate-50'}`}
                                           >
                                             <div className="flex items-stretch justify-between gap-3">

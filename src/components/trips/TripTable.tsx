@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn, formatDate, pluralRu } from '../../lib/utils'
 import type { ColumnConfig, CustomColDef } from '../../services/columnConfigService'
 import { DEFAULT_COLUMN_CONFIG } from '../../services/columnConfigService'
-import type { PaymentStatus, ShipmentStatus, Store, TripFormValues, TripLineFormValues, TripLineWithStore, TripStatus, TripWithLines } from '../../types'
+import type { ExecutorOption, PaymentStatus, ShipmentStatus, Store, TripFormValues, TripLineFormValues, TripLineWithStore, TripStatus, TripWithLines } from '../../types'
 import { tripStatuses, shipmentStatuses, paymentStatuses } from '../../lib/constants'
 import { supabase } from '../../lib/supabase'
 import { Badge } from '../ui/Badge'
@@ -340,6 +340,7 @@ interface TripTableProps {
   stores: Store[]
   carrierNames?: string[]
   warehouseNames?: string[]
+  transferPartners?: ExecutorOption[]
   expandAll?: boolean
   onDeleteTrip: (tripId: string) => Promise<void>
   onDeleteTripLine: (tripId: string, lineId: string) => Promise<void>
@@ -498,7 +499,7 @@ const ArchivedLinesSection = ({
                       Поставка {line.shipment_number ?? '—'}
                     </td>
                     <td className="px-3 py-2 text-slate-500">
-                      {line.destination_warehouse ?? '—'}
+                      {line.destination_warehouse || '—'}
                     </td>
                     <td className="px-3 py-2 text-slate-600">
                       <div>{boxQty} {pluralRu(boxQty, 'короб', 'короба', 'коробов')}</div>
@@ -558,6 +559,7 @@ export const TripTable = ({
   stores,
   carrierNames,
   warehouseNames,
+  transferPartners = [],
   expandAll = false,
   onDeleteTrip,
   onDeleteTripLine,
@@ -607,6 +609,10 @@ export const TripTable = ({
   onUpdateTripCustomFields,
   onUpdateLineCustomFields,
 }: TripTableProps) => {
+  const transferPartnerNames = useMemo(
+    () => new Map(transferPartners.map((partner) => [partner.account_id, partner.account_name])),
+    [transferPartners],
+  )
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [refreshingCargoIds, setRefreshingCargoIds] = useState<Set<string>>(new Set())
 
@@ -1181,7 +1187,11 @@ export const TripTable = ({
                                   {!lineHidden.has('shipment') && (
                                     <td className="px-3 py-2.5">
                                       <div className="flex flex-col leading-tight">
-                                        <span className="font-medium text-slate-800">{line.destination_warehouse}</span>
+                                        <span className={line.transfer_to_account_id ? 'font-semibold text-blue-600' : 'font-medium text-slate-800'}>
+                                          {line.transfer_to_account_id
+                                            ? `Передача: ${transferPartnerNames.get(line.transfer_to_account_id) ?? 'компания-партнёр'}`
+                                            : (line.destination_warehouse || '—')}
+                                        </span>
                                         <div className="mt-0.5 flex items-center gap-1">
                                           <span className="text-[11px] text-slate-400">Поставка {line.shipment_number}</span>
                                           {canManage && (
@@ -1521,6 +1531,7 @@ export const TripTable = ({
         open={addLineForTripId !== null}
         stores={stores}
         warehouseNames={warehouseNames}
+        transferPartners={transferPartners}
         onClose={() => setAddLineForTripId(null)}
         onSubmit={async (values) => {
           if (!addLineForTripId) return
@@ -1549,6 +1560,7 @@ export const TripTable = ({
         open={editingTripLine !== null}
         stores={stores}
         warehouseNames={warehouseNames}
+        transferPartners={transferPartners}
         onClose={() => setEditingTripLine(null)}
         fulfillmentBatchId={editingTripLine?.line.fulfillment_batch_id}
         trips={trips}
@@ -1556,6 +1568,7 @@ export const TripTable = ({
         initialValues={editingTripLine ? {
           store_id: editingTripLine.line.store_id,
           destination_warehouse: editingTripLine.line.destination_warehouse,
+          transfer_to_account_id: editingTripLine.line.transfer_to_account_id,
           box_qty: editingTripLine.line.box_qty,
           units_qty: editingTripLine.line.units_qty,
           units_total: editingTripLine.line.units_total,
