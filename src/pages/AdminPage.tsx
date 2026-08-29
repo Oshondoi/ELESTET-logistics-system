@@ -670,10 +670,15 @@ export const AdminPage = ({
                 <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
               </svg>
               <input
-                type="text"
+                type="search"
+                name="admin-user-filter"
+                autoComplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                readOnly={resetPwdUser !== null}
                 placeholder="Поиск по email или компании..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => { if (!resetPwdUser) setSearch(e.target.value) }}
                 className="h-9 w-full rounded-xl border border-transparent bg-slate-100 pl-9 pr-4 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
               />
             </div>
@@ -766,6 +771,16 @@ export const AdminPage = ({
           <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-1 text-base font-semibold text-slate-800">Сброс пароля</h3>
             <p className="mb-5 text-xs text-slate-400">{resetPwdUser.email}</p>
+            <input
+              type="email"
+              name="username"
+              value={resetPwdUser.email}
+              autoComplete="username"
+              readOnly
+              tabIndex={-1}
+              aria-hidden="true"
+              className="sr-only"
+            />
 
             {resetPwdSuccess ? (
               <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
@@ -777,6 +792,9 @@ export const AdminPage = ({
                   <label className="mb-1 block text-xs font-medium text-slate-500">Новый пароль</label>
                   <input
                     type="password"
+                    name="new-password"
+                    autoComplete="new-password"
+                    spellCheck={false}
                     value={resetPwdValue}
                     onChange={(e) => setResetPwdValue(e.target.value)}
                     placeholder="Минимум 6 символов и 1 цифра"
@@ -788,6 +806,9 @@ export const AdminPage = ({
                   <label className="mb-1 block text-xs font-medium text-slate-500">Повторите пароль</label>
                   <input
                     type="password"
+                    name="confirm-new-password"
+                    autoComplete="new-password"
+                    spellCheck={false}
                     value={resetPwdConfirm}
                     onChange={(e) => setResetPwdConfirm(e.target.value)}
                     placeholder=""

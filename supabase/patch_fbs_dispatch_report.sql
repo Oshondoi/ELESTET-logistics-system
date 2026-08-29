@@ -24,6 +24,8 @@ create table if not exists public.fbs_dispatch_events (
   dispatched_at timestamptz not null,
   source text not null check (source in ('elestet_delivery', 'wb_sync', 'history_backfill')),
   is_estimated_time boolean not null default false,
+  accepted_at timestamptz,
+  is_estimated_acceptance_time boolean not null default true,
   supplier_status text,
   wb_system_status text,
   created_at timestamptz not null default now(),
@@ -33,7 +35,9 @@ create table if not exists public.fbs_dispatch_events (
 alter table public.fbs_dispatch_events
   add column if not exists internal_warehouse_id uuid,
   add column if not exists seller_warehouse_id bigint,
-  add column if not exists wb_office_id bigint;
+  add column if not exists wb_office_id bigint,
+  add column if not exists accepted_at timestamptz,
+  add column if not exists is_estimated_acceptance_time boolean not null default true;
 
 create index if not exists fbs_dispatch_events_period_idx
   on public.fbs_dispatch_events (account_id, store_id, dispatched_at desc);
@@ -41,6 +45,9 @@ create index if not exists fbs_dispatch_events_barcode_idx
   on public.fbs_dispatch_events (store_id, product_barcode);
 create index if not exists fbs_dispatch_events_warehouses_idx
   on public.fbs_dispatch_events (store_id, internal_warehouse_id, wb_office_id, dispatched_at desc);
+create index if not exists fbs_dispatch_events_acceptance_idx
+  on public.fbs_dispatch_events (account_id, store_id, accepted_at desc)
+  where accepted_at is not null;
 
 alter table public.fbs_dispatch_events enable row level security;
 
@@ -189,6 +196,67 @@ create trigger capture_fbs_dispatch_from_status_trigger
 after insert or update of supplier_status on public.fbs_orders
 for each row execute function public.capture_fbs_dispatch_from_status();
 
+-- WB подтверждает физическую приёмку своим статусом. Для обычного FBS первым
+-- таким статусом является sorted. Остальные статусы ниже возможны позднее или
+-- используются в кроссбордере, но также однозначно означают, что заказ уже был
+-- принят логистикой WB.
+create or replace function public.capture_fbs_wb_acceptance_from_status()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_is_accepted boolean;
+  v_was_accepted boolean := false;
+  v_seen_at timestamptz;
+begin
+  v_is_accepted := coalesce(new.supplier_status, '') = 'complete'
+    and coalesce(new.wb_system_status, '') in (
+      'sorted', 'accepted_by_carrier', 'sent_to_carrier',
+      'ready_for_pickup', 'postponed_delivery', 'sold',
+      'canceled_by_client', 'defect'
+    );
+
+  if tg_op = 'UPDATE' then
+    v_was_accepted := coalesce(old.supplier_status, '') = 'complete'
+      and coalesce(old.wb_system_status, '') in (
+        'sorted', 'accepted_by_carrier', 'sent_to_carrier',
+        'ready_for_pickup', 'postponed_delivery', 'sold',
+        'canceled_by_client', 'defect'
+      );
+  end if;
+
+  if v_is_accepted and not v_was_accepted then
+    v_seen_at := coalesce(new.status_synced_at, new.synced_at, timezone('utc', now()));
+
+    -- На случай, если заказ появился в синхронизации уже после приёмки WB.
+    perform public.capture_fbs_dispatch_event(new.id, v_seen_at, 'wb_sync', true);
+
+    update public.fbs_dispatch_events event
+    set accepted_at = coalesce(event.accepted_at, v_seen_at),
+        is_estimated_acceptance_time = true,
+        supplier_status = new.supplier_status,
+        wb_system_status = new.wb_system_status
+    where event.store_id = new.store_id
+      and event.wb_order_id = new.wb_order_id;
+  else
+    update public.fbs_dispatch_events event
+    set supplier_status = coalesce(new.supplier_status, event.supplier_status),
+        wb_system_status = coalesce(new.wb_system_status, event.wb_system_status)
+    where event.store_id = new.store_id
+      and event.wb_order_id = new.wb_order_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists capture_fbs_wb_acceptance_trigger on public.fbs_orders;
+create trigger capture_fbs_wb_acceptance_trigger
+after insert or update of supplier_status, wb_system_status on public.fbs_orders
+for each row execute function public.capture_fbs_wb_acceptance_from_status();
+
 -- Расширяем существующую операцию: после успешной команды WB фиксируем все
 -- заказы поставки, даже если ни один из них не был зарезервирован из короба.
 create or replace function public.mark_fbs_supply_dispatched(
@@ -283,7 +351,25 @@ begin
 end;
 $$;
 
+-- Для старой истории точная дата приёмки WB недоступна. Сохраняем факт
+-- приёмки, а датой считаем ранее восстановленную дату передачи.
+update public.fbs_dispatch_events event
+set accepted_at = coalesce(event.accepted_at, event.dispatched_at),
+    is_estimated_acceptance_time = true,
+    supplier_status = order_row.supplier_status,
+    wb_system_status = order_row.wb_system_status
+from public.fbs_orders order_row
+where event.store_id = order_row.store_id
+  and event.wb_order_id = order_row.wb_order_id
+  and order_row.supplier_status = 'complete'
+  and order_row.wb_system_status in (
+    'sorted', 'accepted_by_carrier', 'sent_to_carrier',
+    'ready_for_pickup', 'postponed_delivery', 'sold',
+    'canceled_by_client', 'defect'
+  );
+
 drop function if exists public.get_fbs_dispatch_report(uuid, uuid, date, date, text);
+drop function if exists public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint);
 
 create or replace function public.get_fbs_dispatch_report(
   p_account_id uuid,
@@ -292,7 +378,8 @@ create or replace function public.get_fbs_dispatch_report(
   p_period_to date,
   p_timezone text default 'Asia/Bishkek',
   p_internal_warehouse_id uuid default null,
-  p_wb_office_id bigint default null
+  p_wb_office_id bigint default null,
+  p_report_mode text default 'dispatched'
 )
 returns table (
   product_barcode text,
@@ -318,6 +405,10 @@ as $$
 begin
   if p_period_from is null or p_period_to is null or p_period_from > p_period_to then
     raise exception 'Укажите корректный период отчёта';
+  end if;
+
+  if p_report_mode not in ('dispatched', 'accepted') then
+    raise exception 'Неизвестный режим отчёта';
   end if;
 
   if not exists (select 1 from pg_timezone_names where name = p_timezone) then
@@ -349,14 +440,24 @@ begin
     sum(event.quantity)::bigint,
     count(*)::bigint,
     count(distinct event.supply_id)::bigint,
-    min(event.dispatched_at),
-    max(event.dispatched_at),
-    sum(case when event.is_estimated_time then event.quantity else 0 end)::bigint
+    min(case when p_report_mode = 'accepted' then event.accepted_at else event.dispatched_at end),
+    max(case when p_report_mode = 'accepted' then event.accepted_at else event.dispatched_at end),
+    sum(case
+      when p_report_mode = 'accepted' and event.is_estimated_acceptance_time then event.quantity
+      when p_report_mode = 'dispatched' and event.is_estimated_time then event.quantity
+      else 0
+    end)::bigint
   from public.fbs_dispatch_events event
   where event.account_id = p_account_id
     and event.store_id = p_store_id
-    and event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
-    and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    and case
+      when p_report_mode = 'accepted' then
+        event.accepted_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.accepted_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+      else
+        event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    end
     and (p_internal_warehouse_id is null or event.internal_warehouse_id = p_internal_warehouse_id)
     and (p_wb_office_id is null or event.wb_office_id = p_wb_office_id)
   group by event.product_barcode
@@ -364,5 +465,5 @@ begin
 end;
 $$;
 
-revoke all on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint) from public, anon;
-grant execute on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint) to authenticated;
+revoke all on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint, text) from public, anon;
+grant execute on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint, text) to authenticated;

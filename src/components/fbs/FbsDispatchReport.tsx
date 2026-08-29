@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { toUserMessage } from '../../lib/userMessage'
 import { PhotoThumb } from '../ui/PhotoThumb'
@@ -31,6 +31,7 @@ interface Props {
 }
 
 type PeriodPreset = 'week' | 'month' | 'quarter'
+type ReportMode = 'dispatched' | 'accepted'
 
 const PERIOD_PRESETS: Array<{ key: PeriodPreset; label: string }> = [
   { key: 'week', label: 'Неделя' },
@@ -39,6 +40,7 @@ const PERIOD_PRESETS: Array<{ key: PeriodPreset; label: string }> = [
 ]
 
 interface SavedDispatchFilters {
+  reportMode: ReportMode
   periodFrom: string
   periodTo: string
   internalWarehouseId: string
@@ -78,6 +80,7 @@ function presetPeriod(preset: PeriodPreset) {
 
 function defaultDispatchFilters(): SavedDispatchFilters {
   return {
+    reportMode: 'dispatched',
     periodFrom: initialPeriodFrom(),
     periodTo: localDateValue(new Date()),
     internalWarehouseId: '',
@@ -97,7 +100,9 @@ function loadDispatchFilters(storageKey: string): SavedDispatchFilters {
     const selectedPreset = PERIOD_PRESETS.some((preset) => preset.key === saved.selectedPreset)
       ? saved.selectedPreset as PeriodPreset
       : null
+    const reportMode: ReportMode = saved.reportMode === 'accepted' ? 'accepted' : 'dispatched'
     return {
+      reportMode,
       periodFrom: periodFrom <= periodTo ? periodFrom : fallback.periodFrom,
       periodTo: periodFrom <= periodTo ? periodTo : fallback.periodTo,
       internalWarehouseId: typeof saved.internalWarehouseId === 'string' ? saved.internalWarehouseId : '',
@@ -136,6 +141,7 @@ export function FbsDispatchReport({
 }: Props) {
   const filtersStorageKey = useMemo(() => `fbs_dispatch_filters_${accountId}_${storeId}`, [accountId, storeId])
   const initialFilters = useMemo(() => loadDispatchFilters(filtersStorageKey), [filtersStorageKey])
+  const [reportMode, setReportMode] = useState<ReportMode>(initialFilters.reportMode)
   const [periodFrom, setPeriodFrom] = useState(initialFilters.periodFrom)
   const [periodTo, setPeriodTo] = useState(initialFilters.periodTo)
   const [internalWarehouseId, setInternalWarehouseId] = useState(initialFilters.internalWarehouseId)
@@ -147,14 +153,17 @@ export function FbsDispatchReport({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const reportRequestIdRef = useRef(0)
 
   const loadReport = useCallback(async (
     from: string,
     to: string,
     selectedInternalWarehouseId: string,
     selectedWbOfficeId: string,
+    selectedReportMode: ReportMode,
   ) => {
     if (!supabase || !accountId || !storeId) return
+    const requestId = ++reportRequestIdRef.current
     setLoading(true)
     setError(null)
     try {
@@ -167,8 +176,10 @@ export function FbsDispatchReport({
         p_timezone: timezone,
         p_internal_warehouse_id: selectedInternalWarehouseId || null,
         p_wb_office_id: selectedWbOfficeId ? Number(selectedWbOfficeId) : null,
+        p_report_mode: selectedReportMode,
       })
       if (requestError) throw requestError
+      if (requestId !== reportRequestIdRef.current) return
       setRows(((data ?? []) as DispatchReportRow[]).map((row) => ({
         ...row,
         quantity: Number(row.quantity ?? 0),
@@ -177,10 +188,11 @@ export function FbsDispatchReport({
         estimated_quantity: Number(row.estimated_quantity ?? 0),
       })))
     } catch (requestError) {
+      if (requestId !== reportRequestIdRef.current) return
       setRows([])
       setError(toUserMessage(requestError))
     } finally {
-      setLoading(false)
+      if (requestId === reportRequestIdRef.current) setLoading(false)
     }
   }, [accountId, storeId])
 
@@ -190,12 +202,14 @@ export function FbsDispatchReport({
       initialFilters.periodTo,
       initialFilters.internalWarehouseId,
       initialFilters.wbOfficeId,
+      initialFilters.reportMode,
     )
   }, [initialFilters, loadReport])
 
   useEffect(() => {
     try {
       localStorage.setItem(filtersStorageKey, JSON.stringify({
+        reportMode,
         periodFrom,
         periodTo,
         internalWarehouseId,
@@ -206,7 +220,7 @@ export function FbsDispatchReport({
     } catch {
       // Настройки продолжают работать в текущей вкладке без localStorage.
     }
-  }, [filtersStorageKey, internalWarehouseId, periodFrom, periodTo, search, selectedPreset, wbOfficeId])
+  }, [filtersStorageKey, internalWarehouseId, periodFrom, periodTo, reportMode, search, selectedPreset, wbOfficeId])
 
   useEffect(() => {
     if (internalWarehouses.length > 0 && internalWarehouseId
@@ -248,7 +262,7 @@ export function FbsDispatchReport({
       setError('Дата начала не может быть позже даты окончания.')
       return
     }
-    void loadReport(periodFrom, periodTo, internalWarehouseId, wbOfficeId)
+    void loadReport(periodFrom, periodTo, internalWarehouseId, wbOfficeId, reportMode)
   }
 
   const applyPreset = (preset: PeriodPreset) => {
@@ -257,7 +271,13 @@ export function FbsDispatchReport({
     setPeriodTo(period.to)
     setSelectedPreset(preset)
     setPresetMenuOpen(false)
-    void loadReport(period.from, period.to, internalWarehouseId, wbOfficeId)
+    void loadReport(period.from, period.to, internalWarehouseId, wbOfficeId, reportMode)
+  }
+
+  const applyReportMode = (nextMode: ReportMode) => {
+    if (nextMode === reportMode) return
+    setReportMode(nextMode)
+    void loadReport(periodFrom, periodTo, internalWarehouseId, wbOfficeId, nextMode)
   }
 
   const handleCopy = async (value: string) => {
@@ -275,6 +295,31 @@ export function FbsDispatchReport({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 p-5">
       <div className="shrink-0 space-y-4 pb-4">
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center gap-3">
+            <span className="text-xs font-semibold text-slate-600">Тип отчёта</span>
+            <div className="flex h-9 w-[300px] rounded-xl bg-slate-100 p-1" role="group" aria-label="Тип отчёта">
+              <button
+                type="button"
+                aria-pressed={reportMode === 'dispatched'}
+                onClick={() => applyReportMode('dispatched')}
+                className={`flex-1 cursor-pointer rounded-lg px-3 text-xs font-semibold transition ${reportMode === 'dispatched'
+                  ? 'bg-white text-violet-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                Передано в доставку
+              </button>
+              <button
+                type="button"
+                aria-pressed={reportMode === 'accepted'}
+                onClick={() => applyReportMode('accepted')}
+                className={`flex-1 cursor-pointer rounded-lg px-3 text-xs font-semibold transition ${reportMode === 'accepted'
+                  ? 'bg-white text-emerald-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                Принято WB
+              </button>
+            </div>
+          </div>
           <div className="flex flex-wrap items-end gap-3">
             <label className="space-y-1.5 text-xs font-semibold text-slate-600">
               <span className="block">Магазин</span>
@@ -393,8 +438,8 @@ export function FbsDispatchReport({
 
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-            <div className="text-2xl font-bold text-violet-700">{totals.quantity.toLocaleString('ru-RU')}</div>
-            <div className="mt-1 text-xs text-slate-500">товаров передано в WB</div>
+            <div className={`text-2xl font-bold ${reportMode === 'accepted' ? 'text-emerald-700' : 'text-violet-700'}`}>{totals.quantity.toLocaleString('ru-RU')}</div>
+            <div className="mt-1 text-xs text-slate-500">{reportMode === 'accepted' ? 'товаров принято WB' : 'товаров передано в доставку'}</div>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
             <div className="text-2xl font-bold text-slate-900">{rows.length.toLocaleString('ru-RU')}</div>
@@ -419,7 +464,9 @@ export function FbsDispatchReport({
             </div>
           ) : filteredRows.length === 0 ? (
             <div className="px-5 py-16 text-center text-sm text-slate-400">
-              {rows.length === 0 ? 'За выбранный период отгрузок не найдено' : 'По вашему запросу ничего не найдено'}
+              {rows.length === 0
+                ? reportMode === 'accepted' ? 'За выбранный период приёмок WB не найдено' : 'За выбранный период передач не найдено'
+                : 'По вашему запросу ничего не найдено'}
             </div>
           ) : (
             <div className="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable]">
@@ -430,9 +477,9 @@ export function FbsDispatchReport({
                     <th className="px-4 py-3 font-semibold">Баркод</th>
                     <th className="px-4 py-3 font-semibold">Артикулы</th>
                     <th className="px-4 py-3 font-semibold">Размер / цвет</th>
-                    <th className="px-4 py-3 text-right font-semibold">Передано</th>
+                    <th className="px-4 py-3 text-right font-semibold">{reportMode === 'accepted' ? 'Принято WB' : 'Передано'}</th>
                     <th className="px-4 py-3 text-right font-semibold">Заказов</th>
-                    <th className="px-5 py-3 font-semibold">Время</th>
+                    <th className="px-5 py-3 font-semibold">{reportMode === 'accepted' ? 'Время приёмки' : 'Время передачи'}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -479,7 +526,9 @@ export function FbsDispatchReport({
                         <td className="px-5 py-3">
                           <div className="whitespace-nowrap text-slate-700">{formatDateTime(row.last_dispatched_at)}</div>
                           {partlyEstimated ? (
-                            <div className="mt-1 inline-flex rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700" title="WB не передаёт точное время действия для старой истории. Использовано время, когда сервис увидел статус.">
+                            <div className="mt-1 inline-flex rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700" title={reportMode === 'accepted'
+                              ? 'WB не передаёт точное время приёмки в обычном ответе статусов. Использовано время, когда сервис увидел подтверждение WB.'
+                              : 'WB не передаёт точное время действия для старой истории. Использовано время, когда сервис увидел статус.'}>
                               Примерно: {row.estimated_quantity} шт.
                             </div>
                           ) : (
