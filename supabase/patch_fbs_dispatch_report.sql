@@ -7,6 +7,9 @@ create table if not exists public.fbs_dispatch_events (
   store_id uuid not null references public.stores(id) on delete cascade,
   wb_order_id text not null,
   supply_id text,
+  internal_warehouse_id uuid,
+  seller_warehouse_id bigint,
+  wb_office_id bigint,
   product_barcode text not null default '',
   nm_id bigint,
   chrt_id bigint,
@@ -27,10 +30,17 @@ create table if not exists public.fbs_dispatch_events (
   unique (store_id, wb_order_id)
 );
 
+alter table public.fbs_dispatch_events
+  add column if not exists internal_warehouse_id uuid,
+  add column if not exists seller_warehouse_id bigint,
+  add column if not exists wb_office_id bigint;
+
 create index if not exists fbs_dispatch_events_period_idx
   on public.fbs_dispatch_events (account_id, store_id, dispatched_at desc);
 create index if not exists fbs_dispatch_events_barcode_idx
   on public.fbs_dispatch_events (store_id, product_barcode);
+create index if not exists fbs_dispatch_events_warehouses_idx
+  on public.fbs_dispatch_events (store_id, internal_warehouse_id, wb_office_id, dispatched_at desc);
 
 alter table public.fbs_dispatch_events enable row level security;
 
@@ -56,7 +66,8 @@ set search_path = public
 as $$
 begin
   insert into public.fbs_dispatch_events (
-    account_id, store_id, wb_order_id, supply_id, product_barcode,
+    account_id, store_id, wb_order_id, supply_id,
+    internal_warehouse_id, seller_warehouse_id, wb_office_id, product_barcode,
     nm_id, chrt_id, article, product_name, vendor_code, brand, color,
     tech_size, photo_url, quantity, dispatched_at, source,
     is_estimated_time, supplier_status, wb_system_status
@@ -66,6 +77,13 @@ begin
     order_row.store_id,
     order_row.wb_order_id,
     order_row.supply_id,
+    internal_warehouse.id,
+    nullif(order_row.warehouse_id, 0)::bigint,
+    case
+      when coalesce(order_row.data ->> 'officeId', '') ~ '^\d+$'
+        then (order_row.data ->> 'officeId')::bigint
+      else null
+    end,
     coalesce(barcode.value, ''),
     order_row.nm_id,
     order_row.chrt_id,
@@ -86,6 +104,15 @@ begin
   left join public.products product
     on product.store_id = order_row.store_id and product.nm_id = order_row.nm_id
   left join lateral (
+    select warehouse.id
+    from public.wms_warehouses warehouse
+    where warehouse.account_id = order_row.account_id
+      and warehouse.fbs_enabled = true
+      and warehouse.wb_warehouse_id::text = order_row.warehouse_id::text
+    order by warehouse.created_at
+    limit 1
+  ) internal_warehouse on true
+  left join lateral (
     select sku.value
     from jsonb_array_elements_text(coalesce(order_row.skus, '[]'::jsonb)) with ordinality sku(value, position)
     order by sku.position
@@ -104,6 +131,9 @@ begin
   where order_row.id = p_order_row_id
   on conflict (store_id, wb_order_id) do update set
     supply_id = coalesce(excluded.supply_id, fbs_dispatch_events.supply_id),
+    internal_warehouse_id = coalesce(excluded.internal_warehouse_id, fbs_dispatch_events.internal_warehouse_id),
+    seller_warehouse_id = coalesce(excluded.seller_warehouse_id, fbs_dispatch_events.seller_warehouse_id),
+    wb_office_id = coalesce(excluded.wb_office_id, fbs_dispatch_events.wb_office_id),
     product_barcode = coalesce(nullif(excluded.product_barcode, ''), fbs_dispatch_events.product_barcode),
     nm_id = coalesce(excluded.nm_id, fbs_dispatch_events.nm_id),
     chrt_id = coalesce(excluded.chrt_id, fbs_dispatch_events.chrt_id),
@@ -253,12 +283,16 @@ begin
 end;
 $$;
 
+drop function if exists public.get_fbs_dispatch_report(uuid, uuid, date, date, text);
+
 create or replace function public.get_fbs_dispatch_report(
   p_account_id uuid,
   p_store_id uuid,
   p_period_from date,
   p_period_to date,
-  p_timezone text default 'Asia/Bishkek'
+  p_timezone text default 'Asia/Bishkek',
+  p_internal_warehouse_id uuid default null,
+  p_wb_office_id bigint default null
 )
 returns table (
   product_barcode text,
@@ -323,10 +357,12 @@ begin
     and event.store_id = p_store_id
     and event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
     and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    and (p_internal_warehouse_id is null or event.internal_warehouse_id = p_internal_warehouse_id)
+    and (p_wb_office_id is null or event.wb_office_id = p_wb_office_id)
   group by event.product_barcode
   order by sum(event.quantity) desc, event.product_barcode;
 end;
 $$;
 
-revoke all on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text) from public, anon;
-grant execute on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text) to authenticated;
+revoke all on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint) from public, anon;
+grant execute on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint) to authenticated;

@@ -25,10 +25,27 @@ interface Props {
   accountId: string
   storeId: string
   stores: Array<{ id: string; name: string }>
+  internalWarehouses: Array<{ id: string; name: string }>
+  wbDestinations: Array<{ id: number; name: string }>
   onStoreChange: (storeId: string) => void
 }
 
 type PeriodPreset = 'week' | 'month' | 'quarter'
+
+const PERIOD_PRESETS: Array<{ key: PeriodPreset; label: string }> = [
+  { key: 'week', label: 'Неделя' },
+  { key: 'month', label: 'Месяц' },
+  { key: 'quarter', label: 'Квартал' },
+]
+
+interface SavedDispatchFilters {
+  periodFrom: string
+  periodTo: string
+  internalWarehouseId: string
+  wbOfficeId: string
+  selectedPreset: PeriodPreset | null
+  search: string
+}
 
 function localDateValue(date: Date) {
   const year = date.getFullYear()
@@ -59,6 +76,40 @@ function presetPeriod(preset: PeriodPreset) {
   return { from: localDateValue(from), to: localDateValue(today) }
 }
 
+function defaultDispatchFilters(): SavedDispatchFilters {
+  return {
+    periodFrom: initialPeriodFrom(),
+    periodTo: localDateValue(new Date()),
+    internalWarehouseId: '',
+    wbOfficeId: '',
+    selectedPreset: null,
+    search: '',
+  }
+}
+
+function loadDispatchFilters(storageKey: string): SavedDispatchFilters {
+  const fallback = defaultDispatchFilters()
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || '{}') as Partial<SavedDispatchFilters>
+    const validDate = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    const periodFrom = validDate(saved.periodFrom) ? saved.periodFrom : fallback.periodFrom
+    const periodTo = validDate(saved.periodTo) ? saved.periodTo : fallback.periodTo
+    const selectedPreset = PERIOD_PRESETS.some((preset) => preset.key === saved.selectedPreset)
+      ? saved.selectedPreset as PeriodPreset
+      : null
+    return {
+      periodFrom: periodFrom <= periodTo ? periodFrom : fallback.periodFrom,
+      periodTo: periodFrom <= periodTo ? periodTo : fallback.periodTo,
+      internalWarehouseId: typeof saved.internalWarehouseId === 'string' ? saved.internalWarehouseId : '',
+      wbOfficeId: typeof saved.wbOfficeId === 'string' ? saved.wbOfficeId : '',
+      selectedPreset,
+      search: typeof saved.search === 'string' ? saved.search : '',
+    }
+  } catch {
+    return fallback
+  }
+}
+
 function formatDateTime(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
@@ -75,24 +126,34 @@ async function copyText(value: string) {
   await navigator.clipboard.writeText(value)
 }
 
-export function FbsDispatchReport({ accountId, storeId, stores, onStoreChange }: Props) {
-  const [periodFrom, setPeriodFrom] = useState(initialPeriodFrom)
-  const [periodTo, setPeriodTo] = useState(() => localDateValue(new Date()))
+export function FbsDispatchReport({
+  accountId,
+  storeId,
+  stores,
+  internalWarehouses,
+  wbDestinations,
+  onStoreChange,
+}: Props) {
+  const filtersStorageKey = useMemo(() => `fbs_dispatch_filters_${accountId}_${storeId}`, [accountId, storeId])
+  const initialFilters = useMemo(() => loadDispatchFilters(filtersStorageKey), [filtersStorageKey])
+  const [periodFrom, setPeriodFrom] = useState(initialFilters.periodFrom)
+  const [periodTo, setPeriodTo] = useState(initialFilters.periodTo)
+  const [internalWarehouseId, setInternalWarehouseId] = useState(initialFilters.internalWarehouseId)
+  const [wbOfficeId, setWbOfficeId] = useState(initialFilters.wbOfficeId)
+  const [selectedPreset, setSelectedPreset] = useState<PeriodPreset | null>(initialFilters.selectedPreset)
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false)
   const [rows, setRows] = useState<DispatchReportRow[]>([])
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(initialFilters.search)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
 
-  const activePreset = useMemo<PeriodPreset | null>(() => {
-    const presets: PeriodPreset[] = ['week', 'month', 'quarter']
-    return presets.find((preset) => {
-      const period = presetPeriod(preset)
-      return periodFrom === period.from && periodTo === period.to
-    }) ?? null
-  }, [periodFrom, periodTo])
-
-  const loadReport = useCallback(async (from: string, to: string) => {
+  const loadReport = useCallback(async (
+    from: string,
+    to: string,
+    selectedInternalWarehouseId: string,
+    selectedWbOfficeId: string,
+  ) => {
     if (!supabase || !accountId || !storeId) return
     setLoading(true)
     setError(null)
@@ -104,6 +165,8 @@ export function FbsDispatchReport({ accountId, storeId, stores, onStoreChange }:
         p_period_from: from,
         p_period_to: to,
         p_timezone: timezone,
+        p_internal_warehouse_id: selectedInternalWarehouseId || null,
+        p_wb_office_id: selectedWbOfficeId ? Number(selectedWbOfficeId) : null,
       })
       if (requestError) throw requestError
       setRows(((data ?? []) as DispatchReportRow[]).map((row) => ({
@@ -122,13 +185,42 @@ export function FbsDispatchReport({ accountId, storeId, stores, onStoreChange }:
   }, [accountId, storeId])
 
   useEffect(() => {
-    const from = initialPeriodFrom()
-    const to = localDateValue(new Date())
-    setPeriodFrom(from)
-    setPeriodTo(to)
-    setSearch('')
-    void loadReport(from, to)
-  }, [loadReport])
+    void loadReport(
+      initialFilters.periodFrom,
+      initialFilters.periodTo,
+      initialFilters.internalWarehouseId,
+      initialFilters.wbOfficeId,
+    )
+  }, [initialFilters, loadReport])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(filtersStorageKey, JSON.stringify({
+        periodFrom,
+        periodTo,
+        internalWarehouseId,
+        wbOfficeId,
+        selectedPreset,
+        search,
+      } satisfies SavedDispatchFilters))
+    } catch {
+      // Настройки продолжают работать в текущей вкладке без localStorage.
+    }
+  }, [filtersStorageKey, internalWarehouseId, periodFrom, periodTo, search, selectedPreset, wbOfficeId])
+
+  useEffect(() => {
+    if (internalWarehouses.length > 0 && internalWarehouseId
+      && !internalWarehouses.some((warehouse) => warehouse.id === internalWarehouseId)) {
+      setInternalWarehouseId('')
+    }
+  }, [internalWarehouseId, internalWarehouses])
+
+  useEffect(() => {
+    if (wbDestinations.length > 0 && wbOfficeId
+      && !wbDestinations.some((warehouse) => String(warehouse.id) === wbOfficeId)) {
+      setWbOfficeId('')
+    }
+  }, [wbDestinations, wbOfficeId])
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLocaleLowerCase('ru-RU')
@@ -156,14 +248,16 @@ export function FbsDispatchReport({ accountId, storeId, stores, onStoreChange }:
       setError('Дата начала не может быть позже даты окончания.')
       return
     }
-    void loadReport(periodFrom, periodTo)
+    void loadReport(periodFrom, periodTo, internalWarehouseId, wbOfficeId)
   }
 
   const applyPreset = (preset: PeriodPreset) => {
     const period = presetPeriod(preset)
     setPeriodFrom(period.from)
     setPeriodTo(period.to)
-    void loadReport(period.from, period.to)
+    setSelectedPreset(preset)
+    setPresetMenuOpen(false)
+    void loadReport(period.from, period.to, internalWarehouseId, wbOfficeId)
   }
 
   const handleCopy = async (value: string) => {
@@ -192,35 +286,35 @@ export function FbsDispatchReport({ accountId, storeId, stores, onStoreChange }:
                 {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
               </select>
             </label>
-            <div className="space-y-1.5">
-              <span className="block text-xs font-semibold text-slate-600">Быстрый период</span>
-              <div className="flex h-9 items-center rounded-xl bg-slate-100 p-1">
-                {([
-                  { key: 'week' as const, label: 'Неделя' },
-                  { key: 'month' as const, label: 'Месяц' },
-                  { key: 'quarter' as const, label: 'Квартал' },
-                ]).map((preset) => (
-                  <button
-                    key={preset.key}
-                    type="button"
-                    disabled={loading || !storeId}
-                    onClick={() => applyPreset(preset.key)}
-                    className={`h-7 cursor-pointer rounded-lg px-3 text-xs font-semibold transition disabled:cursor-wait disabled:opacity-50 ${activePreset === preset.key
-                      ? 'bg-white text-violet-700 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-800'}`}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <label className="space-y-1.5 text-xs font-semibold text-slate-600">
+              <span className="block">Со склада ELESTET</span>
+              <select
+                value={internalWarehouseId}
+                onChange={(event) => setInternalWarehouseId(event.target.value)}
+                className="h-9 min-w-[190px] max-w-[240px] rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
+              >
+                <option value="">Все склады</option>
+                {internalWarehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1.5 text-xs font-semibold text-slate-600">
+              <span className="block">На склад WB</span>
+              <select
+                value={wbOfficeId}
+                onChange={(event) => setWbOfficeId(event.target.value)}
+                className="h-9 min-w-[190px] max-w-[240px] rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
+              >
+                <option value="">Все склады</option>
+                {wbDestinations.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+              </select>
+            </label>
             <label className="space-y-1.5 text-xs font-semibold text-slate-600">
               <span className="block">С даты</span>
               <input
                 type="date"
                 value={periodFrom}
                 max={periodTo}
-                onChange={(event) => setPeriodFrom(event.target.value)}
+                onChange={(event) => { setPeriodFrom(event.target.value); setSelectedPreset(null) }}
                 className="h-9 rounded-xl border border-slate-200 px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
               />
             </label>
@@ -231,20 +325,59 @@ export function FbsDispatchReport({ accountId, storeId, stores, onStoreChange }:
                 value={periodTo}
                 min={periodFrom}
                 max={localDateValue(new Date())}
-                onChange={(event) => setPeriodTo(event.target.value)}
+                onChange={(event) => { setPeriodTo(event.target.value); setSelectedPreset(null) }}
                 className="h-9 rounded-xl border border-slate-200 px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
               />
             </label>
+            <div className={`space-y-1.5 ${presetMenuOpen ? 'relative z-30' : ''}`}>
+              <span className="block text-xs font-semibold text-slate-600">Период</span>
+              <div className="relative h-9 w-[132px]">
+                {presetMenuOpen && (
+                  <button
+                    type="button"
+                    aria-label="Закрыть меню периода"
+                    onClick={() => setPresetMenuOpen(false)}
+                    className="fixed inset-0 z-20 cursor-default"
+                  />
+                )}
+                <button
+                  type="button"
+                  disabled={loading || !storeId}
+                  onClick={() => setPresetMenuOpen((open) => !open)}
+                  className="relative z-30 flex h-9 w-[132px] cursor-pointer items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:border-violet-300 disabled:cursor-wait disabled:opacity-50"
+                >
+                  <span>{PERIOD_PRESETS.find((preset) => preset.key === selectedPreset)?.label ?? 'Выбрать'}</span>
+                  <svg viewBox="0 0 24 24" className={`h-4 w-4 text-slate-400 transition-transform ${presetMenuOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                {presetMenuOpen && (
+                  <div className="absolute left-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                    {PERIOD_PRESETS.map((preset) => (
+                      <button
+                        key={preset.key}
+                        type="button"
+                        onClick={() => applyPreset(preset.key)}
+                        className={`flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-medium transition ${selectedPreset === preset.key
+                          ? 'bg-violet-50 text-violet-700'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+                      >
+                        {preset.label}
+                        {selectedPreset === preset.key && <span className="h-2 w-2 rounded-full bg-violet-500" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
             <button
               type="button"
               disabled={loading || !storeId}
               onClick={applyPeriod}
-              className="flex h-9 cursor-pointer items-center gap-2 rounded-xl bg-violet-600 px-4 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-wait disabled:opacity-50"
+              className="relative flex h-9 w-[108px] shrink-0 cursor-pointer items-center justify-center rounded-xl bg-violet-600 px-4 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-wait disabled:opacity-50"
             >
-              {loading && <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="31" strokeDashoffset="10"/></svg>}
-              {loading ? 'Загрузка...' : 'Показать'}
+              {loading && <svg className="absolute left-2.5 h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="31" strokeDashoffset="10"/></svg>}
+              <span>Показать</span>
             </button>
-            <div className="min-w-[240px] flex-1" />
+            <div className="flex-1" />
             <div className="relative min-w-[260px] flex-1 xl:max-w-md">
               <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
               <input
@@ -256,10 +389,6 @@ export function FbsDispatchReport({ accountId, storeId, stores, onStoreChange }:
               />
             </div>
           </div>
-          <p className="mt-3 text-[11px] leading-5 text-slate-500">
-            Здесь учитываются все заказы, переданные в доставку Wildberries, даже если товар не выбирали из короба ELESTET.
-            Передачи, найденные по истории статусов WB, помечены как приблизительные по времени.
-          </p>
         </section>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -324,12 +453,14 @@ export function FbsDispatchReport({ accountId, storeId, stores, onStoreChange }:
                           {row.product_barcode ? (
                             <button
                               type="button"
-                              title="Скопировать баркод"
+                              title={copied === row.product_barcode ? 'Скопировано' : 'Скопировать баркод'}
+                              aria-label={copied === row.product_barcode ? 'Баркод скопирован' : 'Скопировать баркод'}
                               onClick={() => void handleCopy(row.product_barcode)}
-                              className="cursor-copy rounded-md px-1.5 py-1 font-mono font-semibold text-blue-600 transition hover:bg-blue-50"
+                              className={`cursor-copy whitespace-nowrap rounded-md px-1.5 py-1 font-mono font-semibold transition-colors ${copied === row.product_barcode
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : 'text-blue-600 hover:bg-blue-50'}`}
                             >
                               {row.product_barcode}
-                              {copied === row.product_barcode && <span className="ml-2 font-sans text-[10px] text-emerald-600">Скопировано</span>}
                             </button>
                           ) : <span className="font-semibold text-red-500">Не определён</span>}
                         </td>

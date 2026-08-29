@@ -1802,10 +1802,17 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     const office = wbOffices.find((item) => Number(item.id) === Number(officeId))
     return {
       id: String(warehouse.id),
+      officeId,
       officialName: office?.name || (officeId ? `Склад WB #${officeId}` : 'Склад WB не определён'),
       sellerName: internalWarehouse?.name || warehouse.name || `Склад продавца #${warehouse.id}`,
     }
   })
+
+  const dispatchWbDestinations = Array.from(new Map(
+    warehouseFilterOptions
+      .filter((warehouse) => warehouse.officeId > 0)
+      .map((warehouse) => [warehouse.officeId, { id: warehouse.officeId, name: warehouse.officialName }]),
+  ).values())
 
   const renderWbWarehouseCell = (order: FbsOrder) => {
     const warehouse = wbWarehouseInfo(order)
@@ -2018,7 +2025,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         {([
           { key: 'orders' as const, label: 'Заказы' },
           { key: 'stocks' as const, label: 'Остатки FBS' },
-          { key: 'dispatches' as const, label: 'Отгрузки FBS' },
+          { key: 'dispatches' as const, label: 'Отчёт' },
         ]).map((section) => (
           <button
             key={section.key}
@@ -2112,6 +2119,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           accountId={accountId}
           storeId={selectedStoreId}
           stores={storesWithKey}
+          internalWarehouses={internalWarehouses}
+          wbDestinations={dispatchWbDestinations}
           onStoreChange={handleStoreChange}
         />
       ) : <>
