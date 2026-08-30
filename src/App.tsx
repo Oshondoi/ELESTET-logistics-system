@@ -112,6 +112,7 @@ const ROUTE_PAGES: Record<string, PageKey> = Object.fromEntries(
 
 const ACTIVE_PAGE_STORAGE_KEY = 'elestet-active-page'
 const ACTIVE_ACCOUNT_STORAGE_KEY = 'elestet-active-account-id'
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'elestet-sidebar-collapsed'
 const ACTIVE_STORE_ID_STORAGE_KEY = 'elestet-active-store-id'
 
 const toRawShipments = (shipments: ShipmentWithStore[]): Shipment[] =>
@@ -317,6 +318,8 @@ function App() {
     return 'home'
   })
   const [fbsSection, setFbsSection] = useState<'orders' | 'info'>('orders')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   // short_id партии из URL — для авто-открытия модалки
   const [initialBatchShortId, setInitialBatchShortId] = useState<number | null>(
     () => parsedFulfillmentUrl?.batchShortId ?? null
@@ -553,6 +556,15 @@ function App() {
     if (key !== null && !permissions[key]) return 'home'
     return activePage
   })()
+  const hasSidebar = !['admin', 'glossary', 'diary', 'finance_report', 'promotion', 'tz_prompts'].includes(effectivePage)
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(sidebarCollapsed))
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
+    setMobileSidebarOpen(false)
+  }, [effectivePage])
 
   // Перезагружать trips каждый раз при открытии страницы Логистики
   useEffect(() => {
@@ -763,27 +775,57 @@ function App() {
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-900">
       <ToastContainer />
       <div className="flex h-full">
-        {effectivePage !== 'admin' && effectivePage !== 'glossary' && effectivePage !== 'diary' && effectivePage !== 'finance_report' && effectivePage !== 'promotion' && effectivePage !== 'tz_prompts' && (
-          <Sidebar
-            activePage={effectivePage}
-            onSelectPage={setActivePage}
-            onOpenAddCompany={() => setAccountModalOpen(true)}
-            onSignOut={() => void signOut()}
-            accounts={accounts}
-            activeAccount={activeAccount}
-            onSelectAccount={setActiveAccountId}
-            onDeleteActiveCompany={handleDeleteCompany}
-            onEditCompany={(account) => { setEditingAccount(account); setEditAccountModalOpen(true) }}
-            onRestoreAccount={restoreAccount}
-            archivedAccounts={archivedAccounts}
-            permissions={permissions}
-            isAdmin={isSupport}
-          />
+        {hasSidebar && (
+          <div className="hidden h-full lg:block">
+            <Sidebar
+              activePage={effectivePage}
+              onSelectPage={setActivePage}
+              onOpenAddCompany={() => setAccountModalOpen(true)}
+              onSignOut={() => void signOut()}
+              accounts={accounts}
+              activeAccount={activeAccount}
+              onSelectAccount={setActiveAccountId}
+              onDeleteActiveCompany={handleDeleteCompany}
+              onEditCompany={(account) => { setEditingAccount(account); setEditAccountModalOpen(true) }}
+              onRestoreAccount={restoreAccount}
+              archivedAccounts={archivedAccounts}
+              permissions={permissions}
+              isAdmin={isSupport}
+              collapsed={sidebarCollapsed}
+              onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
+            />
+          </div>
         )}
 
-        <main className="flex flex-1 flex-col overflow-hidden">
+        {hasSidebar && mobileSidebarOpen && (
+          <div className="fixed inset-0 z-[9000] flex lg:hidden">
+            <button type="button" aria-label="Закрыть меню" className="absolute inset-0 bg-slate-950/45" onClick={() => setMobileSidebarOpen(false)} />
+            <div className="relative h-full w-[min(86vw,300px)] shadow-2xl">
+              <Sidebar
+                activePage={effectivePage}
+                onSelectPage={setActivePage}
+                onOpenAddCompany={() => { setMobileSidebarOpen(false); setAccountModalOpen(true) }}
+                onSignOut={() => void signOut()}
+                accounts={accounts}
+                activeAccount={activeAccount}
+                onSelectAccount={setActiveAccountId}
+                onDeleteActiveCompany={handleDeleteCompany}
+                onEditCompany={(account) => { setEditingAccount(account); setEditAccountModalOpen(true) }}
+                onRestoreAccount={restoreAccount}
+                archivedAccounts={archivedAccounts}
+                permissions={permissions}
+                isAdmin={isSupport}
+                mobile
+                onNavigate={() => setMobileSidebarOpen(false)}
+              />
+            </div>
+          </div>
+        )}
+
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <Topbar
             title={pageTitles[effectivePage]}
+            onMenuClick={hasSidebar ? () => setMobileSidebarOpen(true) : undefined}
             pageTabs={effectivePage === 'fbs' && isSuperAdmin ? [
               { label: 'FBS Заказы', active: fbsSection === 'orders', onClick: () => setFbsSection('orders') },
               { label: 'Инфо', active: fbsSection === 'info', onClick: () => setFbsSection('info') },
@@ -870,7 +912,7 @@ function App() {
             )
           })()}
 
-          <div className="flex-1 overflow-y-scroll p-3 lg:p-4">
+          <div className="flex-1 overflow-y-scroll p-2 sm:p-3 lg:p-4">
             {!isLoading && !error ? (
               effectivePage === 'home' ? (
                 <HomePage shipments={shipments} rawShipments={rawShipments} stores={stores} hasAccount={accounts.length > 0} onCreateCompany={() => setAccountModalOpen(true)} />

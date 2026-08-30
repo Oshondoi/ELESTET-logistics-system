@@ -48,7 +48,7 @@ import {
   updateTripLineTripId as updateTripLineTripIdInSupabase,
 } from '../services/tripService'
 import { fetchSupplyByTripLineId } from '../services/fulfillmentService'
-import { downloadGoodsTemplate, downloadBoxesTemplate } from '../lib/wbExcelExport'
+import { downloadGoodsTemplate, downloadBoxesTemplate, downloadAllTemplates } from '../lib/wbExcelExport'
 import {
   updateTripCustomFieldsInSupabase,
   updateLineCustomFieldsInSupabase,
@@ -918,7 +918,7 @@ export const useAppData = (accountId: string | null) => {
     const supply = await fetchSupplyByTripLineId(lineId)
     if (!supply) throw new Error('Данные фулфилмент-поставки не найдены. Убедитесь, что поставка создана через модуль Фулфилмент.')
 
-    if (type === 'goods' || type === 'all') {
+    if (type === 'goods') {
       downloadGoodsTemplate(supply)
     }
 
@@ -927,7 +927,8 @@ export const useAppData = (accountId: string | null) => {
       const line = trips.find((t) => t.id === tripId)?.lines.find((l) => l.id === lineId)
       const codes = line?.wb_package_codes ?? []
       if (codes.length === 0) throw new Error('ШК коробов не синхронизированы. Нажмите синюю кнопку QR-стикеров рядом со стикерами поставки.')
-      downloadBoxesTemplate(supply, codes)
+      if (type === 'all') downloadAllTemplates(supply, codes)
+      else downloadBoxesTemplate(supply, codes)
     }
   }
 

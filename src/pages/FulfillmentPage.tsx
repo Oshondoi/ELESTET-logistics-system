@@ -95,6 +95,7 @@ import { createStoreInSupabase } from '../services/storeService'
 import { supabase } from '../lib/supabase'
 import { buildFulfillmentBoxBarcode } from '../lib/fulfillmentBoxBarcode'
 import { buildFulfillmentBoxQrPdf } from '../lib/fulfillmentBoxQrPdf'
+import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import {
   buildFulfillmentBoxContentsPdf,
   type FulfillmentBoxContentsFormat,
@@ -151,6 +152,7 @@ const BOX_EXPORT_COLUMNS = [
 
 type BoxExportColumnKey = typeof BOX_EXPORT_COLUMNS[number]['key']
 type OptionalBoxExportColumnKey = Extract<typeof BOX_EXPORT_COLUMNS[number], { required: false }>['key']
+type FulfillmentExcelMode = 'boxes' | 'barcodes' | 'both'
 
 const BOX_EXPORT_OPTIONAL_COLUMNS = BOX_EXPORT_COLUMNS
   .filter((column): column is Extract<typeof BOX_EXPORT_COLUMNS[number], { required: false }> => !column.required)
@@ -213,30 +215,51 @@ const getStoredBoxExportColumns = (): OptionalBoxExportColumnKey[] => {
   }
 }
 
-const createBoxExportWorkbook = async (data: (string | number)[][]) => {
-  const XLSX = await import('xlsx')
-  const ws = XLSX.utils.aoa_to_sheet(data)
-  const colWidths: number[] = []
-  data.forEach((row) => {
-    row.forEach((cell, i) => {
-      const len = String(cell).length + 2
-      colWidths[i] = colWidths[i] !== undefined ? Math.max(colWidths[i], len) : len
-    })
+const buildBarcodeExportRows = (boxRows: (string | number)[][]): (string | number)[][] => {
+  const headers = boxRows[0] ?? []
+  const barcodeIndex = headers.indexOf('Баркод товара')
+  const quantityIndex = headers.indexOf('Кол-во товаров')
+  if (barcodeIndex < 0 || quantityIndex < 0) throw new Error('В выгрузке отсутствуют баркод или количество')
+
+  const excludedHeaders = new Set(['ШК короба', 'Срок годности', 'Номер короба', 'Поставка', 'Склад'])
+  const includedIndexes = headers.flatMap((header, index) => excludedHeaders.has(String(header)) ? [] : [index])
+  const outputHeaders = includedIndexes.map((index) => headers[index])
+  const outputQuantityIndex = includedIndexes.indexOf(quantityIndex)
+  const aggregated = new Map<string, (string | number)[]>()
+
+  boxRows.slice(1).forEach((row) => {
+    const barcode = String(row[barcodeIndex] ?? '').trim()
+    if (!barcode) return
+    const existing = aggregated.get(barcode)
+    if (existing) {
+      existing[outputQuantityIndex] = Number(existing[outputQuantityIndex] ?? 0) + Number(row[quantityIndex] ?? 0)
+      return
+    }
+    aggregated.set(barcode, includedIndexes.map((index) => index === quantityIndex ? Number(row[index] ?? 0) : row[index]))
   })
-  ws['!cols'] = colWidths.map((width) => ({ wch: width }))
+
+  return [outputHeaders, ...aggregated.values()]
+}
+
+const createBoxExportWorkbook = async (data: (string | number)[][], mode: FulfillmentExcelMode) => {
+  const XLSX = await import('xlsx')
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Коробки')
+  if (mode === 'barcodes' || mode === 'both') {
+    const barcodeSheet = XLSX.utils.aoa_to_sheet(buildBarcodeExportRows(data))
+    applyExcelWorksheetStandards(XLSX.utils, barcodeSheet)
+    XLSX.utils.book_append_sheet(wb, barcodeSheet, 'По баркодам')
+  }
+  if (mode === 'boxes' || mode === 'both') {
+    const boxSheet = XLSX.utils.aoa_to_sheet(data)
+    applyExcelWorksheetStandards(XLSX.utils, boxSheet)
+    XLSX.utils.book_append_sheet(wb, boxSheet, 'По коробам')
+  }
   return { XLSX, wb }
 }
 
-const writeBoxExportWorkbook = async (data: (string | number)[][], filename: string) => {
-  const { XLSX, wb } = await createBoxExportWorkbook(data)
+const writeBoxExportWorkbook = async (data: (string | number)[][], filename: string, mode: FulfillmentExcelMode) => {
+  const { XLSX, wb } = await createBoxExportWorkbook(data, mode)
   XLSX.writeFile(wb, filename)
-}
-
-const createBoxExportWorkbookBytes = async (data: (string | number)[][]): Promise<ArrayBuffer> => {
-  const { XLSX, wb } = await createBoxExportWorkbook(data)
-  return XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
 }
 
 const buildBoxExportRows = async ({
@@ -310,44 +333,40 @@ const getBoxExportFilename = ({
   storeName,
   warehouseName,
   boxNumber,
+  mode = 'boxes',
 }: {
   accountShortId: number | null
   batchShortId: number | null
   storeName?: string | null
   warehouseName: string
   boxNumber?: number
+  mode?: FulfillmentExcelMode
 }) => {
   const date = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
   const parts = [`C${accountShortId ?? 'unknown'}`, `P${batchShortId ?? 'unknown'}`, safeBoxExportFilenamePart(storeName ?? 'unknown'), safeBoxExportFilenamePart(warehouseName)]
   if (boxNumber != null) parts.push(`BOX${boxNumber}`)
+  if (mode === 'barcodes') parts.push('BARCODES')
+  if (mode === 'both') parts.push('BARCODES_BOXES')
   parts.push(date)
   return `${parts.join('_')}.xlsx`
 }
 
-const getBatchBoxExportArchiveFilename = ({
+const getBatchExcelExportFilename = ({
   accountShortId,
   batchShortId,
   storeName,
-  mode,
+  selectionMode,
+  exportMode,
 }: {
   accountShortId: number | null
   batchShortId: number | null
   storeName?: string | null
-  mode: 'ALL' | 'CUSTOM'
+  selectionMode: 'ALL' | 'CUSTOM'
+  exportMode: FulfillmentExcelMode
 }) => {
   const date = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
-  return `C${accountShortId ?? 'unknown'}_P${batchShortId ?? 'unknown'}_${safeBoxExportFilenamePart(storeName ?? 'unknown')}_${mode}_${date}.zip`
-}
-
-const downloadBlob = (blob: Blob, filename: string) => {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(url)
+  const type = exportMode === 'boxes' ? 'BOXES' : exportMode === 'barcodes' ? 'BARCODES' : 'BARCODES_BOXES'
+  return `C${accountShortId ?? 'unknown'}_P${batchShortId ?? 'unknown'}_${safeBoxExportFilenamePart(storeName ?? 'unknown')}_${selectionMode}_${type}_${date}.xlsx`
 }
 
 const createBoxQrLabels = ({
@@ -899,6 +918,7 @@ const BatchDetailModal = ({
   const [packingAutoAdd, setPackingAutoAdd] = useState(() => localStorage.getItem(packingAutoAddStorageKey) === 'true')
   const [boxExportSelectedOptionalColumns, setBoxExportSelectedOptionalColumns] = useState<OptionalBoxExportColumnKey[]>(getStoredBoxExportColumns)
   const [boxExportDialog, setBoxExportDialog] = useState<{ supplyId: string; boxId?: string } | null>(null)
+  const [boxExportMode, setBoxExportMode] = useState<FulfillmentExcelMode>('boxes')
   const [boxQrDialog, setBoxQrDialog] = useState<{ supplyId: string; boxId: string } | null>(null)
   const [boxContentsDialog, setBoxContentsDialog] = useState<{ supplies: FulfillmentSupplyWithBoxes[]; description: string } | null>(null)
   const [isExportingBoxesExcel, setIsExportingBoxesExcel] = useState(false)
@@ -1002,13 +1022,14 @@ const BatchDetailModal = ({
     )
   }
 
-  const boxExportFilename = (supply: FulfillmentSupplyWithBoxes, boxNumber?: number) => {
+  const boxExportFilename = (supply: FulfillmentSupplyWithBoxes, mode: FulfillmentExcelMode, boxNumber?: number) => {
     return getBoxExportFilename({
       accountShortId,
       batchShortId: batch.short_id,
       storeName: store?.name,
       warehouseName: supply.warehouse_name,
       boxNumber,
+      mode,
     })
   }
 
@@ -1027,18 +1048,19 @@ const BatchDetailModal = ({
     optionalColumnKeys,
   })
 
-  const downloadSupplyBoxesExcel = async (supply: FulfillmentSupplyWithBoxes, optionalColumnKeys: OptionalBoxExportColumnKey[]) => {
+  const downloadSupplyBoxesExcel = async (supply: FulfillmentSupplyWithBoxes, optionalColumnKeys: OptionalBoxExportColumnKey[], mode: FulfillmentExcelMode) => {
     const data = await buildBoxesExportData(supply, supply.boxes, optionalColumnKeys)
-    await writeBoxExportWorkbook(data, boxExportFilename(supply))
+    await writeBoxExportWorkbook(data, boxExportFilename(supply, mode), mode)
   }
 
   const downloadSingleBoxExcel = async (
     supply: FulfillmentSupplyWithBoxes,
     box: FulfillmentSupplyWithBoxes['boxes'][number],
     optionalColumnKeys: OptionalBoxExportColumnKey[],
+    mode: FulfillmentExcelMode,
   ) => {
     const data = await buildBoxesExportData(supply, [box], optionalColumnKeys)
-    await writeBoxExportWorkbook(data, boxExportFilename(supply, box.box_number))
+    await writeBoxExportWorkbook(data, boxExportFilename(supply, mode, box.box_number), mode)
   }
 
   const openBoxExportDialog = (request: { supplyId: string; boxId?: string }) => {
@@ -5962,8 +5984,26 @@ const BatchDetailModal = ({
                             </button>
                           </div>
 
+                          <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
+                            {([
+                              ['boxes', 'По коробам'],
+                              ['barcodes', 'По баркодам'],
+                              ['both', 'Оба'],
+                            ] as const).map(([mode, label]) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                disabled={isExportingBoxesExcel}
+                                onClick={() => { setBoxExportMode(mode); setBoxExportError(null) }}
+                                className={`rounded-lg px-2 py-2 text-xs font-semibold transition ${boxExportMode === mode ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+
                           <div className="space-y-1.5">
-                              {BOX_EXPORT_COLUMNS.map((column) => {
+                              {BOX_EXPORT_COLUMNS.filter((column) => boxExportMode !== 'barcodes' || !['boxBarcode', 'expiryDate', 'boxNumber'].includes(column.key)).map((column) => {
                                 const selected = column.required || boxExportSelectedOptionalColumns.includes(column.key as OptionalBoxExportColumnKey)
                                 if (column.required) {
                                   return (
@@ -6025,9 +6065,9 @@ const BatchDetailModal = ({
                                 setBoxExportError(null)
                                 try {
                                   if (box) {
-                                    await downloadSingleBoxExcel(supply, box, boxExportSelectedOptionalColumns)
+                                    await downloadSingleBoxExcel(supply, box, boxExportSelectedOptionalColumns, boxExportMode)
                                   } else {
-                                    await downloadSupplyBoxesExcel(supply, boxExportSelectedOptionalColumns)
+                                    await downloadSupplyBoxesExcel(supply, boxExportSelectedOptionalColumns, boxExportMode)
                                   }
                                   setBoxExportDialog(null)
                                 } catch (err) {
@@ -9282,6 +9322,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
   const [batchExportSelectedSupplyIds, setBatchExportSelectedSupplyIds] = useState<string[]>([])
   const [batchExportTarget, setBatchExportTarget] = useState<{ batch: FulfillmentBatchWithItems; supplies: FulfillmentSupplyWithBoxes[]; archiveMode: 'ALL' | 'CUSTOM' | null } | null>(null)
   const [batchExportSelectedColumns, setBatchExportSelectedColumns] = useState<OptionalBoxExportColumnKey[]>(getStoredBoxExportColumns)
+  const [batchExportMode, setBatchExportMode] = useState<FulfillmentExcelMode>('boxes')
   const [isExportingBatchBoxes, setIsExportingBatchBoxes] = useState(false)
   const [batchExportError, setBatchExportError] = useState<string | null>(null)
   // Pipeline
@@ -9488,13 +9529,12 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
           batchShortId: batch.short_id,
           storeName: store?.name,
           warehouseName: supply.warehouse_name,
-        }))
+          mode: batchExportMode,
+        }), batchExportMode)
       } else {
-        const { default: JSZip } = await import('jszip')
-        const zip = new JSZip()
-        const usedFilenames = new Map<string, number>()
-        await Promise.all(supplies.map(async (supply) => {
-          const data = await buildBoxExportRows({
+        const supplyData = await Promise.all(supplies.map(async (supply) => ({
+          supply,
+          rows: await buildBoxExportRows({
             accountId: batch.account_id,
             accountShortId,
             batchShortId: batch.short_id,
@@ -9503,25 +9543,24 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
             batchItems: batch.items,
             boxes: supply.boxes,
             optionalColumnKeys: batchExportSelectedColumns,
-          })
-          const baseFilename = getBoxExportFilename({
-            accountShortId,
-            batchShortId: batch.short_id,
-            storeName: store?.name,
-            warehouseName: supply.warehouse_name,
-          })
-          const duplicateNumber = (usedFilenames.get(baseFilename) ?? 0) + 1
-          usedFilenames.set(baseFilename, duplicateNumber)
-          const filename = duplicateNumber === 1 ? baseFilename : baseFilename.replace(/\.xlsx$/i, `_${duplicateNumber}.xlsx`)
-          zip.file(filename, await createBoxExportWorkbookBytes(data))
-        }))
-        const archive = await zip.generateAsync({ type: 'blob' })
-        downloadBlob(archive, getBatchBoxExportArchiveFilename({
+          }),
+        })))
+        const baseHeaders = supplyData[0]?.rows[0] ?? []
+        const combinedRows: (string | number)[][] = [
+          ['Поставка', 'Склад', ...baseHeaders],
+          ...supplyData.flatMap(({ supply, rows }) => rows.slice(1).map((row) => [
+            `S${supply.supply_number}`,
+            supply.warehouse_name,
+            ...row,
+          ])),
+        ]
+        await writeBoxExportWorkbook(combinedRows, getBatchExcelExportFilename({
           accountShortId,
           batchShortId: batch.short_id,
           storeName: store?.name,
-          mode: archiveMode ?? 'CUSTOM',
-        }))
+          selectionMode: archiveMode ?? 'CUSTOM',
+          exportMode: batchExportMode,
+        }), batchExportMode)
       }
       setBatchExportTarget(null)
     } catch (error) {
@@ -9826,8 +9865,25 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
               </button>
             </div>
+            <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
+              {([
+                ['boxes', 'По коробам'],
+                ['barcodes', 'По баркодам'],
+                ['both', 'Оба'],
+              ] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  disabled={isExportingBatchBoxes}
+                  onClick={() => { setBatchExportMode(mode); setBatchExportError(null) }}
+                  className={`rounded-lg px-2 py-2 text-xs font-semibold transition ${batchExportMode === mode ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="space-y-1.5">
-              {BOX_EXPORT_COLUMNS.map((column) => {
+              {BOX_EXPORT_COLUMNS.filter((column) => batchExportMode !== 'barcodes' || !['boxBarcode', 'expiryDate', 'boxNumber'].includes(column.key)).map((column) => {
                 const selected = column.required || batchExportSelectedColumns.includes(column.key as OptionalBoxExportColumnKey)
                 if (column.required) {
                   return (
@@ -9861,7 +9917,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
             <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
               <button type="button" disabled={isExportingBatchBoxes} onClick={() => setBatchExportTarget(null)} className="cursor-pointer rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">Отмена</button>
               <button type="button" disabled={isExportingBatchBoxes} onClick={() => void handleDownloadBatchBoxes()} className="cursor-pointer rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-wait disabled:opacity-50">
-                {isExportingBatchBoxes ? 'Подготовка…' : batchExportTarget.supplies.length > 1 ? 'Скачать ZIP' : 'Скачать Excel'}
+                {isExportingBatchBoxes ? 'Подготовка…' : 'Скачать Excel'}
               </button>
             </div>
           </div>

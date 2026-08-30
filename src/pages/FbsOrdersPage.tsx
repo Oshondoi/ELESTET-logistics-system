@@ -8,6 +8,7 @@ import { invokeFbs } from '../services/fbsApi'
 import { FbsKizScannerModal } from '../components/fbs/FbsKizScannerModal'
 import { FbsStocksPanel } from '../components/fbs/FbsStocksPanel'
 import { FbsDispatchReport } from '../components/fbs/FbsDispatchReport'
+import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import type { Product, Store } from '../types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1710,7 +1711,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       ...rows.map((row) => ['', row.brand, row.name, row.size, row.color, row.vendorCode, row.sticker, row.barcode]),
     ]
     const sheet = XLSX.utils.aoa_to_sheet(data)
-    sheet['!cols'] = [{ wch: 13 }, { wch: 18 }, { wch: 38 }, { wch: 11 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 20 }]
+    applyExcelWorksheetStandards(XLSX.utils, sheet, { headerRow: 4 })
+    if (sheet['!cols']) sheet['!cols'][0] = { wch: 13 }
     sheet['!rows'] = [{ hpt: 20 }, { hpt: 30 }, { hpt: 8 }, { hpt: 20 }, { hpt: 28 }, ...rows.map(() => ({ hpt: 72 }))]
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, sheet, 'Лист подбора')
@@ -1831,6 +1833,18 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     name: `${warehouse.sellerNames.join(', ')} — ${warehouse.officialName}`,
   }))
 
+  const stockWbWarehouses = wbWarehouses.map((warehouse) => {
+    const orderOfficeId = orders.find((order) => Number(order.warehouseId) === Number(warehouse.id))?.officeId || 0
+    const officeId = warehouse.officeId || orderOfficeId
+    const officialName = wbOffices.find((office) => Number(office.id) === Number(officeId))?.name
+    return {
+      ...warehouse,
+      displayName: officialName && officialName !== warehouse.name
+        ? `${warehouse.name} — ${officialName}`
+        : warehouse.name,
+    }
+  })
+
   const renderWbWarehouseCell = (order: FbsOrder) => {
     const warehouse = wbWarehouseInfo(order)
     return (
@@ -1865,10 +1879,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     const sheet = rows.length > 0
       ? XLSX.utils.json_to_sheet(rows)
       : XLSX.utils.aoa_to_sheet([['Заказ №', 'Дата заказа', 'Статус', 'Артикул WB', 'Артикул продавца', 'Товар', 'Бренд', 'Размер', 'Баркод', 'Поставка WB', 'Склад продавца', 'Склад приёмки WB']])
-    sheet['!cols'] = [
-      { wch: 16 }, { wch: 20 }, { wch: 24 }, { wch: 14 }, { wch: 24 }, { wch: 42 },
-      { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 20 }, { wch: 24 }, { wch: 28 },
-    ]
+    applyExcelWorksheetStandards(XLSX.utils, sheet)
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, sheet, sheetName)
     XLSX.writeFile(workbook, filename)
@@ -2130,7 +2141,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           key={`${accountId}:${selectedStoreId}`}
           accountId={accountId}
           storeId={selectedStoreId}
-          warehouses={wbWarehouses}
+          warehouses={stockWbWarehouses}
           canManage={canManageStocks}
         />
       ) : pageSection === 'dispatches' ? (

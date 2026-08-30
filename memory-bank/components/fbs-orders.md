@@ -178,3 +178,15 @@
 - Production Supabase уже содержит `patch_fbs_reliable_sync.sql`, а актуальная Edge Function `wb-fbs` задеплоена.
 - Production-снимок проверен на полном совпадении 326 заказов и статусов.
 - Изменения интерфейса находятся в локальной рабочей копии и появятся на Vercel только после отдельного commit/push в `main`.
+# Calculated FBS balance (31.08.2026)
+
+`Расчётный остаток` is an independent per-barcode report for the currently selected store:
+
+`all accepted units in all non-cancelled fulfillment batches − active New/On assembly orders − orders handed over to delivery`.
+
+- It does not change or derive from the physical box columns `Физически / Резерв / Свободно`.
+- A cancellation before handoff removes the order from the calculated active-order deduction, but does not automatically release or move a physical box reservation.
+- Once an order is handed over to delivery, it remains deducted from the calculated balance regardless of later WB cancellation, refusal, defect or sale statuses.
+- A later receipt of the same physical unit is an ordinary new ELESTET receipt and is not linked automatically to the old FBS order.
+- An order with a dispatch event is excluded from the active-order deduction even if WB synchronization still temporarily reports `confirm + waiting`; one order must never be deducted twice.
+- WB acceptance is confirmation only and must never deduct the same order a second time.

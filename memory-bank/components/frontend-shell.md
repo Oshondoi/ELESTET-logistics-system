@@ -28,9 +28,17 @@ Defines the application frame:
 ## Why It Matters
 This shell is the UX backbone. If it becomes bloated or presentation-heavy, the app stops feeling like an operations system.
 
+## Responsive sidebar rule (31.08.2026)
+
+- Desktop keeps the left sidebar and allows the user to collapse it to an icon rail.
+- Collapsed desktop mode shows `E`, navigation icons, and the bold short company ID (`C-{short_id}`).
+- The collapse preference is persisted in local storage.
+- Mobile hides the sidebar completely; a hamburger in the top bar opens it as an overlay drawer.
+- Page content uses the full available width whenever the sidebar is hidden or collapsed.
+
 ## Rules For Future Changes
 - keep layout compact
-- preserve left sidebar
+- preserve the desktop sidebar and its collapsed mode
 - avoid reintroducing giant page hero headers
 - keep top bar flat, not card-like
 - if routing is added later, keep visual shell stable

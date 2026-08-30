@@ -7,6 +7,7 @@ import { PhotoThumb } from '../ui/PhotoThumb'
 interface WbWarehouse {
   id: number
   name: string
+  displayName?: string
 }
 
 interface StockCatalogRow {
@@ -24,6 +25,7 @@ interface StockCatalogRow {
   reserved_quantity: number
   awaiting_quantity: number
   available_quantity: number
+  calculated_quantity: number
 }
 
 interface StockUpdateRow {
@@ -53,6 +55,104 @@ function parseAmount(value: string) {
   if (!/^\d+$/.test(value)) return null
   const amount = Number(value)
   return Number.isSafeInteger(amount) && amount >= 0 && amount <= 1_000_000_000 ? amount : null
+}
+
+async function loadCalculatedQuantities(accountId: string, storeId: string): Promise<Map<string, number>> {
+  if (!supabase) return new Map<string, number>()
+  const { data: serverRows, error: serverError } = await (supabase as any).rpc('get_fbs_calculated_stock', {
+    p_account_id: accountId,
+    p_store_id: storeId,
+  })
+  if (!serverError) {
+    return new Map<string, number>((serverRows ?? []).map((row: any) => [
+      String(row.barcode ?? ''),
+      Number(row.calculated_quantity ?? 0),
+    ]))
+  }
+  if (!['PGRST202', '42883'].includes(String(serverError.code ?? ''))) throw serverError
+
+  const received = new Map<string, number>()
+  const active = new Map<string, number>()
+  const dispatched = new Map<string, number>()
+  const activeOrderCandidates: Array<{ orderId: string; barcode: string }> = []
+  const dispatchedOrderIds = new Set<string>()
+
+  const batchIds: string[] = []
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await (supabase as any)
+      .from('fulfillment_batches')
+      .select('id')
+      .eq('account_id', accountId)
+      .eq('store_id', storeId)
+      .is('deleted_at', null)
+      .neq('status', 'cancelled')
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    batchIds.push(...(data ?? []).map((row: any) => String(row.id)))
+    if ((data ?? []).length < PAGE_SIZE) break
+  }
+
+  for (const ids of splitIntoChunks(batchIds, 100)) {
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await (supabase as any)
+        .from('fulfillment_items')
+        .select('barcode,qty_received')
+        .in('batch_id', ids)
+        .range(from, from + PAGE_SIZE - 1)
+      if (error) throw error
+      for (const row of data ?? []) {
+        const barcode = String(row.barcode ?? '').trim()
+        if (barcode) received.set(barcode, (received.get(barcode) ?? 0) + Number(row.qty_received ?? 0))
+      }
+      if ((data ?? []).length < PAGE_SIZE) break
+    }
+  }
+
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await (supabase as any)
+      .from('fbs_orders')
+      .select('wb_order_id,skus')
+      .eq('account_id', accountId)
+      .eq('store_id', storeId)
+      .eq('is_in_latest_snapshot', true)
+      .in('supplier_status', ['new', 'confirm'])
+      .eq('wb_system_status', 'waiting')
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    for (const row of data ?? []) {
+      const skus = Array.isArray(row.skus) ? row.skus : []
+      const barcode = String(skus[0] ?? '').trim()
+      if (barcode) activeOrderCandidates.push({ orderId: String(row.wb_order_id ?? ''), barcode })
+    }
+    if ((data ?? []).length < PAGE_SIZE) break
+  }
+
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await (supabase as any)
+      .from('fbs_dispatch_events')
+      .select('wb_order_id,product_barcode,quantity')
+      .eq('account_id', accountId)
+      .eq('store_id', storeId)
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    for (const row of data ?? []) {
+      const barcode = String(row.product_barcode ?? '').trim()
+      const orderId = String(row.wb_order_id ?? '').trim()
+      if (orderId) dispatchedOrderIds.add(orderId)
+      if (barcode) dispatched.set(barcode, (dispatched.get(barcode) ?? 0) + Number(row.quantity ?? 0))
+    }
+    if ((data ?? []).length < PAGE_SIZE) break
+  }
+
+  for (const order of activeOrderCandidates) {
+    if (!dispatchedOrderIds.has(order.orderId)) active.set(order.barcode, (active.get(order.barcode) ?? 0) + 1)
+  }
+
+  const allBarcodes = new Set([...received.keys(), ...active.keys(), ...dispatched.keys()])
+  return new Map<string, number>([...allBarcodes].map((barcode) => [
+    barcode,
+    (received.get(barcode) ?? 0) - (active.get(barcode) ?? 0) - (dispatched.get(barcode) ?? 0),
+  ]))
 }
 
 export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Props) {
@@ -108,6 +208,15 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
         if (page.length < PAGE_SIZE) break
       }
 
+      const hasServerCalculation = rows.every((row) => Number.isFinite(Number(row.calculated_quantity)))
+      const calculatedQuantities = hasServerCalculation ? null : await loadCalculatedQuantities(accountId, storeId)
+      const normalizedRows = rows.map((row) => ({
+        ...row,
+        calculated_quantity: hasServerCalculation
+          ? Number(row.calculated_quantity)
+          : (calculatedQuantities?.get(row.barcode) ?? 0),
+      }))
+
       const amounts: Record<number, number> = {}
       for (const chrtIds of splitIntoChunks(rows.map((row) => Number(row.chrt_id)), PAGE_SIZE)) {
         const response = await invokeFbs(storeId, {
@@ -117,7 +226,7 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
         })
         for (const stock of response.stocks ?? []) amounts[Number(stock.chrtId)] = Number(stock.amount) || 0
       }
-      setCatalog(rows)
+      setCatalog(normalizedRows)
       setWbAmounts(amounts)
       setDrafts({})
       setErrorChrtIds(new Set())
@@ -259,6 +368,7 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
   }
 
   const zeroChanges = changedRows.filter(({ amount }) => amount === 0).length
+  const selectedWarehouse = warehouses.find((warehouse) => warehouse.id === warehouseId)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-slate-50">
@@ -274,7 +384,7 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
           }}
           className="h-9 min-w-[240px] rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-violet-400"
         >
-          {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name} · ID {warehouse.id}</option>)}
+          {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.displayName || warehouse.name}</option>)}
         </select>
 
         <div className="relative min-w-[240px] flex-1">
@@ -333,7 +443,7 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
       <div className="min-h-0 flex-1 overflow-auto p-5">
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="max-h-[calc(100vh-17rem)] overflow-auto [scrollbar-gutter:stable]">
-            <table className="w-full min-w-[1320px] text-xs">
+            <table className="w-full min-w-[1420px] text-xs">
               <thead className="sticky top-0 z-20 border-b border-slate-200 bg-slate-50 text-left text-[10px] uppercase tracking-[0.08em] text-slate-500">
                 <tr>
                   <th className="w-14 px-3 py-2.5" />
@@ -344,15 +454,16 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
                   <th className="px-3 py-2.5 text-right">Физически</th>
                   <th className="px-3 py-2.5 text-right">Резерв</th>
                   <th className="px-3 py-2.5 text-right">Свободно</th>
+                  <th className="px-3 py-2.5 text-right" title="Принято в партиях − активные FBS-заказы − передано в доставку">Расчётный остаток</th>
                   <th className="px-3 py-2.5 text-right">Сейчас WB</th>
                   <th className="sticky right-0 z-30 min-w-[170px] border-l border-slate-200 bg-slate-50 px-3 py-2.5 text-center shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]">Новый остаток WB</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
-                  <tr><td colSpan={10} className="py-14 text-center text-sm text-slate-400">Загрузка товаров и остатков Wildberries…</td></tr>
+                  <tr><td colSpan={11} className="py-14 text-center text-sm text-slate-400">Загрузка товаров и остатков Wildberries…</td></tr>
                 ) : visibleRows.length === 0 ? (
-                  <tr><td colSpan={10} className="py-14 text-center text-sm text-slate-400">По выбранному фильтру товаров нет</td></tr>
+                  <tr><td colSpan={11} className="py-14 text-center text-sm text-slate-400">По выбранному фильтру товаров нет</td></tr>
                 ) : visibleRows.map((row) => {
                   const current = wbAmounts[row.chrt_id] ?? 0
                   const value = drafts[row.chrt_id] ?? String(current)
@@ -370,6 +481,7 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
                       <td className="px-3 py-2 text-right font-semibold text-slate-700">{row.physical_quantity}</td>
                       <td className="px-3 py-2 text-right text-amber-600">{reserve}</td>
                       <td className="px-3 py-2 text-right font-semibold text-emerald-700">{row.available_quantity}</td>
+                      <td className={`px-3 py-2 text-right font-bold ${row.calculated_quantity < 0 ? 'text-rose-600' : 'text-violet-700'}`}>{row.calculated_quantity}</td>
                       <td className="px-3 py-2 text-right text-base font-bold text-slate-800">{current}</td>
                       <td className={`sticky right-0 z-10 border-l px-3 py-2 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.35)] ${hasError ? 'border-rose-200 bg-rose-50' : changed ? 'border-violet-200 bg-violet-50' : 'border-slate-100 bg-white'}`}>
                         <div className="flex items-center justify-end gap-2">
@@ -405,7 +517,7 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" onClick={() => setConfirmOpen(false)}>
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <h2 className="text-lg font-bold text-slate-900">Отправить остатки в Wildberries?</h2>
-            <p className="mt-3 text-sm leading-6 text-slate-600">Будут изменены <strong>{changedRows.length}</strong> позиций на складе «{warehouses.find((warehouse) => warehouse.id === warehouseId)?.name}».</p>
+            <p className="mt-3 text-sm leading-6 text-slate-600">Будут изменены <strong>{changedRows.length}</strong> позиций на складе «{selectedWarehouse?.displayName || selectedWarehouse?.name}».</p>
             {zeroChanges > 0 && <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">У {zeroChanges} позиций остаток станет нулевым — они перестанут быть доступны для новых заказов FBS.</div>}
             <p className="mt-3 text-xs leading-5 text-slate-400">ELESTET после отправки повторно запросит данные WB и покажет несовпадения.</p>
             <div className="mt-5 flex justify-end gap-2">

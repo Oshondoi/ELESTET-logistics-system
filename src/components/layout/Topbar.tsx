@@ -24,9 +24,10 @@ interface TopbarProps {
   onHomeClick?: () => void
   onProfileClick: () => void
   onSignOut: () => void
+  onMenuClick?: () => void
 }
 
-export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onTzPromptsClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut }: TopbarProps) => {
+export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onGlossaryClick, onDiaryClick, onTzPromptsClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut, onMenuClick }: TopbarProps) => {
   const initial = userName ? userName.charAt(0).toUpperCase() : (userEmail ? userEmail.charAt(0).toUpperCase() : '?')
   const displayName = userName || userEmail || 'Профиль'
   const [open, setOpen] = useState(false)
@@ -80,6 +81,11 @@ export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAc
   return (
     <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-4">
       <div className="flex items-center gap-3">
+        {onMenuClick && (
+          <button type="button" onClick={onMenuClick} aria-label="Открыть меню" className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 lg:hidden">
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+          </button>
+        )}
         {pageTabs?.length ? (
           <div className="flex h-12 items-stretch gap-5">
             {pageTabs.map((tab) => (
@@ -91,11 +97,12 @@ export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAc
             ))}
           </div>
         ) : (
-          <div className="text-xl font-semibold tracking-tight text-slate-900">{title}</div>
+          <div className="max-w-[52vw] truncate text-base font-semibold tracking-tight text-slate-900 sm:text-xl">{title}</div>
         )}
       </div>
 
       <div className="flex items-center gap-2">
+        <div className="hidden items-center gap-2 lg:flex">
         {onHomeClick && (
           <button
             type="button"
@@ -193,6 +200,7 @@ export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAc
             </button>
           </>
         )}
+        </div>
         <div className="relative" ref={notifRef}>
           <button
             type="button"
@@ -231,7 +239,7 @@ export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAc
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 text-[11px] font-semibold text-blue-700">
               {initial}
             </span>
-            <span className="text-left">
+            <span className="hidden text-left sm:block">
               <span className="block text-sm font-medium leading-none text-slate-900">{displayName}</span>
               <span className="block max-w-[140px] truncate text-xs text-slate-500">{userEmail}</span>
             </span>

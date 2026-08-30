@@ -5,8 +5,8 @@ import { getWhitelabelLogoUrl } from '../../lib/companyLogo'
 import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
-  activePage: 'home' | 'fulfillment' | 'shipments' | 'wms' | 'fbs' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription' | 'payment_result'
-  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'wms' | 'fbs' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'subscription') => void
+  activePage: 'home' | 'fulfillment' | 'shipments' | 'wms' | 'fbs' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'promotion' | 'tz_prompts' | 'subscription' | 'payment_result'
+  onSelectPage: (page: 'home' | 'fulfillment' | 'shipments' | 'wms' | 'fbs' | 'stores' | 'directories' | 'products' | 'reviews' | 'invoices' | 'roles' | 'stickers' | 'admin' | 'glossary' | 'diary' | 'finance_report' | 'promotion' | 'tz_prompts' | 'subscription') => void
   onOpenAddCompany: () => void
   onSignOut: () => void
   accounts: Account[]
@@ -18,6 +18,10 @@ interface SidebarProps {
   onRestoreAccount?: (accountId: string) => Promise<void>
   permissions: RolePermissions
   isAdmin?: boolean
+  collapsed?: boolean
+  mobile?: boolean
+  onToggleCollapsed?: () => void
+  onNavigate?: () => void
 }
 
 const items = [
@@ -191,6 +195,10 @@ export const Sidebar = ({
   onRestoreAccount,
   permissions,
   isAdmin = false,
+  collapsed = false,
+  mobile = false,
+  onToggleCollapsed,
+  onNavigate,
 }: SidebarProps) => {
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false)
@@ -202,6 +210,7 @@ export const Sidebar = ({
   const hasActiveAccount = Boolean(activeAccount)
   const companyName = activeAccount ? activeAccount.name : 'Нет компании'
   const companyIdLabel = activeAccount ? (activeAccount.short_id != null ? `ID: C-${activeAccount.short_id}` : `ID: ${activeAccount.id.slice(0, 8)}`) : 'Создайте компанию'
+  const compactCompanyIdLabel = activeAccount ? (activeAccount.short_id != null ? `C-${activeAccount.short_id}` : activeAccount.id.slice(0, 6)) : '—'
 
   const openDropdown = () => {
     if (!triggerRef.current) return
@@ -237,9 +246,30 @@ export const Sidebar = ({
   }, [isCompanyOpen])
 
   return (
-    <aside className="flex h-full w-[200px] shrink-0 flex-col border-r border-slate-200 bg-white/95">
-      <div className="border-b border-slate-200 px-5 py-4">
+    <aside className={cn(
+      'relative flex h-full shrink-0 flex-col border-r border-slate-200 bg-white/95 transition-[width] duration-200',
+      mobile ? 'w-full' : collapsed ? 'w-[68px]' : 'w-[200px]',
+    )}>
+      {!mobile && onToggleCollapsed && (
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          title={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+          aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+          className="absolute -right-3 top-5 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm transition hover:text-slate-700"
+        >
+          <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform ${collapsed ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.2"><path d="m15 18-6-6 6-6" /></svg>
+        </button>
+      )}
+      <div className={cn('border-b border-slate-200 py-4', collapsed && !mobile ? 'px-3' : 'px-5')}>
         {(() => {
+          if (collapsed && !mobile) {
+            return (
+              <div className="flex items-center justify-center">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-sm font-black text-white">E</div>
+              </div>
+            )
+          }
           const whitelabelUrl = activeAccount ? getWhitelabelLogoUrl(activeAccount) : null
           if (whitelabelUrl) {
             return (
@@ -273,8 +303,8 @@ export const Sidebar = ({
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-4">
-        <div className="mb-3 border-b border-slate-200 pb-3 -mx-2 px-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#98A5CC]">
+        <div className={cn('mb-3 border-b border-slate-200 pb-3 -mx-2 px-2', collapsed && !mobile && 'text-center')}>
+          <div className={cn('mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#98A5CC]', collapsed && !mobile && 'hidden')}>
             Моя компания
           </div>
           <div ref={companyRef} className="relative">
@@ -289,14 +319,22 @@ export const Sidebar = ({
               }}
               className={cn(
                 'flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1.5 text-left transition-colors duration-150',
+                collapsed && !mobile && 'justify-center px-0 text-center',
                 isCompanyOpen ? 'bg-slate-100' : 'bg-transparent hover:bg-slate-100',
               )}
+              title={collapsed && !mobile ? `${companyName} · ${companyIdLabel}` : undefined}
             >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-bold text-slate-900">{companyName}</span>
-                <span className="mt-0.5 block text-[10px] text-[#61729E]">{companyIdLabel}</span>
+              <span className={cn('min-w-0 flex-1', collapsed && !mobile && 'flex-none')}>
+                {collapsed && !mobile ? (
+                  <span className="block text-[12px] font-black text-slate-900">{compactCompanyIdLabel}</span>
+                ) : (
+                  <>
+                    <span className="block truncate text-[13px] font-bold text-slate-900">{companyName}</span>
+                    <span className="mt-0.5 block text-[10px] text-[#61729E]">{companyIdLabel}</span>
+                  </>
+                )}
               </span>
-              {hasActiveAccount ? (
+              {hasActiveAccount && (!collapsed || mobile) ? (
                 <svg
                   viewBox="0 0 24 24"
                   className="h-4 w-4 text-[#7A8BB8]"
@@ -316,7 +354,7 @@ export const Sidebar = ({
                   position: 'fixed',
                   top: dropdownPos.top,
                   left: dropdownPos.left,
-                  minWidth: dropdownPos.width,
+                  minWidth: Math.max(dropdownPos.width, 240),
                   zIndex: 9999,
                 }}
                 className="max-h-[50vh] overflow-y-auto rounded-[12px] border border-[#BCD2FF] bg-white shadow-[0_8px_20px_rgba(36,72,146,0.14)]"
@@ -506,7 +544,7 @@ export const Sidebar = ({
           <button
             type="button"
             onClick={onOpenAddCompany}
-            className="mt-1 inline-flex cursor-pointer items-center text-[11px] font-medium text-[#6C84E8] transition hover:text-[#5B74DD]"
+            className={cn('mt-1 cursor-pointer items-center text-[11px] font-medium text-[#6C84E8] transition hover:text-[#5B74DD]', collapsed && !mobile ? 'hidden' : 'inline-flex')}
           >
             <span>Добавить компанию</span>
           </button>
@@ -519,11 +557,13 @@ export const Sidebar = ({
               key={item.key}
               className={cn(
                 'flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left font-medium transition',
+                collapsed && !mobile && 'justify-center px-1',
                 activePage === item.key
                   ? 'bg-blue-600 text-white shadow-sm'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
               )}
-              onClick={() => onSelectPage(item.key)}
+              onClick={() => { onSelectPage(item.key); onNavigate?.() }}
+              title={collapsed && !mobile ? item.label : undefined}
             >
               <span
                 className={cn(
@@ -533,7 +573,7 @@ export const Sidebar = ({
               >
                 {item.icon}
               </span>
-              <span className="text-[15px] font-medium tracking-normal">{item.label}</span>
+              {(!collapsed || mobile) && <span className="text-[15px] font-medium tracking-normal">{item.label}</span>}
             </button>
           ))}
 
@@ -542,13 +582,15 @@ export const Sidebar = ({
         </nav>
       </div>
 
-      <div className="mt-auto border-t border-slate-200 px-4 py-4 flex flex-col gap-1">
+      <div className={cn('mt-auto flex flex-col gap-1 border-t border-slate-200 py-4', collapsed && !mobile ? 'px-2' : 'px-4')}>
         {activeAccount?.my_role === 'owner' && (
         <button
           type="button"
-          onClick={() => onSelectPage('subscription')}
+          onClick={() => { onSelectPage('subscription'); onNavigate?.() }}
+          title={collapsed && !mobile ? 'Подписка' : undefined}
           className={cn(
             'flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left font-medium transition',
+            collapsed && !mobile && 'justify-center px-1',
             activePage === 'subscription'
               ? 'bg-blue-600 text-white shadow-sm'
               : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
@@ -564,21 +606,22 @@ export const Sidebar = ({
               <path d="M6 14h4" />
             </svg>
           </span>
-          <span className="text-[15px]">Подписка</span>
+          {(!collapsed || mobile) && <span className="text-[15px]">Подписка</span>}
         </button>
         )}
         <a
           href="https://t.me/+4e0mYW-2Bjw3NTYy"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+          className={cn('flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900', collapsed && !mobile && 'justify-center px-1')}
+          title={collapsed && !mobile ? 'Telegram-канал' : undefined}
         >
           <span className="flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-md bg-sky-100 text-sky-500">
             <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="currentColor">
               <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2Zm4.93 7.13-1.68 7.93c-.12.56-.46.7-.93.43l-2.57-1.89-1.24 1.19c-.14.14-.25.25-.51.25l.18-2.6 4.72-4.26c.2-.18-.05-.28-.32-.1L7.77 14.6 5.23 13.8c-.56-.18-.57-.56.12-.83l9.67-3.73c.46-.17.86.11.71.83-.01.02 0 .02-.1.06Z" />
             </svg>
           </span>
-          <span className="text-[15px]">Telegram-канал</span>
+          {(!collapsed || mobile) && <span className="text-[15px]">Telegram-канал</span>}
         </a>
       </div>
     </aside>

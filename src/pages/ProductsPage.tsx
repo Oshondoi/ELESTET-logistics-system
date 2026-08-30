@@ -6,6 +6,7 @@ import { Card } from '../components/ui/Card'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { fetchLastSync, fetchProducts, triggerSync, updateProductsCost } from '../services/productService'
 import { fetchMarkingDefectsByStore } from '../services/fulfillmentService'
+import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import type { MarkingDefectRow } from '../services/fulfillmentService'
 import type { Product, Store, StoreSyncLog } from '../types'
 
@@ -379,11 +380,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
 
     const data = [columns.map((column) => column.label), ...dataRows]
     const sheet = XLSX.utils.aoa_to_sheet(data)
-    const colWidths = columns.map((column, columnIndex) => {
-      const maxContent = dataRows.reduce((max, row) => Math.max(max, String(row[columnIndex] ?? '').length), column.label.length)
-      return { wch: Math.min(Math.max(maxContent + 2, 12), 48) }
-    })
-    sheet['!cols'] = colWidths
+    applyExcelWorksheetStandards(XLSX.utils, sheet, { maxWidth: 48 })
 
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, sheet, 'Себестоимость')

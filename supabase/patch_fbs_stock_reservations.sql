@@ -432,9 +432,19 @@ begin
   for update;
   if not found or v_allocation.status in ('consumed', 'released') then return new; end if;
 
+  -- Cancellation never releases a box reservation automatically. Before WB
+  -- handoff the order simply stops participating in the calculated FBS stock;
+  -- the physical reservation remains until the user handles it explicitly.
+  -- After handoff the dispatch ledger is permanent and cancellation is also
+  -- intentionally ignored here.
   if coalesce(new.supplier_status, '') = 'cancel'
      or coalesce(new.wb_system_status, '') in ('canceled', 'declined_by_client') then
-    v_next_status := 'released';
+    update public.fbs_stock_allocations
+    set updated_at = v_now,
+        last_supplier_status = new.supplier_status,
+        last_wb_status = new.wb_system_status
+    where id = v_allocation.id;
+    return new;
   elsif coalesce(new.wb_system_status, '') in (
     'sorted', 'ready_for_pickup', 'postponed_delivery', 'sold', 'canceled_by_client', 'defect'
   ) then
@@ -466,11 +476,6 @@ begin
         last_supplier_status = new.supplier_status, last_wb_status = new.wb_system_status
     where id = v_allocation.id and status = 'reserved';
     if not found then return new; end if;
-  else
-    update public.fbs_stock_allocations
-    set status = 'released', released_at = coalesce(released_at, v_now), updated_at = v_now,
-        last_supplier_status = new.supplier_status, last_wb_status = new.wb_system_status
-    where id = v_allocation.id;
   end if;
 
   insert into public.fbs_stock_allocation_events (

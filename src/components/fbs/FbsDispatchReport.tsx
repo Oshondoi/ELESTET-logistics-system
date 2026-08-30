@@ -251,7 +251,7 @@ export function FbsDispatchReport({
   const periodControls = (
     <div className="flex items-end gap-3">
       <label className="flex h-9 items-center gap-2 text-xs font-semibold text-slate-600">
-        <span className="whitespace-nowrap">С даты</span>
+        <span className="whitespace-nowrap">С</span>
         <input
           type="date"
           value={periodFrom}
@@ -261,7 +261,7 @@ export function FbsDispatchReport({
         />
       </label>
       <label className="flex h-9 items-center gap-2 text-xs font-semibold text-slate-600">
-        <span className="whitespace-nowrap">По дату</span>
+        <span className="whitespace-nowrap">По</span>
         <input
           type="date"
           value={periodTo}
