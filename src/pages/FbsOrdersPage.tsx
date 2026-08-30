@@ -1804,15 +1804,32 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       id: String(warehouse.id),
       officeId,
       officialName: office?.name || (officeId ? `Склад WB #${officeId}` : 'Склад WB не определён'),
+      sellerWbName: warehouse.name || `Склад продавца #${warehouse.id}`,
       sellerName: internalWarehouse?.name || warehouse.name || `Склад продавца #${warehouse.id}`,
     }
   })
 
-  const dispatchWbDestinations = Array.from(new Map(
-    warehouseFilterOptions
-      .filter((warehouse) => warehouse.officeId > 0)
-      .map((warehouse) => [warehouse.officeId, { id: warehouse.officeId, name: warehouse.officialName }]),
-  ).values())
+  const dispatchDestinationMap = new Map<number, { id: number; officialName: string; sellerNames: string[] }>()
+  warehouseFilterOptions
+    .filter((warehouse) => warehouse.officeId > 0)
+    .forEach((warehouse) => {
+      const destination = dispatchDestinationMap.get(warehouse.officeId)
+      if (!destination) {
+        dispatchDestinationMap.set(warehouse.officeId, {
+          id: warehouse.officeId,
+          officialName: warehouse.officialName,
+          sellerNames: [warehouse.sellerWbName],
+        })
+        return
+      }
+      if (!destination.sellerNames.includes(warehouse.sellerWbName)) {
+        destination.sellerNames.push(warehouse.sellerWbName)
+      }
+    })
+  const dispatchWbDestinations = Array.from(dispatchDestinationMap.values()).map((warehouse) => ({
+    id: warehouse.id,
+    name: `${warehouse.sellerNames.join(', ')} — ${warehouse.officialName}`,
+  }))
 
   const renderWbWarehouseCell = (order: FbsOrder) => {
     const warehouse = wbWarehouseInfo(order)
@@ -2021,7 +2038,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex items-center gap-1 border-b border-slate-200 bg-white px-5 pt-2">
+      <div className="relative z-20 flex items-end gap-1 border-b border-slate-200 bg-white px-5 pt-2">
         {([
           { key: 'orders' as const, label: 'Заказы' },
           { key: 'stocks' as const, label: 'Остатки FBS' },
@@ -2041,6 +2058,9 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
             {section.label}
           </button>
         ))}
+        {pageSection === 'dispatches' && (
+          <div id="fbs-dispatch-period-controls" className="ml-auto shrink-0 pb-2" />
+        )}
       </div>
 
       {/* Toolbar */}
@@ -2119,9 +2139,9 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           accountId={accountId}
           storeId={selectedStoreId}
           stores={storesWithKey}
-          internalWarehouses={internalWarehouses}
           wbDestinations={dispatchWbDestinations}
           onStoreChange={handleStoreChange}
+          periodControlsContainerId="fbs-dispatch-period-controls"
         />
       ) : <>
       {/* Tabs */}

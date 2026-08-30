@@ -771,17 +771,6 @@ export const AdminPage = ({
           <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-1 text-base font-semibold text-slate-800">Сброс пароля</h3>
             <p className="mb-5 text-xs text-slate-400">{resetPwdUser.email}</p>
-            <input
-              type="email"
-              name="username"
-              value={resetPwdUser.email}
-              autoComplete="username"
-              readOnly
-              tabIndex={-1}
-              aria-hidden="true"
-              className="sr-only"
-            />
-
             {resetPwdSuccess ? (
               <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
                 Пароль успешно изменён
@@ -791,28 +780,34 @@ export const AdminPage = ({
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-500">Новый пароль</label>
                   <input
-                    type="password"
-                    name="new-password"
-                    autoComplete="new-password"
+                    type="text"
+                    name="admin-reset-secret-primary"
+                    autoComplete="off"
+                    data-form-type="other"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
                     spellCheck={false}
                     value={resetPwdValue}
                     onChange={(e) => setResetPwdValue(e.target.value)}
                     placeholder="Минимум 6 символов и 1 цифра"
-                    className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                    className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none [-webkit-text-security:disc] focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                   />
                   <p className="mt-1 text-[11px] leading-snug text-slate-400">Только латинские буквы и цифры, минимум одна цифра. Регистр не учитывается.</p>
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-500">Повторите пароль</label>
                   <input
-                    type="password"
-                    name="confirm-new-password"
-                    autoComplete="new-password"
+                    type="text"
+                    name="admin-reset-secret-confirmation"
+                    autoComplete="off"
+                    data-form-type="other"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
                     spellCheck={false}
                     value={resetPwdConfirm}
                     onChange={(e) => setResetPwdConfirm(e.target.value)}
                     placeholder=""
-                    className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                    className="h-9 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none [-webkit-text-security:disc] focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                   />
                 </div>
                 {resetPwdError && <p className="text-xs text-rose-500">{resetPwdError}</p>}

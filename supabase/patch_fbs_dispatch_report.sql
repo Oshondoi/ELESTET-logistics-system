@@ -370,6 +370,7 @@ where event.store_id = order_row.store_id
 
 drop function if exists public.get_fbs_dispatch_report(uuid, uuid, date, date, text);
 drop function if exists public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint);
+drop function if exists public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint, text);
 
 create or replace function public.get_fbs_dispatch_report(
   p_account_id uuid,
@@ -378,8 +379,7 @@ create or replace function public.get_fbs_dispatch_report(
   p_period_to date,
   p_timezone text default 'Asia/Bishkek',
   p_internal_warehouse_id uuid default null,
-  p_wb_office_id bigint default null,
-  p_report_mode text default 'dispatched'
+  p_wb_office_id bigint default null
 )
 returns table (
   product_barcode text,
@@ -391,12 +391,16 @@ returns table (
   color text,
   tech_size text,
   photo_url text,
-  quantity bigint,
+  dispatched_quantity bigint,
+  accepted_quantity bigint,
   orders_count bigint,
   supplies_count bigint,
   first_dispatched_at timestamptz,
   last_dispatched_at timestamptz,
-  estimated_quantity bigint
+  first_accepted_at timestamptz,
+  last_accepted_at timestamptz,
+  estimated_dispatched_quantity bigint,
+  estimated_accepted_quantity bigint
 )
 language plpgsql
 security definer
@@ -405,10 +409,6 @@ as $$
 begin
   if p_period_from is null or p_period_to is null or p_period_from > p_period_to then
     raise exception 'Укажите корректный период отчёта';
-  end if;
-
-  if p_report_mode not in ('dispatched', 'accepted') then
-    raise exception 'Неизвестный режим отчёта';
   end if;
 
   if not exists (select 1 from pg_timezone_names where name = p_timezone) then
@@ -437,33 +437,71 @@ begin
     max(event.color),
     max(event.tech_size),
     max(event.photo_url),
-    sum(event.quantity)::bigint,
+    coalesce(sum(event.quantity) filter (
+      where event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ), 0)::bigint,
+    coalesce(sum(event.quantity) filter (
+      where event.accepted_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.accepted_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ), 0)::bigint,
     count(*)::bigint,
     count(distinct event.supply_id)::bigint,
-    min(case when p_report_mode = 'accepted' then event.accepted_at else event.dispatched_at end),
-    max(case when p_report_mode = 'accepted' then event.accepted_at else event.dispatched_at end),
-    sum(case
-      when p_report_mode = 'accepted' and event.is_estimated_acceptance_time then event.quantity
-      when p_report_mode = 'dispatched' and event.is_estimated_time then event.quantity
-      else 0
-    end)::bigint
+    min(event.dispatched_at) filter (
+      where event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ),
+    max(event.dispatched_at) filter (
+      where event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ),
+    min(event.accepted_at) filter (
+      where event.accepted_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.accepted_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ),
+    max(event.accepted_at) filter (
+      where event.accepted_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.accepted_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ),
+    coalesce(sum(event.quantity) filter (
+      where event.is_estimated_time
+        and event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ), 0)::bigint,
+    coalesce(sum(event.quantity) filter (
+      where event.is_estimated_acceptance_time
+        and event.accepted_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.accepted_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ), 0)::bigint
   from public.fbs_dispatch_events event
   where event.account_id = p_account_id
     and event.store_id = p_store_id
-    and case
-      when p_report_mode = 'accepted' then
-        event.accepted_at >= (p_period_from::timestamp at time zone p_timezone)
-        and event.accepted_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
-      else
+    and (
+      (
         event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
         and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
-    end
+      )
+      or (
+        event.accepted_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.accepted_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+      )
+    )
     and (p_internal_warehouse_id is null or event.internal_warehouse_id = p_internal_warehouse_id)
     and (p_wb_office_id is null or event.wb_office_id = p_wb_office_id)
   group by event.product_barcode
-  order by sum(event.quantity) desc, event.product_barcode;
+  order by (
+    coalesce(sum(event.quantity) filter (
+      where event.dispatched_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.dispatched_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ), 0)
+    + coalesce(sum(event.quantity) filter (
+      where event.accepted_at >= (p_period_from::timestamp at time zone p_timezone)
+        and event.accepted_at < ((p_period_to + 1)::timestamp at time zone p_timezone)
+    ), 0)
+  ) desc,
+  event.product_barcode;
 end;
 $$;
 
-revoke all on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint, text) from public, anon;
-grant execute on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint, text) to authenticated;
+revoke all on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint) from public, anon;
+grant execute on function public.get_fbs_dispatch_report(uuid, uuid, date, date, text, uuid, bigint) to authenticated;
