@@ -304,8 +304,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }, [session?.id, session?.status, stableDeviceId])
 
   useEffect(() => {
-    if (!busy && !loading && session?.status !== 'completed') inputRef.current?.focus()
-  }, [busy, loading, session?.pending_order_id, session?.pending_product_barcode, session?.status])
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false
+    if (!coarsePointer && !cameraOpen && !busy && !loading && session?.status !== 'completed') inputRef.current?.focus()
+  }, [busy, cameraOpen, loading, session?.pending_order_id, session?.pending_product_barcode, session?.status])
 
   const setBarcodeMode = async (enabled: boolean) => {
     if (!supabase || !session || busy) return
@@ -545,7 +546,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   // кликнул по заголовку, списку или кнопке, первый символ следующего скана
   // возвращает ввод в единственное рабочее поле этой модалки.
   useEffect(() => {
-    if (busy || loading || session?.status === 'completed') return
+    if (cameraOpen || busy || loading || session?.status === 'completed') return
 
     const focusInput = () => inputRef.current?.focus({ preventScroll: true })
     const appendScannerValue = (chunk: string) => {
@@ -603,7 +604,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       document.removeEventListener('keyup', handleDocumentKeyUp, true)
       altNumpadDigitsRef.current = ''
     }
-  }, [busy, loading, session?.status])
+  }, [busy, cameraOpen, loading, session?.status])
 
   const releasePending = async () => {
     if (!supabase || !session || busy) return
@@ -710,6 +711,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         ? (boxEnabled ? 2 : 1)
         : totalSteps - 1
   const scanTarget = boxScanMode ? 'QR короба' : barcodeStep ? 'баркод товара' : session?.pending_order_id ? 'КИЗ' : 'QR WB'
+  const openCamera = () => {
+    inputRef.current?.blur()
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+    setCameraOpen(true)
+  }
   const scanSteps = [
     ...(boxEnabled ? [{ key: 'box', label: 'Короб' }] : []),
     ...(session?.barcode_scan_enabled ? [{ key: 'barcode', label: 'Баркод товара' }] : []),
@@ -724,31 +730,32 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   ]
 
   return (
-    <div className="fixed inset-0 z-[70] flex bg-white" onClick={onClose}>
+    <div className="fixed inset-0 z-[70] flex h-[100dvh] bg-white" onClick={onClose}>
       <div
-        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white"
+        className="flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-white"
         onClick={(event) => event.stopPropagation()}
         onPointerDownCapture={(event) => {
+          if (cameraOpen || (window.matchMedia?.('(pointer: coarse)').matches ?? false)) return
           const target = event.target as HTMLElement
           if (target.closest('input, textarea, select, button, a, [contenteditable="true"]')) return
           window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
         }}
       >
-        <header className="flex items-start justify-between border-b border-slate-100 px-6 py-4">
+        <header className="flex shrink-0 items-start justify-between border-b border-slate-100 px-4 py-3 sm:px-6 sm:py-4">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">Сканирование КИЗ</h2>
+            <h2 className="text-lg font-bold text-slate-900 sm:text-xl">Сканирование КИЗ</h2>
             <p className="mt-1 text-xs text-slate-500">{storeName} · устройство {stableDeviceId.slice(0, 6)}</p>
           </div>
           <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200">×</button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5">
           {loading ? (
             <div className="flex h-full items-center justify-center text-sm text-slate-500">Подготавливаем QR заказов…</div>
           ) : (
             <>
-              <section className={`rounded-3xl border-2 p-6 text-center ${session?.pending_order_id ? 'border-emerald-300 bg-emerald-50' : 'border-violet-300 bg-violet-50'}`}>
-                <div className="mx-auto mb-4 max-w-xl px-2">
+              <section className={`rounded-2xl border-2 p-3 text-center sm:rounded-3xl sm:p-6 ${session?.pending_order_id ? 'border-emerald-300 bg-emerald-50' : 'border-violet-300 bg-violet-50'}`}>
+                <div className="mx-auto mb-3 max-w-xl sm:mb-4 sm:px-2">
                   <div className="fbs-scan-steps flex items-start">
                     {allScanSteps.map((step) => {
                       const visibleIndex = scanSteps.findIndex((visibleStep) => visibleStep.key === step.key)
@@ -780,7 +787,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                               <span className="h-2 w-2 rounded-full bg-white" />
                             ) : visibleIndex + 1}
                           </div>
-                          <span className={`mt-1.5 max-w-[110px] text-[11px] font-semibold leading-tight ${
+                          <span className={`mt-1.5 max-w-[78px] text-[10px] font-semibold leading-tight sm:max-w-[110px] sm:text-[11px] ${
                             completed ? 'text-emerald-600' : current ? 'text-blue-700' : 'text-blue-500'
                           }`}>
                             {step.label}
@@ -791,26 +798,28 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   </div>
                 </div>
                 {session?.status !== 'completed' && (
-                  <div className="mx-auto grid max-w-2xl grid-cols-2 gap-3">
-                    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
-                      <span className="text-sm font-semibold text-slate-800">Короб</span>
+                  <div className="mx-auto grid max-w-2xl grid-cols-2 gap-2 sm:gap-3">
+                    <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-left sm:rounded-2xl sm:px-4 sm:py-3">
+                      <span className="text-xs font-semibold text-slate-800 sm:text-sm">Короб</span>
                       <input
                         type="checkbox"
                         checked={boxEnabled}
                         disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
                         onChange={(event) => void setBoxMode(event.target.checked)}
-                        className="h-5 w-5 shrink-0 accent-violet-600"
+                        className="peer sr-only"
                       />
+                      <span className="relative h-5 w-9 shrink-0 rounded-full bg-slate-200 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-violet-600 peer-checked:after:translate-x-4 peer-disabled:opacity-50" />
                     </label>
-                    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-left">
-                      <span className="text-sm font-semibold text-slate-800">Баркод</span>
+                    <label className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-left sm:rounded-2xl sm:px-4 sm:py-3">
+                      <span className="text-xs font-semibold text-slate-800 sm:text-sm">Баркод</span>
                       <input
                         type="checkbox"
                         checked={Boolean(session?.barcode_scan_enabled)}
                         disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
                         onChange={(event) => void setBarcodeMode(event.target.checked)}
-                        className="h-5 w-5 shrink-0 accent-violet-600"
+                        className="peer sr-only"
                       />
+                      <span className="relative h-5 w-9 shrink-0 rounded-full bg-slate-200 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-violet-600 peer-checked:after:translate-x-4 peer-disabled:opacity-50" />
                     </label>
                   </div>
                 )}
@@ -834,7 +843,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   </div>
                 )}
                 {session?.status !== 'completed' && (
-                  <form className="mx-auto mt-5 flex max-w-2xl flex-wrap gap-2 sm:flex-nowrap" onSubmit={(event) => { event.preventDefault(); void handleScan() }}>
+                  <form className="mx-auto mt-3 grid max-w-2xl grid-cols-[minmax(0,1fr)_48px] gap-2 sm:mt-5 sm:grid-cols-[minmax(0,1fr)_auto_auto]" onSubmit={(event) => { event.preventDefault(); void handleScan() }}>
                     <input
                       ref={inputRef}
                       value={value}
@@ -843,30 +852,20 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       autoComplete="off"
                       spellCheck={false}
                       placeholder={boxScanMode ? 'QR короба' : barcodeStep ? 'Баркод товара' : session?.pending_order_id ? 'КИЗ' : 'QR заказа WB'}
-                      className="min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-5 py-4 font-mono text-base outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:opacity-60"
+                      className="h-12 min-w-0 rounded-xl border border-slate-300 bg-white px-3 font-mono text-sm outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:opacity-60 sm:h-auto sm:rounded-2xl sm:px-5 sm:py-4 sm:text-base"
                     />
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => setCameraOpen(true)}
-                      className="flex items-center justify-center gap-2 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-40"
+                      onClick={openCamera}
+                      className="flex h-12 w-12 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-40 sm:h-auto sm:w-auto sm:rounded-2xl sm:px-4 sm:py-3"
                       title="Сканировать камерой телефона"
                     >
                       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3h5Z"/><circle cx="12" cy="13" r="3"/></svg>
                       <span className="hidden sm:inline">Камера</span>
                     </button>
-                    <button type="submit" disabled={busy || value.length === 0} className="rounded-2xl bg-violet-600 px-6 py-3 text-sm font-semibold text-white disabled:opacity-40">{busy ? 'Сохраняем…' : 'Принять'}</button>
+                    <button type="submit" disabled={busy || value.length === 0} className="col-span-2 h-12 rounded-xl bg-violet-600 px-6 text-sm font-semibold text-white disabled:opacity-40 sm:col-span-1 sm:h-auto sm:rounded-2xl sm:py-3">{busy ? 'Сохраняем…' : 'Принять'}</button>
                   </form>
-                )}
-                {cameraOpen && session?.status !== 'completed' && (
-                  <div className="mx-auto mt-4 max-w-2xl overflow-hidden rounded-2xl border border-violet-200 bg-slate-950 p-2 text-left">
-                    <div className="mb-2 flex items-center justify-between px-2 text-xs font-semibold text-white">
-                      <span>Наведите камеру на {scanTarget}</span>
-                      <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg bg-white/15 px-2 py-1 hover:bg-white/25">Закрыть</button>
-                    </div>
-                    <video ref={cameraVideoRef} autoPlay muted playsInline className="max-h-72 w-full rounded-xl bg-black object-cover" />
-                    {cameraError && <div className="px-2 py-3 text-center text-xs font-medium text-red-300">{cameraError}</div>}
-                  </div>
                 )}
                 {(session?.pending_order_id || session?.pending_product_barcode) && session.status !== 'completed' && (
                   <button type="button" onClick={() => void releasePending()} disabled={busy} className="mt-3 text-xs font-medium text-slate-500 underline hover:text-red-600">Сбросить текущую пару</button>
@@ -889,13 +888,13 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                 </div>
               )}
 
-              <div className="mt-5 grid grid-cols-3 gap-3">
-                {[['Ожидают отправки', draftCount, 'text-violet-700'], ['Отправлено в WB', sentCount, 'text-emerald-700'], ['С ошибкой', errorCount, 'text-red-600']].map(([label, count, color]) => (
-                  <div key={String(label)} className="rounded-2xl border border-slate-200 p-4 text-center"><b className={`block text-2xl ${color}`}>{count}</b><span className="text-xs text-slate-500">{label}</span></div>
+              <div className="mt-3 grid grid-cols-3 gap-2 sm:mt-5 sm:gap-3">
+                {[['Ожидают', draftCount, 'text-violet-700'], ['Отправлено', sentCount, 'text-emerald-700'], ['Ошибки', errorCount, 'text-red-600']].map(([label, count, color]) => (
+                  <div key={String(label)} className="rounded-xl border border-slate-200 px-2 py-3 text-center sm:rounded-2xl sm:p-4"><b className={`block text-xl sm:text-2xl ${color}`}>{count}</b><span className="mt-0.5 block text-[10px] leading-tight text-slate-500 sm:text-xs">{label}</span></div>
                 ))}
               </div>
 
-              <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200">
+              <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 sm:mt-5">
                 <div className="border-b border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">Отсканированные пары</div>
                 {pairs.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-400">Пока ничего не отсканировано</div> : (
                   <div className="divide-y divide-slate-100">
@@ -922,13 +921,32 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           )}
         </div>
 
-        <footer className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
-          <span className="text-xs text-slate-500">QR WB и КИЗ уникальны. Товарный баркод можно повторять в следующей паре.</span>
-          <div className="flex gap-2">
-            <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Закрыть</button>
-            {session?.status !== 'completed' && <button type="button" onClick={() => void finish()} disabled={busy || loading || pairs.length === 0} className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Завершить и отправить в WB</button>}
+        <footer className="grid shrink-0 grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] items-center gap-2 border-t border-slate-100 px-3 pt-3 [padding-bottom:max(0.75rem,env(safe-area-inset-bottom))] sm:flex sm:justify-between sm:px-6 sm:py-4">
+          <span className="hidden text-xs text-slate-500 sm:block">QR WB и КИЗ уникальны. Товарный баркод можно повторять в следующей паре.</span>
+          <div className="contents sm:flex sm:gap-2">
+            <button type="button" onClick={onClose} className={`h-12 rounded-xl border border-slate-200 px-3 text-sm font-medium text-slate-600 sm:h-auto sm:px-4 sm:py-2.5 ${session?.status === 'completed' ? 'col-span-2' : ''}`}>Закрыть</button>
+            {session?.status !== 'completed' && <button type="button" onClick={() => void finish()} disabled={busy || loading || pairs.length === 0} className="h-12 whitespace-nowrap rounded-xl bg-violet-600 px-3 text-sm font-semibold text-white disabled:opacity-40 sm:h-auto sm:px-5 sm:py-2.5"><span className="sm:hidden">Отправить в WB</span><span className="hidden sm:inline">Завершить и отправить в WB</span></button>}
           </div>
         </footer>
+
+        {cameraOpen && session?.status !== 'completed' && (
+          <div className="fixed inset-0 z-[100] flex h-[100dvh] flex-col bg-slate-950" role="dialog" aria-modal="true" aria-label={`Сканирование камерой: ${scanTarget}`}>
+            <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 text-white">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold">Наведите камеру на {scanTarget}</div>
+                <div className="mt-0.5 text-[11px] text-white/60">Код распознается автоматически</div>
+              </div>
+              <button type="button" onClick={() => setCameraOpen(false)} className="flex h-10 shrink-0 items-center rounded-xl bg-white/15 px-4 text-sm font-semibold hover:bg-white/25">Закрыть</button>
+            </div>
+            <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+              <video ref={cameraVideoRef} autoPlay muted playsInline className="h-full w-full bg-black object-cover" />
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
+                <div className="aspect-square w-full max-w-[300px] rounded-3xl border-2 border-white/80 shadow-[0_0_0_999px_rgba(0,0,0,0.28)]" />
+              </div>
+              {cameraError && <div className="absolute inset-x-4 bottom-6 rounded-2xl bg-red-500/90 px-4 py-3 text-center text-xs font-medium text-white">{cameraError}</div>}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

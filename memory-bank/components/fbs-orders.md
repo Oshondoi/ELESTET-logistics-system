@@ -144,6 +144,9 @@
 - `Завершить и отправить в WB` обрабатывает только текущую сессию устройства. Перед PUT `/api/v3/orders/{orderId}/meta/sgtin` сервер заново проверяет официальный статус и уже записанные метаданные WB.
 - Частичный ответ обрабатывается по каждой паре: успешные получают `sent`, ошибки — `error` с причиной. Повторная отправка не дублирует уже принятые пары и распознаёт идемпотентный случай, когда тот же КИЗ уже находится в WB.
 - SQL: `supabase/patch_fbs_marking_scanner.sql`; сервер: действия `get_scan_catalog` и `submit_marking_session` в `supabase/functions/wb-fbs/index.ts`.
+- На телефоне модалка использует `100dvh`, компактные переключатели и двухрядную форму: поле + камера, затем кнопка `Принять` на всю ширину. Нижняя панель содержит только компактные действия и учитывает `safe-area-inset-bottom`.
+- На touch-устройствах поле не получает автоматический фокус от открытия модалки или случайного тапа по фону. Перед запуском камеры input обязательно теряет фокус, чтобы программная клавиатура закрылась.
+- Камера на телефоне открывается отдельным полноэкранным слоем поверх сканера. Она не расширяет рабочую карточку и не конкурирует по высоте с клавиатурой или нижней панелью.
 
 ## Данные товара
 - FBS WB order — источник `order id`, `nmId`, `chrtId`, `skus`.
@@ -190,3 +193,14 @@
 - A later receipt of the same physical unit is an ordinary new ELESTET receipt and is not linked automatically to the old FBS order.
 - An order with a dispatch event is excluded from the active-order deduction even if WB synchronization still temporarily reports `confirm + waiting`; one order must never be deducted twice.
 - WB acceptance is confirmation only and must never deduct the same order a second time.
+
+## Supply acceptance status (31.08.2026)
+
+- Supply status is read from the official `GET /api/v3/supplies` response.
+- `done` / `closedAt` only mean that the supply was closed and handed over to delivery. They must never be presented as WB acceptance.
+- A non-empty `scanDt` is the reliable supply-level confirmation that WB scanned the supply QR code.
+- Item acceptance remains independent: it is counted from WB order statuses (`sorted`, `ready_for_pickup`, `postponed_delivery`, cross-border carrier statuses, `sold`, `canceled_by_client`, `defect`).
+- The supply row therefore shows both the QR result and the accepted-order count. This prevents a scanned QR from being confused with complete item-by-item acceptance.
+- Parent supply rows use separate, borderless visual columns for supply name, QR code, WB processing status, QR scan time, order/accepted counts, warehouse, and actions. Do not merge these fields back into one inline metadata block.
+- A scanned QR is labelled `Поставка в обработке`; this confirms that WB started processing, not that every item was accepted. Item acceptance remains the separate `принято X/Y` value.
+- All order timers use total hours and minutes (`37ч 13мин`) and never convert elapsed time to days.

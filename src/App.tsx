@@ -776,7 +776,7 @@ function App() {
       <ToastContainer />
       <div className="flex h-full">
         {hasSidebar && (
-          <div className="hidden h-full lg:block">
+          <div className={`relative z-20 hidden h-full shrink-0 [contain:layout] transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] will-change-[width] motion-reduce:transition-none lg:block ${sidebarCollapsed ? 'w-[68px]' : 'w-[200px]'}`}>
             <Sidebar
               activePage={effectivePage}
               onSelectPage={setActivePage}
@@ -800,7 +800,7 @@ function App() {
         {hasSidebar && mobileSidebarOpen && (
           <div className="fixed inset-0 z-[9000] flex lg:hidden">
             <button type="button" aria-label="Закрыть меню" className="absolute inset-0 bg-slate-950/45" onClick={() => setMobileSidebarOpen(false)} />
-            <div className="relative h-full w-[min(86vw,300px)] shadow-2xl">
+            <div className="relative h-full w-[min(88vw,340px)] shadow-2xl">
               <Sidebar
                 activePage={effectivePage}
                 onSelectPage={setActivePage}

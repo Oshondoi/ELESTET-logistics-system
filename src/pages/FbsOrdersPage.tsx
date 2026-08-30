@@ -127,6 +127,8 @@ interface WbSupply {
   ordersCount?: number
   done?: boolean
   createdAt?: string
+  closedAt?: string | null
+  scanDt?: string | null
 }
 
 interface FbsArchiveReport {
@@ -359,19 +361,21 @@ function ProductLocationsCell({ order }: { order: FbsOrder }) {
 }
 
 function slaLabel(ddate: string, createdAt?: string): { text: string; cls: string } {
+  const hoursAndMinutes = (milliseconds: number) => {
+    const totalMinutes = Math.max(0, Math.floor(Math.abs(milliseconds) / 60000))
+    return `${Math.floor(totalMinutes / 60)}ч ${totalMinutes % 60}мин`
+  }
   // Если есть ddate — показываем остаток/просрочку
   if (ddate) {
     const diff = new Date(ddate).getTime() - Date.now()
     if (!isNaN(diff)) {
       if (diff < 0) {
-        const h = Math.floor(Math.abs(diff) / 3600000)
-        return { text: `${h}ч назад`, cls: 'text-red-600 font-bold' }
+        return { text: `${hoursAndMinutes(diff)} назад`, cls: 'text-red-600 font-bold' }
       }
       const h = Math.floor(diff / 3600000)
-      if (h < 8) return { text: `${h}ч`, cls: 'text-red-500 font-semibold' }
-      if (h < 24) return { text: `${h}ч`, cls: 'text-amber-500 font-semibold' }
-      const d = Math.floor(h / 24)
-      return { text: `${d}д ${h % 24}ч`, cls: 'text-slate-600' }
+      if (h < 8) return { text: hoursAndMinutes(diff), cls: 'text-red-500 font-semibold' }
+      if (h < 24) return { text: hoursAndMinutes(diff), cls: 'text-amber-500 font-semibold' }
+      return { text: hoursAndMinutes(diff), cls: 'text-slate-600' }
     }
   }
   // Fallback: время с момента создания заказа
@@ -379,10 +383,8 @@ function slaLabel(ddate: string, createdAt?: string): { text: string; cls: strin
     const elapsed = Date.now() - new Date(createdAt).getTime()
     if (!isNaN(elapsed) && elapsed > 0) {
       const h = Math.floor(elapsed / 3600000)
-      const m = Math.floor((elapsed % 3600000) / 60000)
       const cls = h >= 48 ? 'text-red-500 font-semibold' : h >= 24 ? 'text-amber-500' : 'text-slate-500'
-      if (h >= 24) return { text: `${Math.floor(h / 24)}д ${h % 24}ч назад`, cls }
-      return { text: `${h}ч ${m}мин назад`, cls }
+      return { text: `${hoursAndMinutes(elapsed)} назад`, cls }
     }
   }
   return { text: '—', cls: 'text-slate-400' }
@@ -713,6 +715,59 @@ type TabKey = 'pending' | 'assembling' | 'delivering' | 'completed' | 'cancelled
 function isFinalFbsOrder(order: Pick<FbsOrder, 'supplierStatus' | 'wbSystemStatus'>): boolean {
   return order.supplierStatus === 'cancel'
     || ['sold', 'canceled', 'canceled_by_client', 'declined_by_client', 'defect'].includes(order.wbSystemStatus)
+}
+
+const WB_ACCEPTED_ORDER_STATUSES = new Set([
+  'sorted', 'ready_for_pickup', 'postponed_delivery', 'accepted_by_carrier',
+  'sent_to_carrier', 'sold', 'canceled_by_client', 'defect',
+])
+
+function formatSupplyTimestamp(value?: string | null): string | null {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function acceptedSupplyOrdersCount(orders: FbsOrder[]): number {
+  return orders.filter((order) => WB_ACCEPTED_ORDER_STATUSES.has(order.wbSystemStatus)).length
+}
+
+function SupplyWbStatus({ supply }: { supply: WbSupply }) {
+  const closedAt = formatSupplyTimestamp(supply.closedAt)
+
+  if (supply.done !== true) {
+    return (
+      <span
+        title="Поставка ещё открыта в Wildberries. QR поставки становится доступен после передачи в доставку."
+        className="whitespace-nowrap rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600"
+      >
+        На сборке
+      </span>
+    )
+  }
+
+  if (!formatSupplyTimestamp(supply.scanDt)) {
+    return (
+      <span
+        title={`Поставка передана в доставку${closedAt ? ` ${closedAt}` : ''}, но Wildberries ещё не вернул время сканирования QR. Закрытие поставки не означает её приёмку.`}
+        className="whitespace-nowrap rounded-lg bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-700"
+      >
+        Ожидает сканирования
+      </span>
+    )
+  }
+
+  return (
+    <span
+      title="WB отсканировал QR поставки и начал её обработку. Поштучная приёмка считается отдельно по статусам заказов."
+      className="whitespace-nowrap rounded-lg bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-700"
+    >
+      Поставка в обработке
+    </span>
+  )
 }
 
 function isOfficialCompletedOrder(order: Pick<FbsOrder, 'supplierStatus' | 'wbSystemStatus' | 'createdAt'>): boolean {
@@ -1263,6 +1318,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         ordersCount: s.ordersCount,
         done: s.done,
         createdAt: s.createdAt ?? s.created_at,
+        closedAt: s.closedAt ?? s.closed_at ?? null,
+        scanDt: s.scanDt ?? s.scan_dt ?? null,
       })))
   }, [selectedStoreId])
 
@@ -1276,6 +1333,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       ordersCount: s.ordersCount,
       done: s.done,
       createdAt: s.createdAt ?? s.created_at,
+      closedAt: s.closedAt ?? s.closed_at ?? null,
+      scanDt: s.scanDt ?? s.scan_dt ?? null,
     })))
   }, [selectedStoreId])
 
@@ -2411,7 +2470,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         }
         return (
           <div className="flex-1 overflow-auto [scrollbar-gutter:stable]">
-            <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
+            <div className="sticky top-0 z-10 grid min-w-[1260px] grid-cols-[18px_18px_minmax(220px,1.35fr)_minmax(160px,0.9fr)_minmax(170px,1fr)_minmax(180px,1fr)_minmax(100px,0.55fr)_minmax(150px,0.85fr)_80px] items-center gap-x-4 border-b border-slate-200 bg-white px-4 py-2.5 text-[11px] font-semibold text-slate-500">
+              <span aria-hidden="true" />
               <input
                 type="checkbox"
                 title="Выбрать все поставки"
@@ -2419,9 +2479,15 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                 ref={(element) => { if (element) element.indeterminate = someParentsSelected }}
                 checked={allParentsSelected}
                 onChange={toggleAllParents}
-                className="ml-[26px] h-3.5 w-3.5 cursor-pointer rounded accent-violet-500"
+                className="h-3.5 w-3.5 cursor-pointer rounded accent-violet-500"
               />
-              <span className="text-xs font-semibold text-slate-500">Поставка</span>
+              <span>Поставка</span>
+              <span>QR-код поставки</span>
+              <span>Статус</span>
+              <span>Время сканирования QR-кода</span>
+              <span>Заказы</span>
+              <span>Склад</span>
+              <span aria-hidden="true" />
             </div>
             {supplyGroupEntries.map(([supplyId, group]) => {
               const { supply, orders: supplyOrders } = group
@@ -2450,14 +2516,18 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                   return next
                 })
               }
-              const wh = supplyOrders.length > 0
-                ? (wbWarehouses.find((warehouse) => Number(warehouse.id) === Number(supplyOrders[0].warehouseId))?.name || '')
-                : ''
+              const allSupplyOrders = supplyId === '__none__'
+                ? supplyOrders
+                : orders.filter((order) => order.supply_id === supplyId && orderMatchesWarehouseFilter(order))
+              const totalOrderCount = Math.max(supply?.ordersCount ?? 0, allSupplyOrders.length, supplyOrders.length)
+              const acceptedOrders = acceptedSupplyOrdersCount(allSupplyOrders)
+              const supplyWarehouse = supplyOrders[0] ? wbWarehouseInfo(supplyOrders[0]) : null
+              const scanTimestamp = formatSupplyTimestamp(supply?.scanDt)
               return (
                 <div key={supplyId} className="border-b border-slate-200">
                   {/* Строка поставки (родитель) */}
-                  <div className={`flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors ${isParentSelected ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'}`} onClick={toggle}>
-                    <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 flex-shrink-0 text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <div className={`grid min-h-[68px] min-w-[1260px] cursor-pointer grid-cols-[18px_18px_minmax(220px,1.35fr)_minmax(160px,0.9fr)_minmax(170px,1fr)_minmax(180px,1fr)_minmax(100px,0.55fr)_minmax(150px,0.85fr)_80px] items-center gap-x-4 px-4 py-3 transition-colors ${isParentSelected ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'}`} onClick={toggle}>
+                    <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M9 18l6-6-6-6" />
                     </svg>
                     {supplyId !== '__none__' ? (
@@ -2468,21 +2538,29 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                         checked={isParentSelected}
                         onClick={(event) => event.stopPropagation()}
                         onChange={toggleParentSelection}
-                        className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded accent-violet-500"
+                        className="h-3.5 w-3.5 cursor-pointer rounded accent-violet-500"
                       />
-                    ) : <span className="h-3.5 w-3.5 shrink-0" />}
-                    <div className="flex flex-1 items-center gap-4 min-w-0">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-800 truncate">{supplyId === '__none__' ? 'Без поставки' : (supply?.name || supplyId)}</p>
-                        {supplyId !== '__none__' && supply?.name && supply.name !== supplyId && (
-                          <p className="font-mono text-[11px] text-slate-400">{supplyId}</p>
-                        )}
-                      </div>
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">{supplyOrders.length} зак.</span>
-                      {wh && <span className="text-xs text-slate-400">{wh}</span>}
+                    ) : <span className="h-3.5 w-3.5" />}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-800">{supplyId === '__none__' ? 'Без поставки' : (supply?.name || supplyId)}</p>
                     </div>
+                    <span className="truncate font-mono text-xs font-semibold text-slate-700">{supplyId === '__none__' ? '—' : supplyId}</span>
+                    <div>{supplyId !== '__none__' && supply ? <SupplyWbStatus supply={supply} /> : <span className="text-xs text-slate-400">—</span>}</div>
+                    <span className="text-xs text-slate-600">{scanTimestamp ?? '—'}</span>
+                    <div className="min-w-0">
+                      <span className="block text-sm font-semibold text-slate-800">{totalOrderCount}</span>
+                      {supply?.done === true && (
+                        <span className="block whitespace-nowrap text-[10px] text-slate-500">принято {acceptedOrders}/{totalOrderCount}</span>
+                      )}
+                    </div>
+                    {supplyWarehouse ? (
+                      <div className="min-w-0 leading-tight" title={supplyWarehouse.address ?? undefined}>
+                        <div className="truncate text-xs font-semibold text-slate-700">{supplyWarehouse.officialName}</div>
+                        <div className="mt-1 truncate text-[10px] text-slate-400">Ваш склад: {supplyWarehouse.sellerName}</div>
+                      </div>
+                    ) : <span className="text-xs text-slate-400">—</span>}
                     {!isCompletedGroupedTab && supplyId !== '__none__' && supplyOrders.length > 0 && (
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-end gap-2">
                         <button type="button" title="Распечатать стикеры поставки" aria-label="Распечатать стикеры поставки"
                           disabled={busyIds.size > 0}
                           onClick={(e) => { e.stopPropagation(); openStickerPrintModal(supplyOrders, supply ?? { id: supplyId, name: supplyId }, 'supply') }}
@@ -2520,6 +2598,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                         )}
                       </div>
                     )}
+                    {(isCompletedGroupedTab || supplyId === '__none__' || supplyOrders.length === 0) && <span aria-hidden="true" />}
                   </div>
                   {/* Аккордеон — заказы */}
                   <div style={{ display: 'grid', gridTemplateRows: isExpanded ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
