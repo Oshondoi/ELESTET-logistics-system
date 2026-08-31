@@ -2818,29 +2818,53 @@ const BatchDetailModal = ({
     const qty = catalogQties[key] ?? 0
     if (qty < 1) return
     const sz = sizeIdx !== undefined ? product.sizes[sizeIdx] : undefined
-    const barcode = sz?.skus?.[0] ?? product.barcodes[0] ?? ''
+    const barcode = (sz?.skus?.[0] ?? product.barcodes[0] ?? '').trim()
     const size = sz?.techSize ?? null
+    if (!barcode) {
+      setError('У выбранного варианта нет баркода')
+      return
+    }
     setIsAddingSaving(true)
     setError(null)
     try {
-      const tempId = `_local_${crypto.randomUUID()}`
-      const localItem: FulfillmentItem = {
-        id: tempId, batch_id: batch.id, barcode,
-        product_name: product.name ?? product.vendor_code ?? 'Товар',
-        size, color: null,
-        article: product.vendor_code ?? null,
-        qty_declared: receptionTab === 'declared' ? qty : 0,
-        qty_received: receptionTab === 'actual' ? qty : 0,
-        qty_defect: 0, pipeline_stage_id: displayPipelineStage?.id ?? null,
-        qty_otk: null, qty_marked: null, qty_packed: null,
-        boxes: null, notes: null, sort_order: items.length,
-        created_at: new Date().toISOString(),
+      const existing = items.find((item) => !item.is_excluded && item.barcode.trim() === barcode)
+      if (existing) {
+        const nextQty = getReceptionQty(existing) + qty
+        if (pendingItemIds.has(existing.id)) {
+          const next = items.map((item) => item.id === existing.id ? withReceptionQty(item, nextQty) : item)
+          setItems(next)
+          onItemsChanged(next)
+          if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
+        } else {
+          setReceptionQtyDraft(existing.id, nextQty)
+        }
+        setPendingDeleteIds((previous) => {
+          if (!previous.has(existing.id)) return previous
+          const next = new Set(previous)
+          next.delete(existing.id)
+          return next
+        })
+      } else {
+        const tempId = `_local_${crypto.randomUUID()}`
+        const localItem: FulfillmentItem = {
+          id: tempId, batch_id: batch.id, barcode,
+          product_name: product.name ?? product.vendor_code ?? 'Товар',
+          size, color: null,
+          article: product.vendor_code ?? null,
+          qty_declared: receptionTab === 'declared' ? qty : 0,
+          qty_received: receptionTab === 'actual' ? qty : 0,
+          qty_defect: 0, pipeline_stage_id: displayPipelineStage?.id ?? null,
+          qty_otk: null, qty_marked: null, qty_packed: null,
+          boxes: null, notes: null, sort_order: items.length,
+          created_at: new Date().toISOString(),
+        }
+        const next = [...items, localItem]
+        setItems(next); onItemsChanged(next)
+        setPendingItemIds((prev) => new Set([...prev, tempId]))
+        setIsDirty(true)
+        if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
       }
-      const next = [...items, localItem]
-      setItems(next); onItemsChanged(next)
-      setPendingItemIds((prev) => new Set([...prev, tempId]))
       setIsDirty(true)
-      if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
       setCatalogQties((prev) => { const n = { ...prev }; delete n[key]; return n })
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
@@ -4344,53 +4368,51 @@ const BatchDetailModal = ({
 
               {/* Режим: Из каталога */}
               {canEditReception && addMode === 'catalog' && (
-                <div className="relative">
-                  {/* Строка поиска — та же высота что у других режимов */}
-                  <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-2">
+                <div className="relative basis-full w-full max-w-5xl">
+                  <div className="flex w-full items-center gap-2 rounded-2xl bg-slate-50 p-2">
                     {!store?.api_key ? (
-                      <div className="flex flex-col gap-1">
-                        <span className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-400">Нет API-ключа у магазина</span>
-                      </div>
+                      <span className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-400">Нет API-ключа у магазина</span>
                     ) : (
-                      <div className="flex flex-1 items-center gap-2">
-                        <div className="flex flex-1 items-center gap-2">
-                          <div className="relative flex-1">
-                            <input type="text" value={catalogSearch}
-                              onChange={(e) => void handleCatalogSearch(e.target.value)}
-                              placeholder="Поиск по названию или артикулу WB..."
-                              className="w-full rounded-xl border border-slate-200 px-3 py-1.5 pr-7 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-                            />
-                            {catalogSearch && (
-                              <button type="button" onClick={() => { void handleCatalogSearch(''); setCatalogResults([]) }}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
-                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                              </button>
-                            )}
-                          </div>
-                          {isSearching && <span className="text-xs text-slate-400">⟳</span>}
+                      <>
+                        <div className="relative flex-1">
+                          <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                          <input type="text" value={catalogSearch}
+                            onChange={(e) => void handleCatalogSearch(e.target.value)}
+                            placeholder="Найти товар по названию, артикулу или баркоду"
+                            className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                          />
+                          {catalogSearch && (
+                            <button type="button" onClick={() => { void handleCatalogSearch(''); setCatalogResults([]) }}
+                              className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-lg text-slate-300 hover:bg-slate-100 hover:text-slate-500">
+                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                            </button>
+                          )}
                         </div>
-                      </div>
+                        {isSearching && <span className="shrink-0 px-2 text-xs text-slate-400">Поиск…</span>}
+                      </>
                     )}
                   </div>
-                  {/* Результаты поиска — абсолютный оверлей, не сдвигает контент */}
                   {store?.api_key && (catalogResults.length > 0 || (catalogSearch.length >= 2 && !isSearching)) && (
-                    <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl [scrollbar-width:thin]">
+                    <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-[60vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl [scrollbar-width:thin]">
                       {catalogResults.length === 0 ? (
-                        <div className="px-4 py-6 text-center text-sm text-slate-400">Товары не найдены</div>
+                        <div className="px-6 py-12 text-center text-sm text-slate-400">Товары не найдены</div>
                       ) : catalogResults.map((product) => (
-                        <div key={product.id} className="border-b border-slate-100 px-4 py-3 last:border-0">
-                          <div className="mb-2 flex items-center gap-2">
-                            <PhotoThumb url={product.photos?.[0]?.c246x328 ?? product.photos?.[0]?.big ?? null} className="h-8 w-8 rounded-lg flex-shrink-0" />
+                        <div key={product.id} className="border-b border-slate-100 p-5 last:border-0">
+                          <div className="mb-4 flex items-center gap-3">
+                            <PhotoThumb url={product.photos?.[0]?.c246x328 ?? product.photos?.[0]?.big ?? null} className="h-14 w-14 flex-shrink-0 rounded-xl" />
                             <div className="min-w-0">
-                              <p className="text-sm font-medium text-slate-800 line-clamp-1">{product.name ?? product.vendor_code ?? 'Товар'}</p>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                {product.nm_id && <a href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-blue-500 hover:underline">{product.nm_id}</a>}
-                                {product.brand && <span className="text-xs text-slate-400">{product.brand}</span>}
-                                {product.vendor_code && <span className="text-xs text-slate-400">{product.vendor_code}</span>}
+                              <p className="line-clamp-2 text-base font-semibold text-slate-800">{product.name ?? product.vendor_code ?? 'Товар'}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                                {product.nm_id && <a href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono font-medium text-blue-500 hover:underline">WB {product.nm_id}</a>}
+                                {product.brand && <span className="text-slate-500">{product.brand}</span>}
+                                {product.vendor_code && <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-slate-500">{product.vendor_code}</span>}
                               </div>
                             </div>
                           </div>
-                          <div className="space-y-1">
+                          <div className="overflow-hidden rounded-xl border border-slate-200">
+                            <div className="grid grid-cols-[90px_minmax(170px,1fr)_150px_120px] items-center gap-3 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                              <span>Размер</span><span>Баркод</span><span className="text-center">Количество</span><span />
+                            </div>
                             {product.sizes && product.sizes.length > 0
                               ? [...product.sizes].sort((a, b) => {
                                   const order = ['XXS','XS','S','S/M','M','M/L','L','L/XL','XL','XXL','2XL','3XL','4XL','5XL','6XL']
@@ -4406,33 +4428,45 @@ const BatchDetailModal = ({
                                 }).map((sz) => {
                                   const sIdx = product.sizes.indexOf(sz)
                                   const key = `${product.id}_${sIdx}`
+                                  const qty = catalogQties[key] ?? 0
                                   return (
-                                    <div key={key} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-1.5">
-                                      <span className="w-10 text-xs font-semibold text-slate-600">{sz.techSize ?? '—'}</span>
-                                      <span className="flex-1 font-mono text-[11px] text-slate-400 truncate">{sz.skus?.[0] ?? '—'}</span>
-                                      <input type="number" min={0} value={catalogQties[key] ?? 0}
-                                        onChange={(e) => setCatalogQties((p) => ({ ...p, [key]: Number(e.target.value) }))}
-                                        className="w-14 rounded-lg border border-slate-200 px-2 py-0.5 text-center text-xs outline-none focus:border-blue-300"
-                                      />
+                                    <div key={key} className="grid grid-cols-[90px_minmax(170px,1fr)_150px_120px] items-center gap-3 border-t border-slate-100 px-4 py-2.5 first:border-t-0">
+                                      <span className="text-sm font-semibold text-slate-700">{sz.techSize ?? '—'}</span>
+                                      <span className="truncate font-mono text-xs text-slate-500">{sz.skus?.[0] ?? '—'}</span>
+                                      <div className="flex h-9 items-center overflow-hidden rounded-xl border border-slate-200 bg-white">
+                                        <button type="button" onClick={() => setCatalogQties((previous) => ({ ...previous, [key]: Math.max(0, qty - 1) }))} className="h-full w-9 text-slate-400 hover:bg-slate-50 hover:text-slate-700">−</button>
+                                        <input type="number" min={0} value={qty || ''} placeholder="0"
+                                          onChange={(e) => setCatalogQties((previous) => ({ ...previous, [key]: Math.max(0, Number(e.target.value)) }))}
+                                          onKeyDown={(e) => { if (e.key === 'Enter' && qty > 0) void handleCatalogAdd(product, sIdx) }}
+                                          className="h-full min-w-0 flex-1 border-x border-slate-200 text-center text-sm font-medium outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                        />
+                                        <button type="button" onClick={() => setCatalogQties((previous) => ({ ...previous, [key]: qty + 1 }))} className="h-full w-9 text-blue-500 hover:bg-blue-50">+</button>
+                                      </div>
                                       <button type="button" onClick={() => void handleCatalogAdd(product, sIdx)}
-                                        disabled={isAddingSaving || (catalogQties[key] ?? 0) < 1}
-                                        className="rounded-lg bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed">
-                                        + Добавить
+                                        disabled={isAddingSaving || qty < 1 || !sz.skus?.[0]}
+                                        className="h-9 rounded-xl bg-blue-600 px-4 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-35">
+                                        Добавить
                                       </button>
                                     </div>
                                   )
                                 })
                               : (
-                                <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-1.5">
-                                  <span className="flex-1 font-mono text-[11px] text-slate-400 truncate">{product.barcodes[0] ?? '—'}</span>
-                                  <input type="number" min={0} value={catalogQties[product.id] ?? 0}
-                                    onChange={(e) => setCatalogQties((p) => ({ ...p, [product.id]: Number(e.target.value) }))}
-                                    className="w-14 rounded-lg border border-slate-200 px-2 py-0.5 text-center text-xs outline-none focus:border-blue-300"
-                                  />
+                                <div className="grid grid-cols-[90px_minmax(170px,1fr)_150px_120px] items-center gap-3 border-t border-slate-100 px-4 py-2.5">
+                                  <span className="text-sm font-semibold text-slate-400">—</span>
+                                  <span className="truncate font-mono text-xs text-slate-500">{product.barcodes[0] ?? '—'}</span>
+                                  <div className="flex h-9 items-center overflow-hidden rounded-xl border border-slate-200 bg-white">
+                                    <button type="button" onClick={() => setCatalogQties((previous) => ({ ...previous, [product.id]: Math.max(0, (catalogQties[product.id] ?? 0) - 1) }))} className="h-full w-9 text-slate-400 hover:bg-slate-50 hover:text-slate-700">−</button>
+                                    <input type="number" min={0} value={catalogQties[product.id] || ''} placeholder="0"
+                                      onChange={(e) => setCatalogQties((previous) => ({ ...previous, [product.id]: Math.max(0, Number(e.target.value)) }))}
+                                      onKeyDown={(e) => { if (e.key === 'Enter' && (catalogQties[product.id] ?? 0) > 0) void handleCatalogAdd(product) }}
+                                      className="h-full min-w-0 flex-1 border-x border-slate-200 text-center text-sm font-medium outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                    />
+                                    <button type="button" onClick={() => setCatalogQties((previous) => ({ ...previous, [product.id]: (catalogQties[product.id] ?? 0) + 1 }))} className="h-full w-9 text-blue-500 hover:bg-blue-50">+</button>
+                                  </div>
                                   <button type="button" onClick={() => void handleCatalogAdd(product)}
-                                    disabled={isAddingSaving || (catalogQties[product.id] ?? 0) < 1}
-                                    className="rounded-lg bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed">
-                                    + Добавить
+                                    disabled={isAddingSaving || (catalogQties[product.id] ?? 0) < 1 || !product.barcodes[0]}
+                                    className="h-9 rounded-xl bg-blue-600 px-4 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-35">
+                                    Добавить
                                   </button>
                                 </div>
                               )
