@@ -24,6 +24,7 @@
 - `src/services/fulfillmentService.ts`, `src/services/pipelineService.ts`, `src/types/index.ts` — WMS warehouse/history data access and types.
 - `supabase/patch_fulfillment_wms_warehouse.sql` — warehouse ownership validation, reception correction boundary/audit, completed-stock alignment and `get_wms_warehouse_products` RPC.
 - Patch status: applied to production on 31.08.2026 through Supabase Management API; full rollback compilation, structural verification and authenticated behavior test passed.
+- Frontend status: commit `26d6ecf` опубликован в `main`/`master`; production asset — `assets/index-C5pyKxku.js`.
 
 ## Packages used by current FBS/export/WMS work
 - `jspdf` — PDF; `xlsx` — Excel; `jszip` — ZIP нескольких поставок; `qrcode.react` — QR физического короба; `@supabase/supabase-js` — DB/Functions.
