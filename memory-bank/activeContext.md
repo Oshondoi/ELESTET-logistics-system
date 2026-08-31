@@ -2604,3 +2604,11 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Новый payload проверен: партнёр создал owner-scoped поставку, короб и товар короба; транзакция полностью откатилась.
 - Legacy payload обычной партии проверен: стадия осталась `null`, владелец не изменился; транзакция полностью откатилась.
 - Итог production: 0 pipeline-товаров/журналов без стадии, 0 дублей lineage, 0 отрицательных количеств, 0 тестовых строк, 0 поставок с неверным владельцем; три manage-policy и два compatibility-trigger активны.
+
+### Публикация
+
+- Функциональный коммит: `d41b27e feat: add stage-specific fulfillment reception`.
+- Коммит отправлен fast-forward в `origin/main` и `origin/master`; обе ветки указывают на один commit.
+- Локальная активная ветка оставлена `main`; локальная ссылка `master` также fast-forward обновлена без переключения ветки.
+- Vercel завершил автоматический deploy: `https://elestet.net` отдаёт тот же JS asset `assets/index-CvK4iwBl.js`, который получен локальной production-сборкой.
+- Единственный оставшийся неотслеживаемый файл — пользовательский `Priemka_WB_barcodes_quantity.xlsx`; он не изменён и не добавлен в Git.

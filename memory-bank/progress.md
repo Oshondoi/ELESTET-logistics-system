@@ -1845,3 +1845,11 @@ MVP в активной разработке. Деплой на Vercel акти�
 - Последняя проверка доступности: основной домен и Vercel вернули HTTP `200`.
 - Последняя read-only проверка целостности: 0 pipeline-товаров без стадии; записей pipeline-приёмки за последние 12 часов не было.
 - Несовместимость старого frontend с partner-stage RLS закрыта compatibility-триггерами и owner-scoped manage-policy. Все тесты были транзакционными с `ROLLBACK`; production-данные не изменялись.
+
+## Опубликовано 31.08.2026 — стадийная приёмка
+
+- [x] Коммит `d41b27e` отправлен в `origin/main` и `origin/master` обычным fast-forward.
+- [x] Локально активна ветка `main`; `main`, локальный `master`, `origin/main` и `origin/master` синхронизированы.
+- [x] Production Supabase содержит обе миграции и последнее исправление owner-scoped поставок/коробов.
+- [x] Vercel deployment завершён; основной домен отдаёт asset новой локально проверенной сборки `assets/index-CvK4iwBl.js`.
+- [x] Пользовательский Excel оставлен вне Git.
