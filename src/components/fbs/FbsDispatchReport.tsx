@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../../lib/supabase'
 import { toUserMessage } from '../../lib/userMessage'
-import { getStoreSelectorLabel } from '../../lib/storeDisplay'
 import { PhotoThumb } from '../ui/PhotoThumb'
+import { FbsStoreSelect } from './FbsStoreSelect'
 import type { Store } from '../../types'
 
 interface DispatchReportRow {
@@ -330,16 +330,7 @@ export function FbsDispatchReport({
       <div className="shrink-0 space-y-4 pb-4">
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-end gap-3">
-            <label className="space-y-1.5 text-xs font-semibold text-slate-600">
-              <span className="block">Магазин</span>
-              <select
-                value={storeId}
-                onChange={(event) => onStoreChange(event.target.value)}
-                className="h-9 min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
-              >
-                {stores.map((store) => <option key={store.id} value={store.id}>{getStoreSelectorLabel(store)}</option>)}
-              </select>
-            </label>
+            <FbsStoreSelect value={storeId} stores={stores} onChange={onStoreChange} />
             <label className="space-y-1.5 text-xs font-semibold text-slate-600">
               <span className="block">На склад WB</span>
               <select

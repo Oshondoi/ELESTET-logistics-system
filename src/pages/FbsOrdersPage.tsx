@@ -8,8 +8,8 @@ import { invokeFbs } from '../services/fbsApi'
 import { FbsKizScannerModal } from '../components/fbs/FbsKizScannerModal'
 import { FbsStocksPanel } from '../components/fbs/FbsStocksPanel'
 import { FbsDispatchReport } from '../components/fbs/FbsDispatchReport'
+import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
-import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import type { Product, Store } from '../types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -2136,14 +2136,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
 
       {/* Toolbar */}
       {pageSection !== 'dispatches' && (
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
-        <select
-          value={selectedStoreId}
-          onChange={(event) => handleStoreChange(event.target.value)}
-          className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-violet-400"
-        >
-          {storesWithKey.map((s) => <option key={s.id} value={s.id}>{getStoreSelectorLabel(s)}</option>)}
-        </select>
+      <div className="flex flex-wrap items-end gap-3 border-b border-slate-200 bg-white px-5 py-3">
+        <FbsStoreSelect value={selectedStoreId} stores={storesWithKey} onChange={handleStoreChange} />
 
         {pageSection === 'orders' && <>
         <select

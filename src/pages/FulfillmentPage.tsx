@@ -21,6 +21,7 @@ import type {
   BatchConsumable,
   Consumable,
   ConsumableCatalogItem,
+  Product,
   Store,
   TripLine,
   TripWithLines,
@@ -45,7 +46,6 @@ import {
   deleteItem,
   advanceStage,
   lookupProductByBarcode,
-  searchProducts,
   fetchOtkLogs,
   fetchDeletedOtkLogs,
   addOtkLog,
@@ -88,7 +88,8 @@ import {
   fetchFulfillmentWmsWarehouses,
   fetchStageWarehouseHistory,
 } from '../services/fulfillmentService'
-import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
+import type { OtkPerformer, ProductInfo } from '../services/fulfillmentService'
+import { fetchProducts } from '../services/productService'
 import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, createBatchWithPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags, updateBatchPipelineWarehouse } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, PipelineStageDiscrepancy } from '../types'
 import { fetchExecutorOptions } from '../services/outsourceService'
@@ -108,6 +109,60 @@ import {
   type FulfillmentBoxContentsFormat,
   type FulfillmentBoxContentsPageSource,
 } from '../lib/fulfillmentBoxContentsPdf'
+
+interface CatalogSizeRow {
+  techSize: string
+  barcode: string
+  rowKey: string
+}
+
+const CATALOG_LETTER_SIZE_ORDER: Record<string, number> = {
+  XXS: 1,
+  XS: 2,
+  S: 3,
+  M: 4,
+  L: 5,
+  XL: 6,
+  '2XL': 7,
+  XXL: 7,
+  '3XL': 8,
+  XXXL: 8,
+  '4XL': 9,
+  '5XL': 10,
+  '6XL': 11,
+}
+
+function catalogSizeWeight(techSize: string): number {
+  const normalized = techSize.trim().toUpperCase()
+  if (CATALOG_LETTER_SIZE_ORDER[normalized] !== undefined) return CATALOG_LETTER_SIZE_ORDER[normalized]
+  const numeric = Number.parseFloat(normalized)
+  return Number.isNaN(numeric) ? -1 : numeric
+}
+
+function getCatalogSizeRows(product: Product): CatalogSizeRow[] {
+  const sizes = (product.sizes ?? []) as Array<{ techSize?: string; skus?: string[] }>
+  if (sizes.length === 0) {
+    return [{ techSize: '—', barcode: product.barcodes[0] ?? '—', rowKey: `${product.id}-0` }]
+  }
+
+  const rows: CatalogSizeRow[] = []
+  sizes.forEach((size, sizeIndex) => {
+    const skus = size.skus ?? []
+    if (skus.length === 0) {
+      rows.push({ techSize: size.techSize ?? '—', barcode: '—', rowKey: `${product.id}-${sizeIndex}` })
+      return
+    }
+    skus.forEach((barcode, skuIndex) => {
+      rows.push({
+        techSize: size.techSize ?? '—',
+        barcode,
+        rowKey: `${product.id}-${sizeIndex}-${skuIndex}`,
+      })
+    })
+  })
+
+  return rows.sort((a, b) => catalogSizeWeight(a.techSize) - catalogSizeWeight(b.techSize))
+}
 
 // ── Вспомогательные константы ─────────────────────────────────
 const STAGE_LABELS: Record<FulfillmentStage, string> = {
@@ -733,10 +788,12 @@ const BatchDetailModal = ({
   const [boxesWarehouse, setBoxesWarehouse] = useState('')
 
   // Режим «Из каталога»
+  const [catalogModalOpen, setCatalogModalOpen] = useState(false)
   const [catalogSearch, setCatalogSearch] = useState('')
-  const [catalogResults, setCatalogResults] = useState<CatalogProduct[]>([])
+  const [catalogProducts, setCatalogProducts] = useState<Product[]>([])
+  const [catalogExpandedIds, setCatalogExpandedIds] = useState<Set<string>>(new Set())
   const [catalogQties, setCatalogQties] = useState<Record<string, number>>({})
-  const [isSearching, setIsSearching] = useState(false)
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false)
 
   // Редактирование этапов партии
   const [isSavingBatchStages, setIsSavingBatchStages] = useState(false)
@@ -2800,102 +2857,158 @@ const BatchDetailModal = ({
     }
   }
 
-  const handleCatalogSearch = async (q: string) => {
-    setCatalogSearch(q)
-    if (q.trim().length < 2) { setCatalogResults([]); return }
-    setIsSearching(true)
+  const handleOpenCatalog = async () => {
+    setCatalogModalOpen(true)
+    if (catalogProducts.length > 0 || !batch.store_id) return
+    setIsCatalogLoading(true)
+    setError(null)
     try {
-      const results = await searchProducts(accountId, batch.store_id, q)
-      setCatalogResults(results)
+      setCatalogProducts(await fetchProducts(batch.store_id))
+    } catch (err) {
+      setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Не удалось загрузить каталог')
     } finally {
-      setIsSearching(false)
+      setIsCatalogLoading(false)
     }
   }
 
-  // Режим «Из каталога» — добавить позицию
-  const handleCatalogAdd = async (product: CatalogProduct, sizeIdx?: number) => {
-    const key = sizeIdx !== undefined ? `${product.id}_${sizeIdx}` : product.id
-    const qty = catalogQties[key] ?? 0
-    if (qty < 1) return
-    const sz = sizeIdx !== undefined ? product.sizes[sizeIdx] : undefined
-    const barcode = (sz?.skus?.[0] ?? product.barcodes[0] ?? '').trim()
-    const size = sz?.techSize ?? null
-    if (!barcode) {
-      setError('У выбранного варианта нет баркода')
-      return
-    }
+  const handleCloseCatalog = () => {
+    if (isAddingSaving) return
+    setCatalogModalOpen(false)
+    setCatalogSearch('')
+    setCatalogExpandedIds(new Set())
+    setCatalogQties({})
+  }
+
+  const toggleCatalogProduct = (productId: string) => {
+    setCatalogExpandedIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(productId)) next.delete(productId)
+      else next.add(productId)
+      return next
+    })
+  }
+
+  // Режим «Из каталога» — применить все введённые количества одной операцией.
+  const handleCatalogSave = async () => {
+    const groupedSelections = new Map<string, { product: Product; size: string | null; qty: number }>()
+    catalogProducts.forEach((product) => {
+      getCatalogSizeRows(product).forEach((row) => {
+        const qty = Math.max(0, Math.trunc(catalogQties[row.rowKey] ?? 0))
+        const barcode = row.barcode.trim()
+        if (qty < 1 || !barcode || barcode === '—') return
+        const previous = groupedSelections.get(barcode)
+        groupedSelections.set(barcode, {
+          product: previous?.product ?? product,
+          size: previous?.size ?? (row.techSize === '—' ? null : row.techSize),
+          qty: (previous?.qty ?? 0) + qty,
+        })
+      })
+    })
+    if (groupedSelections.size === 0) return
+
     setIsAddingSaving(true)
     setError(null)
     try {
-      const matchingItems = items.filter((item) => !item.is_excluded && item.barcode.trim() === barcode)
-      const existing = matchingItems.find((item) => !pendingItemIds.has(item.id)) ?? matchingItems[0]
-      if (existing) {
-        const duplicateItems = matchingItems.filter((item) => item.id !== existing.id)
-        const duplicateIds = new Set(duplicateItems.map((item) => item.id))
-        const declaredTotal = matchingItems.reduce((sum, item) => sum + (declaredDraft[item.id] ?? item.qty_declared ?? 0), 0)
-          + (receptionTab === 'declared' ? qty : 0)
-        const receivedTotal = matchingItems.reduce((sum, item) => sum + (receptionDraft[item.id] ?? item.qty_received ?? 0), 0)
-          + (receptionTab === 'actual' ? qty : 0)
-        const defectTotal = matchingItems.reduce((sum, item) => sum + (receptionDefectDraft[item.id] ?? item.qty_defect ?? 0), 0)
-        const next = items
-          .filter((item) => !duplicateIds.has(item.id))
-          .map((item) => item.id === existing.id && pendingItemIds.has(existing.id)
-            ? { ...item, qty_declared: declaredTotal, qty_received: receivedTotal, qty_defect: defectTotal }
-            : item)
+      let nextItems = [...items]
+      const nextDeclaredDraft = { ...declaredDraft }
+      const nextReceptionDraft = { ...receptionDraft }
+      const nextDefectDraft = { ...receptionDefectDraft }
+      const nextPendingItems = new Set(pendingItemIds)
+      const nextPendingDeletes = new Set(pendingDeleteIds)
 
-        if (pendingItemIds.has(existing.id)) {
-          setDeclaredDraft((previous) => ({ ...previous, [existing.id]: declaredTotal }))
-          setReceptionDraft((previous) => ({ ...previous, [existing.id]: receivedTotal }))
-          setReceptionDefectDraft((previous) => ({ ...previous, [existing.id]: defectTotal }))
-        } else {
-          setDeclaredDraft((previous) => ({ ...previous, [existing.id]: declaredTotal }))
-          setReceptionDraft((previous) => ({ ...previous, [existing.id]: receivedTotal }))
-          setReceptionDefectDraft((previous) => ({ ...previous, [existing.id]: defectTotal }))
-        }
+      groupedSelections.forEach(({ product, size, qty }, barcode) => {
+        const matchingItems = nextItems.filter((item) => !item.is_excluded && item.barcode.trim() === barcode)
+        const existing = matchingItems.find((item) => !nextPendingItems.has(item.id)) ?? matchingItems[0]
 
-        setItems(next)
-        onItemsChanged(next)
-        setPendingItemIds((previous) => {
-          const updated = new Set(previous)
-          duplicateItems.forEach((item) => updated.delete(item.id))
-          return updated
-        })
-        setPendingDeleteIds((previous) => {
-          const next = new Set(previous)
-          next.delete(existing.id)
+        if (existing) {
+          const duplicateItems = matchingItems.filter((item) => item.id !== existing.id)
+          const duplicateIds = new Set(duplicateItems.map((item) => item.id))
+          const declaredTotal = matchingItems.reduce(
+            (sum, item) => sum + (nextDeclaredDraft[item.id] ?? item.qty_declared ?? 0),
+            receptionTab === 'declared' ? qty : 0,
+          )
+          const receivedTotal = matchingItems.reduce(
+            (sum, item) => sum + (nextReceptionDraft[item.id] ?? item.qty_received ?? 0),
+            receptionTab === 'actual' ? qty : 0,
+          )
+          const defectTotal = matchingItems.reduce(
+            (sum, item) => sum + (nextDefectDraft[item.id] ?? item.qty_defect ?? 0),
+            0,
+          )
+
+          nextItems = nextItems
+            .filter((item) => !duplicateIds.has(item.id))
+            .map((item) => item.id === existing.id && nextPendingItems.has(existing.id)
+              ? { ...item, qty_declared: declaredTotal, qty_received: receivedTotal, qty_defect: defectTotal }
+              : item)
+          nextDeclaredDraft[existing.id] = declaredTotal
+          nextReceptionDraft[existing.id] = receivedTotal
+          nextDefectDraft[existing.id] = defectTotal
+          nextPendingDeletes.delete(existing.id)
+
           duplicateItems.forEach((item) => {
-            if (!pendingItemIds.has(item.id)) next.add(item.id)
+            delete nextDeclaredDraft[item.id]
+            delete nextReceptionDraft[item.id]
+            delete nextDefectDraft[item.id]
+            if (nextPendingItems.has(item.id)) nextPendingItems.delete(item.id)
+            else nextPendingDeletes.add(item.id)
           })
-          return next
-        })
-        if (receptionTab === 'actual') {
-          const effectiveNext = next.map((item) => item.id === existing.id
-            ? { ...item, qty_declared: declaredTotal, qty_received: receivedTotal, qty_defect: defectTotal }
-            : item)
-          void recalcOtkDiscrepancy(effectiveNext, otkLogs)
+          return
         }
-      } else {
+
         const tempId = `_local_${crypto.randomUUID()}`
+        const declaredQty = receptionTab === 'declared' ? qty : 0
+        const receivedQty = receptionTab === 'actual' ? qty : 0
         const localItem: FulfillmentItem = {
-          id: tempId, batch_id: batch.id, barcode,
+          id: tempId,
+          batch_id: batch.id,
+          barcode,
           product_name: product.name ?? product.vendor_code ?? 'Товар',
-          size, color: null,
-          article: product.vendor_code ?? null,
-          qty_declared: receptionTab === 'declared' ? qty : 0,
-          qty_received: receptionTab === 'actual' ? qty : 0,
-          qty_defect: 0, pipeline_stage_id: displayPipelineStage?.id ?? null,
-          qty_otk: null, qty_marked: null, qty_packed: null,
-          boxes: null, notes: null, sort_order: items.length,
+          size,
+          color: product.color,
+          article: product.vendor_code,
+          qty_declared: declaredQty,
+          qty_received: receivedQty,
+          qty_defect: 0,
+          pipeline_stage_id: displayPipelineStage?.id ?? null,
+          qty_otk: null,
+          qty_marked: null,
+          qty_packed: null,
+          boxes: null,
+          notes: null,
+          sort_order: nextItems.length,
           created_at: new Date().toISOString(),
         }
-        const next = [...items, localItem]
-        setItems(next); onItemsChanged(next)
-        setPendingItemIds((prev) => new Set([...prev, tempId]))
-        setIsDirty(true)
-        if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
-      }
+        nextItems.push(localItem)
+        nextDeclaredDraft[tempId] = declaredQty
+        nextReceptionDraft[tempId] = receivedQty
+        nextDefectDraft[tempId] = 0
+        nextPendingItems.add(tempId)
+      })
+
+      setItems(nextItems)
+      onItemsChanged(nextItems)
+      setDeclaredDraft(nextDeclaredDraft)
+      setReceptionDraft(nextReceptionDraft)
+      setReceptionDefectDraft(nextDefectDraft)
+      setPendingItemIds(nextPendingItems)
+      setPendingDeleteIds(nextPendingDeletes)
       setIsDirty(true)
-      setCatalogQties((prev) => { const n = { ...prev }; delete n[key]; return n })
+
+      if (receptionTab === 'actual') {
+        const effectiveNext = nextItems.map((item) => ({
+          ...item,
+          qty_declared: nextDeclaredDraft[item.id] ?? item.qty_declared,
+          qty_received: nextReceptionDraft[item.id] ?? item.qty_received,
+          qty_defect: nextDefectDraft[item.id] ?? item.qty_defect,
+        }))
+        void recalcOtkDiscrepancy(effectiveNext, otkLogs)
+      }
+
+      setCatalogModalOpen(false)
+      setCatalogSearch('')
+      setCatalogExpandedIds(new Set())
+      setCatalogQties({})
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
@@ -3730,6 +3843,25 @@ const BatchDetailModal = ({
   ))
   const receptionHasBoxes = receptionVisibleItems.some((item) => item.boxes)
   const receptionHasNotes = receptionVisibleItems.some((item) => item.notes)
+  const normalizedCatalogSearch = catalogSearch.trim().toLowerCase()
+  const filteredCatalogProducts = normalizedCatalogSearch
+    ? catalogProducts.filter((product) => {
+        const sizeBarcodes = ((product.sizes ?? []) as Array<{ skus?: string[] }>)
+          .flatMap((size) => size.skus ?? [])
+        return [
+          product.name,
+          product.vendor_code,
+          product.brand,
+          String(product.nm_id),
+          ...product.barcodes,
+          ...sizeBarcodes,
+        ].some((value) => String(value ?? '').toLowerCase().includes(normalizedCatalogSearch))
+      })
+    : catalogProducts
+  const selectedCatalogRows = catalogProducts.flatMap((product) => (
+    getCatalogSizeRows(product).map((row) => ({ row, qty: Math.max(0, Math.trunc(catalogQties[row.rowKey] ?? 0)) }))
+  )).filter(({ row, qty }) => row.barcode !== '—' && qty > 0)
+  const selectedCatalogUnits = selectedCatalogRows.reduce((sum, { qty }) => sum + qty, 0)
 
   const nextStageName = enabledStages[currentIdx + 1]
 
@@ -4398,115 +4530,26 @@ const BatchDetailModal = ({
 
               {/* Режим: Из каталога */}
               {canEditReception && addMode === 'catalog' && (
-                <div className="relative basis-full w-full max-w-5xl">
-                  <div className="flex w-full items-center gap-2 rounded-2xl bg-slate-50 p-2">
-                    {!store?.api_key ? (
-                      <span className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-400">Нет API-ключа у магазина</span>
-                    ) : (
-                      <>
-                        <div className="relative flex-1">
-                          <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-                          <input type="text" value={catalogSearch}
-                            onChange={(e) => void handleCatalogSearch(e.target.value)}
-                            placeholder="Найти товар по названию, артикулу или баркоду"
-                            className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-                          />
-                          {catalogSearch && (
-                            <button type="button" onClick={() => { void handleCatalogSearch(''); setCatalogResults([]) }}
-                              className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-lg text-slate-300 hover:bg-slate-100 hover:text-slate-500">
-                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                            </button>
-                          )}
-                        </div>
-                        {isSearching && <span className="shrink-0 px-2 text-xs text-slate-400">Поиск…</span>}
-                      </>
-                    )}
-                  </div>
-                  {store?.api_key && (catalogResults.length > 0 || (catalogSearch.length >= 2 && !isSearching)) && (
-                    <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-[60vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl [scrollbar-width:thin]">
-                      {catalogResults.length === 0 ? (
-                        <div className="px-6 py-12 text-center text-sm text-slate-400">Товары не найдены</div>
-                      ) : catalogResults.map((product) => (
-                        <div key={product.id} className="border-b border-slate-100 p-5 last:border-0">
-                          <div className="mb-4 flex items-center gap-3">
-                            <PhotoThumb url={product.photos?.[0]?.c246x328 ?? product.photos?.[0]?.big ?? null} className="h-14 w-14 flex-shrink-0 rounded-xl" />
-                            <div className="min-w-0">
-                              <p className="line-clamp-2 text-base font-semibold text-slate-800">{product.name ?? product.vendor_code ?? 'Товар'}</p>
-                              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                                {product.nm_id && <a href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono font-medium text-blue-500 hover:underline">WB {product.nm_id}</a>}
-                                {product.brand && <span className="text-slate-500">{product.brand}</span>}
-                                {product.vendor_code && <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-slate-500">{product.vendor_code}</span>}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="overflow-hidden rounded-xl border border-slate-200">
-                            <div className="grid grid-cols-[90px_minmax(170px,1fr)_150px_120px] items-center gap-3 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                              <span>Размер</span><span>Баркод</span><span className="text-center">Количество</span><span />
-                            </div>
-                            {product.sizes && product.sizes.length > 0
-                              ? [...product.sizes].sort((a, b) => {
-                                  const order = ['XXS','XS','S','S/M','M','M/L','L','L/XL','XL','XXL','2XL','3XL','4XL','5XL','6XL']
-                                  const ai = order.indexOf(a.techSize ?? '')
-                                  const bi = order.indexOf(b.techSize ?? '')
-                                  if (ai !== -1 && bi !== -1) return ai - bi
-                                  if (ai !== -1) return -1
-                                  if (bi !== -1) return 1
-                                  const an = parseFloat(a.techSize ?? '')
-                                  const bn = parseFloat(b.techSize ?? '')
-                                  if (!isNaN(an) && !isNaN(bn)) return an - bn
-                                  return (a.techSize ?? '').localeCompare(b.techSize ?? '')
-                                }).map((sz) => {
-                                  const sIdx = product.sizes.indexOf(sz)
-                                  const key = `${product.id}_${sIdx}`
-                                  const qty = catalogQties[key] ?? 0
-                                  return (
-                                    <div key={key} className="grid grid-cols-[90px_minmax(170px,1fr)_150px_120px] items-center gap-3 border-t border-slate-100 px-4 py-2.5 first:border-t-0">
-                                      <span className="text-sm font-semibold text-slate-700">{sz.techSize ?? '—'}</span>
-                                      <span className="truncate font-mono text-xs text-slate-500">{sz.skus?.[0] ?? '—'}</span>
-                                      <div className="flex h-9 items-center overflow-hidden rounded-xl border border-slate-200 bg-white">
-                                        <button type="button" onClick={() => setCatalogQties((previous) => ({ ...previous, [key]: Math.max(0, qty - 1) }))} className="h-full w-9 text-slate-400 hover:bg-slate-50 hover:text-slate-700">−</button>
-                                        <input type="number" min={0} value={qty || ''} placeholder="0"
-                                          onChange={(e) => setCatalogQties((previous) => ({ ...previous, [key]: Math.max(0, Number(e.target.value)) }))}
-                                          onKeyDown={(e) => { if (e.key === 'Enter' && qty > 0) void handleCatalogAdd(product, sIdx) }}
-                                          className="h-full min-w-0 flex-1 border-x border-slate-200 text-center text-sm font-medium outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                                        />
-                                        <button type="button" onClick={() => setCatalogQties((previous) => ({ ...previous, [key]: qty + 1 }))} className="h-full w-9 text-blue-500 hover:bg-blue-50">+</button>
-                                      </div>
-                                      <button type="button" onClick={() => void handleCatalogAdd(product, sIdx)}
-                                        disabled={isAddingSaving || qty < 1 || !sz.skus?.[0]}
-                                        className="h-9 rounded-xl bg-blue-600 px-4 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-35">
-                                        Добавить
-                                      </button>
-                                    </div>
-                                  )
-                                })
-                              : (
-                                <div className="grid grid-cols-[90px_minmax(170px,1fr)_150px_120px] items-center gap-3 border-t border-slate-100 px-4 py-2.5">
-                                  <span className="text-sm font-semibold text-slate-400">—</span>
-                                  <span className="truncate font-mono text-xs text-slate-500">{product.barcodes[0] ?? '—'}</span>
-                                  <div className="flex h-9 items-center overflow-hidden rounded-xl border border-slate-200 bg-white">
-                                    <button type="button" onClick={() => setCatalogQties((previous) => ({ ...previous, [product.id]: Math.max(0, (catalogQties[product.id] ?? 0) - 1) }))} className="h-full w-9 text-slate-400 hover:bg-slate-50 hover:text-slate-700">−</button>
-                                    <input type="number" min={0} value={catalogQties[product.id] || ''} placeholder="0"
-                                      onChange={(e) => setCatalogQties((previous) => ({ ...previous, [product.id]: Math.max(0, Number(e.target.value)) }))}
-                                      onKeyDown={(e) => { if (e.key === 'Enter' && (catalogQties[product.id] ?? 0) > 0) void handleCatalogAdd(product) }}
-                                      className="h-full min-w-0 flex-1 border-x border-slate-200 text-center text-sm font-medium outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                                    />
-                                    <button type="button" onClick={() => setCatalogQties((previous) => ({ ...previous, [product.id]: (catalogQties[product.id] ?? 0) + 1 }))} className="h-full w-9 text-blue-500 hover:bg-blue-50">+</button>
-                                  </div>
-                                  <button type="button" onClick={() => void handleCatalogAdd(product)}
-                                    disabled={isAddingSaving || (catalogQties[product.id] ?? 0) < 1 || !product.barcodes[0]}
-                                    className="h-9 rounded-xl bg-blue-600 px-4 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-35">
-                                    Добавить
-                                  </button>
-                                </div>
-                              )
-                            }
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                <button
+                  type="button"
+                  onClick={() => void handleOpenCatalog()}
+                  disabled={!batch.store_id || isCatalogLoading}
+                  className="flex h-10 items-center gap-2 rounded-xl border border-blue-200 bg-white px-4 text-sm font-medium text-blue-600 transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isCatalogLoading ? (
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" strokeDasharray="28" strokeDashoffset="8" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M4 5.5h16M4 12h16M4 18.5h16" />
+                      <circle cx="7" cy="5.5" r="1" fill="currentColor" stroke="none" />
+                      <circle cx="7" cy="12" r="1" fill="currentColor" stroke="none" />
+                      <circle cx="7" cy="18.5" r="1" fill="currentColor" stroke="none" />
+                    </svg>
                   )}
-                </div>
+                  {isCatalogLoading ? 'Загрузка каталога…' : 'Открыть каталог'}
+                </button>
               )}
               </div>
 
@@ -7914,6 +7957,187 @@ const BatchDetailModal = ({
           </div>
         )}
       </div>
+
+      {catalogModalOpen && createPortal(
+        <div
+          className="fixed inset-0 flex items-center justify-center bg-slate-950/50"
+          style={{ zIndex: zIndex + 50 }}
+          onClick={handleCloseCatalog}
+        >
+          <div
+            className="flex h-[95vh] w-[90vw] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-start gap-4 border-b border-slate-200 px-6 py-4">
+              <div className="min-w-0 flex-1">
+                <p className="text-lg font-semibold text-slate-800">Каталог товаров</p>
+                <p className="mt-0.5 text-sm text-slate-400">
+                  Введите количество у нужных размеров и сохраните весь выбор в конце · {receptionTab === 'declared' ? 'Заявлено' : 'Принято'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseCatalog}
+                disabled={isAddingSaving}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
+                aria-label="Закрыть каталог"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <div className="shrink-0 border-b border-slate-200 bg-slate-50/70 px-6 py-3">
+              <div className="relative">
+                <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+                <input
+                  type="search"
+                  value={catalogSearch}
+                  onChange={(event) => setCatalogSearch(event.target.value)}
+                  placeholder="Найти товар по названию, артикулу или баркоду"
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                  autoFocus
+                />
+                {catalogSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setCatalogSearch('')}
+                    className="absolute right-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-300 hover:bg-slate-100 hover:text-slate-600"
+                    aria-label="Очистить поиск"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto">
+              {isCatalogLoading ? (
+                <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-400">
+                  <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" strokeDasharray="28" strokeDashoffset="8" /></svg>
+                  Загрузка каталога…
+                </div>
+              ) : filteredCatalogProducts.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                  {catalogProducts.length === 0 ? 'В магазине пока нет товаров' : 'Ничего не найдено'}
+                </div>
+              ) : (
+                <table className="min-w-[1500px] w-full text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-50 shadow-[0_1px_0_0_rgb(226_232_240)]">
+                    <tr>
+                      <th className="w-8 px-3 py-2.5" />
+                      <th className="w-12 px-2 py-2.5" />
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Артикул WB</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Артикул продавца</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Название</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Бренд</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Цвет</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Состав</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Страна</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Предмет</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Категория</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-500">Себестоимость</th>
+                    </tr>
+                  </thead>
+                  {filteredCatalogProducts.map((product) => {
+                    const isExpanded = catalogExpandedIds.has(product.id)
+                    const sizeRows = getCatalogSizeRows(product)
+                    const photos = product.photos as Array<{ c246x328?: string; big?: string }> | null
+                    const photoUrl = photos?.[0]?.c246x328 ?? photos?.[0]?.big ?? null
+                    return (
+                      <tbody key={product.id} className="divide-y divide-slate-50">
+                        <tr
+                          className="cursor-pointer align-middle transition-colors duration-150 hover:bg-slate-50"
+                          onClick={() => toggleCatalogProduct(product.id)}
+                        >
+                          <td className="px-3 py-3 text-slate-400">
+                            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m9 18 6-6-6-6" /></svg>
+                          </td>
+                          <td className="px-2 py-2"><PhotoThumb url={photoUrl} /></td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-400">
+                            <a href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="text-blue-500 hover:underline">{product.nm_id}</a>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-600">{product.vendor_code ?? '—'}</td>
+                          <td className="px-4 py-3 font-medium text-slate-800">{product.name ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{product.brand ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{product.color ?? '—'}</td>
+                          <td className="max-w-[200px] truncate px-4 py-3 text-xs text-slate-500" title={product.composition ?? ''}>{product.composition ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{product.country ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-400">{product.category ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-400">{(product as Product & { category_parent?: string | null }).category_parent ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-slate-600">{product.cost_price ?? '—'}</td>
+                        </tr>
+                        <tr>
+                          <td className="p-0" colSpan={12}>
+                            <div style={{ display: 'grid', gridTemplateRows: isExpanded ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
+                              <div className="overflow-hidden">
+                                <div className="border-t border-slate-100 bg-slate-50/70">
+                                  <table className="min-w-full text-[13px]">
+                                    <thead className="text-left text-[10px] uppercase tracking-[0.12em] text-slate-400">
+                                      <tr>
+                                        <th className="w-8 px-3 py-2" />
+                                        <th className="w-[25%] px-4 py-2 font-semibold">Размер</th>
+                                        <th className="px-4 py-2 font-semibold">Баркод</th>
+                                        <th className="w-48 px-4 py-2 text-center font-semibold">Количество</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100/80">
+                                      {sizeRows.map((row) => {
+                                        const qty = catalogQties[row.rowKey] ?? 0
+                                        const hasBarcode = row.barcode !== '—' && row.barcode.trim().length > 0
+                                        return (
+                                          <tr key={row.rowKey} className="align-middle">
+                                            <td className="px-3 py-2" />
+                                            <td className="px-4 py-2">
+                                              {row.techSize !== '—' ? <span className="rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-600">{row.techSize}</span> : <span className="text-xs text-slate-300">—</span>}
+                                            </td>
+                                            <td className="px-4 py-2 font-mono text-xs text-slate-500">{row.barcode}</td>
+                                            <td className="px-4 py-2">
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                step={1}
+                                                value={qty || ''}
+                                                disabled={!hasBarcode}
+                                                onChange={(event) => {
+                                                  const value = Math.max(0, Math.trunc(Number(event.target.value) || 0))
+                                                  setCatalogQties((previous) => ({ ...previous, [row.rowKey]: value }))
+                                                }}
+                                                placeholder="0"
+                                                aria-label={`Количество, размер ${row.techSize}, баркод ${row.barcode}`}
+                                                className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-center text-sm font-medium text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                              />
+                                            </td>
+                                          </tr>
+                                        )
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    )
+                  })}
+                </table>
+              )}
+            </div>
+
+            <div className="flex shrink-0 items-center gap-3 border-t border-slate-200 bg-white px-6 py-4">
+              <p className="text-sm text-slate-500">
+                Выбрано: <span className="font-semibold text-slate-800">{selectedCatalogRows.length}</span> позиций · <span className="font-semibold text-slate-800">{selectedCatalogUnits}</span> ед.
+              </p>
+              <div className="flex-1" />
+              <button type="button" onClick={handleCloseCatalog} disabled={isAddingSaving} className="h-10 rounded-xl border border-slate-200 px-5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-40">Отмена</button>
+              <button type="button" onClick={() => void handleCatalogSave()} disabled={isAddingSaving || selectedCatalogUnits === 0} className="flex h-10 min-w-36 items-center justify-center rounded-xl bg-blue-600 px-5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40">
+                {isAddingSaving ? 'Сохранение…' : 'Сохранить'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {/* Диалог: подтверждение завершения этапа */}
       {pendingAdvance && (
