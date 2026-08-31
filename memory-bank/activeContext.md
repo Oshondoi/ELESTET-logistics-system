@@ -2686,3 +2686,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Доступ каталога продолжает определяться общим `canEditReception`: до завершения приёмки это обычное изменение, после завершения — только явная корректировка.
 - Выбор магазина в FBS `Заказы`/`Остатки FBS` и `Отчёт` переведён на один компонент `FbsStoreSelect`. Поэтому подпись, высота, рамка, фон, шрифт, focus-состояние и формат `юридическое название — рабочее название` теперь совпадают.
 - Изменений Supabase/SQL для этой задачи нет.
+- Функциональный commit `1dfd77d feat: add batch catalog reception modal` отправлен fast-forward в `origin/main` и `origin/master`; Vercel production отвечает HTTP `200` и отдаёт проверенный asset `assets/index-hy55yNrm.js`.
