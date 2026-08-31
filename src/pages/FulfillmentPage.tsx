@@ -85,7 +85,7 @@ import {
   uploadPackagingPhoto,
 } from '../services/fulfillmentService'
 import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
-import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, initBatchPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags } from '../services/pipelineService'
+import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, createBatchWithPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, PipelineStageDiscrepancy } from '../types'
 import { fetchExecutorOptions } from '../services/outsourceService'
 import { findProductByBarcode, fetchPhotosByBarcodes, fetchProductInfoByBarcodes } from '../services/fulfillmentService'
@@ -3784,7 +3784,7 @@ const BatchDetailModal = ({
             {activePipelineStage && (
               <p className="mt-1.5 text-[11px] text-violet-500">
                 Активна: <span className="font-semibold">{activePipelineStage.name}</span>
-                {activePipelineStage.partner_account_id
+                {activePipelineStage.partner_account_id && activePipelineStage.partner_account_id !== activePipelineStage.owner_account_id
                   ? ' — передана партнёру'
                   : ' — выполняется вашей компанией'}
               </p>
@@ -8773,7 +8773,8 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
   const [name, setName] = useState(todayName)
   const [storeId, setStoreId] = useState('')
   const [pendingStore, setPendingStore] = useState<Store | null>(null)
-  const [usePipeline, setUsePipeline] = useState(hasPipeline)
+  const pipelineExecutorsReady = pipelineStages.length > 0 && pipelineStages.every((stage) => stage.partner_account_id !== null)
+  const [usePipeline, setUsePipeline] = useState(hasPipeline && pipelineExecutorsReady)
 
   // sub-modal: pick store
   const [pickStoreOpen, setPickStoreOpen] = useState(false)
@@ -8847,8 +8848,12 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
   const [confirmNoStore, setConfirmNoStore] = useState(false)
 
   const doSubmit = async (storeIdOverride?: string) => {
-    setIsSaving(true)
     setError(null)
+    if (usePipeline && !pipelineExecutorsReady) {
+      setError('Для каждой стадии пайплайна нужно выбрать исполнителя в настройках')
+      return
+    }
+    setIsSaving(true)
     const effectiveStoreId = storeIdOverride !== undefined ? storeIdOverride : storeId
     // Когда включён пайплайн — флаги этапов = объединение всех стадий пайплайна
     const usePipelineFlags = usePipeline && pipelineStages.length > 0
@@ -8871,6 +8876,10 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) { setError('Введите название'); return }
+    if (usePipeline && !pipelineExecutorsReady) {
+      setError('Для каждой стадии пайплайна нужно выбрать исполнителя в настройках')
+      return
+    }
     if (!storeId) { setConfirmNoStore(true); return }
     await doSubmit()
   }
@@ -8976,20 +8985,32 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
             </div>
           )}
           {hasPipeline && (
-            <div className="flex cursor-pointer items-center gap-3 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3"
-              onClick={() => setUsePipeline((v) => !v)}>
-              <button type="button"
+            <div
+              className={`flex items-center gap-3 rounded-2xl border px-4 py-3 ${pipelineExecutorsReady ? 'cursor-pointer border-violet-200 bg-violet-50' : 'cursor-not-allowed border-slate-200 bg-slate-50'}`}
+              onClick={() => {
+                if (!pipelineExecutorsReady) {
+                  setError('Сначала выберите исполнителя для каждой стадии пайплайна')
+                  return
+                }
+                setUsePipeline((value) => !value)
+              }}
+            >
+              <button type="button" disabled={!pipelineExecutorsReady}
                 className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${usePipeline ? 'bg-violet-500' : 'bg-slate-200'}`}>
                 <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${usePipeline ? 'translate-x-[22px]' : 'translate-x-[2px]'}`} />
               </button>
               <div>
-                <p className="text-sm font-medium text-violet-800">Использовать пайплайн</p>
-                <p className="text-xs text-violet-500">Партия будет привязана к настроенным стадиям аутсорса</p>
+                <p className={`text-sm font-medium ${pipelineExecutorsReady ? 'text-violet-800' : 'text-slate-500'}`}>Использовать пайплайн</p>
+                <p className={`text-xs ${pipelineExecutorsReady ? 'text-violet-500' : 'text-amber-600'}`}>
+                  {pipelineExecutorsReady
+                    ? 'Партия будет привязана к настроенным стадиям аутсорса'
+                    : 'Сначала выберите исполнителя для каждой стадии'}
+                </p>
               </div>
             </div>
           )}
           <div className="flex items-center justify-between pt-1">
-            <button type="submit" disabled={isSaving}
+            <button type="submit" disabled={isSaving || (usePipeline && !pipelineExecutorsReady)}
               onClick={() => { closeOnlyRef.current = true }}
               className="rounded-2xl bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
               {isSaving && closeOnlyRef.current ? 'Создание…' : 'Создать и закрыть'}
@@ -8998,7 +9019,7 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
               <button type="button" onClick={onClose} className="rounded-2xl border border-slate-200 px-4 py-2 text-sm text-slate-500 hover:bg-slate-50">
                 Отмена
               </button>
-              <button type="submit" disabled={isSaving}
+              <button type="submit" disabled={isSaving || (usePipeline && !pipelineExecutorsReady)}
                 onClick={() => { closeOnlyRef.current = false }}
                 className="rounded-2xl bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                 {isSaving && !closeOnlyRef.current ? 'Создание…' : 'Далее'}
@@ -9137,12 +9158,13 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
 interface SettingsModalProps {
   settings: FulfillmentSettings | null
   accountId: string
+  accountShortId: number | null
   accountName?: string
   onClose: () => void
   onSave: (s: Partial<FulfillmentSettings>) => Promise<void>
 }
 
-const SettingsModal = ({ settings, accountId, accountName = '', onClose, onSave }: SettingsModalProps) => {
+const SettingsModal = ({ settings, accountId, accountShortId, accountName = '', onClose, onSave }: SettingsModalProps) => {
   const [activeTab, setActiveTab] = useState<'general' | 'pipeline'>('general')
 
   // ── General tab state ──
@@ -9178,11 +9200,27 @@ const SettingsModal = ({ settings, accountId, accountName = '', onClose, onSave 
   const [pipelineSaving, setPipelineSaving] = useState(false)
   const [pipelineError, setPipelineError] = useState<string | null>(null)
   const [activePipelineStageIdx, setActivePipelineStageIdx] = useState(0)
+  const [executorPickerOpen, setExecutorPickerOpen] = useState(false)
 
   const [generalDirty, setGeneralDirty] = useState(false)
   const [pipelineDirty, setPipelineDirty] = useState(false)
   const [confirmClose, setConfirmClose] = useState(false)
   const isDirty = generalDirty || pipelineDirty
+  const executorChoices = useMemo(() => [
+    {
+      account_id: accountId,
+      account_name: accountName || 'Моя компания',
+      account_short_id: accountShortId,
+      option_type: 'own' as const,
+    },
+    ...executorOptions
+      .filter((option) => option.account_id !== accountId)
+      .map((option) => ({ ...option, account_short_id: option.account_short_id as number | null })),
+  ].sort((left, right) => {
+    const leftId = left.account_short_id ?? Number.MAX_SAFE_INTEGER
+    const rightId = right.account_short_id ?? Number.MAX_SAFE_INTEGER
+    return leftId - rightId || left.account_name.localeCompare(right.account_name, 'ru')
+  }), [accountId, accountName, accountShortId, executorOptions])
 
   // draft editing of pipeline (converted from AccountPipelineStage to editable form)
   const [draftStages, setDraftStages] = useState<Array<{
@@ -9420,18 +9458,59 @@ const SettingsModal = ({ settings, accountId, accountName = '', onClose, onSave 
                     {/* Исполнитель */}
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs text-slate-400">Исполнитель</label>
-                      <select
-                        value={s.partner_account_id ?? ''}
-                        onChange={(e) => updateDraftStage(idx, 'partner_account_id', e.target.value || null)}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                      <div
+                        className="relative"
+                        onBlur={(event) => {
+                          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setExecutorPickerOpen(false)
+                        }}
                       >
-                        <option value="">{accountName || 'Моя компания'}</option>
-                        {executorOptions.map((o) => (
-                          <option key={o.account_id} value={o.account_id}>
-                            {o.account_name} (C-{o.account_short_id})
-                          </option>
-                        ))}
-                      </select>
+                        <button
+                          type="button"
+                          onClick={() => setExecutorPickerOpen((open) => !open)}
+                          onKeyDown={(event) => { if (event.key === 'Escape') setExecutorPickerOpen(false) }}
+                          className="grid w-full grid-cols-[6rem_minmax(0,1fr)_1rem] items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                        >
+                          {(() => {
+                            const selected = executorChoices.find((option) => option.account_id === s.partner_account_id)
+                            return selected ? (
+                              <>
+                                <span className="font-medium text-slate-600">C-{selected.account_short_id ?? '—'}</span>
+                                <span className="truncate text-slate-800">{selected.account_name}</span>
+                              </>
+                            ) : (
+                              <span className="col-span-2 text-slate-400">Выберите исполнителя</span>
+                            )
+                          })()}
+                          <svg viewBox="0 0 24 24" className={`h-4 w-4 text-slate-400 transition-transform ${executorPickerOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        {executorPickerOpen && (
+                          <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl bg-white py-1 shadow-xl ring-1 ring-slate-200/80">
+                            <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-3 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                              <span>ID компании</span>
+                              <span>Название</span>
+                            </div>
+                            <div className="max-h-56 overflow-y-auto py-0.5">
+                              {executorChoices.map((option) => (
+                                <button
+                                  key={option.account_id}
+                                  type="button"
+                                  onClick={() => {
+                                    updateDraftStage(idx, 'partner_account_id', option.account_id)
+                                    setExecutorPickerOpen(false)
+                                  }}
+                                  className={`grid w-full grid-cols-[6rem_minmax(0,1fr)] gap-3 px-3 py-2 text-left text-sm transition-colors ${s.partner_account_id === option.account_id ? 'bg-blue-50 text-blue-700' : 'text-slate-700 hover:bg-slate-50'}`}
+                                >
+                                  <span className="font-medium">C-{option.account_short_id ?? '—'}</span>
+                                  <span className="truncate">{option.account_name}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {s.partner_account_id === null && (
+                        <p className="text-xs text-amber-600">Без исполнителя этот пайплайн можно сохранить, но нельзя использовать при создании партии.</p>
+                      )}
                     </div>
                     {/* Этапы */}
                     <div className="flex flex-col gap-1.5">
@@ -9786,27 +9865,29 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
 
   const handleCreate = async (values: Parameters<typeof createBatch>[1] & { use_pipeline?: boolean; pipelineStageOverrides?: Record<number, { stage_otk: boolean; stage_packaging: boolean; stage_marking: boolean; stage_packing: boolean; stage_logistics: boolean }> }, closeOnly?: boolean) => {
     const { use_pipeline, pipelineStageOverrides, ...batchValues } = values
-    const batch = await createBatch(accountId, batchValues)
+    if (use_pipeline && (accountPipelineStages.length === 0 || accountPipelineStages.some((stage) => stage.partner_account_id === null))) {
+      throw new Error('Для каждой стадии пайплайна нужно выбрать исполнителя в настройках')
+    }
+    const batch = use_pipeline
+      ? await createBatchWithPipeline(accountId, batchValues)
+      : await createBatch(accountId, batchValues)
     if (use_pipeline) {
-      try {
-        await initBatchPipeline(batch.id, accountId)
-        let stages = await fetchAllBatchPipelineStages([batch.id]).catch(() => [])
-        if (pipelineStageOverrides && stages.length > 0) {
-          await Promise.all(stages.map((s) => {
-            const ovr = pipelineStageOverrides[s.order_index]
-            if (!ovr) return Promise.resolve()
-            return updateBatchPipelineStageFlags(s.id, ovr).catch(() => {})
-          }))
-          stages = await fetchAllBatchPipelineStages([batch.id]).catch(() => stages)
-        }
-        if (stages.length > 0) {
-          setBatchPipelineMap((prev) => {
-            const next = new Map(prev)
-            next.set(batch.id, stages)
-            return next
-          })
-        }
-      } catch { /* не блокируем */ }
+      let stages = await fetchAllBatchPipelineStages([batch.id])
+      if (pipelineStageOverrides && stages.length > 0) {
+        await Promise.all(stages.map((s) => {
+          const ovr = pipelineStageOverrides[s.order_index]
+          if (!ovr) return Promise.resolve()
+          return updateBatchPipelineStageFlags(s.id, ovr)
+        }))
+        stages = await fetchAllBatchPipelineStages([batch.id])
+      }
+      if (stages.length > 0) {
+        setBatchPipelineMap((prev) => {
+          const next = new Map(prev)
+          next.set(batch.id, stages)
+          return next
+        })
+      }
     }
     setBatches((prev) => [batch, ...prev])
     setCreateOpen(false)
@@ -9955,7 +10036,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
       {/* Модалки */}
       {createOpen && <CreateBatchModal stores={stores} accountId={accountId} settings={settings} hasPipeline={hasPipeline} pipelineStages={accountPipelineStages} onClose={() => setCreateOpen(false)} onSubmit={handleCreate} onStoreCreated={(s) => onStoreCreated?.(s)} />}
       {editTarget && <EditBatchModal batch={editTarget} stores={stores} onClose={() => setEditTarget(null)} onSave={async (values) => { const updated = await updateBatch(editTarget.id, values); handleBatchUpdated(updated); setEditTarget(null) }} />}
-      {settingsOpen && <SettingsModal settings={settings} accountId={accountId} accountName={accountName} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
+      {settingsOpen && <SettingsModal settings={settings} accountId={accountId} accountShortId={accountShortId} accountName={accountName} onClose={() => setSettingsOpen(false)} onSave={handleSaveSettings} />}
       {batchContentsDialog && (
         <BoxContentsFormatModal
           description={batchContentsDialog.description}

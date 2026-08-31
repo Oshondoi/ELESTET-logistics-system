@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, FulfillmentStage, PipelineStageDiscrepancy } from '../types'
+import type { FulfillmentBatch } from '../types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabase as any
@@ -97,6 +98,32 @@ export async function advanceBatchPipelineStep(stageId: string, newStep: Fulfill
   if (data?.current_stage !== newStep) {
     throw new Error('Сервер определил другой следующий этап. Обновите партию и повторите действие.')
   }
+}
+
+export async function createBatchWithPipeline(
+  accountId: string,
+  values: {
+    name: string
+    store_id?: string | null
+    stage_otk: boolean
+    stage_packaging: boolean
+    stage_marking: boolean
+    stage_packing: boolean
+    stage_logistics: boolean
+  },
+): Promise<FulfillmentBatch> {
+  const { data, error } = await db.rpc('create_fulfillment_batch_with_pipeline', {
+    p_account_id: accountId,
+    p_name: values.name,
+    p_store_id: values.store_id ?? null,
+    p_stage_otk: values.stage_otk,
+    p_stage_packaging: values.stage_packaging,
+    p_stage_marking: values.stage_marking,
+    p_stage_packing: values.stage_packing,
+    p_stage_logistics: values.stage_logistics,
+  })
+  if (error) throw error
+  return data as FulfillmentBatch
 }
 
 export async function fetchPipelineStageDiscrepancies(stageId: string): Promise<PipelineStageDiscrepancy[]> {
