@@ -9,6 +9,7 @@ import { FbsKizScannerModal } from '../components/fbs/FbsKizScannerModal'
 import { FbsStocksPanel } from '../components/fbs/FbsStocksPanel'
 import { FbsDispatchReport } from '../components/fbs/FbsDispatchReport'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
+import { FbsWarehouseSelect } from '../components/fbs/FbsWarehouseSelect'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import type { Product, Store } from '../types'
 
@@ -2140,10 +2141,9 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         <FbsStoreSelect value={selectedStoreId} stores={storesWithKey} onChange={handleStoreChange} />
 
         {pageSection === 'orders' && <>
-        <select
+        <FbsWarehouseSelect
           value={selectedWarehouseFilter}
-          onChange={(event) => {
-            const warehouseId = event.target.value
+          onChange={(warehouseId) => {
             setSelectedWarehouseFilter(warehouseId)
             setSelected(new Set())
             setSelectedSupplyIds(new Set())
@@ -2153,17 +2153,16 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
               // Filtering remains available without persistence.
             }
           }}
-          aria-label="Фильтр по складу FBS"
+          ariaLabel="Фильтр по складу FBS"
           title="Фильтр по складу FBS"
-          className="max-w-[360px] rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-violet-400"
-        >
-          <option value={ALL_WAREHOUSES_FILTER}>Все склады</option>
-          {warehouseFilterOptions.map((warehouse) => (
-            <option key={warehouse.id} value={warehouse.id}>
-              {warehouse.sellerName} — Склад WB: {warehouse.officialName}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: ALL_WAREHOUSES_FILTER, label: 'Все склады' },
+            ...warehouseFilterOptions.map((warehouse) => ({
+              value: warehouse.id,
+              label: `${warehouse.sellerName} — Склад WB: ${warehouse.officialName}`,
+            })),
+          ]}
+        />
 
         <button type="button" onClick={() => void doSync()} disabled={loading || !selectedStoreId}
           className="flex h-8 items-center gap-1.5 rounded-xl bg-violet-500 px-4 text-xs font-semibold text-white hover:bg-violet-600 disabled:opacity-50 transition">

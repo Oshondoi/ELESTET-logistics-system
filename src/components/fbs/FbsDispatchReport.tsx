@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { toUserMessage } from '../../lib/userMessage'
 import { PhotoThumb } from '../ui/PhotoThumb'
 import { FbsStoreSelect } from './FbsStoreSelect'
+import { FbsWarehouseSelect } from './FbsWarehouseSelect'
 import type { Store } from '../../types'
 
 interface DispatchReportRow {
@@ -331,17 +332,14 @@ export function FbsDispatchReport({
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-end gap-3">
             <FbsStoreSelect value={storeId} stores={stores} onChange={onStoreChange} />
-            <label className="space-y-1.5 text-xs font-semibold text-slate-600">
-              <span className="block">На склад WB</span>
-              <select
-                value={wbOfficeId}
-                onChange={(event) => setWbOfficeId(event.target.value)}
-                className="h-9 min-w-[280px] max-w-[380px] rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
-              >
-                <option value="">Все склады</option>
-                {wbDestinations.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
-              </select>
-            </label>
+            <FbsWarehouseSelect
+              value={wbOfficeId}
+              onChange={setWbOfficeId}
+              options={[
+                { value: '', label: 'Все склады' },
+                ...wbDestinations.map((warehouse) => ({ value: warehouse.id, label: warehouse.name })),
+              ]}
+            />
             <div className="flex-1" />
             <div className="relative min-w-[260px] flex-1 xl:max-w-md">
               <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>

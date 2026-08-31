@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { toUserMessage } from '../../lib/userMessage'
 import { invokeFbs } from '../../services/fbsApi'
 import { PhotoThumb } from '../ui/PhotoThumb'
+import { FbsWarehouseSelect } from './FbsWarehouseSelect'
 
 interface WbWarehouse {
   id: number
@@ -372,20 +373,21 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-slate-50">
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-5 py-3">
-        <select
+      <div className="flex flex-wrap items-end gap-2 border-b border-slate-200 bg-white px-5 py-3">
+        <FbsWarehouseSelect
           value={warehouseId}
-          onChange={(event) => {
-            const next = Number(event.target.value)
+          onChange={(value) => {
+            const next = Number(value)
             setWarehouseId(next)
             localStorage.setItem(warehouseStorageKey, String(next))
             setDrafts({})
             setErrorChrtIds(new Set())
           }}
-          className="h-9 min-w-[240px] rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-violet-400"
-        >
-          {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.displayName || warehouse.name}</option>)}
-        </select>
+          options={warehouses.map((warehouse) => ({
+            value: warehouse.id,
+            label: warehouse.displayName || warehouse.name,
+          }))}
+        />
 
         <div className="relative min-w-[240px] flex-1">
           <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
