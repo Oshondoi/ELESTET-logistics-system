@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { shipmentStatuses, paymentStatuses } from '../../lib/constants'
+import { getStoreSelectorLabel } from '../../lib/storeDisplay'
 import type { ExecutorOption, Store, TripLineFormValues, TripWithLines } from '../../types'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -100,7 +101,7 @@ export const TripLineFormModal = ({ open, stores, onClose, onSubmit, initialValu
   }
 
   const storeOptions = stores.map((s) => ({
-    label: s.store_code ? `${s.name} (${s.store_code})` : s.name,
+    label: getStoreSelectorLabel(s, { includeStoreCode: true }),
     value: s.id,
   }))
 

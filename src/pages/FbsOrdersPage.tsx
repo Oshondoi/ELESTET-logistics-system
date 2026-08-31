@@ -9,6 +9,7 @@ import { FbsKizScannerModal } from '../components/fbs/FbsKizScannerModal'
 import { FbsStocksPanel } from '../components/fbs/FbsStocksPanel'
 import { FbsDispatchReport } from '../components/fbs/FbsDispatchReport'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
+import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import type { Product, Store } from '../types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -2141,7 +2142,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           onChange={(event) => handleStoreChange(event.target.value)}
           className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-violet-400"
         >
-          {storesWithKey.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          {storesWithKey.map((s) => <option key={s.id} value={s.id}>{getStoreSelectorLabel(s)}</option>)}
         </select>
 
         {pageSection === 'orders' && <>

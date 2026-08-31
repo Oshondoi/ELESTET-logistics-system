@@ -145,6 +145,17 @@ export async function updateBatchPipelineStageFlags(stageId: string, flags: { st
   if (error) throw error
 }
 
+export async function updateBatchPipelineWarehouse(stageId: string, warehouseId: string | null): Promise<BatchPipelineStage> {
+  const { data, error } = await db
+    .from('batch_pipeline_stages')
+    .update({ wms_warehouse_id: warehouseId, updated_at: new Date().toISOString() })
+    .eq('id', stageId)
+    .select()
+    .single()
+  if (error) throw error
+  return data as BatchPipelineStage
+}
+
 // ── Партнёрские партии ───────────────────────────────────────
 
 export async function fetchPartnerBatches(accountId: string): Promise<PartnerBatchInfo[]> {

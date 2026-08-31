@@ -7,6 +7,7 @@ import { Modal } from '../components/ui/Modal'
 import { Textarea } from '../components/ui/Textarea'
 import { cn } from '../lib/utils'
 import { supabase } from '../lib/supabase'
+import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import {
   WbRateLimitError,
   callOpenAi,
@@ -877,7 +878,7 @@ export const ReviewsPage = ({
               <path d="M4 10.5 6 5h12l2 5.5" />
               <path d="M5 10h14v9H5z" />
             </svg>
-            <span>{activeStore?.name ?? 'Выберите магазин'}</span>
+            <span>{activeStore ? getStoreSelectorLabel(activeStore) : 'Выберите магазин'}</span>
             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="m6 9 6 6 6-6" />
             </svg>
@@ -894,7 +895,7 @@ export const ReviewsPage = ({
                     s.id === activeStore?.id ? 'font-semibold text-blue-600' : 'text-slate-700',
                   )}
                 >
-                  {s.name}
+                  {getStoreSelectorLabel(s)}
                 </button>
               ))}
             </div>
@@ -2355,7 +2356,7 @@ export const ReviewsPage = ({
                 >
                   <option value="">— Выберите магазин —</option>
                   {modalStores.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
+                    <option key={s.id} value={s.id}>{getStoreSelectorLabel(s)}</option>
                   ))}
                 </select>
               </div>

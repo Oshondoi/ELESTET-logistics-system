@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
+import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import type { Store } from '../types'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
@@ -748,7 +749,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
             className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-            <span className="max-w-[140px] truncate">{activeStore?.name ?? 'Магазин'}</span>
+            <span className="max-w-[140px] truncate">{activeStore ? getStoreSelectorLabel(activeStore) : 'Магазин'}</span>
             <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 text-slate-400 transition-transform ${storeDropOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           {storeDropOpen && (
@@ -761,7 +762,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                   className={`w-full px-3 py-2 text-left text-sm transition-colors hover:bg-slate-50 flex items-center gap-2 ${s.id === activeStore?.id ? 'font-semibold text-blue-600' : 'text-slate-700'}`}
                 >
                   <span className={`h-2 w-2 shrink-0 rounded-full ${s.teksher_login ? 'bg-emerald-500' : 'bg-red-400'}`} />
-                  {s.name}
+                  {getStoreSelectorLabel(s)}
                 </button>
               ))}
             </div>

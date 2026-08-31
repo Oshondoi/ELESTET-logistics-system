@@ -14,7 +14,20 @@ import type {
   Product,
   TripLine,
   FulfillmentReceptionHistory,
+  FulfillmentStageWarehouseHistory,
+  WmsWarehouse,
 } from '../types'
+
+export const fetchFulfillmentWmsWarehouses = async (accountId: string): Promise<WmsWarehouse[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('wms_warehouses')
+    .select('*')
+    .eq('account_id', accountId)
+    .order('created_at')
+  if (error) throw error
+  return (data ?? []) as WmsWarehouse[]
+}
 
 // ── Settings ──────────────────────────────────────────────────
 
@@ -171,6 +184,7 @@ export const updateBatch = async (
       | 'packaging_qty'
       | 'boxes_qty'
       | 'box_catalog_consumable_id'
+      | 'wms_warehouse_id'
     >
   >,
 ): Promise<FulfillmentBatch> => {
@@ -238,6 +252,7 @@ export const updateItem = async (
       | 'qty_marked'
       | 'qty_packed'
       | 'boxes'
+      | 'barcode'
       | 'product_name'
       | 'size'
       | 'color'
@@ -443,6 +458,23 @@ export const fetchReceptionHistory = async (
   const { data, error } = await query
   if (error) throw error
   return (data ?? []) as FulfillmentReceptionHistory[]
+}
+
+export const fetchStageWarehouseHistory = async (
+  batchId: string,
+  pipelineStageId?: string | null,
+): Promise<FulfillmentStageWarehouseHistory[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  let query = (supabase as any)
+    .from('fulfillment_stage_warehouse_history')
+    .select('*')
+    .eq('batch_id', batchId)
+    .order('changed_at', { ascending: false })
+  if (pipelineStageId) query = query.eq('pipeline_stage_id', pipelineStageId)
+  else query = query.is('pipeline_stage_id', null)
+  const { data, error } = await query
+  if (error) throw error
+  return (data ?? []) as FulfillmentStageWarehouseHistory[]
 }
 
 export const fetchProductInfoByBarcodes = async (

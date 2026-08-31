@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import type { Store } from '../types'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
@@ -451,7 +452,7 @@ export const PromotionPage = ({ stores }: PromotionPageProps) => {
           className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           {storesWithKey.map(s => (
-            <option key={s.id} value={s.id}>{s.name}</option>
+            <option key={s.id} value={s.id}>{getStoreSelectorLabel(s)}</option>
           ))}
         </select>
 

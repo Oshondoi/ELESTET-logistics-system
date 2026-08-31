@@ -13,6 +13,7 @@ import type {
   FulfillmentMarkingLogHistory,
   FulfillmentPackagingLog,
   FulfillmentReceptionHistory,
+  FulfillmentStageWarehouseHistory,
   FulfillmentSupplyWithBoxes,
   FulfillmentSettings,
   FulfillmentStage,
@@ -25,6 +26,7 @@ import type {
   TripWithLines,
   TripLineFormValues,
   Warehouse,
+  WmsWarehouse,
 } from '../types'
 import {
   fetchBatches,
@@ -83,9 +85,11 @@ import {
   updatePackagingLog,
   deletePackagingLog,
   uploadPackagingPhoto,
+  fetchFulfillmentWmsWarehouses,
+  fetchStageWarehouseHistory,
 } from '../services/fulfillmentService'
 import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
-import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, createBatchWithPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags } from '../services/pipelineService'
+import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, createBatchWithPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags, updateBatchPipelineWarehouse } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, PipelineStageDiscrepancy } from '../types'
 import { fetchExecutorOptions } from '../services/outsourceService'
 import { findProductByBarcode, fetchPhotosByBarcodes, fetchProductInfoByBarcodes } from '../services/fulfillmentService'
@@ -98,6 +102,7 @@ import { supabase } from '../lib/supabase'
 import { buildFulfillmentBoxBarcode } from '../lib/fulfillmentBoxBarcode'
 import { buildFulfillmentBoxQrPdf } from '../lib/fulfillmentBoxQrPdf'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
+import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import {
   buildFulfillmentBoxContentsPdf,
   type FulfillmentBoxContentsFormat,
@@ -825,6 +830,7 @@ const BatchDetailModal = ({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyItemId, setHistoryItemId] = useState<string | null>(null)
   const [receptionHistory, setReceptionHistory] = useState<FulfillmentReceptionHistory[]>([])
+  const [warehouseHistory, setWarehouseHistory] = useState<FulfillmentStageWarehouseHistory[]>([])
 
   // Тарифы работ из БД
   const [workTariffs, setWorkTariffs] = useState<FulfillmentWorkTariff[]>([])
@@ -987,6 +993,16 @@ const BatchDetailModal = ({
   const [receptionBoxesDraft, setReceptionBoxesDraft] = useState<Record<string, number>>(
     Object.fromEntries(initialBatch.items.filter((it) => it.boxes != null).map((it) => [it.id, it.boxes ?? 0]))
   )
+  type ReceptionItemDataDraft = Pick<FulfillmentItem, 'barcode' | 'product_name' | 'article' | 'color' | 'size'>
+  const [receptionItemDataDraft, setReceptionItemDataDraft] = useState<Record<string, ReceptionItemDataDraft>>(
+    Object.fromEntries(initialBatch.items.map((item) => [item.id, {
+      barcode: item.barcode,
+      product_name: item.product_name,
+      article: item.article,
+      color: item.color,
+      size: item.size,
+    }]))
+  )
   // Локальные (несохранённые) элементы приёмки — только в памяти до нажатия «Сохранить»
   const [pendingItemIds, setPendingItemIds] = useState<Set<string>>(new Set())
   // Элементы помеченные на удаление — удаляются из БД только при «Сохранить»
@@ -998,6 +1014,9 @@ const BatchDetailModal = ({
   const [pendingSwitchStage, setPendingSwitchStage] = useState<FulfillmentStage | null>(null)
   const [isAddingBox, setIsAddingBox] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
+  const [receptionWmsWarehouses, setReceptionWmsWarehouses] = useState<WmsWarehouse[]>([])
+  const [receptionWarehouseId, setReceptionWarehouseId] = useState(initialBatch.wms_warehouse_id ?? '')
+  const [receptionCorrectionMode, setReceptionCorrectionMode] = useState(false)
 
   const store = stores.find((s) => s.id === batch.store_id)
   const transferTrips = useMemo(() => {
@@ -1226,6 +1245,23 @@ const BatchDetailModal = ({
         ? displayPipelineStage.status !== 'pending' && (isPartnerExecutorOfActiveStage || isOwnerExecutorOfDisplayedStage)
         : canManage
 
+  const stageExecutorAccountId = displayPipelineStage
+    ? (displayPipelineStage.partner_account_id ?? displayPipelineStage.owner_account_id)
+    : batch.account_id
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchFulfillmentWmsWarehouses(stageExecutorAccountId)
+      .then((rows) => { if (!cancelled) setReceptionWmsWarehouses(rows) })
+      .catch(() => { if (!cancelled) setReceptionWmsWarehouses([]) })
+    return () => { cancelled = true }
+  }, [stageExecutorAccountId])
+
+  useEffect(() => {
+    setReceptionWarehouseId(displayPipelineStage?.wms_warehouse_id ?? batch.wms_warehouse_id ?? '')
+    setReceptionCorrectionMode(false)
+  }, [displayPipelineStage?.id, displayPipelineStage?.wms_warehouse_id, batch.wms_warehouse_id])
+
   useEffect(() => {
     if (!displayPipelineStage?.id) return
     let cancelled = false
@@ -1233,6 +1269,13 @@ const BatchDetailModal = ({
       .then((fresh) => {
         if (cancelled) return
         setItems(fresh.items)
+        setReceptionItemDataDraft(Object.fromEntries(fresh.items.map((item) => [item.id, {
+          barcode: item.barcode,
+          product_name: item.product_name,
+          article: item.article,
+          color: item.color,
+          size: item.size,
+        }])))
         onItemsChanged(fresh.items)
       })
       .catch(() => {})
@@ -1255,9 +1298,20 @@ const BatchDetailModal = ({
   useEffect(() => {
     if (!historyOpen || otkHistoryStageTab !== 'reception') return
     let cancelled = false
-    void fetchReceptionHistory(initialBatch.id, displayPipelineStage?.id ?? null)
-      .then((rows) => { if (!cancelled) setReceptionHistory(rows) })
-      .catch(() => { if (!cancelled) setReceptionHistory([]) })
+    void Promise.all([
+      fetchReceptionHistory(initialBatch.id, displayPipelineStage?.id ?? null),
+      fetchStageWarehouseHistory(initialBatch.id, displayPipelineStage?.id ?? null),
+    ])
+      .then(([itemRows, warehouseRows]) => {
+        if (cancelled) return
+        setReceptionHistory(itemRows)
+        setWarehouseHistory(warehouseRows)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setReceptionHistory([])
+        setWarehouseHistory([])
+      })
     return () => { cancelled = true }
   }, [historyOpen, otkHistoryStageTab, initialBatch.id, displayPipelineStage?.id])
 
@@ -1398,8 +1452,28 @@ const BatchDetailModal = ({
     void fetchStageCompletedAt(initialBatch.id, 'reception', displayPipelineStage?.id).then((d) => setReceptionCompletedDate(d))
   }, [initialBatch.id, displayPipelineStage?.id])
 
+  const receptionIsCompleted = receptionCompletedDate !== null || activeSubStage !== 'reception'
+  const canEditReception = canManageStageData && (!receptionIsCompleted || receptionCorrectionMode)
+  const storedReceptionWarehouseId = displayPipelineStage?.wms_warehouse_id ?? batch.wms_warehouse_id ?? ''
+  const storedReceptionWarehouseName = displayPipelineStage?.wms_warehouse_name ?? batch.wms_warehouse_name ?? ''
+
+  const persistReceptionWarehouse = async () => {
+    if (receptionWarehouseId === storedReceptionWarehouseId) return
+    if (displayPipelineStage) {
+      const updatedStage = await updateBatchPipelineWarehouse(displayPipelineStage.id, receptionWarehouseId || null)
+      setPipelineStgs((previous) => previous.map((stage) => stage.id === updatedStage.id ? updatedStage : stage))
+    } else {
+      const updatedBatch = await updateBatch(batch.id, { wms_warehouse_id: receptionWarehouseId || null })
+      setBatch((previous) => ({ ...previous, ...updatedBatch }))
+      onBatchUpdated(updatedBatch)
+    }
+  }
+
   // Синхронизировать viewStage при реальном переходе этапа
   useEffect(() => { setViewStage(activeSubStage) }, [activeSubStage])
+  useEffect(() => {
+    if (viewStage !== 'reception') setReceptionCorrectionMode(false)
+  }, [viewStage])
 
   // Закрывать share-попап по клику снаружи
   useEffect(() => {
@@ -2190,6 +2264,22 @@ const BatchDetailModal = ({
     setReceptionQtyDraft(id, qty)
   }
 
+  const handleUpdateReceptionItemData = (id: string, field: keyof ReceptionItemDataDraft, value: string) => {
+    setReceptionItemDataDraft((previous) => {
+      const item = items.find((candidate) => candidate.id === id)
+      if (!item) return previous
+      const current = previous[id] ?? {
+        barcode: item.barcode,
+        product_name: item.product_name,
+        article: item.article,
+        color: item.color,
+        size: item.size,
+      }
+      return { ...previous, [id]: { ...current, [field]: field === 'barcode' ? value : (value || null) } }
+    })
+    setIsDirty(true)
+  }
+
   const handleUpdateReadyBoxesDraft = (id: string, boxes: number) => {
     const nextBoxes = Math.max(1, boxes)
     setReceptionBoxesDraft((p) => ({ ...p, [id]: nextBoxes }))
@@ -2251,6 +2341,7 @@ const BatchDetailModal = ({
     setIsSavingDraft(true)
     setError(null)
     try {
+      await persistReceptionWarehouse()
       const plannedReadyBoxChanges = items
         .filter((it) => !pendingItemIds.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
         .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
@@ -2275,17 +2366,19 @@ const BatchDetailModal = ({
       // 1. Сохранить новые (пендинг) позиции в БД
       if (currentPending.size > 0) {
         const pendingList = currentItems.filter((it) => currentPending.has(it.id))
-        const savedList = await Promise.all(pendingList.map((it) => addItem({
-          batch_id: it.batch_id, barcode: it.barcode,
-          product_name: it.product_name, size: it.size,
-          color: it.color, article: it.article,
+        const savedList = await Promise.all(pendingList.map((it) => {
+          const itemData = receptionItemDataDraft[it.id] ?? it
+          return addItem({
+          batch_id: it.batch_id, barcode: itemData.barcode,
+          product_name: itemData.product_name, size: itemData.size,
+          color: itemData.color, article: itemData.article,
           qty_declared: declaredDraft[it.id] ?? it.qty_declared,
           qty_received: receptionDraft[it.id] ?? it.qty_received,
           qty_defect: receptionDefectDraft[it.id] ?? it.qty_defect ?? 0,
           pipeline_stage_id: displayPipelineStage?.id ?? null,
           qty_otk: null, qty_marked: null, qty_packed: it.qty_packed ?? null,
           boxes: it.boxes ?? null, notes: it.notes ?? null, sort_order: it.sort_order,
-        })))
+        })}))
         // Захватываем вновь сохранённые «Готовые короба» по реальным DB-объектам
         newlySavedReadyBoxItems = savedList.filter(
           (it) => it.product_name === 'Готовые короба' && it.qty_received > 0 && (it.boxes ?? 0) > 0
@@ -2304,10 +2397,20 @@ const BatchDetailModal = ({
         (
           (declaredDraft[it.id] !== undefined && declaredDraft[it.id] !== it.qty_declared) ||
           (receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received) ||
-          (receptionDefectDraft[it.id] !== undefined && receptionDefectDraft[it.id] !== (it.qty_defect ?? 0))
+          (receptionDefectDraft[it.id] !== undefined && receptionDefectDraft[it.id] !== (it.qty_defect ?? 0)) ||
+          (receptionItemDataDraft[it.id]?.barcode ?? it.barcode) !== it.barcode ||
+          (receptionItemDataDraft[it.id]?.product_name ?? it.product_name) !== it.product_name ||
+          (receptionItemDataDraft[it.id]?.article ?? it.article) !== it.article ||
+          (receptionItemDataDraft[it.id]?.color ?? it.color) !== it.color ||
+          (receptionItemDataDraft[it.id]?.size ?? it.size) !== it.size
         )
       )
       const updated = await Promise.all(toUpdate.map((it) => updateItem(it.id, {
+        barcode: receptionItemDataDraft[it.id]?.barcode ?? it.barcode,
+        product_name: receptionItemDataDraft[it.id]?.product_name ?? it.product_name,
+        article: receptionItemDataDraft[it.id]?.article ?? it.article,
+        color: receptionItemDataDraft[it.id]?.color ?? it.color,
+        size: receptionItemDataDraft[it.id]?.size ?? it.size,
         qty_declared: declaredDraft[it.id] ?? it.qty_declared,
         qty_received: receptionDraft[it.id] ?? it.qty_received,
         qty_defect: receptionDefectDraft[it.id] ?? it.qty_defect ?? 0,
@@ -2330,7 +2433,7 @@ const BatchDetailModal = ({
       if (currentPendingDelete.size > 0) {
         for (const id of currentPendingDelete) {
           const itemToDelete = finalItems.find((i) => i.id === id)
-          if (displayPipelineStage?.status === 'done' || (!displayPipelineStage && batch.status === 'done')) {
+          if (receptionIsCompleted) {
             await updateItem(id, { is_excluded: true })
             continue
           }
@@ -2355,9 +2458,17 @@ const BatchDetailModal = ({
       const finalItemsAfterDelete = finalItems.filter((it) => !currentPendingDelete.has(it.id))
       setItems(finalItemsAfterDelete)
       onItemsChanged(finalItemsAfterDelete)
+      setReceptionItemDataDraft(Object.fromEntries(finalItemsAfterDelete.map((item) => [item.id, {
+        barcode: item.barcode,
+        product_name: item.product_name,
+        article: item.article,
+        color: item.color,
+        size: item.size,
+      }])))
       setReceptionBoxesDraft(Object.fromEntries(finalItemsAfterDelete.filter((it) => it.boxes != null).map((it) => [it.id, it.boxes ?? 0])))
       await recalcOtkDiscrepancy(finalItemsAfterDelete, otkLogs)
       setIsDirty(false)
+      if (receptionIsCompleted) setReceptionCorrectionMode(false)
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
     } finally {
@@ -2653,6 +2764,13 @@ const BatchDetailModal = ({
       }
       const refreshed = await fetchBatchWithItems(batch.id, displayPipelineStage?.id)
       setItems(refreshed.items)
+      setReceptionItemDataDraft(Object.fromEntries(refreshed.items.map((item) => [item.id, {
+        barcode: item.barcode,
+        product_name: item.product_name,
+        article: item.article,
+        color: item.color,
+        size: item.size,
+      }])))
       onItemsChanged(refreshed.items)
       setIsDirty(false)
     } catch (err) {
@@ -2754,10 +2872,27 @@ const BatchDetailModal = ({
     try {
       const workflowStage = activePipelineStage?.current_stage ?? batch.current_stage
       if (workflowStage === 'reception') {
+        if (!receptionWarehouseId) {
+          setError('Перед завершением приёмки выберите склад')
+          return
+        }
+        await persistReceptionWarehouse()
         const plannedReadyBoxChanges = items
           .filter((it) => !pendingItemIds.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
           .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
         if (!confirmReadyBoxCountChanges(plannedReadyBoxChanges)) return
+        for (const id of pendingDeleteIds) {
+          const item = items.find((candidate) => candidate.id === id)
+          if (item?.product_name !== 'Готовые короба') continue
+          const supply = supplies.find((candidate) =>
+            candidate.source_item_id === item.id || (!candidate.source_item_id && candidate.warehouse_name === item.notes)
+          )
+          const filledBoxes = supply?.boxes.filter((box) => box.items.length > 0) ?? []
+          if (filledBoxes.length > 0) {
+            setError(`Нельзя удалить готовые короба. Содержат товары: ${filledBoxes.map((box) => `BOX${box.box_number}`).join(', ')}.`)
+            return
+          }
+        }
       }
 
       for (const [id, val] of Object.entries(stageDraft)) {
@@ -2774,16 +2909,18 @@ const BatchDetailModal = ({
         let newlySavedReadyBoxItems: FulfillmentItem[] = []
         if (currentPending.size > 0) {
           const pendingList = savedItems.filter((it) => currentPending.has(it.id))
-          const sList = await Promise.all(pendingList.map((it) => addItem({
-            batch_id: it.batch_id, barcode: it.barcode, product_name: it.product_name,
-            size: it.size, color: it.color, article: it.article,
+          const sList = await Promise.all(pendingList.map((it) => {
+            const itemData = receptionItemDataDraft[it.id] ?? it
+            return addItem({
+            batch_id: it.batch_id, barcode: itemData.barcode, product_name: itemData.product_name,
+            size: itemData.size, color: itemData.color, article: itemData.article,
             qty_declared: declaredDraft[it.id] ?? it.qty_declared,
             qty_received: receptionDraft[it.id] ?? it.qty_received,
             qty_defect: receptionDefectDraft[it.id] ?? it.qty_defect ?? 0,
             pipeline_stage_id: displayPipelineStage?.id ?? null,
             qty_otk: null, qty_marked: null, qty_packed: it.qty_packed,
             boxes: it.boxes, notes: it.notes, sort_order: it.sort_order,
-          })))
+          })}))
           newlySavedReadyBoxItems = sList.filter((it) => it.product_name === 'Готовые короба' && it.qty_received > 0 && (it.boxes ?? 0) > 0)
           const m = new Map(pendingList.map((p, i) => [p.id, sList[i]]))
           savedItems = savedItems.map((it) => m.get(it.id) ?? it)
@@ -2797,11 +2934,21 @@ const BatchDetailModal = ({
           (
             (declaredDraft[it.id] !== undefined && declaredDraft[it.id] !== it.qty_declared) ||
             (receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received) ||
-            (receptionDefectDraft[it.id] !== undefined && receptionDefectDraft[it.id] !== (it.qty_defect ?? 0))
+            (receptionDefectDraft[it.id] !== undefined && receptionDefectDraft[it.id] !== (it.qty_defect ?? 0)) ||
+            (receptionItemDataDraft[it.id]?.barcode ?? it.barcode) !== it.barcode ||
+            (receptionItemDataDraft[it.id]?.product_name ?? it.product_name) !== it.product_name ||
+            (receptionItemDataDraft[it.id]?.article ?? it.article) !== it.article ||
+            (receptionItemDataDraft[it.id]?.color ?? it.color) !== it.color ||
+            (receptionItemDataDraft[it.id]?.size ?? it.size) !== it.size
           )
         )
         if (toUpd.length > 0) {
           const upd = await Promise.all(toUpd.map((it) => updateItem(it.id, {
+            barcode: receptionItemDataDraft[it.id]?.barcode ?? it.barcode,
+            product_name: receptionItemDataDraft[it.id]?.product_name ?? it.product_name,
+            article: receptionItemDataDraft[it.id]?.article ?? it.article,
+            color: receptionItemDataDraft[it.id]?.color ?? it.color,
+            size: receptionItemDataDraft[it.id]?.size ?? it.size,
             qty_declared: declaredDraft[it.id] ?? it.qty_declared,
             qty_received: receptionDraft[it.id] ?? it.qty_received,
             qty_defect: receptionDefectDraft[it.id] ?? it.qty_defect ?? 0,
@@ -2816,6 +2963,22 @@ const BatchDetailModal = ({
           const boxChange = readyBoxCountChanges.find((change) => change.item.id === it.id)
           return boxChange ? { ...it, boxes: boxChange.boxes } : it
         })
+
+        if (pendingDeleteIds.size > 0) {
+          for (const id of pendingDeleteIds) {
+            const itemToDelete = savedItems.find((item) => item.id === id)
+            if (itemToDelete?.product_name === 'Готовые короба' && itemToDelete.notes) {
+              const matchingSupply = supplies.find((supply) =>
+                (supply.source_item_id === itemToDelete.id || (!supply.source_item_id && supply.warehouse_name === itemToDelete.notes)) &&
+                supply.boxes.every((box) => box.items.length === 0)
+              )
+              if (matchingSupply) await deleteSupply(matchingSupply.id)
+            }
+            await deleteItem(id)
+          }
+          savedItems = savedItems.filter((item) => !pendingDeleteIds.has(item.id))
+          setPendingDeleteIds(new Set())
+        }
 
         // Маршрут определяют только включённые этапы; готовые короба ничего не перепрыгивают.
         setItems(savedItems)
@@ -3478,9 +3641,11 @@ const BatchDetailModal = ({
 
   const handleCompleteReception = async () => {
     if (items.length === 0) { setError('Добавьте хотя бы одну позицию'); return }
+    if (!receptionWarehouseId) { setError('Перед завершением приёмки выберите склад'); return }
     setIsSavingStage(true)
     setError(null)
     try {
+      await persistReceptionWarehouse()
       // Сохранить несохранённые заявленные и фактические количества перед переходом.
       const toUpdate = items.filter((it) =>
         (declaredDraft[it.id] !== undefined && declaredDraft[it.id] !== it.qty_declared) ||
@@ -3647,9 +3812,10 @@ const BatchDetailModal = ({
               const isEnabled = s === 'reception' || !stageKey || effectiveStageSource[stageKey] as boolean
               const canToggle = !isPipelineLoading && pipelineStgs.length === 0 && canManage && batch.status === 'active' && !isPast && !!stageKey && !isSavingBatchStages
               const canReviewCompletedStage = displayPipelineStage?.status === 'done'
+              const canReviewReceptionCorrection = s === 'reception' && isDone && canManageStageData
 
               const handleClick = () => {
-                if (isPast && (canStageJump || canReviewCompletedStage) && isEnabled) {
+                if (isPast && (canStageJump || canReviewCompletedStage || canReviewReceptionCorrection) && isEnabled) {
                   if (isDirty) { setPendingSwitchStage(s); return }
                   setViewStage(s)
                 } else if (canToggle) {
@@ -3657,7 +3823,7 @@ const BatchDetailModal = ({
                 }
               }
 
-              const isClickable = (isPast && (canStageJump || canReviewCompletedStage) && isEnabled) || canToggle
+              const isClickable = (isPast && (canStageJump || canReviewCompletedStage || canReviewReceptionCorrection) && isEnabled) || canToggle
               const isSelected = viewStage === s
 
               return (
@@ -3667,7 +3833,7 @@ const BatchDetailModal = ({
                     onClick={handleClick}
                     disabled={!isClickable}
                     title={
-                      isPast && (canStageJump || canReviewCompletedStage) && isEnabled
+                      isPast && (canStageJump || canReviewCompletedStage || canReviewReceptionCorrection) && isEnabled
                         ? `Перейти: ${STAGE_LABELS[s]}`
                         : canToggle
                           ? (isEnabled ? 'Отключить этап' : 'Включить этап')
@@ -3934,25 +4100,58 @@ const BatchDetailModal = ({
                 </div>
               )}
 
-              {/* Переключатель режимов */}
-              {canManageStageData && (
-                <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-0.5 w-fit">
-                  {([
-                    ['bulk', 'Навалом'],
-                    ['catalog', 'Из каталога'],
-                    ['barcode', 'По баркоду'],
-                    ['boxes', 'Готовые короба'],
-                  ] as [AddMode, string][]).map(([mode, label]) => (
-                    <button key={mode} type="button" onClick={() => {
-                      setAddMode(mode)
-                      if (mode === 'barcode') setTimeout(() => barcodeInputRef.current?.focus(), 50)
+              {/* Методы приёмки и операционный WMS-склад стадии */}
+              <div className="flex flex-wrap items-center gap-6">
+                {canManageStageData && (
+                  <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-0.5 w-fit">
+                    {([
+                      ['bulk', 'Навалом'],
+                      ['catalog', 'Из каталога'],
+                      ['barcode', 'По баркоду'],
+                      ['boxes', 'Готовые короба'],
+                    ] as [AddMode, string][]).map(([mode, label]) => (
+                      <button key={mode} type="button" onClick={() => {
+                        setAddMode(mode)
+                        if (mode === 'barcode') setTimeout(() => barcodeInputRef.current?.focus(), 50)
+                      }}
+                        className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${addMode === mode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <select
+                    value={receptionWarehouseId}
+                    onChange={(event) => {
+                      setReceptionWarehouseId(event.target.value)
+                      setIsDirty(true)
                     }}
-                      className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${addMode === mode ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                      {label}
+                    disabled={!canEditReception}
+                    className="h-8 min-w-44 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100 disabled:cursor-default disabled:bg-slate-50 disabled:text-slate-500"
+                  >
+                    <option value="" disabled={receptionIsCompleted}>Выбрать склад</option>
+                    {receptionWarehouseId && !receptionWmsWarehouses.some((warehouse) => warehouse.id === receptionWarehouseId) && (
+                      <option value={receptionWarehouseId}>{storedReceptionWarehouseName || 'Сохранённый склад'}</option>
+                    )}
+                    {receptionWmsWarehouses.map((warehouse) => (
+                      <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
+                    ))}
+                  </select>
+                  {receptionIsCompleted && canManageStageData && !receptionCorrectionMode && (
+                    <button
+                      type="button"
+                      onClick={() => setReceptionCorrectionMode(true)}
+                      className="h-8 rounded-xl border border-amber-200 bg-amber-50 px-3 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                    >
+                      Корректировать
                     </button>
-                  ))}
+                  )}
+                  {receptionIsCompleted && receptionCorrectionMode && (
+                    <span className="rounded-lg bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700">Режим корректировки</span>
+                  )}
                 </div>
-              )}
+              </div>
 
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex w-fit items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
@@ -3970,7 +4169,7 @@ const BatchDetailModal = ({
                     </button>
                   ))}
                 </div>
-                {canManageStageData && items.some((item) => (declaredDraft[item.id] ?? item.qty_declared ?? 0) > 0) && (
+                {canEditReception && items.some((item) => (declaredDraft[item.id] ?? item.qty_declared ?? 0) > 0) && (
                   <button
                     type="button"
                     onClick={handleAcceptAllDeclared}
@@ -3981,7 +4180,7 @@ const BatchDetailModal = ({
                 )}
 
               {/* Режим: По баркоду */}
-              {canManageStageData && addMode === 'barcode' && (
+              {canEditReception && addMode === 'barcode' && (
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-2">
                   <div className="flex flex-col gap-1">
                     <div className="flex gap-1">
@@ -4051,7 +4250,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Камера приёмки */}
-              {canManageStageData && addMode === 'barcode' && receptionCameraOpen && createPortal(
+              {canEditReception && addMode === 'barcode' && receptionCameraOpen && createPortal(
                 <div
                   className="fixed inset-0 z-50 flex flex-col bg-black"
                   onClick={() => setReceptionCameraOpen(false)}
@@ -4083,7 +4282,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Режим: Навалом */}
-              {canManageStageData && addMode === 'bulk' && (
+              {canEditReception && addMode === 'bulk' && (
                 <div className="rounded-2xl bg-slate-50 p-2 space-y-2">
                   <div className="flex flex-wrap items-end gap-2">
                     <div className="mr-3 flex items-center gap-2">
@@ -4111,7 +4310,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Режим: Готовые короба */}
-              {canManageStageData && addMode === 'boxes' && (
+              {canEditReception && addMode === 'boxes' && (
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-orange-50 p-2">
                   <div className="flex flex-col gap-1">
                     <input type="text" inputMode="numeric" value={boxesQty} onChange={(e) => setBoxesQty(e.target.value)}
@@ -4144,7 +4343,7 @@ const BatchDetailModal = ({
               )}
 
               {/* Режим: Из каталога */}
-              {canManageStageData && addMode === 'catalog' && (
+              {canEditReception && addMode === 'catalog' && (
                 <div className="relative">
                   {/* Строка поиска — та же высота что у других режимов */}
                   <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-2">
@@ -4263,7 +4462,7 @@ const BatchDetailModal = ({
                         {receptionTab === 'actual' && <th className="px-3 py-2.5 text-center">Брак</th>}
                         {receptionHasBoxes && <th className="px-3 py-2.5 text-center">Коробов</th>}
                         {receptionHasNotes && <th className="px-4 py-2.5 text-left">Склад</th>}
-                        {canManageStageData && <th className="px-3 py-2.5" />}
+                        {canEditReception && <th className="px-3 py-2.5" />}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -4276,13 +4475,33 @@ const BatchDetailModal = ({
                           <td className="px-2 py-1.5">
                             <PhotoThumb url={photoMap[it.barcode] ?? null} />
                           </td>
-                          <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{it.barcode || <span className="text-slate-300">—</span>}</td>
-                          <td className="px-4 py-2.5 text-slate-700">{it.product_name ?? <span className="text-slate-300">—</span>}</td>
-                          <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{it.article ?? <span className="text-slate-300">—</span>}</td>
-                          <td className="px-4 py-2.5 text-slate-500">{it.color ?? <span className="text-slate-300">—</span>}</td>
-                          <td className="px-4 py-2.5 text-slate-500">{it.size ?? <span className="text-slate-300">—</span>}</td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-slate-500">
+                            {canEditReception
+                              ? <input value={receptionItemDataDraft[it.id]?.barcode ?? it.barcode} onChange={(event) => handleUpdateReceptionItemData(it.id, 'barcode', event.target.value)} className="w-28 rounded-lg border border-slate-200 px-2 py-1 font-mono text-xs outline-none focus:border-blue-300" />
+                              : it.barcode || <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-700">
+                            {canEditReception
+                              ? <input value={receptionItemDataDraft[it.id]?.product_name ?? it.product_name ?? ''} onChange={(event) => handleUpdateReceptionItemData(it.id, 'product_name', event.target.value)} className="w-40 rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-300" />
+                              : it.product_name ?? <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-slate-500">
+                            {canEditReception
+                              ? <input value={receptionItemDataDraft[it.id]?.article ?? it.article ?? ''} onChange={(event) => handleUpdateReceptionItemData(it.id, 'article', event.target.value)} className="w-24 rounded-lg border border-slate-200 px-2 py-1 font-mono text-xs outline-none focus:border-blue-300" />
+                              : it.article ?? <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-500">
+                            {canEditReception
+                              ? <input value={receptionItemDataDraft[it.id]?.color ?? it.color ?? ''} onChange={(event) => handleUpdateReceptionItemData(it.id, 'color', event.target.value)} className="w-24 rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-300" />
+                              : it.color ?? <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-500">
+                            {canEditReception
+                              ? <input value={receptionItemDataDraft[it.id]?.size ?? it.size ?? ''} onChange={(event) => handleUpdateReceptionItemData(it.id, 'size', event.target.value)} className="w-20 rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-blue-300" />
+                              : it.size ?? <span className="text-slate-300">—</span>}
+                          </td>
                           <td className="px-3 py-2.5 text-center">
-                            {canManageStageData ? (
+                            {canEditReception ? (
                               <input type="number" min={0} value={getReceptionQty(it)}
                                 onChange={(e) => handleUpdateReceptionDraft(it.id, Number(e.target.value))}
                                 className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-300"
@@ -4291,7 +4510,7 @@ const BatchDetailModal = ({
                           </td>
                           {receptionTab === 'actual' && (
                             <td className="px-3 py-2.5 text-center">
-                              {canManageStageData ? (
+                              {canEditReception ? (
                                 <input
                                   type="number"
                                   min={0}
@@ -4307,7 +4526,7 @@ const BatchDetailModal = ({
                           )}
                           {receptionHasBoxes && (
                             <td className="px-3 py-2.5 text-center text-sm">
-                              {it.product_name === 'Готовые короба' && canManageStageData
+                              {it.product_name === 'Готовые короба' && canEditReception
                                 ? <input type="number" min={1} value={receptionBoxesDraft[it.id] ?? it.boxes ?? 1}
                                     onChange={(e) => handleUpdateReadyBoxesDraft(it.id, Number(e.target.value))}
                                     className="w-16 rounded-lg border border-orange-200 bg-white px-2 py-1 text-center text-sm font-medium text-orange-600 outline-none focus:border-orange-400" />
@@ -4319,7 +4538,7 @@ const BatchDetailModal = ({
                           {receptionHasNotes && (
                             <td className="px-4 py-2.5 text-sm text-slate-500">{it.notes ?? <span className="text-slate-300">—</span>}</td>
                           )}
-                          {canManageStageData && (
+                          {canEditReception && (
                             <td className="px-3 py-2.5 text-center">
                               <button type="button" onClick={() => void handleDeleteItem(it.id)} className="text-slate-300 hover:text-red-400">
                                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
@@ -4345,7 +4564,7 @@ const BatchDetailModal = ({
                         {receptionTab === 'actual' && <td className="px-3 py-2.5 text-center text-slate-800">{receptionVisibleItems.reduce((sum, item) => sum + (receptionDefectDraft[item.id] ?? item.qty_defect ?? 0), 0)}</td>}
                         {receptionHasBoxes && <td className="px-3 py-2.5 text-center text-slate-800">{receptionVisibleItems.reduce((sum, item) => sum + (receptionBoxesDraft[item.id] ?? item.boxes ?? 0), 0) || '—'}</td>}
                         {receptionHasNotes && <td />}
-                        {canManageStageData && <td />}
+                        {canEditReception && <td />}
                       </tr>
                     </tfoot>
                   </table>
@@ -7592,7 +7811,8 @@ const BatchDetailModal = ({
               {activeSubStage !== 'done' && viewStage === activeSubStage && (<>
               {activeSubStage === 'reception' && (
                 <button type="button" onClick={() => setPendingAdvance(true)}
-                  disabled={isSavingStage || items.length === 0 || !canManageStageData}
+                  disabled={isSavingStage || items.length === 0 || !canManageStageData || !receptionWarehouseId}
+                  title={!receptionWarehouseId ? 'Перед завершением приёмки выберите склад' : undefined}
                   className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                   {nextStageName === 'done' ? 'Завершить партию' : `Перейти к ${STAGE_LABELS_TO[nextStageName ?? 'done'] ?? STAGE_LABELS[nextStageName ?? 'done']}`}
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -8206,14 +8426,37 @@ const BatchDetailModal = ({
                       <div className="flex min-h-0 flex-1 flex-col">
                         <p className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-400">Журнал действий</p>
                         <div className="flex-1 overflow-y-scroll space-y-2 pr-1 [scrollbar-width:thin]">
+                          {otkHistoryStageTab === 'reception' && warehouseHistory.map((entry) => (
+                            <div key={entry.id} className={`rounded-2xl px-4 py-3 ${entry.is_correction ? 'bg-amber-50' : 'bg-emerald-50'}`}>
+                              <div className="flex items-start justify-between gap-2">
+                                <span className={`text-xs font-semibold ${entry.is_correction ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                  {entry.is_correction ? 'Корректировка склада' : 'Выбран склад'}
+                                </span>
+                                <span className="shrink-0 text-xs font-semibold text-slate-600">{fmt(entry.changed_at)}</span>
+                              </div>
+                              <p className="mt-2 text-xs text-slate-600">
+                                <span className="text-slate-400 line-through">{entry.old_warehouse_name || 'Не выбран'}</span>
+                                {' → '}
+                                <span className="font-medium text-slate-800">{entry.new_warehouse_name || 'Не выбран'}</span>
+                              </p>
+                            </div>
+                          ))}
                           {otkHistoryStageTab === 'reception' && activeReceptionHistory.map((entry) => {
                             const keys = Object.keys(entry.new_values).filter((key) => JSON.stringify(entry.old_values?.[key]) !== JSON.stringify(entry.new_values[key]))
                             const labels: Record<string, string> = { barcode: 'Баркод', product_name: 'Товар', size: 'Размер', color: 'Цвет', article: 'Артикул', qty_declared: 'Заявлено', qty_good: 'Годное', qty_defect: 'Брак', boxes: 'Коробов', warehouse: 'Склад', is_excluded: 'Исключено' }
-                            const actionLabel = entry.action === 'created' ? 'Добавлено' : entry.action === 'declared_from_previous' ? 'Заявлено предыдущей стадией' : entry.action === 'excluded' ? 'Скорректировано: исключено' : entry.action === 'restored' ? 'Восстановлено' : 'Скорректировано'
+                            const actionLabel = entry.action === 'created'
+                              ? (entry.is_correction ? 'Корректировка: добавлено' : 'Добавлено')
+                              : entry.action === 'declared_from_previous'
+                                ? 'Заявлено предыдущей стадией'
+                                : entry.action === 'excluded'
+                                  ? 'Корректировка: исключено'
+                                  : entry.action === 'restored'
+                                    ? (entry.is_correction ? 'Корректировка: восстановлено' : 'Восстановлено')
+                                    : (entry.is_correction ? 'Корректировка' : 'Изменено')
                             return (
-                              <div key={entry.id} className={`rounded-2xl px-4 py-3 ${entry.action === 'created' || entry.action === 'declared_from_previous' ? 'bg-emerald-50' : 'bg-amber-50'}`}>
+                              <div key={entry.id} className={`rounded-2xl px-4 py-3 ${entry.is_correction ? 'bg-amber-50' : 'bg-emerald-50'}`}>
                                 <div className="flex items-start justify-between gap-2">
-                                  <span className={`text-xs font-semibold ${entry.action === 'created' || entry.action === 'declared_from_previous' ? 'text-emerald-700' : 'text-amber-700'}`}>{actionLabel}</span>
+                                  <span className={`text-xs font-semibold ${entry.is_correction ? 'text-amber-700' : 'text-emerald-700'}`}>{actionLabel}</span>
                                   <span className="shrink-0 text-xs font-semibold text-slate-600">{fmt(entry.changed_at)}</span>
                                 </div>
                                 {keys.length > 0 && <div className="mt-2 space-y-0.5">{keys.map((key) => (
@@ -8624,7 +8867,7 @@ const EditBatchModal = ({ batch, stores, onClose, onSave }: EditBatchModalProps)
     if (!storeId) return null
     const s = stores.find((x) => x.id === storeId)
     if (!s) return null
-    return s.store_code ? `${s.name}  ·  ${s.store_code}` : s.name
+    return getStoreSelectorLabel(s, { includeStoreCode: true })
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -8728,7 +8971,7 @@ const EditBatchModal = ({ batch, stores, onClose, onSave }: EditBatchModalProps)
                   onClick={() => setPickedTmp(s.id)}
                   onDoubleClick={() => { setStoreId(s.id); setPickStoreOpen(false) }}
                   className={`flex w-full items-center justify-between px-4 py-2.5 text-left text-sm hover:bg-slate-50 ${pickedTmp === s.id ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-700'}`}>
-                  <span>{s.name}</span>
+                  <span>{getStoreSelectorLabel(s)}</span>
                   {s.store_code && <span className="ml-3 shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">{s.store_code}</span>}
                 </button>
               ))}
@@ -8826,7 +9069,7 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
     if (!storeId) return null
     const s = allStores.find((x) => x.id === storeId)
     if (!s) return null
-    return s.store_code ? `${s.name}  ·  ${s.store_code}` : s.name
+    return getStoreSelectorLabel(s, { includeStoreCode: true })
   }
 
   const [stageOtk, setStageOtk] = useState(settings?.stage_otk ?? false)
@@ -9079,7 +9322,7 @@ const CreateBatchModal = ({ stores, accountId, settings, hasPipeline, pipelineSt
                   onClick={() => setPickedTmp(s.id)}
                   onDoubleClick={() => { setStoreId(s.id); setPickStoreOpen(false); if (submitAfterPickRef.current) { submitAfterPickRef.current = false; void doSubmit(s.id) } }}
                   className={`flex w-full items-center justify-between px-4 py-2.5 text-left text-sm hover:bg-slate-50 ${pickedTmp === s.id ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-700'}`}>
-                  <span>{s.name}</span>
+                  <span>{getStoreSelectorLabel(s)}</span>
                   {s.store_code && <span className="ml-3 shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">{s.store_code}</span>}
                 </button>
               ))}

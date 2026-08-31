@@ -405,6 +405,17 @@ export interface Warehouse {
   created_at: string
 }
 
+export interface WmsWarehouse {
+  id: string
+  account_id: string
+  name: string
+  description: string
+  fbs_enabled: boolean
+  wb_warehouse_id: string
+  created_at: string
+  short_id: number
+}
+
 export interface CarrierTariff {
   id: string
   account_id: string
@@ -763,6 +774,9 @@ export interface FulfillmentBatch {
   comment: string | null
   otk_discrepancy: number | null
   logistics_tariff_type: 'per_box' | 'per_kg' | null
+  wms_warehouse_id?: string | null
+  wms_warehouse_name?: string | null
+  warehouse_corrected_at?: string | null
   created_at: string
   updated_at: string
   created_by: string | null
@@ -814,6 +828,20 @@ export interface FulfillmentReceptionHistory {
   old_values: Record<string, unknown> | null
   new_values: Record<string, unknown>
   reason: string | null
+  is_correction?: boolean
+  changed_by: string | null
+  changed_at: string
+}
+
+export interface FulfillmentStageWarehouseHistory {
+  id: string
+  batch_id: string
+  pipeline_stage_id: string | null
+  old_warehouse_id: string | null
+  old_warehouse_name: string | null
+  new_warehouse_id: string | null
+  new_warehouse_name: string | null
+  is_correction: boolean
   changed_by: string | null
   changed_at: string
 }
@@ -1035,6 +1063,9 @@ export interface BatchPipelineStage {
   created_at: string
   updated_at: string
   otk_discrepancy?: number
+  wms_warehouse_id?: string | null
+  wms_warehouse_name?: string | null
+  warehouse_corrected_at?: string | null
 }
 
 // ── Outsource: партнёрская связь ────────────────────────────

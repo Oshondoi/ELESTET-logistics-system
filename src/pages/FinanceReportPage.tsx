@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import {
   fetchStoreProductCosts,
   fetchWbFinanceRows,
@@ -499,7 +500,7 @@ export const FinanceReportPage = ({ accountId, stores }: FinanceReportPageProps)
                 return s ? (
                   <>
                     <span className={`h-2 w-2 shrink-0 rounded-full ${s.api_key ? 'bg-emerald-500' : 'bg-rose-400'}`} />
-                    <span className="truncate">{s.name}</span>
+                    <span className="truncate">{getStoreSelectorLabel(s)}</span>
                   </>
                 ) : <span className="text-slate-400">Выберите магазин</span>
               })()}
@@ -522,7 +523,7 @@ export const FinanceReportPage = ({ accountId, stores }: FinanceReportPageProps)
                         }`}
                       >
                         <span className={`h-2 w-2 shrink-0 rounded-full ${s.api_key ? 'bg-emerald-500' : 'bg-rose-400'}`} />
-                        {s.name}
+                        {getStoreSelectorLabel(s)}
                       </button>
                     </Fragment>
                   )

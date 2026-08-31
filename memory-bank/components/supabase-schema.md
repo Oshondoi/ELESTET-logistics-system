@@ -55,6 +55,19 @@
 - `add_trip_line(..., p_fulfillment_supply_id)` links the supply atomically and reuses its number; ordinary logistics lines continue receiving the next free number in the shared company sequence.
 - Backfill verified in production: all 87 supplies numbered; all 1982 boxes have unique barcodes.
 
+## Fulfillment reception WMS warehouse (applied 31.08.2026)
+
+- Patch: `supabase/patch_fulfillment_wms_warehouse.sql`.
+- `batch_pipeline_stages` and legacy `fulfillment_batches`: `wms_warehouse_id`, immutable snapshot `wms_warehouse_name`, `warehouse_corrected_at`.
+- `fulfillment_stage_stock.wms_warehouse_id`: physical location of the completed stage stock; it is inherited from the stage/batch instead of `fulfillment_items.notes`.
+- `fulfillment_reception_history.is_correction`: distinguishes ordinary edits before reception completion from corrections after it.
+- `fulfillment_stage_warehouse_history`: append-only old/new warehouse audit per stage or legacy batch.
+- `fulfillment_reception_is_completed(batch, stage)`: the boundary for correction semantics. It does not complete a pipeline stage and does not transfer products.
+- Triggers validate that the warehouse belongs to the stage executor/company, require it when reception completes, forbid physical item deletion after reception, and keep completed stock aligned after corrections.
+- `get_wms_warehouse_products(uuid)`: account-scoped current active stock for the WMS warehouse, including pipeline stage stock and completed legacy batches.
+- Safe backfill assigns only the sole WMS warehouse of an executor; ambiguous historical stages remain unassigned.
+- Deployment status: applied through Supabase Management API after a full transactional `ROLLBACK` check. Structural verification, authenticated pipeline behavior and completed legacy/RPC rollback tests passed.
+
 ## Important SQL Patterns
 
 ### Store Code Generation

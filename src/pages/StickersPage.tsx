@@ -11,6 +11,7 @@ import { downloadStickerPdf, previewStickerPdf } from '../lib/stickerPdf'
 import { generateEAN13 } from '../lib/ean13'
 import { fetchProducts } from '../services/productService'
 import { showToast } from '../components/ui/Toast'
+import { getStoreSelectorLabel } from '../lib/storeDisplay'
 
 const BULK_PDF_WARN_THRESHOLD = 100
 
@@ -634,7 +635,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                     onClick={() => setImportStoreDropdownOpen((o) => !o)}
                     className="flex h-10 items-center gap-2 rounded-2xl bg-slate-100 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
                   >
-                    {stores.find((s) => s.id === selectedStoreId)?.name ?? '—'}
+                    {importStore ? getStoreSelectorLabel(importStore) : '—'}
                     <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 text-slate-400 transition-transform ${importStoreDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6" /></svg>
                   </button>
                   {importStoreDropdownOpen && (
@@ -647,7 +648,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                           {s.id === selectedStoreId
                             ? <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5" /></svg>
                             : <span className="h-3.5 w-3.5 shrink-0" />}
-                          {s.name}
+                          {getStoreSelectorLabel(s)}
                         </button>
                       ))}
                     </div>

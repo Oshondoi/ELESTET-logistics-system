@@ -16,6 +16,27 @@ interface WmsWarehouse {
   short_id: number
 }
 
+interface WmsWarehouseProduct {
+  source_kind: 'pipeline' | 'legacy'
+  batch_id: string
+  batch_short_id: number | null
+  batch_name: string
+  pipeline_stage_id: string | null
+  pipeline_stage_name: string | null
+  item_id: string
+  barcode: string
+  product_name: string | null
+  article: string | null
+  size: string | null
+  color: string | null
+  quality: 'good' | 'defect'
+  quantity: number
+  store_id: string | null
+  store_name: string | null
+  store_legal_name: string | null
+  completed_at: string
+}
+
 interface WmsZone {
   id: string
   warehouse_id: string
@@ -1486,7 +1507,7 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
   const scanTimerRef = useRef<number | null>(null)
   const autoOpenedAccountRef = useRef<string | null>(null)
   const [accountShortId, setAccountShortId] = useState<number | null>(null)
-  const [operationsModal, setOperationsModal] = useState<'search' | 'unaddressed' | 'history' | 'inventory' | null>(null)
+  const [operationsModal, setOperationsModal] = useState<'products' | 'search' | 'unaddressed' | 'history' | 'inventory' | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<WmsSearchResult[]>([])
   const [searchHasRun, setSearchHasRun] = useState(false)
@@ -1500,6 +1521,8 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
   const [inventoryLocationCode, setInventoryLocationCode] = useState('')
   const [inventoryResults, setInventoryResults] = useState<InventoryScanResult[]>([])
   const [inventorySummary, setInventorySummary] = useState<Record<string, number> | null>(null)
+  const [warehouseProducts, setWarehouseProducts] = useState<WmsWarehouseProduct[]>([])
+  const [warehouseProductsError, setWarehouseProductsError] = useState('')
 
   // ── Data loaders ──────────────────────────────────────────────────────────
 
@@ -1906,6 +1929,26 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
     setScanOpen(false)
   }, [resetScan])
 
+  const loadWarehouseProducts = useCallback(async (warehouseId: string) => {
+    if (!supabase) return
+    setOperationsLoading(true)
+    setWarehouseProductsError('')
+    const { data, error } = await (supabase as any).rpc('get_wms_warehouse_products', { p_warehouse_id: warehouseId })
+    if (error) {
+      setWarehouseProducts([])
+      setWarehouseProductsError(error.message || 'Не удалось загрузить товары склада')
+    } else {
+      setWarehouseProducts((data ?? []) as WmsWarehouseProduct[])
+    }
+    setOperationsLoading(false)
+  }, [])
+
+  const openWarehouseProducts = useCallback((warehouse: WmsWarehouse) => {
+    rememberSelectedWarehouse(warehouse.id)
+    setOperationsModal('products')
+    void loadWarehouseProducts(warehouse.id)
+  }, [loadWarehouseProducts, rememberSelectedWarehouse])
+
   const openOperations = useCallback((mode: 'search' | 'unaddressed' | 'history' | 'inventory') => {
     setOperationsModal(mode)
     if (mode === 'unaddressed') void loadUnaddressedBoxes()
@@ -1920,6 +1963,10 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
       setSearchHasRun(false)
       setSearchError('')
       setOperationsLoading(false)
+    }
+    if (operationsModal === 'products') {
+      setWarehouseProducts([])
+      setWarehouseProductsError('')
     }
     setOperationsModal(null)
   }, [operationsModal])
@@ -2107,6 +2154,15 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
                     <polyline points="9 22 9 12 15 12 15 22" />
                   </svg>
                   <span className="flex-1 truncate text-sm font-medium text-slate-700">{wh.name}</span>
+                  <button type="button"
+                    onClick={(e) => { e.stopPropagation(); openWarehouseProducts(wh) }}
+                    title="Товары склада"
+                    className="hidden h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-violet-600 group-hover:flex">
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                      <path d="M4 7.5 12 3l8 4.5-8 4.5-8-4.5Z" />
+                      <path d="m4 12 8 4.5 8-4.5M4 16.5 12 21l8-4.5" />
+                    </svg>
+                  </button>
                   {canManage && <button type="button"
                     onClick={(e) => { e.stopPropagation(); setWarehouseModal({ open: true, editing: wh }) }}
                     className="hidden h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-600 group-hover:flex">
@@ -2365,13 +2421,77 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
               <div>
                 <h2 className="text-base font-semibold text-slate-800">
-                  {operationsModal === 'search' ? 'Поиск по складу' : operationsModal === 'unaddressed' ? 'Короба без адреса' : operationsModal === 'history' ? 'История склада' : 'Инвентаризация'}
+                  {operationsModal === 'products' ? 'Товары склада' : operationsModal === 'search' ? 'Поиск по складу' : operationsModal === 'unaddressed' ? 'Короба без адреса' : operationsModal === 'history' ? 'История склада' : 'Инвентаризация'}
                 </h2>
-                <p className="text-xs text-slate-400">{selectedWarehouse?.name ?? 'Склад'}</p>
+                <p className="text-xs text-slate-400">
+                  {operationsModal === 'products'
+                    ? (warehouses.find((warehouse) => warehouse.id === selectedWarehouseId)?.name ?? 'Склад')
+                    : (selectedWarehouse?.name ?? 'Склад')}
+                </p>
               </div>
               <button type="button" onClick={closeOperations} className="cursor-pointer text-xl text-slate-400 hover:text-slate-700">×</button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              {operationsModal === 'products' && (() => {
+                const goodQty = warehouseProducts.filter((row) => row.quality === 'good').reduce((sum, row) => sum + row.quantity, 0)
+                const defectQty = warehouseProducts.filter((row) => row.quality === 'defect').reduce((sum, row) => sum + row.quantity, 0)
+                const skuCount = new Set(warehouseProducts.map((row) => row.barcode || row.item_id)).size
+                return (
+                  <>
+                    <div className="mb-4 grid grid-cols-3 gap-3">
+                      <div className="rounded-2xl bg-slate-50 px-4 py-3"><div className="text-xs text-slate-400">Позиций</div><div className="mt-1 text-xl font-bold text-slate-800">{skuCount}</div></div>
+                      <div className="rounded-2xl bg-emerald-50 px-4 py-3"><div className="text-xs text-emerald-500">Годное</div><div className="mt-1 text-xl font-bold text-emerald-700">{goodQty}</div></div>
+                      <div className="rounded-2xl bg-red-50 px-4 py-3"><div className="text-xs text-red-400">Брак</div><div className="mt-1 text-xl font-bold text-red-600">{defectQty}</div></div>
+                    </div>
+                    {warehouseProductsError && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{warehouseProductsError}</div>}
+                    {operationsLoading && warehouseProducts.length === 0 ? (
+                      <div className="py-16 text-center text-sm text-slate-400">Загрузка товаров...</div>
+                    ) : warehouseProducts.length === 0 && !warehouseProductsError ? (
+                      <div className="rounded-2xl border-2 border-dashed border-slate-200 py-16 text-center text-sm text-slate-400">На складе пока нет завершённых остатков</div>
+                    ) : (
+                      <div className="overflow-hidden rounded-2xl border border-slate-200">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                            <tr>
+                              <th className="px-4 py-3 text-left">Магазин</th>
+                              <th className="px-4 py-3 text-left">Товар</th>
+                              <th className="px-4 py-3 text-left">Баркод</th>
+                              <th className="px-4 py-3 text-left">Партия / стадия</th>
+                              <th className="px-4 py-3 text-left">Состояние</th>
+                              <th className="px-4 py-3 text-right">Количество</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {warehouseProducts.map((row, index) => (
+                              <tr key={`${row.source_kind}-${row.item_id}-${row.quality}-${index}`} className="hover:bg-slate-50/60">
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-slate-700">{row.store_legal_name || 'Юр. название не указано'}</div>
+                                  <div className="text-xs text-slate-400">{row.store_name || 'Магазин не указан'}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-slate-700">{row.product_name || 'Без названия'}</div>
+                                  <div className="text-xs text-slate-400">{[row.article, row.color, row.size].filter(Boolean).join(' · ') || '—'}</div>
+                                </td>
+                                <td className="px-4 py-3 font-mono text-xs text-slate-500">{row.barcode || '—'}</td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-slate-700">P-{row.batch_short_id ?? '?'} · {row.batch_name}</div>
+                                  <div className="text-xs text-slate-400">{row.pipeline_stage_name || 'Обычная партия'}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span className={`rounded-lg px-2 py-1 text-xs font-medium ${row.quality === 'good' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+                                    {row.quality === 'good' ? 'Годное' : 'Брак'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-right font-semibold text-slate-800">{row.quantity}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
               {operationsModal === 'search' && (
                 <>
                   <div className="mb-3 flex gap-2">

@@ -17,6 +17,14 @@
 - `supabase/seed_tz_tasks_20260809.sql` — идемпотентный сид девяти задач; применён.
 - `memory-bank/components/fbs-orders.md`, `wms.md` и `tz-tasks.md` — подробная актуальная документация.
 
+## Fulfillment/WMS reception work — 31.08.2026
+
+- `src/pages/FulfillmentPage.tsx` — physical WMS warehouse selector beside reception methods, normal edits before reception completion and explicit correction mode afterwards.
+- `src/pages/WmsPage.tsx` — warehouse-products action and active completed-stock view.
+- `src/services/fulfillmentService.ts`, `src/services/pipelineService.ts`, `src/types/index.ts` — WMS warehouse/history data access and types.
+- `supabase/patch_fulfillment_wms_warehouse.sql` — warehouse ownership validation, reception correction boundary/audit, completed-stock alignment and `get_wms_warehouse_products` RPC.
+- Patch status: applied to production on 31.08.2026 through Supabase Management API; full rollback compilation, structural verification and authenticated behavior test passed.
+
 ## Packages used by current FBS/export/WMS work
 - `jspdf` — PDF; `xlsx` — Excel; `jszip` — ZIP нескольких поставок; `qrcode.react` — QR физического короба; `@supabase/supabase-js` — DB/Functions.
 

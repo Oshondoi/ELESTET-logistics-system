@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { carrierOptions, paymentStatuses, shipmentStatuses, warehouseOptions } from '../../lib/constants'
+import { getStoreSelectorLabel } from '../../lib/storeDisplay'
 import type { ShipmentFormValues, Store } from '../../types'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -94,7 +95,7 @@ export const ShipmentFormModal = ({
             value={values.store_id}
             onChange={(event) => handleChange('store_id', event.target.value)}
             options={stores.map((store) => ({
-              label: `${store.name} (${store.store_code})`,
+              label: getStoreSelectorLabel(store, { includeStoreCode: true }),
               value: store.id,
             }))}
           />
