@@ -10,14 +10,16 @@ interface PhotoThumbProps {
   url: string | null | undefined
   /** Классы для миниатюры и плейсхолдера (размер + скругление). По умолчанию h-9 w-9 rounded-lg */
   className?: string
+  /** Уровень портала предпросмотра. Нужен для миниатюр внутри модальных окон. */
+  previewZIndex?: number
 }
 
 /**
  * PhotoThumb — миниатюра товара с всплывающим превью при наведении.
- * Превью рендерится через портал в document.body (z-50, fixed),
+ * Превью рендерится через портал в document.body (по умолчанию z-50, fixed),
  * автоматически позиционируется справа/слева от миниатюры чтобы не выходить за экран.
  */
-export function PhotoThumb({ url, className = 'h-9 w-9 rounded-lg' }: PhotoThumbProps) {
+export function PhotoThumb({ url, className = 'h-9 w-9 rounded-lg', previewZIndex }: PhotoThumbProps) {
   const [preview, setPreview] = useState<{ url: string; x: number; y: number } | null>(null)
 
   if (!url) {
@@ -54,7 +56,7 @@ export function PhotoThumb({ url, className = 'h-9 w-9 rounded-lg' }: PhotoThumb
       {preview && createPortal(
         <div
           className="pointer-events-none fixed z-50 overflow-hidden rounded-2xl shadow-2xl ring-1 ring-slate-200"
-          style={{ left: preview.x, top: preview.y }}
+          style={{ left: preview.x, top: preview.y, zIndex: previewZIndex }}
         >
           <img src={preview.url} alt="" className="h-96 w-72 object-cover" />
         </div>,
