@@ -1935,9 +1935,10 @@ MVP в активной разработке. Деплой на Vercel акти�
 - [x] TypeScript, production build (666 модулей) и `git diff --check` проходят.
 - [x] Commit `106e87b` отправлен в `origin/main` и `origin/master`; Vercel production отвечает HTTP `200` и отдаёт asset `assets/index-_7bBLn0U.js`.
 
-## Реализовано локально 31.08.2026 — позиция склада в остатках FBS
+## Опубликовано 31.08.2026 — позиция склада в остатках FBS
 
 - [x] Селектор `На склад WB` поднят в верхнюю строку справа от `Магазин`.
 - [x] Из нижней строки селектор удалён; поиск, фильтр и действия сохранили прежнюю логику.
 - [x] Выбранный склад, localStorage и автоматическая загрузка остатков не переносились и не менялись.
 - [x] TypeScript, production build (666 модулей) и `git diff --check` проходят.
+- [x] Commit `706b7d7` отправлен в `origin/main` и `origin/master`; Vercel production отвечает HTTP `200` и отдаёт asset `assets/index-CF5JS-il.js`.

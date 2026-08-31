@@ -2704,3 +2704,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Состояние склада осталось внутри `FbsStocksPanel`: localStorage, автоматическая загрузка остатков, очистка черновика при смене и все WB-операции работают по-прежнему.
 - Для визуального переноса без подъёма бизнес-состояния используется portal в контейнер `fbs-stocks-warehouse-controls` верхней панели.
 - Данные, Supabase и SQL не изменялись; TypeScript, production build (666 модулей) и `git diff --check` проходят.
+- Функциональный commit `706b7d7 feat: move FBS warehouse selector to header` отправлен fast-forward в `origin/main` и `origin/master`; Vercel production отвечает HTTP `200` и отдаёт asset `assets/index-CF5JS-il.js`.
