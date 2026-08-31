@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '../../lib/supabase'
 import { toUserMessage } from '../../lib/userMessage'
 import { invokeFbs } from '../../services/fbsApi'
@@ -42,6 +43,7 @@ interface Props {
   storeId: string
   warehouses: WbWarehouse[]
   canManage: boolean
+  warehouseControlsContainerId: string
 }
 
 const PAGE_SIZE = 1000
@@ -156,7 +158,7 @@ async function loadCalculatedQuantities(accountId: string, storeId: string): Pro
   ]))
 }
 
-export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Props) {
+export function FbsStocksPanel({ accountId, storeId, warehouses, canManage, warehouseControlsContainerId }: Props) {
   const warehouseStorageKey = `fbs_stock_warehouse_${accountId}_${storeId}`
   const [warehouseId, setWarehouseId] = useState<number>(0)
   const [catalog, setCatalog] = useState<StockCatalogRow[]>([])
@@ -171,6 +173,11 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
   const [notice, setNotice] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null)
   const [history, setHistory] = useState<StockUpdateRow[]>([])
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null)
+  const [warehouseControlsTarget, setWarehouseControlsTarget] = useState<HTMLElement | null>(null)
+
+  useEffect(() => {
+    setWarehouseControlsTarget(document.getElementById(warehouseControlsContainerId))
+  }, [warehouseControlsContainerId])
 
   useEffect(() => {
     const saved = Number(localStorage.getItem(warehouseStorageKey))
@@ -373,7 +380,7 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-slate-50">
-      <div className="flex flex-wrap items-end gap-2 border-b border-slate-200 bg-white px-5 py-3">
+      {warehouseControlsTarget && createPortal(
         <FbsWarehouseSelect
           value={warehouseId}
           onChange={(value) => {
@@ -387,8 +394,10 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, canManage }: Pr
             value: warehouse.id,
             label: warehouse.displayName || warehouse.name,
           }))}
-        />
-
+        />,
+        warehouseControlsTarget,
+      )}
+      <div className="flex flex-wrap items-end gap-2 border-b border-slate-200 bg-white px-5 py-3">
         <div className="relative min-w-[240px] flex-1">
           <svg viewBox="0 0 24 24" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Товар, артикул, баркод, размер…" className="h-9 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none focus:border-violet-400" />

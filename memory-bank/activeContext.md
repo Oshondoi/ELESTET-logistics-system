@@ -2696,3 +2696,11 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Складские списки и бизнес-значения не объединялись между вкладками: каждая передаёт общему визуальному компоненту собственный набор вариантов.
 - Изменений Supabase/SQL нет; `npx tsc -b --pretty false`, `npm run build` (666 модулей) и `git diff --check` проходят.
 - Функциональный commit `106e87b feat: unify FBS warehouse selectors` отправлен fast-forward в `origin/main` и `origin/master`; Vercel production отвечает HTTP `200` и отдаёт asset `assets/index-_7bBLn0U.js`.
+
+## 2026-08-31 — Позиция склада в `Остатки FBS`
+
+- Вкладка `Остатки FBS` показывает рабочий селектор `На склад WB` в верхней строке непосредственно справа от селектора `Магазин`.
+- Во внутренней строке панели остатков селектор склада удалён; она начинается с поиска, затем фильтра и действий.
+- Состояние склада осталось внутри `FbsStocksPanel`: localStorage, автоматическая загрузка остатков, очистка черновика при смене и все WB-операции работают по-прежнему.
+- Для визуального переноса без подъёма бизнес-состояния используется portal в контейнер `fbs-stocks-warehouse-controls` верхней панели.
+- Данные, Supabase и SQL не изменялись; TypeScript, production build (666 модулей) и `git diff --check` проходят.

@@ -2139,6 +2139,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       {pageSection !== 'dispatches' && (
       <div className="flex flex-wrap items-end gap-3 border-b border-slate-200 bg-white px-5 py-3">
         <FbsStoreSelect value={selectedStoreId} stores={storesWithKey} onChange={handleStoreChange} />
+        {pageSection === 'stocks' && <div id="fbs-stocks-warehouse-controls" className="contents" />}
 
         {pageSection === 'orders' && <>
         <FbsWarehouseSelect
@@ -2196,6 +2197,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           storeId={selectedStoreId}
           warehouses={stockWbWarehouses}
           canManage={canManageStocks}
+          warehouseControlsContainerId="fbs-stocks-warehouse-controls"
         />
       ) : pageSection === 'dispatches' ? (
         <FbsDispatchReport
