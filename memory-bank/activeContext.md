@@ -2695,3 +2695,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Менялось только отображение. В `Заказах` сохранены фильтр, локальное запоминание и вариант `Все склады`; в `Остатках FBS` сохранён обязательный выбор конкретного склада для чтения и записи остатков WB; в `Отчёте` данные и фильтрация не изменились.
 - Складские списки и бизнес-значения не объединялись между вкладками: каждая передаёт общему визуальному компоненту собственный набор вариантов.
 - Изменений Supabase/SQL нет; `npx tsc -b --pretty false`, `npm run build` (666 модулей) и `git diff --check` проходят.
+- Функциональный commit `106e87b feat: unify FBS warehouse selectors` отправлен fast-forward в `origin/main` и `origin/master`; Vercel production отвечает HTTP `200` и отдаёт asset `assets/index-_7bBLn0U.js`.
