@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, FulfillmentStage } from '../types'
+import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, FulfillmentStage, PipelineStageDiscrepancy } from '../types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabase as any
@@ -91,10 +91,22 @@ export async function completeBatchPipelineStage(
 }
 
 export async function advanceBatchPipelineStep(stageId: string, newStep: FulfillmentStage): Promise<void> {
-  const { error } = await db
-    .from('batch_pipeline_stages')
-    .update({ current_stage: newStep, updated_at: new Date().toISOString() })
-    .eq('id', stageId)
+  const { data, error } = await db.rpc('advance_batch_pipeline_step', { p_stage_id: stageId })
+  if (error) throw error
+  if (data?.error) throw new Error(data.error as string)
+  if (data?.current_stage !== newStep) {
+    throw new Error('Сервер определил другой следующий этап. Обновите партию и повторите действие.')
+  }
+}
+
+export async function fetchPipelineStageDiscrepancies(stageId: string): Promise<PipelineStageDiscrepancy[]> {
+  const { data, error } = await db.rpc('get_pipeline_stage_outgoing_discrepancies', { p_stage_id: stageId })
+  if (error) throw error
+  return (data ?? []) as PipelineStageDiscrepancy[]
+}
+
+export async function updateBatchPipelineOtkDiscrepancy(stageId: string, discrepancy: number): Promise<void> {
+  const { error } = await db.from('batch_pipeline_stages').update({ otk_discrepancy: discrepancy, updated_at: new Date().toISOString() }).eq('id', stageId)
   if (error) throw error
 }
 

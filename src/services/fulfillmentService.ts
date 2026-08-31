@@ -13,6 +13,7 @@ import type {
   BatchConsumable,
   Product,
   TripLine,
+  FulfillmentReceptionHistory,
 } from '../types'
 
 // ── Settings ──────────────────────────────────────────────────
@@ -45,20 +46,30 @@ export const upsertFulfillmentSettings = async (
 
 // ── Batches ───────────────────────────────────────────────────
 
-type RawItem = { qty_received: number; qty_otk: number | null; qty_marked: number | null; qty_packed: number | null }
-type RawLog = { qty: number; qty_defect: number; deleted_at: string | null }
+type RawItem = { qty_declared: number; qty_received: number; qty_defect: number; qty_otk: number | null; qty_marked: number | null; qty_packed: number | null; is_excluded?: boolean; pipeline_stage_id?: string | null }
+type RawLog = { qty: number; qty_defect: number; deleted_at: string | null; pipeline_stage_id?: string | null }
 const sumQty = (items: RawItem[], f: (i: RawItem) => number | null) => items.reduce((s, i) => s + (f(i) ?? 0), 0)
 const sumLog = (logs: RawLog[]) => logs.filter((l) => !l.deleted_at).reduce((s, l) => s + l.qty + l.qty_defect, 0)
 const attachQtySums = (row: any): FulfillmentBatch => {
-  const items: RawItem[] = row.fulfillment_items ?? []
-  const otkLogs: RawLog[] = row.fulfillment_otk_logs ?? []
-  const markingLogs: RawLog[] = row.fulfillment_marking_logs ?? []
-  const packagingLogs: RawLog[] = row.fulfillment_packaging_logs ?? []
+  const pipelineStages = [...(row.batch_pipeline_stages ?? [])] as Array<{ id: string; status: string; order_index: number }>
+  const summaryStage = pipelineStages.find((stage) => stage.status === 'active')
+    ?? pipelineStages.sort((left, right) => right.order_index - left.order_index)[0]
+    ?? null
+  const items: RawItem[] = (row.fulfillment_items ?? []).filter((item: RawItem) =>
+    !item.is_excluded && (!summaryStage || item.pipeline_stage_id === summaryStage.id)
+  )
+  const stageLogs = (logs: RawLog[]) => logs.filter((log) => !summaryStage || log.pipeline_stage_id === summaryStage.id)
+  const otkLogs: RawLog[] = stageLogs(row.fulfillment_otk_logs ?? [])
+  const markingLogs: RawLog[] = stageLogs(row.fulfillment_marking_logs ?? [])
+  const packagingLogs: RawLog[] = stageLogs(row.fulfillment_packaging_logs ?? [])
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { fulfillment_items: _, fulfillment_otk_logs: __, fulfillment_marking_logs: ___, fulfillment_packaging_logs: ____, ...batch } = row
+  const { fulfillment_items: _, fulfillment_otk_logs: __, fulfillment_marking_logs: ___, fulfillment_packaging_logs: ____, batch_pipeline_stages: _____, ...batch } = row
   return {
     ...batch,
-    qty_received_sum: sumQty(items, (i) => i.qty_received),
+    qty_received_sum: sumQty(items, (i) => i.qty_received + (i.qty_defect ?? 0)),
+    qty_good_sum: sumQty(items, (i) => i.qty_received),
+    qty_defect_sum: sumQty(items, (i) => i.qty_defect ?? 0),
+    qty_declared_sum: sumQty(items, (i) => i.qty_declared),
     qty_otk_sum: sumLog(otkLogs),
     qty_marked_sum: sumLog(markingLogs),
     qty_packaging_sum: sumLog(packagingLogs),
@@ -70,7 +81,7 @@ export const fetchBatches = async (accountId: string): Promise<FulfillmentBatch[
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
-    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at), fulfillment_packaging_logs(qty, qty_defect, deleted_at)')
+    .select('*, batch_pipeline_stages(id, status, order_index), fulfillment_items(qty_declared, qty_received, qty_defect, qty_otk, qty_marked, qty_packed, is_excluded, pipeline_stage_id), fulfillment_otk_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_marking_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_packaging_logs(qty, qty_defect, deleted_at, pipeline_stage_id)')
     .eq('account_id', accountId)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
@@ -84,7 +95,7 @@ export const fetchPartnerBatchesFull = async (batchIds: string[]): Promise<Fulfi
   if (batchIds.length === 0) return []
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
-    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at), fulfillment_packaging_logs(qty, qty_defect, deleted_at)')
+    .select('*, batch_pipeline_stages(id, status, order_index), fulfillment_items(qty_declared, qty_received, qty_defect, qty_otk, qty_marked, qty_packed, is_excluded, pipeline_stage_id), fulfillment_otk_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_marking_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_packaging_logs(qty, qty_defect, deleted_at, pipeline_stage_id)')
     .in('id', batchIds)
     .is('deleted_at', null)
   if (error) throw error
@@ -95,7 +106,7 @@ export const fetchArchivedBatches = async (accountId: string): Promise<Fulfillme
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
-    .select('*, fulfillment_items(qty_received, qty_otk, qty_marked, qty_packed), fulfillment_otk_logs(qty, qty_defect, deleted_at), fulfillment_marking_logs(qty, qty_defect, deleted_at), fulfillment_packaging_logs(qty, qty_defect, deleted_at)')
+    .select('*, batch_pipeline_stages(id, status, order_index), fulfillment_items(qty_declared, qty_received, qty_defect, qty_otk, qty_marked, qty_packed, is_excluded, pipeline_stage_id), fulfillment_otk_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_marking_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_packaging_logs(qty, qty_defect, deleted_at, pipeline_stage_id)')
     .eq('account_id', accountId)
     .not('deleted_at', 'is', null)
     .order('deleted_at', { ascending: false })
@@ -103,11 +114,13 @@ export const fetchArchivedBatches = async (accountId: string): Promise<Fulfillme
   return (data ?? []).map(attachQtySums) as FulfillmentBatch[]
 }
 
-export const fetchBatchWithItems = async (batchId: string): Promise<FulfillmentBatchWithItems> => {
+export const fetchBatchWithItems = async (batchId: string, pipelineStageId?: string | null): Promise<FulfillmentBatchWithItems> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  let itemsQuery = (supabase as any).from('fulfillment_items').select('*').eq('batch_id', batchId)
+  if (pipelineStageId) itemsQuery = itemsQuery.eq('pipeline_stage_id', pipelineStageId)
   const [{ data: batch, error: batchErr }, { data: items, error: itemsErr }] = await Promise.all([
     (supabase as any).from('fulfillment_batches').select('*').eq('id', batchId).single(),
-    (supabase as any).from('fulfillment_items').select('*').eq('batch_id', batchId).order('sort_order').order('created_at'),
+    itemsQuery.order('sort_order').order('created_at'),
   ])
   if (batchErr) throw batchErr
   if (itemsErr) throw itemsErr
@@ -218,7 +231,9 @@ export const updateItem = async (
   updates: Partial<
     Pick<
       FulfillmentItem,
+      | 'qty_declared'
       | 'qty_received'
+      | 'qty_defect'
       | 'qty_otk'
       | 'qty_marked'
       | 'qty_packed'
@@ -228,6 +243,7 @@ export const updateItem = async (
       | 'color'
       | 'article'
       | 'notes'
+      | 'is_excluded'
     >
   >,
 ): Promise<FulfillmentItem> => {
@@ -281,13 +297,17 @@ export const advanceStage = async (batch: FulfillmentBatch): Promise<Fulfillment
 export const fetchStageCompletedAt = async (
   batchId: string,
   stage: string,
+  pipelineStageId?: string | null,
 ): Promise<string | null> => {
   if (!supabase) return null
-  const { data } = await (supabase as any)
+  let query = (supabase as any)
     .from('fulfillment_stage_logs')
     .select('completed_at')
     .eq('batch_id', batchId)
     .eq('stage', stage)
+  if (pipelineStageId) query = query.eq('pipeline_stage_id', pipelineStageId)
+  else query = query.is('pipeline_stage_id', null)
+  const { data } = await query
     .order('completed_at', { ascending: false })
     .limit(1)
     .maybeSingle()
@@ -408,6 +428,23 @@ export const findProductByBarcode = async (
   }
 }
 
+export const fetchReceptionHistory = async (
+  batchId: string,
+  pipelineStageId?: string | null,
+): Promise<FulfillmentReceptionHistory[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  let query = (supabase as any)
+    .from('fulfillment_reception_history')
+    .select('*')
+    .eq('batch_id', batchId)
+    .order('changed_at', { ascending: false })
+  if (pipelineStageId) query = query.eq('pipeline_stage_id', pipelineStageId)
+  else query = query.is('pipeline_stage_id', null)
+  const { data, error } = await query
+  if (error) throw error
+  return (data ?? []) as FulfillmentReceptionHistory[]
+}
+
 export const fetchProductInfoByBarcodes = async (
   accountId: string,
   storeId: string | null,
@@ -513,26 +550,28 @@ export const fetchOtkPerformers = async (accountId: string): Promise<OtkPerforme
   }))
 }
 
-export const fetchOtkLogs = async (batchId: string): Promise<FulfillmentOtkLog[]> => {
+export const fetchOtkLogs = async (batchId: string, pipelineStageId?: string | null): Promise<FulfillmentOtkLog[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('fulfillment_otk_logs')
     .select('*')
     .eq('batch_id', batchId)
     .is('deleted_at', null)
-    .order('created_at', { ascending: true })
+  if (pipelineStageId !== undefined) query = pipelineStageId ? query.eq('pipeline_stage_id', pipelineStageId) : query.is('pipeline_stage_id', null)
+  const { data, error } = await query.order('created_at', { ascending: true })
   if (error) throw error
   return (data ?? []) as FulfillmentOtkLog[]
 }
 
-export const fetchDeletedOtkLogs = async (batchId: string): Promise<FulfillmentOtkLog[]> => {
+export const fetchDeletedOtkLogs = async (batchId: string, pipelineStageId?: string | null): Promise<FulfillmentOtkLog[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('fulfillment_otk_logs')
     .select('*')
     .eq('batch_id', batchId)
     .not('deleted_at', 'is', null)
-    .order('created_at', { ascending: true })
+  if (pipelineStageId !== undefined) query = pipelineStageId ? query.eq('pipeline_stage_id', pipelineStageId) : query.is('pipeline_stage_id', null)
+  const { data, error } = await query.order('created_at', { ascending: true })
   if (error) throw error
   return (data ?? []) as FulfillmentOtkLog[]
 }
@@ -553,6 +592,7 @@ export const uploadOtkPhoto = async (
 
 export const addOtkLog = async (entry: {
   batch_id: string
+  pipeline_stage_id?: string | null
   user_id: string
   user_email: string
   user_name?: string | null
@@ -628,32 +668,35 @@ export const fetchOtkLogHistory = async (logId: string) => {
 // Marking Logs — аналог OTK для этапа Маркировки
 // ══════════════════════════════════════════════════════════════
 
-export const fetchMarkingLogs = async (batchId: string): Promise<import('../types').FulfillmentMarkingLog[]> => {
+export const fetchMarkingLogs = async (batchId: string, pipelineStageId?: string | null): Promise<import('../types').FulfillmentMarkingLog[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('fulfillment_marking_logs')
     .select('*')
     .eq('batch_id', batchId)
     .is('deleted_at', null)
-    .order('created_at', { ascending: true })
+  if (pipelineStageId !== undefined) query = pipelineStageId ? query.eq('pipeline_stage_id', pipelineStageId) : query.is('pipeline_stage_id', null)
+  const { data, error } = await query.order('created_at', { ascending: true })
   if (error) throw error
   return (data ?? []) as import('../types').FulfillmentMarkingLog[]
 }
 
-export const fetchDeletedMarkingLogs = async (batchId: string): Promise<import('../types').FulfillmentMarkingLog[]> => {
+export const fetchDeletedMarkingLogs = async (batchId: string, pipelineStageId?: string | null): Promise<import('../types').FulfillmentMarkingLog[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('fulfillment_marking_logs')
     .select('*')
     .eq('batch_id', batchId)
     .not('deleted_at', 'is', null)
-    .order('created_at', { ascending: true })
+  if (pipelineStageId !== undefined) query = pipelineStageId ? query.eq('pipeline_stage_id', pipelineStageId) : query.is('pipeline_stage_id', null)
+  const { data, error } = await query.order('created_at', { ascending: true })
   if (error) throw error
   return (data ?? []) as import('../types').FulfillmentMarkingLog[]
 }
 
 export const addMarkingLog = async (entry: {
   batch_id: string
+  pipeline_stage_id?: string | null
   user_id: string
   user_email: string
   user_name?: string | null
@@ -753,13 +796,14 @@ export const fetchMarkingLogHistory = async (logId: string) => {
 
 // ── Packing: Supplies ─────────────────────────────────────────
 
-export const fetchSupplies = async (batchId: string): Promise<FulfillmentSupplyWithBoxes[]> => {
+export const fetchSupplies = async (batchId: string, pipelineStageId?: string | null): Promise<FulfillmentSupplyWithBoxes[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data: supplies, error: sErr } = await (supabase as any)
+  let suppliesQuery = (supabase as any)
     .from('fulfillment_supplies')
     .select('*')
     .eq('batch_id', batchId)
-    .order('created_at', { ascending: true })
+  if (pipelineStageId !== undefined) suppliesQuery = pipelineStageId ? suppliesQuery.eq('pipeline_stage_id', pipelineStageId) : suppliesQuery.is('pipeline_stage_id', null)
+  const { data: supplies, error: sErr } = await suppliesQuery.order('created_at', { ascending: true })
   if (sErr) throw sErr
 
   const supplyIds: string[] = (supplies ?? []).map((s: FulfillmentSupply) => s.id)
@@ -805,6 +849,7 @@ export const createSupply = async (data: {
   trip_line_id: string | null
   created_by: string | null
   source_item_id?: string | null
+  pipeline_stage_id?: string | null
 }): Promise<FulfillmentSupply> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data: row, error } = await (supabase as any)
@@ -1032,13 +1077,14 @@ export const fetchMarkingDefectsByStore = async (
 
 // ── Batch Consumables ─────────────────────────────────────────
 
-export const fetchBatchConsumables = async (batchId: string): Promise<BatchConsumable[]> => {
+export const fetchBatchConsumables = async (batchId: string, pipelineStageId?: string | null): Promise<BatchConsumable[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('batch_consumables')
     .select('*, consumable:consumables(*)')
     .eq('batch_id', batchId)
-    .order('created_at', { ascending: true })
+  if (pipelineStageId !== undefined) query = pipelineStageId ? query.eq('pipeline_stage_id', pipelineStageId) : query.is('pipeline_stage_id', null)
+  const { data, error } = await query.order('created_at', { ascending: true })
   if (error) throw error
   return (data ?? []) as BatchConsumable[]
 }
@@ -1047,11 +1093,31 @@ export const upsertBatchConsumable = async (
   batchId: string,
   consumableId: string,
   qty: number,
+  pipelineStageId?: string | null,
 ): Promise<BatchConsumable> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  if (!pipelineStageId) {
+    const { data: existing, error: lookupError } = await (supabase as any)
+      .from('batch_consumables')
+      .select('id')
+      .eq('batch_id', batchId)
+      .eq('consumable_id', consumableId)
+      .is('pipeline_stage_id', null)
+      .maybeSingle()
+    if (lookupError) throw lookupError
+    const legacyQuery = existing?.id
+      ? (supabase as any).from('batch_consumables').update({ qty }).eq('id', existing.id)
+      : (supabase as any).from('batch_consumables').insert({ batch_id: batchId, consumable_id: consumableId, qty, pipeline_stage_id: null })
+    const { data, error } = await legacyQuery.select('*, consumable:consumables(*)').single()
+    if (error) throw error
+    return data as BatchConsumable
+  }
   const { data, error } = await (supabase as any)
     .from('batch_consumables')
-    .upsert({ batch_id: batchId, consumable_id: consumableId, qty }, { onConflict: 'batch_id,consumable_id' })
+    .upsert(
+      { batch_id: batchId, consumable_id: consumableId, qty, pipeline_stage_id: pipelineStageId ?? null },
+      { onConflict: 'pipeline_stage_id,consumable_id' },
+    )
     .select('*, consumable:consumables(*)')
     .single()
   if (error) throw error
@@ -1071,20 +1137,22 @@ export const deleteBatchConsumable = async (id: string): Promise<void> => {
 // Packaging Logs — журнал работ этапа Упаковки
 // ══════════════════════════════════════════════════════════════
 
-export const fetchPackagingLogs = async (batchId: string): Promise<import('../types').FulfillmentPackagingLog[]> => {
+export const fetchPackagingLogs = async (batchId: string, pipelineStageId?: string | null): Promise<import('../types').FulfillmentPackagingLog[]> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('fulfillment_packaging_logs')
     .select('*')
     .eq('batch_id', batchId)
     .is('deleted_at', null)
-    .order('created_at', { ascending: true })
+  if (pipelineStageId !== undefined) query = pipelineStageId ? query.eq('pipeline_stage_id', pipelineStageId) : query.is('pipeline_stage_id', null)
+  const { data, error } = await query.order('created_at', { ascending: true })
   if (error) throw error
   return (data ?? []) as import('../types').FulfillmentPackagingLog[]
 }
 
 export const addPackagingLog = async (entry: {
   batch_id: string
+  pipeline_stage_id?: string | null
   account_id: string
   user_id: string
   user_email: string

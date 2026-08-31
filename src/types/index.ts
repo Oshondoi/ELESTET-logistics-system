@@ -769,6 +769,9 @@ export interface FulfillmentBatch {
   deleted_at: string | null
   // агрегированные суммы из fulfillment_items (заполняются при fetchBatches)
   qty_received_sum?: number
+  qty_good_sum?: number
+  qty_defect_sum?: number
+  qty_declared_sum?: number
   qty_otk_sum?: number
   qty_marked_sum?: number
   qty_packaging_sum?: number
@@ -783,7 +786,10 @@ export interface FulfillmentItem {
   size: string | null
   color: string | null
   article: string | null
+  qty_declared: number
+  /** Годное количество фактической приёмки. Legacy name kept for compatibility. */
   qty_received: number
+  qty_defect?: number
   qty_otk: number | null
   qty_marked: number | null
   qty_packed: number | null
@@ -791,6 +797,35 @@ export interface FulfillmentItem {
   notes: string | null
   sort_order: number
   created_at: string
+  pipeline_stage_id?: string | null
+  lineage_id?: string
+  source_item_id?: string | null
+  is_excluded?: boolean
+  corrected_at?: string | null
+}
+
+export interface FulfillmentReceptionHistory {
+  id: string
+  batch_id: string
+  pipeline_stage_id: string | null
+  item_id: string | null
+  lineage_id: string
+  action: 'created' | 'updated' | 'excluded' | 'restored' | 'declared_from_previous'
+  old_values: Record<string, unknown> | null
+  new_values: Record<string, unknown>
+  reason: string | null
+  changed_by: string | null
+  changed_at: string
+}
+
+export interface PipelineStageDiscrepancy {
+  lineage_id: string
+  barcode: string
+  product_name: string | null
+  sent_good: number
+  next_good: number
+  next_defect: number
+  difference: number
 }
 
 export interface FulfillmentStageLog {
@@ -822,6 +857,7 @@ export interface FulfillmentOtkLog {
   created_at: string
   updated_at: string | null
   deleted_at: string | null
+  pipeline_stage_id?: string | null
 }
 
 export interface FulfillmentMarkingLog extends FulfillmentOtkLog {
@@ -895,6 +931,7 @@ export interface FulfillmentSupply {
   source_item_id: string | null
   created_by: string | null
   created_at: string
+  pipeline_stage_id?: string | null
   _local?: boolean
 }
 
@@ -997,6 +1034,7 @@ export interface BatchPipelineStage {
   completed_at: string | null
   created_at: string
   updated_at: string
+  otk_discrepancy?: number
 }
 
 // ── Outsource: партнёрская связь ────────────────────────────

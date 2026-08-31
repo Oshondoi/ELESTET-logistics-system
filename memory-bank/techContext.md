@@ -276,3 +276,12 @@ Invoke-RestMethod -Uri "https://api.supabase.com/v1/projects/<PROJECT_REF>/datab
 - Actions: `connect`, `disconnect`, `stats`, `products`, `codes`, `operations`, `operation_ready`, `emit`, `utilise`, `create_product`, `publish_product`, `participant_info`, `topup_qr`, `countries`, `refresh_countries`, `tnved_list`, `tnved_sync`
 - Auth в edge function: `supabase.auth.getUser()` через заголовок `Authorization: Bearer {token}`
 - **ВАЖНО:** вызывающая сторона (KizPage.tsx `invoke()`) обязана обновить сессию через `supabase.auth.getSession()` перед каждым вызовом и явно передать свежий `access_token`
+
+## Public repository and secret handling (31.08.2026)
+
+- GitHub repository is currently public. Treat `README.md`, tracked files, commit history, author metadata, and unique project strings as discoverable even when a person does not initially know the GitHub username.
+- `sourcemap: false` prevents convenient production source maps, but it does not hide a public repository or its README.
+- Supabase personal access tokens (`sbp_…`), service-role values, WB keys, payment secrets, and similar credentials must never be literals in tracked scripts, README, memory bank, examples, logs, or frontend code.
+- Local helpers must read privileged values from an ignored `.env.local`, process environment, or a platform secret store. Examples use placeholders only.
+- If a real token ever enters a commit, deleting the line is not revocation. First revoke/delete the token at its provider, then remove it from the working tree and rewrite public Git history if cleanup is required.
+- The historical Supabase PAT discovered in a tracked helper during the 31.08.2026 audit was confirmed by the owner as already revoked. Never reuse or reproduce its value.

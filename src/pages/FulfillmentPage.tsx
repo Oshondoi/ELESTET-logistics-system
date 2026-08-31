@@ -12,6 +12,7 @@ import type {
   FulfillmentMarkingLog,
   FulfillmentMarkingLogHistory,
   FulfillmentPackagingLog,
+  FulfillmentReceptionHistory,
   FulfillmentSupplyWithBoxes,
   FulfillmentSettings,
   FulfillmentStage,
@@ -28,6 +29,7 @@ import type {
 import {
   fetchBatches,
   fetchBatchWithItems,
+  fetchReceptionHistory,
   fetchPartnerBatchesFull,
   fetchFulfillmentSettings,
   upsertFulfillmentSettings,
@@ -83,8 +85,8 @@ import {
   uploadPackagingPhoto,
 } from '../services/fulfillmentService'
 import type { CatalogProduct, OtkPerformer, ProductInfo } from '../services/fulfillmentService'
-import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, initBatchPipeline, completeBatchPipelineStage, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags } from '../services/pipelineService'
-import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo } from '../types'
+import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, initBatchPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags } from '../services/pipelineService'
+import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, PipelineStageDiscrepancy } from '../types'
 import { fetchExecutorOptions } from '../services/outsourceService'
 import { findProductByBarcode, fetchPhotosByBarcodes, fetchProductInfoByBarcodes } from '../services/fulfillmentService'
 import { createTrip, addTripLine, setTripLineFulfillmentBatch, updateTripLineTripId, updateTripLineWeight } from '../services/tripService'
@@ -124,6 +126,7 @@ const STAGE_LABELS_TO: Partial<Record<FulfillmentStage, string>> = {
   logistics: 'Логистике',
 }
 type AddMode = 'barcode' | 'bulk' | 'catalog' | 'boxes'
+type ReceptionTab = 'declared' | 'actual'
 
 const STATUS_LABELS: Record<string, string> = {
   active: 'В работе',
@@ -680,6 +683,7 @@ const BatchDetailModal = ({
   const [photoMap, setPhotoMap] = useState<Record<string, string | null>>({})
 
   // Приёмка: режим добавления
+  const [receptionTab, setReceptionTab] = useState<ReceptionTab>('declared')
   const [addMode, setAddMode] = useState<AddMode>('bulk')
 
   // Режим «По баркоду»
@@ -820,6 +824,7 @@ const BatchDetailModal = ({
   const [otkLogHistories, setOtkLogHistories] = useState<Record<string, FulfillmentOtkLogHistory[]>>({})
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyItemId, setHistoryItemId] = useState<string | null>(null)
+  const [receptionHistory, setReceptionHistory] = useState<FulfillmentReceptionHistory[]>([])
 
   // Тарифы работ из БД
   const [workTariffs, setWorkTariffs] = useState<FulfillmentWorkTariff[]>([])
@@ -970,8 +975,14 @@ const BatchDetailModal = ({
   const [supplyWeightMap, setSupplyWeightMap] = useState<Record<string, string>>({})
 
   // Буфер изменений приёмки
+  const [declaredDraft, setDeclaredDraft] = useState<Record<string, number>>(
+    Object.fromEntries(initialBatch.items.map((it) => [it.id, it.qty_declared ?? it.qty_received]))
+  )
   const [receptionDraft, setReceptionDraft] = useState<Record<string, number>>(
     Object.fromEntries(initialBatch.items.map((it) => [it.id, it.qty_received]))
+  )
+  const [receptionDefectDraft, setReceptionDefectDraft] = useState<Record<string, number>>(
+    Object.fromEntries(initialBatch.items.map((it) => [it.id, it.qty_defect ?? 0]))
   )
   const [receptionBoxesDraft, setReceptionBoxesDraft] = useState<Record<string, number>>(
     Object.fromEntries(initialBatch.items.filter((it) => it.boxes != null).map((it) => [it.id, it.boxes ?? 0]))
@@ -1156,6 +1167,8 @@ const BatchDetailModal = ({
 
   // ── Pipeline stages ──────────────────────────────────────────
   const [pipelineStgs, setPipelineStgs] = useState<BatchPipelineStage[]>([])
+  const [selectedPipelineStageId, setSelectedPipelineStageId] = useState<string | null>(null)
+  const [outgoingDiscrepancies, setOutgoingDiscrepancies] = useState<PipelineStageDiscrepancy[]>([])
   const [isPipelineLoading, setIsPipelineLoading] = useState(true)
   const [isCompletingPipelineStage, setIsCompletingPipelineStage] = useState(false)
 
@@ -1165,21 +1178,23 @@ const BatchDetailModal = ({
       .then(setPipelineStgs)
       .catch(() => {})
       .finally(() => setIsPipelineLoading(false))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialBatch.id])
 
   const activePipelineStage = pipelineStgs.find((s) => s.status === 'active') ?? null
-  const effectiveStageSource = activePipelineStage
+  const displayPipelineStage = pipelineStgs.find((stage) => stage.id === selectedPipelineStageId)
+    ?? activePipelineStage
+    ?? null
+  const effectiveStageSource = displayPipelineStage
     ? {
         ...batch,
-        stage_otk: activePipelineStage.stage_otk,
-        stage_packaging: activePipelineStage.stage_packaging,
-        stage_marking: activePipelineStage.stage_marking,
-        stage_packing: activePipelineStage.stage_packing,
-        stage_logistics: activePipelineStage.stage_logistics,
+        stage_otk: displayPipelineStage.stage_otk,
+        stage_packaging: displayPipelineStage.stage_packaging,
+        stage_marking: displayPipelineStage.stage_marking,
+        stage_packing: displayPipelineStage.stage_packing,
+        stage_logistics: displayPipelineStage.stage_logistics,
       }
     : batch
-  const activeSubStage = activePipelineStage?.current_stage ?? batch.current_stage
+  const activeSubStage = displayPipelineStage?.current_stage ?? batch.current_stage
   const enabledStages = getEnabledStages(effectiveStageSource)
   const currentIdx = enabledStages.indexOf(activeSubStage)
   // Только тот, кто является исполнителем активной стадии, может её завершить:
@@ -1192,19 +1207,72 @@ const BatchDetailModal = ({
 
   // Активный этап пайплайна выполняется партнёром — владелец не может редактировать данные
   // isPipelineLoading: пока не загружено — блокируем (защита от race condition)
-  const stagePartnerLocked = !isPipelineLoading && activePipelineStage !== null
-    && activePipelineStage.partner_account_id !== null
-    && activePipelineStage.partner_account_id !== accountId
+  const stagePartnerLocked = !isPipelineLoading && displayPipelineStage !== null
+    && displayPipelineStage.partner_account_id !== null
+    && displayPipelineStage.partner_account_id !== accountId
   // Текущий пользователь — назначенный партнёр-исполнитель активного этапа
-  const isPartnerExecutorOfActiveStage = !isPipelineLoading && activePipelineStage !== null
-    && activePipelineStage.partner_account_id === accountId
+  const isPartnerExecutorOfActiveStage = !isPipelineLoading && displayPipelineStage !== null
+    && displayPipelineStage.partner_account_id === accountId
+  const isOwnerExecutorOfDisplayedStage = !isPipelineLoading && displayPipelineStage !== null
+    && displayPipelineStage.partner_account_id === null
+    && displayPipelineStage.owner_account_id === accountId
   // Право на редактирование данных этапа (приёмка, ОТК, маркировка, упаковка, паллеты)
   // Во время загрузки пайплайна — блокируем, чтобы не было временного доступа до получения данных
   const canManageStageData = isPipelineLoading
     ? false
     : stagePartnerLocked
       ? false
-      : (canManage || isPartnerExecutorOfActiveStage)
+      : displayPipelineStage
+        ? displayPipelineStage.status !== 'pending' && (isPartnerExecutorOfActiveStage || isOwnerExecutorOfDisplayedStage)
+        : canManage
+
+  useEffect(() => {
+    if (!displayPipelineStage?.id) return
+    let cancelled = false
+    void fetchBatchWithItems(initialBatch.id, displayPipelineStage.id)
+      .then((fresh) => {
+        if (cancelled) return
+        setItems(fresh.items)
+        onItemsChanged(fresh.items)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayPipelineStage?.id, initialBatch.id])
+
+  useEffect(() => {
+    if (!displayPipelineStage?.id || displayPipelineStage.status !== 'done') {
+      setOutgoingDiscrepancies([])
+      return
+    }
+    let cancelled = false
+    void fetchPipelineStageDiscrepancies(displayPipelineStage.id)
+      .then((rows) => { if (!cancelled) setOutgoingDiscrepancies(rows) })
+      .catch(() => { if (!cancelled) setOutgoingDiscrepancies([]) })
+    return () => { cancelled = true }
+  }, [displayPipelineStage?.id, displayPipelineStage?.status, items])
+
+  useEffect(() => {
+    if (!historyOpen || otkHistoryStageTab !== 'reception') return
+    let cancelled = false
+    void fetchReceptionHistory(initialBatch.id, displayPipelineStage?.id ?? null)
+      .then((rows) => { if (!cancelled) setReceptionHistory(rows) })
+      .catch(() => { if (!cancelled) setReceptionHistory([]) })
+    return () => { cancelled = true }
+  }, [historyOpen, otkHistoryStageTab, initialBatch.id, displayPipelineStage?.id])
+
+  const advanceWorkflowStage = async (): Promise<FulfillmentBatch> => {
+    if (!activePipelineStage) return advanceStage(batch)
+    if (displayPipelineStage?.id !== activePipelineStage.id) {
+      throw new Error('Завершать этапы можно только в активной стадии')
+    }
+    const nextStep = enabledStages[currentIdx + 1] ?? 'done'
+    await advanceBatchPipelineStep(activePipelineStage.id, nextStep)
+    const updatedStages = await fetchBatchPipeline(initialBatch.id)
+    setPipelineStgs(updatedStages)
+    setViewStage(nextStep)
+    return batch
+  }
 
   const activePackingBoxId = (() => {
     if (!activeSupplyId) return null
@@ -1281,7 +1349,7 @@ const BatchDetailModal = ({
         await Promise.all(Object.entries(otkEdits).map(([id, v]) => updateOtkLog(id, v)))
         await Promise.all(otkBuffer.map(async (e) => {
           const photoUrls = e.photo_files.length > 0 ? await Promise.all(e.photo_files.map((f) => uploadOtkPhoto(userId || 'anon', batch.id, f))) : []
-          return addOtkLog({ batch_id: batch.id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, performer_user_id: e.performer_user_id, performer_name: e.performer_name, tariff: e.tariff, qty: e.qty, qty_defect: e.qty_defect, notes: e.notes || undefined, photo_urls: photoUrls })
+          return addOtkLog({ batch_id: batch.id, pipeline_stage_id: displayPipelineStage?.id ?? null, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, performer_user_id: e.performer_user_id, performer_name: e.performer_name, tariff: e.tariff, qty: e.qty, qty_defect: e.qty_defect, notes: e.notes || undefined, photo_urls: photoUrls })
         }))
         setOtkBuffer([]); setOtkEdits({}); setOtkDeletedIds([])
       }
@@ -1291,14 +1359,30 @@ const BatchDetailModal = ({
         await Promise.all(Object.entries(packagingEdits).map(([id, v]) => { const { zip_bags_all: _, ...dbPatch } = v; return updatePackagingLog(id, dbPatch) }))
         await Promise.all(packagingBuffer.map(async (e) => {
           const photoUrls = e.photo_files.length > 0 ? await Promise.all(e.photo_files.map((f) => uploadPackagingPhoto(userId || 'anon', batch.id, f))) : []
-          return addPackagingLog({ batch_id: batch.id, account_id: batch.account_id, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, performer_user_id: e.performer_user_id, performer_name: e.performer_name, tariff: e.tariff, qty: e.qty, qty_defect: e.qty_defect, notes: e.notes || undefined, photo_urls: photoUrls, consumable_id: e.consumable_id, zip_bags_qty: e.zip_bags_qty })
+          return addPackagingLog({ batch_id: batch.id, pipeline_stage_id: displayPipelineStage?.id ?? null, account_id: accountId, user_id: userId || '', user_email: userEmail || '', user_name: userName || null, performer_user_id: e.performer_user_id, performer_name: e.performer_name, tariff: e.tariff, qty: e.qty, qty_defect: e.qty_defect, notes: e.notes || undefined, photo_urls: photoUrls, consumable_id: e.consumable_id, zip_bags_qty: e.zip_bags_qty })
         }))
         setPackagingBuffer([]); setPackagingEdits({}); setPackagingDeletedIds([])
       }
       // Теперь завершаем стадию пайплайна
-      await completeBatchPipelineStage(activePipelineStage.id)
+      const completion = await completeBatchPipelineStage(activePipelineStage.id)
       const updated = await fetchBatchPipeline(initialBatch.id)
       setPipelineStgs(updated)
+      const nextStage = completion.next_stage_id
+        ? updated.find((stage) => stage.id === completion.next_stage_id) ?? null
+        : null
+      if (nextStage) {
+        setSelectedPipelineStageId(nextStage.id)
+        const refreshed = await fetchBatchWithItems(initialBatch.id, nextStage.id)
+        setItems(refreshed.items)
+        onItemsChanged(refreshed.items)
+        setViewStage(nextStage.current_stage)
+      } else {
+        setSelectedPipelineStageId(activePipelineStage.id)
+        const refreshed = await fetchBatchWithItems(initialBatch.id, activePipelineStage.id)
+        const completedBatch = { ...refreshed, status: 'done' as const, current_stage: 'done' as const }
+        setBatch(completedBatch)
+        onBatchUpdated(completedBatch)
+      }
       setIsDirty(false)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка завершения стадии')
@@ -1311,9 +1395,8 @@ const BatchDetailModal = ({
   // Дата завершения этапа Приёмка
   const [receptionCompletedDate, setReceptionCompletedDate] = useState<string | null>(null)
   useEffect(() => {
-    void fetchStageCompletedAt(initialBatch.id, 'reception').then((d) => setReceptionCompletedDate(d))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialBatch.id])
+    void fetchStageCompletedAt(initialBatch.id, 'reception', displayPipelineStage?.id).then((d) => setReceptionCompletedDate(d))
+  }, [initialBatch.id, displayPipelineStage?.id])
 
   // Синхронизировать viewStage при реальном переходе этапа
   useEffect(() => { setViewStage(activeSubStage) }, [activeSubStage])
@@ -1342,9 +1425,17 @@ const BatchDetailModal = ({
     })
     setStageDraft(draft)
     // Инициализировать reception draft
+    const decDraft: Record<string, number> = {}
     const recDraft: Record<string, number> = {}
-    items.forEach((it) => { recDraft[it.id] = it.qty_received })
+    const defectDraft: Record<string, number> = {}
+    items.forEach((it) => {
+      decDraft[it.id] = it.qty_declared ?? it.qty_received
+      recDraft[it.id] = it.qty_received
+      defectDraft[it.id] = it.qty_defect ?? 0
+    })
+    setDeclaredDraft(decDraft)
     setReceptionDraft(recDraft)
+    setReceptionDefectDraft(defectDraft)
     setIsDirty(false)
   }, [batch.current_stage])
 
@@ -1362,9 +1453,17 @@ const BatchDetailModal = ({
     setMarkingDeletedIds([])
     setMarkingEditingId(null)
     // Сбросить черновик приёмки
+    const decDraft: Record<string, number> = {}
     const recDraft: Record<string, number> = {}
-    items.forEach((it) => { recDraft[it.id] = it.qty_received })
+    const defectDraft: Record<string, number> = {}
+    items.forEach((it) => {
+      decDraft[it.id] = it.qty_declared ?? it.qty_received
+      recDraft[it.id] = it.qty_received
+      defectDraft[it.id] = it.qty_defect ?? 0
+    })
+    setDeclaredDraft(decDraft)
     setReceptionDraft(recDraft)
+    setReceptionDefectDraft(defectDraft)
     // Инициализировать stageDraft под целевой этап или вернуть к сохранённым значениям текущего
     const draft: Record<string, { qty: number; boxes?: number }> = {}
     items.forEach((it) => {
@@ -1381,7 +1480,7 @@ const BatchDetailModal = ({
     setIsLoadingOtk(true)
     setOtkPerformerId(userId)
     setOtkPerformerName(userName || userEmail)
-    Promise.all([fetchOtkLogs(batch.id), fetchDeletedOtkLogs(batch.id)])
+    Promise.all([fetchOtkLogs(batch.id, displayPipelineStage?.id ?? null), fetchDeletedOtkLogs(batch.id, displayPipelineStage?.id ?? null)])
       .then(([active, deleted]) => {
         setOtkLogs(active)
         setOtkDeletedLogs(deleted)
@@ -1390,7 +1489,9 @@ const BatchDetailModal = ({
         const tOtk = active.reduce((s, l) => s + l.qty + l.qty_defect, 0)
         // Если логов нет — discrepancy = 0 (или null). Если есть — считаем разницу.
         const discrepancy = active.length > 0 ? tOtk - tReceived : 0
-        if (discrepancy !== (batch.otk_discrepancy ?? 0)) {
+        if (displayPipelineStage) {
+          if (discrepancy !== (displayPipelineStage.otk_discrepancy ?? 0)) void updateBatchPipelineOtkDiscrepancy(displayPipelineStage.id, discrepancy).catch(() => {})
+        } else if (discrepancy !== (batch.otk_discrepancy ?? 0)) {
           updateBatch(batch.id, { otk_discrepancy: discrepancy })
             .then((updated) => {
               setBatch((prev) => ({ ...prev, ...updated }))
@@ -1406,7 +1507,7 @@ const BatchDetailModal = ({
         .then(setOtkPerformers)
         .catch(() => setOtkPerformers([]))
     }
-  }, [batch.id, viewStage])
+  }, [batch.id, viewStage, displayPipelineStage?.id])
 
   // Загрузить Marking-логи при переходе на этап Маркировки
   useEffect(() => {
@@ -1415,11 +1516,11 @@ const BatchDetailModal = ({
     setMarkingPerformerId(userId)
     setMarkingPerformerName(userName || userEmail)
     setIsLoadingConsumables(true)
-    fetchConsumables(batch.account_id)
+    fetchConsumables(accountId)
       .then((ac) => setAccountConsumables(ac as Consumable[]))
       .catch(() => setAccountConsumables([]))
       .finally(() => setIsLoadingConsumables(false))
-    Promise.all([fetchMarkingLogs(batch.id), fetchDeletedMarkingLogs(batch.id)])
+    Promise.all([fetchMarkingLogs(batch.id, displayPipelineStage?.id ?? null), fetchDeletedMarkingLogs(batch.id, displayPipelineStage?.id ?? null)])
       .then(([active, deleted]) => { setMarkingLogs(active); setMarkingDeletedLogs(deleted) })
       .catch(() => { setMarkingLogs([]); setMarkingDeletedLogs([]) })
       .finally(() => setIsLoadingMarking(false))
@@ -1428,7 +1529,7 @@ const BatchDetailModal = ({
         .then(setMarkingPerformers)
         .catch(() => setMarkingPerformers([]))
     }
-  }, [batch.id, viewStage])
+  }, [batch.id, viewStage, displayPipelineStage?.id])
 
   // Актуальные позиции для камерного лукапа (без stale closure)
   useEffect(() => { markingItemsRef.current = items }, [items])
@@ -1467,7 +1568,7 @@ const BatchDetailModal = ({
   useEffect(() => {
     if (viewStage !== 'packing' && viewStage !== 'logistics') return
     setIsLoadingSupplies(true)
-    fetchSupplies(batch.id)
+    fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
       .then((loaded) => {
         setSupplies(loaded)
         // Инициализировать карту типов тарифов из загруженных поставок
@@ -1491,21 +1592,21 @@ const BatchDetailModal = ({
       })
       .catch(() => setSupplies([]))
       .finally(() => setIsLoadingSupplies(false))
-  }, [batch.id, viewStage])
+  }, [batch.id, viewStage, displayPipelineStage?.id])
 
   // Загрузить расходники-короба при открытии этапа packing
   useEffect(() => {
     if (viewStage !== 'packing') return
-    fetchConsumableCatalog(batch.account_id)
+    fetchConsumableCatalog(accountId)
       .then((items) => setBoxCatalogItems((items as ConsumableCatalogItem[]).filter((i) => i.kind === 'Короб' && !!i.size).sort((a, b) => { const ap = a.size.split('x').map(Number); const bp = b.size.split('x').map(Number); for (let i = 0; i < Math.max(ap.length, bp.length); i++) { const d = (bp[i] || 0) - (ap[i] || 0); if (d !== 0) return d } return 0 })))
       .catch(() => setBoxCatalogItems([]))
-  }, [batch.account_id, viewStage])
+  }, [accountId, viewStage])
 
   // Загрузить расходники при открытии этапа packaging
   useEffect(() => {
     if (viewStage !== 'packaging') return
     setIsLoadingConsumables(true)
-    Promise.all([fetchBatchConsumables(batch.id), fetchConsumables(batch.account_id), fetchConsumableCatalog(batch.account_id)])
+    Promise.all([fetchBatchConsumables(batch.id, displayPipelineStage?.id ?? null), fetchConsumables(accountId), fetchConsumableCatalog(accountId)])
       .then(([bc, ac, catalog]) => {
         setBatchConsumables(bc)
         setAccountConsumables(ac as Consumable[])
@@ -1515,7 +1616,7 @@ const BatchDetailModal = ({
       .finally(() => setIsLoadingConsumables(false))
     // Загрузить логи работ упаковки
     setIsLoadingPackagingLogs(true)
-    fetchPackagingLogs(batch.id)
+    fetchPackagingLogs(batch.id, displayPipelineStage?.id ?? null)
       .then(setPackagingLogs)
       .catch(() => setPackagingLogs([]))
       .finally(() => setIsLoadingPackagingLogs(false))
@@ -1529,7 +1630,7 @@ const BatchDetailModal = ({
         })
         .catch(() => setPackagingPerformers([]))
     }
-  }, [batch.id, batch.account_id, viewStage])
+  }, [batch.id, accountId, viewStage, displayPipelineStage?.id])
 
   // Камера — BarcodeDetector (Chrome Android) + ZXing fallback (все остальные)
   useEffect(() => {
@@ -1689,6 +1790,33 @@ const BatchDetailModal = ({
     }
   }, [accountId, batch.store_id, store?.api_key])
 
+  const getReceptionQty = (item: FulfillmentItem) => receptionTab === 'declared'
+    ? (declaredDraft[item.id] ?? item.qty_declared ?? item.qty_received)
+    : (receptionDraft[item.id] ?? item.qty_received)
+
+  const withReceptionQty = (item: FulfillmentItem, qty: number): FulfillmentItem => receptionTab === 'declared'
+    ? { ...item, qty_declared: qty }
+    : { ...item, qty_received: qty }
+
+  const setReceptionQtyDraft = (id: string, qty: number) => {
+    if (receptionTab === 'declared') setDeclaredDraft((prev) => ({ ...prev, [id]: qty }))
+    else setReceptionDraft((prev) => ({ ...prev, [id]: qty }))
+    setIsDirty(true)
+  }
+
+  const handleAcceptAllDeclared = () => {
+    const good: Record<string, number> = {}
+    const defect: Record<string, number> = {}
+    items.filter((item) => !item.is_excluded).forEach((item) => {
+      good[item.id] = declaredDraft[item.id] ?? item.qty_declared ?? 0
+      defect[item.id] = 0
+    })
+    setReceptionDraft(good)
+    setReceptionDefectDraft(defect)
+    setReceptionTab('actual')
+    setIsDirty(true)
+  }
+
   const handleReceptionCameraScan = async (barcode: string) => {
     setNewBarcode(barcode)
     setNewName('')
@@ -1724,14 +1852,11 @@ const BatchDetailModal = ({
         const existing = items.find((i) => i.barcode === barcode.trim())
         if (existing) {
           if (pendingItemIds.has(existing.id)) {
-            const next = items.map((i) => i.id === existing.id ? { ...i, qty_received: i.qty_received + 1 } : i)
+            const next = items.map((i) => i.id === existing.id ? withReceptionQty(i, getReceptionQty(i) + 1) : i)
             setItems(next); onItemsChanged(next); setIsDirty(true)
-            void recalcOtkDiscrepancy(next, otkLogs)
+            if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
           } else {
-            const newQty = (receptionDraft[existing.id] ?? existing.qty_received) + 1
-            setReceptionDraft((p) => ({ ...p, [existing.id]: newQty }))
-            setIsDirty(true)
-            void recalcOtkDiscrepancy(items, otkLogs)
+            setReceptionQtyDraft(existing.id, getReceptionQty(existing) + 1)
           }
         } else {
           const tempId = `_local_${crypto.randomUUID()}`
@@ -1739,7 +1864,10 @@ const BatchDetailModal = ({
             id: tempId, batch_id: batch.id, barcode: barcode.trim(),
             product_name: resolvedName || null, size: resolvedSize || null,
             color: resolvedColor || null, article: resolvedArticle || null,
-            qty_received: 1, qty_otk: null, qty_marked: null, qty_packed: null,
+            qty_declared: receptionTab === 'declared' ? 1 : 0,
+            qty_received: receptionTab === 'actual' ? 1 : 0,
+            qty_defect: 0, pipeline_stage_id: displayPipelineStage?.id ?? null,
+            qty_otk: null, qty_marked: null, qty_packed: null,
             boxes: null, notes: null, sort_order: items.length,
             created_at: new Date().toISOString(),
           }
@@ -1747,7 +1875,7 @@ const BatchDetailModal = ({
           setItems(next); onItemsChanged(next)
           setPendingItemIds((prev) => new Set([...prev, tempId]))
           setIsDirty(true)
-          void recalcOtkDiscrepancy(next, otkLogs)
+          if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
         }
         setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize(''); setNewColor(''); setNewArticle('')
         // Переканывать следующий скан
@@ -1942,14 +2070,11 @@ const BatchDetailModal = ({
       const existing = items.find((i) => i.barcode === newBarcode.trim())
       if (existing) {
         if (pendingItemIds.has(existing.id)) {
-          const next = items.map((i) => i.id === existing.id ? { ...i, qty_received: i.qty_received + effectiveQty } : i)
+          const next = items.map((i) => i.id === existing.id ? withReceptionQty(i, getReceptionQty(i) + effectiveQty) : i)
           setItems(next); onItemsChanged(next); setIsDirty(true)
-          void recalcOtkDiscrepancy(next, otkLogs)
+          if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
         } else {
-          const newQty = (receptionDraft[existing.id] ?? existing.qty_received) + effectiveQty
-          setReceptionDraft((p) => ({ ...p, [existing.id]: newQty }))
-          setIsDirty(true)
-          void recalcOtkDiscrepancy(items, otkLogs)
+          setReceptionQtyDraft(existing.id, getReceptionQty(existing) + effectiveQty)
         }
       } else {
         const tempId = `_local_${crypto.randomUUID()}`
@@ -1957,7 +2082,10 @@ const BatchDetailModal = ({
           id: tempId, batch_id: batch.id, barcode: newBarcode.trim(),
           product_name: resolvedName || null, size: resolvedSize || null,
           color: resolvedColor || null, article: resolvedArticle || null,
-          qty_received: effectiveQty, qty_otk: null, qty_marked: null, qty_packed: null,
+          qty_declared: receptionTab === 'declared' ? effectiveQty : 0,
+          qty_received: receptionTab === 'actual' ? effectiveQty : 0,
+          qty_defect: 0, pipeline_stage_id: displayPipelineStage?.id ?? null,
+          qty_otk: null, qty_marked: null, qty_packed: null,
           boxes: null, notes: null, sort_order: items.length,
           created_at: new Date().toISOString(),
         }
@@ -1965,7 +2093,7 @@ const BatchDetailModal = ({
         setItems(next); onItemsChanged(next)
         setPendingItemIds((prev) => new Set([...prev, tempId]))
         setIsDirty(true)
-        void recalcOtkDiscrepancy(next, otkLogs)
+        if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
       }
       setNewBarcode(''); setNewQty(''); setNewName(''); setNewSize(''); setNewColor(''); setNewArticle('')
       barcodeInputRef.current?.focus()
@@ -2001,7 +2129,9 @@ const BatchDetailModal = ({
         id: tempId, batch_id: batch.id, barcode: '',
         product_name: bulkNote.trim() || 'Общая партия',
         size: null, color: null, article: null,
-        qty_received: Number(bulkQty),
+        qty_declared: receptionTab === 'declared' ? Number(bulkQty) : 0,
+        qty_received: receptionTab === 'actual' ? Number(bulkQty) : 0,
+        qty_defect: 0, pipeline_stage_id: displayPipelineStage?.id ?? null,
         qty_otk: null, qty_marked: null, qty_packed: null,
         boxes: null, notes: null, sort_order: items.length,
         created_at: new Date().toISOString(),
@@ -2010,7 +2140,7 @@ const BatchDetailModal = ({
       setItems(next); onItemsChanged(next)
       setPendingItemIds((prev) => new Set([...prev, tempId]))
       setIsDirty(true)
-      void recalcOtkDiscrepancy(next, otkLogs)
+      if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
       setBulkQty(''); setBulkNote('')
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
@@ -2033,7 +2163,10 @@ const BatchDetailModal = ({
         id: tempId, batch_id: batch.id, barcode: '',
         product_name: 'Готовые короба',
         size: null, color: null, article: null,
-        qty_received: qty, qty_otk: null, qty_marked: null, qty_packed: qty,
+        qty_declared: receptionTab === 'declared' ? qty : 0,
+        qty_received: receptionTab === 'actual' ? qty : 0,
+        qty_defect: 0, pipeline_stage_id: displayPipelineStage?.id ?? null,
+        qty_otk: null, qty_marked: null, qty_packed: receptionTab === 'actual' ? qty : null,
         boxes: Number(boxesCount),
         notes: boxesWarehouse.trim() || null,
         sort_order: items.length,
@@ -2052,10 +2185,9 @@ const BatchDetailModal = ({
     }
   }
 
-  // Приёмка: qty_received редактируется локально, сохраняется по кнопке
-  const handleUpdateReceivedDraft = (id: string, qty: number) => {
-    setReceptionDraft((p) => ({ ...p, [id]: qty }))
-    setIsDirty(true)
+  // Количество редактируется в активной вкладке и сохраняется по кнопке.
+  const handleUpdateReceptionDraft = (id: string, qty: number) => {
+    setReceptionQtyDraft(id, qty)
   }
 
   const handleUpdateReadyBoxesDraft = (id: string, boxes: number) => {
@@ -2094,7 +2226,7 @@ const BatchDetailModal = ({
   const syncReadyBoxSupplyCounts = async (changes: { item: FulfillmentItem; boxes: number }[]) => {
     if (changes.length === 0) return
     await Promise.all(changes.map(({ item, boxes }) => syncReadyBoxSupply(item.id, boxes)))
-    const freshSupplies = await fetchSupplies(batch.id)
+    const freshSupplies = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
     setSupplies(freshSupplies)
     rebuildSlotsFromSupplies(freshSupplies)
   }
@@ -2105,7 +2237,9 @@ const BatchDetailModal = ({
     const tOtk = currentOtkLogs.reduce((s, l) => s + l.qty + l.qty_defect, 0)
     // Если логов нет — сбросить в 0, иначе считаем разницу
     const discrepancy = currentOtkLogs.length > 0 ? tOtk - tReceived : 0
-    if (discrepancy !== (batch.otk_discrepancy ?? 0)) {
+    if (displayPipelineStage) {
+      if (discrepancy !== (displayPipelineStage.otk_discrepancy ?? 0)) await updateBatchPipelineOtkDiscrepancy(displayPipelineStage.id, discrepancy)
+    } else if (discrepancy !== (batch.otk_discrepancy ?? 0)) {
       const updated = await updateBatch(batch.id, { otk_discrepancy: discrepancy })
       setBatch((prev) => ({ ...prev, ...updated }))
       onBatchUpdated(updated)
@@ -2145,13 +2279,16 @@ const BatchDetailModal = ({
           batch_id: it.batch_id, barcode: it.barcode,
           product_name: it.product_name, size: it.size,
           color: it.color, article: it.article,
-          qty_received: it.qty_received,
+          qty_declared: declaredDraft[it.id] ?? it.qty_declared,
+          qty_received: receptionDraft[it.id] ?? it.qty_received,
+          qty_defect: receptionDefectDraft[it.id] ?? it.qty_defect ?? 0,
+          pipeline_stage_id: displayPipelineStage?.id ?? null,
           qty_otk: null, qty_marked: null, qty_packed: it.qty_packed ?? null,
           boxes: it.boxes ?? null, notes: it.notes ?? null, sort_order: it.sort_order,
         })))
         // Захватываем вновь сохранённые «Готовые короба» по реальным DB-объектам
         newlySavedReadyBoxItems = savedList.filter(
-          (it) => it.product_name === 'Готовые короба' && (it.boxes ?? 0) > 0
+          (it) => it.product_name === 'Готовые короба' && it.qty_received > 0 && (it.boxes ?? 0) > 0
         )
         const replacements = new Map(pendingList.map((p, i) => [p.id, savedList[i]]))
         currentItems = currentItems.map((it) => replacements.get(it.id) ?? it)
@@ -2160,20 +2297,28 @@ const BatchDetailModal = ({
 
       // 2. Сохранить изменённые qty и количество готовых коробов существующих позиций
       const readyBoxCountChanges = currentItems
-        .filter((it) => !currentPending.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
+        .filter((it) => !currentPending.has(it.id) && it.product_name === 'Готовые короба' && it.qty_received > 0 && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
         .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
       const toUpdate = currentItems.filter((it) =>
         !currentPending.has(it.id) &&
-        receptionDraft[it.id] !== undefined &&
-        receptionDraft[it.id] !== it.qty_received
+        (
+          (declaredDraft[it.id] !== undefined && declaredDraft[it.id] !== it.qty_declared) ||
+          (receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received) ||
+          (receptionDefectDraft[it.id] !== undefined && receptionDefectDraft[it.id] !== (it.qty_defect ?? 0))
+        )
       )
       const updated = await Promise.all(toUpdate.map((it) => updateItem(it.id, {
-        qty_received: receptionDraft[it.id],
+        qty_declared: declaredDraft[it.id] ?? it.qty_declared,
+        qty_received: receptionDraft[it.id] ?? it.qty_received,
+        qty_defect: receptionDefectDraft[it.id] ?? it.qty_defect ?? 0,
+        boxes: it.product_name === 'Готовые короба' ? (receptionBoxesDraft[it.id] ?? it.boxes) : it.boxes,
       })))
-      await syncReadyBoxSupplyCounts([
-        ...readyBoxCountChanges,
-        ...newlySavedReadyBoxItems.map((item) => ({ item, boxes: item.boxes ?? 1 })),
-      ])
+      if (displayPipelineStage?.status !== 'done') {
+        await syncReadyBoxSupplyCounts([
+          ...readyBoxCountChanges,
+          ...newlySavedReadyBoxItems.map((item) => ({ item, boxes: item.boxes ?? 1 })),
+        ])
+      }
       const finalItems = currentItems.map((it) => {
         const u = updated.find((x) => x.id === it.id) ?? it
         const boxChange = readyBoxCountChanges.find((change) => change.item.id === it.id)
@@ -2185,6 +2330,10 @@ const BatchDetailModal = ({
       if (currentPendingDelete.size > 0) {
         for (const id of currentPendingDelete) {
           const itemToDelete = finalItems.find((i) => i.id === id)
+          if (displayPipelineStage?.status === 'done' || (!displayPipelineStage && batch.status === 'done')) {
+            await updateItem(id, { is_excluded: true })
+            continue
+          }
           // Если «Готовые короба» — удалить соответствующую поставку
           if (itemToDelete?.product_name === 'Готовые короба' && itemToDelete.notes) {
             const matchingSupply = supplies.find((s) =>
@@ -2335,7 +2484,7 @@ const BatchDetailModal = ({
           barcode: bc,
           message: reason ? `Товар не добавлен: ${reason}` : 'Товар не добавлен в короб. Повторите сканирование.',
         })
-        void fetchSupplies(batch.id).then(setSupplies)
+        void fetchSupplies(batch.id, displayPipelineStage?.id ?? null).then(setSupplies)
       })
 
     void lookupAndCacheBarcode(bc)
@@ -2363,7 +2512,7 @@ const BatchDetailModal = ({
     const scheduleRefresh = () => {
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(async () => {
-        const fresh = await fetchSupplies(batch.id)
+        const fresh = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
         setSupplies(fresh)
       }, 600)
     }
@@ -2398,7 +2547,11 @@ const BatchDetailModal = ({
     for (const supply of localSupplies) {
       const created = await createSupply({
         batch_id: supply.batch_id,
-        account_id: supply.account_id,
+        // Поставка и её системная нумерация всегда принадлежат владельцу партии.
+        // Исполнитель стадии управляет ею через pipeline_stage_id, но не получает
+        // поставку в собственное пространство номеров/QR.
+        account_id: batch.account_id,
+        pipeline_stage_id: displayPipelineStage?.id ?? null,
         warehouse_id: supply.warehouse_id || null,
         warehouse_name: supply.warehouse_name,
         trip_id: supply.trip_id || null,
@@ -2407,7 +2560,7 @@ const BatchDetailModal = ({
       })
       for (const box of supply.boxes) {
         try {
-          const createdBox = await createBox({ supply_id: created.id, account_id: box.account_id, box_number: box.box_number })
+          const createdBox = await createBox({ supply_id: created.id, account_id: batch.account_id, box_number: box.box_number })
           for (const item of box.items) {
             try {
               await incrementBoxItem({ box_id: createdBox.id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
@@ -2422,7 +2575,7 @@ const BatchDetailModal = ({
       for (const box of supply.boxes) {
         if (box._local) {
           try {
-            const createdBox = await createBox({ supply_id: supply.id, account_id: box.account_id, box_number: box.box_number })
+            const createdBox = await createBox({ supply_id: supply.id, account_id: supply.account_id, box_number: box.box_number })
             for (const item of box.items) {
               try {
                 await incrementBoxItem({ box_id: createdBox.id, barcode: item.barcode, item_id: item.item_id, product_name: item.product_name, qty: item.qty })
@@ -2439,7 +2592,7 @@ const BatchDetailModal = ({
       }
     }
     if (localSupplies.length > 0) {
-      const refreshed = await fetchSupplies(batch.id)
+      const refreshed = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
       setSupplies(refreshed)
     }
   }
@@ -2460,8 +2613,8 @@ const BatchDetailModal = ({
         // После завершения партии — автоматически привязать новые поставки к рейсу
         const _autoTripId = tripSlots[0]?.tripId ?? ''
         if (batch.status === 'done' && _autoTripId && batch.store_id) {
-          const freshSupplies = await fetchSupplies(batch.id)
-          const receptionCompletedAt = await fetchStageCompletedAt(batch.id, 'reception')
+          const freshSupplies = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
+          const receptionCompletedAt = await fetchStageCompletedAt(batch.id, 'reception', displayPipelineStage?.id)
           const receptionDateStr = receptionCompletedAt
             ? new Date(receptionCompletedAt).toISOString().slice(0, 10)
             : ''
@@ -2494,11 +2647,11 @@ const BatchDetailModal = ({
             // Пометить поставку как созданную из фулфилмента — блокирует ручное редактирование
             try { await setTripLineFulfillmentBatch(tripLine.id, batch.id) } catch {}
           }
-          const refreshedSupplies = await fetchSupplies(batch.id)
+          const refreshedSupplies = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
           setSupplies(refreshedSupplies)
         }
       }
-      const refreshed = await fetchBatchWithItems(batch.id)
+      const refreshed = await fetchBatchWithItems(batch.id, displayPipelineStage?.id)
       setItems(refreshed.items)
       onItemsChanged(refreshed.items)
       setIsDirty(false)
@@ -2558,7 +2711,9 @@ const BatchDetailModal = ({
         product_name: product.name ?? product.vendor_code ?? 'Товар',
         size, color: null,
         article: product.vendor_code ?? null,
-        qty_received: qty,
+        qty_declared: receptionTab === 'declared' ? qty : 0,
+        qty_received: receptionTab === 'actual' ? qty : 0,
+        qty_defect: 0, pipeline_stage_id: displayPipelineStage?.id ?? null,
         qty_otk: null, qty_marked: null, qty_packed: null,
         boxes: null, notes: null, sort_order: items.length,
         created_at: new Date().toISOString(),
@@ -2567,7 +2722,7 @@ const BatchDetailModal = ({
       setItems(next); onItemsChanged(next)
       setPendingItemIds((prev) => new Set([...prev, tempId]))
       setIsDirty(true)
-      void recalcOtkDiscrepancy(next, otkLogs)
+      if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
       setCatalogQties((prev) => { const n = { ...prev }; delete n[key]; return n })
     } catch (err) {
       setError((err instanceof Error ? err.message : (err as any)?.message) ?? 'Ошибка')
@@ -2597,7 +2752,8 @@ const BatchDetailModal = ({
     setIsSavingStage(true)
     setError(null)
     try {
-      if (batch.current_stage === 'reception') {
+      const workflowStage = activePipelineStage?.current_stage ?? batch.current_stage
+      if (workflowStage === 'reception') {
         const plannedReadyBoxChanges = items
           .filter((it) => !pendingItemIds.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
           .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
@@ -2606,12 +2762,12 @@ const BatchDetailModal = ({
 
       for (const [id, val] of Object.entries(stageDraft)) {
         if (id.startsWith('_local_')) continue  // ещё не в DB
-        if (batch.current_stage === 'packing') await updateItem(id, { qty_packed: val.qty, boxes: val.boxes ?? 0 })
+        if (workflowStage === 'packing') await updateItem(id, { qty_packed: val.qty, boxes: val.boxes ?? 0 })
       }
-      if (batch.current_stage === 'packing') { /* boxes already in DB */ }
+      if (workflowStage === 'packing') { /* boxes already in DB */ }
 
       // ── Завершение Приёмки: сохранить pending + создать поставки из «Готовых коробов» ──
-      if (batch.current_stage === 'reception') {
+      if (workflowStage === 'reception') {
         // 1. Сохранить pending items в БД (inline, как handleSaveReceptionDraft)
         let savedItems = [...items]
         const currentPending = new Set(pendingItemIds)
@@ -2621,25 +2777,34 @@ const BatchDetailModal = ({
           const sList = await Promise.all(pendingList.map((it) => addItem({
             batch_id: it.batch_id, barcode: it.barcode, product_name: it.product_name,
             size: it.size, color: it.color, article: it.article,
-            qty_received: it.qty_received, qty_otk: null, qty_marked: null, qty_packed: it.qty_packed,
+            qty_declared: declaredDraft[it.id] ?? it.qty_declared,
+            qty_received: receptionDraft[it.id] ?? it.qty_received,
+            qty_defect: receptionDefectDraft[it.id] ?? it.qty_defect ?? 0,
+            pipeline_stage_id: displayPipelineStage?.id ?? null,
+            qty_otk: null, qty_marked: null, qty_packed: it.qty_packed,
             boxes: it.boxes, notes: it.notes, sort_order: it.sort_order,
           })))
-          newlySavedReadyBoxItems = sList.filter((it) => it.product_name === 'Готовые короба' && (it.boxes ?? 0) > 0)
+          newlySavedReadyBoxItems = sList.filter((it) => it.product_name === 'Готовые короба' && it.qty_received > 0 && (it.boxes ?? 0) > 0)
           const m = new Map(pendingList.map((p, i) => [p.id, sList[i]]))
           savedItems = savedItems.map((it) => m.get(it.id) ?? it)
           setPendingItemIds(new Set())
         }
         const readyBoxCountChanges = savedItems
-          .filter((it) => !currentPending.has(it.id) && it.product_name === 'Готовые короба' && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
+          .filter((it) => !currentPending.has(it.id) && it.product_name === 'Готовые короба' && it.qty_received > 0 && receptionBoxesDraft[it.id] !== undefined && receptionBoxesDraft[it.id] !== (it.boxes ?? 0))
           .map((item) => ({ item, boxes: receptionBoxesDraft[item.id] }))
         const toUpd = savedItems.filter((it) =>
           !currentPending.has(it.id) &&
-          receptionDraft[it.id] !== undefined &&
-          receptionDraft[it.id] !== it.qty_received
+          (
+            (declaredDraft[it.id] !== undefined && declaredDraft[it.id] !== it.qty_declared) ||
+            (receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received) ||
+            (receptionDefectDraft[it.id] !== undefined && receptionDefectDraft[it.id] !== (it.qty_defect ?? 0))
+          )
         )
         if (toUpd.length > 0) {
           const upd = await Promise.all(toUpd.map((it) => updateItem(it.id, {
-            qty_received: receptionDraft[it.id],
+            qty_declared: declaredDraft[it.id] ?? it.qty_declared,
+            qty_received: receptionDraft[it.id] ?? it.qty_received,
+            qty_defect: receptionDefectDraft[it.id] ?? it.qty_defect ?? 0,
           })))
           savedItems = savedItems.map((it) => { const u = upd.find((x) => x.id === it.id); return u ?? it })
         }
@@ -2660,18 +2825,18 @@ const BatchDetailModal = ({
 
       // При завершении логистики — создаём trip_lines из поставок фулфилмента
       const hasAnyTripSlot = tripSlots.some((s) => s.tripId)
-      if (batch.current_stage === 'logistics' && hasAnyTripSlot && batch.store_id) {
+      if (workflowStage === 'logistics' && hasAnyTripSlot && batch.store_id) {
         // Убедиться что локальные поставки сохранены
         const hasLocal = supplies.some((s) => s._local)
         /* boxes already saved to DB directly */
         if (hasLocal) { /* no-op */ }
         // Дата завершения этапа Приёмка (reception_date в trip_line = "Приём")
-        const receptionCompletedAt = await fetchStageCompletedAt(batch.id, 'reception')
+        const receptionCompletedAt = await fetchStageCompletedAt(batch.id, 'reception', displayPipelineStage?.id)
         const receptionDateStr = receptionCompletedAt
           ? new Date(receptionCompletedAt).toISOString().slice(0, 10)
           : ''
         // Загрузить актуальные поставки из БД
-        const freshSupplies = await fetchSupplies(batch.id)
+        const freshSupplies = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
         // Создать trip_line для каждой поставки без trip_line_id
         for (const supply of freshSupplies.filter((s) => !s.trip_line_id)) {
           // В per-supply режиме используем рейс конкретной поставки
@@ -2714,10 +2879,10 @@ const BatchDetailModal = ({
         }
       }
 
-      const refreshed = await fetchBatchWithItems(batch.id)
+      const refreshed = await fetchBatchWithItems(batch.id, displayPipelineStage?.id)
       setItems(refreshed.items)
       onItemsChanged(refreshed.items)
-      const updated = await advanceStage(batch)
+      const updated = await advanceWorkflowStage()
       const newBatch = { ...batch, ...updated }
       setBatch(newBatch)
       onBatchUpdated(updated)
@@ -2804,6 +2969,7 @@ const BatchDetailModal = ({
           : []
         const log = await addOtkLog({
           batch_id: batch.id,
+          pipeline_stage_id: displayPipelineStage?.id ?? null,
           user_id: userId || '',
           user_email: userEmail || '',
           user_name: userName || null,
@@ -2829,7 +2995,9 @@ const BatchDetailModal = ({
       const savedLogs = otkLogs.filter((l) => !otkDeletedIds.includes(l.id)).map((l) => otkEdits[l.id] ? { ...l, ...otkEdits[l.id] } : l)
       const tOtkSaved = [...savedLogs, ...newLogs].reduce((s, l) => s + l.qty + l.qty_defect, 0)
       const discrepancy = tOtkSaved - tReceived
-      if (discrepancy !== (batch.otk_discrepancy ?? 0)) {
+      if (displayPipelineStage) {
+        if (discrepancy !== (displayPipelineStage.otk_discrepancy ?? 0)) await updateBatchPipelineOtkDiscrepancy(displayPipelineStage.id, discrepancy)
+      } else if (discrepancy !== (batch.otk_discrepancy ?? 0)) {
         const updated = await updateBatch(batch.id, { otk_discrepancy: discrepancy })
         setBatch((prev) => ({ ...prev, ...updated }))
         onBatchUpdated(updated)
@@ -3012,6 +3180,7 @@ const BatchDetailModal = ({
           : []
         const log = await addMarkingLog({
           batch_id: batch.id,
+          pipeline_stage_id: displayPipelineStage?.id ?? null,
           user_id: userId || '',
           user_email: userEmail || '',
           user_name: userName || null,
@@ -3113,7 +3282,8 @@ const BatchDetailModal = ({
           : []
         return addPackagingLog({
           batch_id: batch.id,
-          account_id: batch.account_id,
+          pipeline_stage_id: displayPipelineStage?.id ?? null,
+          account_id: accountId,
           user_id: userId || '',
           user_email: userEmail || '',
           user_name: userName || null,
@@ -3162,7 +3332,8 @@ const BatchDetailModal = ({
             : []
           return addPackagingLog({
             batch_id: batch.id,
-            account_id: batch.account_id,
+            pipeline_stage_id: displayPipelineStage?.id ?? null,
+            account_id: accountId,
             user_id: userId || '',
             user_email: userEmail || '',
             user_name: userName || null,
@@ -3181,7 +3352,7 @@ const BatchDetailModal = ({
         setPackagingEdits({})
         setPackagingDeletedIds([])
       }
-      const updated = await advanceStage(batch)
+      const updated = await advanceWorkflowStage()
       const newBatch = { ...batch, ...updated }
       setBatch(newBatch)
       onBatchUpdated(updated)
@@ -3227,6 +3398,7 @@ const BatchDetailModal = ({
             : []
           const log = await addMarkingLog({
             batch_id: batch.id,
+            pipeline_stage_id: displayPipelineStage?.id ?? null,
             user_id: userId || '',
             user_email: userEmail || '',
             user_name: userName || null,
@@ -3248,7 +3420,7 @@ const BatchDetailModal = ({
         setMarkingEdits({})
         setMarkingDeletedIds([])
       }
-      const updated = await advanceStage(batch)
+      const updated = await advanceWorkflowStage()
       const newBatch = { ...batch, ...updated }
       setBatch(newBatch)
       onBatchUpdated(updated)
@@ -3275,6 +3447,7 @@ const BatchDetailModal = ({
             : []
           return addOtkLog({
             batch_id: batch.id,
+            pipeline_stage_id: displayPipelineStage?.id ?? null,
             user_id: userId || '',
             user_email: userEmail || '',
             user_name: userName || null,
@@ -3291,7 +3464,7 @@ const BatchDetailModal = ({
         setOtkEdits({})
         setOtkDeletedIds([])
       }
-      const updated = await advanceStage(batch)
+      const updated = await advanceWorkflowStage()
       const newBatch = { ...batch, ...updated }
       setBatch(newBatch)
       onBatchUpdated(updated)
@@ -3308,10 +3481,16 @@ const BatchDetailModal = ({
     setIsSavingStage(true)
     setError(null)
     try {
-      // Сохранить несохранённые qty_received перед переходом
-      const toUpdate = items.filter((it) => receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received)
-      await Promise.all(toUpdate.map((it) => updateItem(it.id, { qty_received: receptionDraft[it.id] })))
-      const updated = await advanceStage(batch)
+      // Сохранить несохранённые заявленные и фактические количества перед переходом.
+      const toUpdate = items.filter((it) =>
+        (declaredDraft[it.id] !== undefined && declaredDraft[it.id] !== it.qty_declared) ||
+        (receptionDraft[it.id] !== undefined && receptionDraft[it.id] !== it.qty_received)
+      )
+      await Promise.all(toUpdate.map((it) => updateItem(it.id, {
+        qty_declared: declaredDraft[it.id] ?? it.qty_declared,
+        qty_received: receptionDraft[it.id] ?? it.qty_received,
+      })))
+      const updated = await advanceWorkflowStage()
       const newBatch = { ...batch, ...updated }
       setBatch(newBatch)
       onBatchUpdated(updated)
@@ -3326,6 +3505,12 @@ const BatchDetailModal = ({
   const tBoxes = sumField(items, 'boxes')
   const tPacked = sumField(items, 'qty_packed')
   const tReceived = sumField(items, 'qty_received')
+  const receptionVisibleItems = items.filter((item) => !item.is_excluded && (
+    getReceptionQty(item) > 0
+    || (receptionTab === 'actual' && (receptionDefectDraft[item.id] ?? item.qty_defect ?? 0) > 0)
+  ))
+  const receptionHasBoxes = receptionVisibleItems.some((item) => item.boxes)
+  const receptionHasNotes = receptionVisibleItems.some((item) => item.notes)
 
   const nextStageName = enabledStages[currentIdx + 1]
 
@@ -3415,7 +3600,7 @@ const BatchDetailModal = ({
             if (viewStage === 'otk' && otkLogs.length > 0 && !otkHistoryTabId) setOtkHistoryTabId(otkLogs[0].id)
             if (viewStage === 'marking') {
               if (markingLogs.length === 0 && markingDeletedLogs.length === 0) {
-                Promise.all([fetchMarkingLogs(batch.id), fetchDeletedMarkingLogs(batch.id)])
+                Promise.all([fetchMarkingLogs(batch.id, displayPipelineStage?.id ?? null), fetchDeletedMarkingLogs(batch.id, displayPipelineStage?.id ?? null)])
                   .then(([active, deleted]) => {
                     setMarkingLogs(active)
                     setMarkingDeletedLogs(deleted)
@@ -3425,7 +3610,7 @@ const BatchDetailModal = ({
                   .catch(() => {})
               } else {
                 // Всегда перезагружаем удалённые логи чтобы показать актуальный список
-                void fetchDeletedMarkingLogs(batch.id).then(setMarkingDeletedLogs).catch(() => {})
+                void fetchDeletedMarkingLogs(batch.id, displayPipelineStage?.id ?? null).then(setMarkingDeletedLogs).catch(() => {})
                 const all = [...markingLogs, ...markingDeletedLogs].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
                 if (all.length > 0 && !markingHistoryTabId) setMarkingHistoryTabId(all[0].id)
               }
@@ -3447,8 +3632,8 @@ const BatchDetailModal = ({
         </div>
 
         {/* Stage progress */}
-        <div className="border-b border-slate-100 px-6 py-2.5">
-          <div className="flex items-start" style={{ minHeight: 72 }}>
+        <div className="border-b border-slate-100 px-6 py-2">
+          <div className="flex items-center overflow-x-auto [scrollbar-width:thin]">
             {(['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics'] as FulfillmentStage[]).map((s, idx, arr) => {
               const stageIdx = STAGE_ORDER.indexOf(s)
               const currentStageIdx = STAGE_ORDER.indexOf(activeSubStage)
@@ -3461,9 +3646,10 @@ const BatchDetailModal = ({
               const stageKey = keyMap[s]
               const isEnabled = s === 'reception' || !stageKey || effectiveStageSource[stageKey] as boolean
               const canToggle = (!activePipelineStage || stagePartnerLocked) && canManage && batch.status === 'active' && !isPast && !!stageKey && !isSavingBatchStages
+              const canReviewCompletedStage = displayPipelineStage?.status === 'done'
 
               const handleClick = () => {
-                if (isPast && canStageJump && isEnabled) {
+                if (isPast && (canStageJump || canReviewCompletedStage) && isEnabled) {
                   if (isDirty) { setPendingSwitchStage(s); return }
                   setViewStage(s)
                 } else if (canToggle) {
@@ -3471,115 +3657,56 @@ const BatchDetailModal = ({
                 }
               }
 
-              const isClickable = (isPast && canStageJump && isEnabled) || canToggle
-              const dotColor = isDone ? 'bg-emerald-500' : 'bg-blue-600'
+              const isClickable = (isPast && (canStageJump || canReviewCompletedStage) && isEnabled) || canToggle
               const isSelected = viewStage === s
 
               return (
-                <div key={s} className={`flex flex-col ${isLast ? '' : 'flex-1'}`}>
-                  <div className="flex w-full items-center" style={{ height: 52 }}>
-                    <div className="flex w-14 shrink-0 items-center justify-center">
-                      <div className="relative flex items-center justify-center">
-                        {/* Фоновый шар выбранного этапа */}
-                        <div className={`absolute w-16 h-16 rounded-full pointer-events-none transition-all duration-500 ease-out left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2
-                          ${isDone ? 'bg-emerald-200' : isCurrent ? 'bg-blue-200' : 'bg-slate-200'}
-                          ${isSelected ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`} />
-                      <button
-                        type="button"
-                        onClick={handleClick}
-                        disabled={!isClickable}
-                        title={
-                          isPast && canStageJump && isEnabled
-                            ? `Перейти: ${STAGE_LABELS[s]}`
-                            : canToggle
-                              ? (isEnabled ? 'Отключить этап' : 'Включить этап')
-                              : undefined
-                        }
-                        className={`relative z-10 flex shrink-0 items-center justify-center rounded-full font-bold transition-all duration-300 ease-in-out
-                          ${isSelected ? 'h-12 w-12' : 'h-10 w-10'}
-                          ${isClickable ? 'cursor-pointer' : 'cursor-default'}
-                          ${!isEnabled ? 'border-2 border-dashed border-slate-200 bg-white text-slate-300' :
-                            isDone ? 'bg-emerald-500 text-white' :
-                            isCurrent ? 'bg-blue-600 text-white' :
-                            canToggle ? 'bg-slate-100 text-slate-400 hover:bg-slate-200' :
-                            'bg-slate-100 text-slate-400'}`}>
-                        {!isEnabled ? (
-                          <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-5 w-5' : 'h-4 w-4'}`} fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <line x1="5" y1="12" x2="19" y2="12" />
-                          </svg>
-                        ) : isDone ? (
-                          <svg viewBox="0 0 24 24" className={`transition-all duration-300 ease-in-out ${isSelected ? 'h-5 w-5' : 'h-4 w-4'}`} fill="none" stroke="currentColor" strokeWidth="3">
-                            <path d="M20 6 9 17l-5-5" />
-                          </svg>
-                        ) : (
-                          <span className={`transition-all duration-300 ease-in-out leading-none ${isSelected ? 'text-xl' : 'text-sm'}`}>{idx + 1}</span>
-                        )}
-                      </button>
-                      </div>
-                    </div>
-                    {!isLast && (() => {
-                      const km: Record<string, keyof typeof batch> = { otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' }
-                      const getEnabled = (st: FulfillmentStage) => st === 'reception' || !km[st] || (effectiveStageSource[km[st]] as boolean)
-                      const getColor = (st: FulfillmentStage) => {
-                        const si = STAGE_ORDER.indexOf(st)
-                        if (currentStageIdx > si) return 'bg-emerald-400'
-                        if (activeSubStage === st) return 'bg-blue-500'
-                        return 'bg-slate-200'
-                      }
-                      // Ближайший включённый слева (включая idx)
-                      let li = -1
-                      for (let i = idx; i >= 0; i--) { if (getEnabled(arr[i])) { li = i; break } }
-                      // Ближайший включённый справа (включая idx+1)
-                      let ri = -1
-                      for (let i = idx + 1; i < arr.length; i++) { if (getEnabled(arr[i])) { ri = i; break } }
-
-                      const lColor = li >= 0 ? getColor(arr[li]) : 'bg-slate-200'
-                      const rColor = ri >= 0 ? getColor(arr[ri]) : 'bg-slate-200'
-
-                      let lineLeft: string, lineRight: string
-                      if (li < 0 || ri < 0) {
-                        lineLeft = lineRight = li >= 0 ? lColor : rColor
-                      } else {
-                        const spanCount = ri - li  // кол-во сегментов в пролёте
-                        const segPos = idx - li    // позиция этого сегмента внутри пролёта (0-based)
-                        if (spanCount === 1) {
-                          // единственный сегмент: ровно 50/50
-                          lineLeft = lColor; lineRight = rColor
-                        } else if (spanCount % 2 === 0) {
-                          // чётное кол-во: первая половина — lColor, вторая — rColor
-                          lineLeft = lineRight = segPos < spanCount / 2 ? lColor : rColor
-                        } else {
-                          // нечётное: средний сегмент делится пополам, остальные — сплошные
-                          const mid = Math.floor(spanCount / 2)
-                          if (segPos < mid) { lineLeft = lineRight = lColor }
-                          else if (segPos > mid) { lineLeft = lineRight = rColor }
-                          else { lineLeft = lColor; lineRight = rColor }
-                        }
-                      }
-                      return (
-                        <div className="flex h-0.5 flex-1">
-                          <div className={`flex-1 ${lineLeft}`} />
-                          <div className={`flex-1 ${lineRight}`} />
-                        </div>
-                      )
-                    })()}
-                  </div>
-                  <div className="flex w-14 flex-col items-center">
-                    <span className={`mt-1.5 text-center text-xs font-medium leading-tight
-                      ${isDone ? 'text-emerald-600' : isCurrent ? 'text-blue-600' : !isEnabled ? 'text-slate-300 line-through' : 'text-slate-400'}`}>
-                      {STAGE_LABELS[s]}
+                <div key={s} className={`flex min-w-0 items-center ${isLast ? '' : 'flex-1'}`}>
+                  <button
+                    type="button"
+                    onClick={handleClick}
+                    disabled={!isClickable}
+                    title={
+                      isPast && (canStageJump || canReviewCompletedStage) && isEnabled
+                        ? `Перейти: ${STAGE_LABELS[s]}`
+                        : canToggle
+                          ? (isEnabled ? 'Отключить этап' : 'Включить этап')
+                          : undefined
+                    }
+                    className={`flex h-9 shrink-0 items-center gap-2 rounded-xl px-2.5 text-xs font-medium transition
+                      ${isClickable ? 'cursor-pointer' : 'cursor-default'}
+                      ${!isEnabled
+                        ? 'border border-dashed border-slate-200 bg-white text-slate-300 line-through'
+                        : isDone
+                          ? `bg-emerald-50 text-emerald-700 ${isSelected ? 'ring-2 ring-emerald-200' : 'hover:bg-emerald-100'}`
+                          : isCurrent
+                            ? `bg-blue-50 text-blue-700 ${isSelected ? 'ring-2 ring-blue-200' : 'hover:bg-blue-100'}`
+                            : `bg-slate-50 text-slate-400 ${isSelected ? 'ring-2 ring-slate-200' : canToggle ? 'hover:bg-slate-100' : ''}`}`}
+                  >
+                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold
+                      ${!isEnabled
+                        ? 'border border-dashed border-slate-200 bg-white text-slate-300'
+                        : isDone
+                          ? 'bg-emerald-500 text-white'
+                          : isCurrent
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-200 text-slate-500'}`}
+                    >
+                      {!isEnabled ? (
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                      ) : isDone ? (
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="3">
+                          <path d="M20 6 9 17l-5-5" />
+                        </svg>
+                      ) : idx + 1}
                     </span>
-                    {/* Dot — всегда в DOM, анимированно выезжает из-за родителя */}
-                    {canStageJump && isEnabled && (isDone || isCurrent) && (
-                      <div
-                        className={`mt-1 h-2.5 w-2.5 rounded-full transition-all duration-500 ease-out pointer-events-none
-                          ${dotColor}
-                          ${isSelected
-                            ? 'translate-y-0 scale-100 opacity-100'
-                            : '-translate-y-10 scale-0 opacity-0'}`}
-                      />
-                    )}
-                  </div>
+                    <span className="whitespace-nowrap">{STAGE_LABELS[s]}</span>
+                  </button>
+                  {!isLast && (
+                    <div className={`mx-1 h-0.5 min-w-4 flex-1 rounded-full ${isDone ? 'bg-emerald-400' : isCurrent ? 'bg-blue-500' : 'bg-slate-200'}`} />
+                  )}
                 </div>
               )
             })}
@@ -3594,13 +3721,24 @@ const BatchDetailModal = ({
               <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-0.5">
                 {pipelineStgs.map((s, idx) => (
                   <div key={s.id} className="flex shrink-0 items-center gap-1.5">
-                    <div className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isDirty) {
+                          setError('Сначала сохраните изменения текущей стадии')
+                          return
+                        }
+                        setSelectedPipelineStageId(s.id)
+                        setViewStage(s.current_stage === 'done' ? 'reception' : s.current_stage)
+                      }}
+                      className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium transition-colors ${displayPipelineStage?.id === s.id ? 'ring-2 ring-violet-200' : ''} ${
                       s.status === 'done'
                         ? 'bg-emerald-100 text-emerald-700'
                         : s.status === 'active'
                           ? 'bg-violet-500 text-white shadow-sm'
                           : 'bg-slate-100 text-slate-400'
-                    }`}>
+                    }`}
+                    >
                       {s.status === 'done' && (
                         <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5"/></svg>
                       )}
@@ -3611,7 +3749,7 @@ const BatchDetailModal = ({
                         <span className="h-2 w-2 shrink-0 rounded-full bg-slate-300" />
                       )}
                       <span className="max-w-[100px] truncate">{s.name}</span>
-                    </div>
+                    </button>
                     {idx < pipelineStgs.length - 1 && (
                       <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M9 18l6-6-6-6"/>
@@ -3621,7 +3759,7 @@ const BatchDetailModal = ({
                 ))}
               </div>
               {/* Complete button */}
-              {canCompletePipelineStage && (
+              {canCompletePipelineStage && activePipelineStage?.current_stage === 'done' && (
                 <button
                   type="button"
                   onClick={() => void handleCompletePipelineStage()}
@@ -3636,7 +3774,9 @@ const BatchDetailModal = ({
                   ) : (
                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5"/></svg>
                   )}
-                  Завершить стадию
+                  {pipelineStgs.some((stage) => stage.order_index > activePipelineStage.order_index)
+                    ? 'Завершить стадию и передать'
+                    : 'Завершить стадию'}
                 </button>
               )}
             </div>
@@ -3702,9 +3842,21 @@ const BatchDetailModal = ({
                   supplies.flatMap(s => s.boxes.flatMap(b => b.items.map(i => i.barcode)))
                 ).size
 
-            // Предыдущий этап через items (корректно даже если этап отключён)
-            const sPrevForMarking = items.reduce((s, it) => s + (it.qty_otk ?? it.qty_received), 0)
-            const sPrevForPacking = items.reduce((s, it) => s + (it.qty_marked ?? it.qty_otk ?? it.qty_received), 0)
+            // Каждый этап получает только годный выход предыдущего включённого этапа.
+            // Брак остаётся в журнале этапа и дальше по цепочке не передаётся.
+            const sInputForPackaging = effectiveStageSource.stage_otk ? sOtkGood : sReceived
+            const sInputForMarking = effectiveStageSource.stage_packaging
+              ? sPackagingGood
+              : effectiveStageSource.stage_otk
+                ? sOtkGood
+                : sReceived
+            const sInputForPacking = effectiveStageSource.stage_marking
+              ? sMarkGood
+              : effectiveStageSource.stage_packaging
+                ? sPackagingGood
+                : effectiveStageSource.stage_otk
+                  ? sOtkGood
+                  : sReceived
 
             const diffCard = (label: string, val: number) => (
               <div className={`flex-1 rounded-2xl px-3 py-3 text-center ${val === 0 ? 'bg-emerald-50' : val > 0 ? 'bg-amber-50' : 'bg-red-50'}`}>
@@ -3742,29 +3894,26 @@ const BatchDetailModal = ({
                 </>)}
 
                 {viewStage === 'packaging' && (<>
-                  {simpleCard('ОТК итого', sOtk, 'bg-blue-50', 'text-blue-700', 'text-blue-400')}
+                  {simpleCard(effectiveStageSource.stage_otk ? 'Годные ОТК' : 'Годные приёмки', sInputForPackaging, 'bg-blue-50', 'text-blue-700', 'text-blue-400')}
                   {splitCard('Упаковка', [['Упаковано', sPackagingGood], ['Браки', sPackagingDefect], ['Итого', sPackaging]], 'bg-teal-50', 'text-teal-700', 'text-teal-400')}
-                  {diffCard('Расхождение', sPackaging - sOtk)}
+                  {diffCard('Расхождение', sPackaging - sInputForPackaging)}
                 </>)}
 
                 {viewStage === 'marking' && (<>
-                  {batch.stage_packaging
-                    ? simpleCard('Упаковка итого', sPackaging, 'bg-teal-50', 'text-teal-700', 'text-teal-400')
-                    : simpleCard('ОТК итого', sOtk, 'bg-blue-50', 'text-blue-700', 'text-blue-400')
-                  }
+                  {simpleCard('Годные предыдущего этапа', sInputForMarking, 'bg-teal-50', 'text-teal-700', 'text-teal-400')}
                   {splitCard('Маркировка', [['Годные', sMarkGood], ['Браки', sMarkDefect], ['Итого', sMarking]], 'bg-violet-50', 'text-violet-700', 'text-violet-400')}
-                  {diffCard('Расхождение', sMarking - (batch.stage_packaging ? sPackaging : sOtk))}
+                  {diffCard('Расхождение', sMarking - sInputForMarking)}
                 </>)}
 
                 {viewStage === 'packing' && (<>
-                  {simpleCard('Маркировка', sPrevForPacking, 'bg-violet-50', 'text-violet-700', 'text-violet-400')}
+                  {simpleCard('Годные предыдущего этапа', sInputForPacking, 'bg-violet-50', 'text-violet-700', 'text-violet-400')}
                   {splitCard('Короба', [['Коробов', sPackBoxes], ['Баркодов', sPackBarcodes], ['Единиц', sPackUnits]], 'bg-purple-50', 'text-purple-700', 'text-purple-400')}
-                  {diffCard('Расхождение', sPackUnits - sPrevForPacking)}
+                  {diffCard('Расхождение', sPackUnits - sInputForPacking)}
                 </>)}
 
                 {viewStage === 'logistics' && (<>
                   {simpleCard('Упаковано', sPackUnits, 'bg-purple-50', 'text-purple-700', 'text-purple-400')}
-                  {diffCard('Расхождение', sPackUnits - sPrevForPacking)}
+                  {diffCard('Расхождение', sPackUnits - sInputForPacking)}
                 </>)}
               </div>
             )
@@ -3773,6 +3922,17 @@ const BatchDetailModal = ({
           {/* ПРИЁМКА */}
           {viewStage === 'reception' && (
             <div className="flex-1 flex flex-col gap-4 min-h-0">
+
+              {outgoingDiscrepancies.length > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <span className="font-semibold">Расхождение со следующей стадией:</span>{' '}
+                  {outgoingDiscrepancies.length} поз.
+                  <span className="ml-2 text-amber-600">
+                    Передано {outgoingDiscrepancies.reduce((sum, row) => sum + row.sent_good, 0)}, принято{' '}
+                    {outgoingDiscrepancies.reduce((sum, row) => sum + row.next_good + row.next_defect, 0)}.
+                  </span>
+                </div>
+              )}
 
               {/* Переключатель режимов */}
               {canManageStageData && (
@@ -3794,11 +3954,36 @@ const BatchDetailModal = ({
                 </div>
               )}
 
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex w-fit items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
+                  {([
+                    ['declared', 'Заявлено'],
+                    ['actual', 'Принято'],
+                  ] as [ReceptionTab, string][]).map(([tab, label]) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setReceptionTab(tab)}
+                      className={`rounded-xl px-4 py-1.5 text-xs font-medium transition ${receptionTab === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {canManageStageData && items.some((item) => (declaredDraft[item.id] ?? item.qty_declared ?? 0) > 0) && (
+                  <button
+                    type="button"
+                    onClick={handleAcceptAllDeclared}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Принять всё
+                  </button>
+                )}
+
               {/* Режим: По баркоду */}
               {canManageStageData && addMode === 'barcode' && (
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-2">
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Баркод *</span>
                     <div className="flex gap-1">
                       <input ref={barcodeInputRef} type="text" value={newBarcode}
                         onChange={(e) => {
@@ -3807,14 +3992,14 @@ const BatchDetailModal = ({
                           void handleBarcodeChange(v.length > 13 ? v.slice(-13) : v)
                         }}
                         onKeyDown={(e) => { if (e.key === 'Enter') void handleAddItem() }}
-                        placeholder="Сканируй или введи"
+                        placeholder="Баркод *"
                         className="w-36 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                       />
                       <button
                         type="button"
                         title="Открыть камеру для сканирования (только мобильные)"
                         onClick={() => setReceptionCameraOpen((o) => !o)}
-                        className={`hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${receptionCameraOpen ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-slate-200 bg-white text-slate-400 hover:text-blue-500 hover:border-blue-300'}`}
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition lg:hidden ${receptionCameraOpen ? 'border-blue-400 bg-blue-50 text-blue-600' : 'border-slate-200 bg-white text-slate-400 hover:text-blue-500 hover:border-blue-300'}`}
                       >
                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
                           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -3824,27 +4009,21 @@ const BatchDetailModal = ({
                     </div>
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                      Наименование{isLooking ? ' ⟳' : ''}
-                      {store?.api_key && <span className="ml-1 normal-case font-normal text-blue-400">авто</span>}
-                    </span>
                     <input type="text" value={newName} readOnly
-                      placeholder="Авто"
+                      placeholder={isLooking ? 'Наименование ⟳' : 'Наименование (авто)'}
                       className="w-48 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600 outline-none cursor-default select-none"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Размер</span>
                     <input type="text" value={newSize} readOnly
-                      placeholder="—"
+                      placeholder="Размер"
                       className="w-24 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600 outline-none cursor-default select-none"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Кол-во *</span>
                     <input type="text" inputMode="numeric" value={newQty}
                       onChange={(e) => setNewQty(e.target.value)}
-                      placeholder="0"
+                      placeholder="Кол-во *"
                       disabled={singleScanMode}
                       className="w-20 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                     />
@@ -3907,19 +4086,17 @@ const BatchDetailModal = ({
               {canManageStageData && addMode === 'bulk' && (
                 <div className="rounded-2xl bg-slate-50 p-2 space-y-2">
                   <div className="flex flex-wrap items-end gap-2">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Кол-во единиц *</span>
+                    <div className="mr-3 flex items-center gap-2">
                       <input type="text" inputMode="numeric" value={bulkQty} onChange={(e) => setBulkQty(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') void handleBulkAdd() }}
-                        placeholder="0"
-                        className="w-28 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                        placeholder="Кол-во единиц *"
+                        className="w-36 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                       />
                     </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Примечание</span>
+                    <div className="mr-3 flex items-center gap-2">
                       <input type="text" value={bulkNote} onChange={(e) => setBulkNote(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') void handleBulkAdd() }}
-                        placeholder="Необязательно"
+                        placeholder="Примечание"
                         className="w-56 rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
                       />
                     </div>
@@ -3937,26 +4114,23 @@ const BatchDetailModal = ({
               {canManageStageData && addMode === 'boxes' && (
                 <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-orange-50 p-2">
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Единиц</span>
                     <input type="text" inputMode="numeric" value={boxesQty} onChange={(e) => setBoxesQty(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') void handleBoxesAdd() }}
-                      placeholder="0"
-                      className="w-20 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+                      placeholder="Единиц"
+                      className="w-28 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Коробов *</span>
                     <input type="text" inputMode="numeric" value={boxesCount} onChange={(e) => setBoxesCount(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') void handleBoxesAdd() }}
-                      placeholder="0"
-                      className="w-20 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+                      placeholder="Коробов *"
+                      className="w-28 rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-400">Склад ВБ *</span>
                     <select value={boxesWarehouse} onChange={(e) => setBoxesWarehouse(e.target.value)}
                       className="rounded-xl border border-orange-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-300 focus:ring-2 focus:ring-orange-100">
-                      <option value="">— не указан —</option>
+                      <option value="">Выбрать склад</option>
                       {warehouses.map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
                     </select>
                   </div>
@@ -3976,13 +4150,11 @@ const BatchDetailModal = ({
                   <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-slate-50 p-2">
                     {!store?.api_key ? (
                       <div className="flex flex-col gap-1">
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Поиск по товару</span>
                         <span className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-400">Нет API-ключа у магазина</span>
                       </div>
                     ) : (
-                      <div className="flex flex-col gap-1 flex-1">
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Поиск по товару</span>
-                        <div className="flex items-center gap-2">
+                      <div className="flex flex-1 items-center gap-2">
+                        <div className="flex flex-1 items-center gap-2">
                           <div className="relative flex-1">
                             <input type="text" value={catalogSearch}
                               onChange={(e) => void handleCatalogSearch(e.target.value)}
@@ -4073,9 +4245,10 @@ const BatchDetailModal = ({
                   )}
                 </div>
               )}
+              </div>
 
               {/* Таблица добавленных позиций */}
-              {items.length > 0 ? (
+              {receptionVisibleItems.length > 0 ? (
                 <div className="flex-1 min-h-0 overflow-y-auto rounded-2xl border border-slate-200">
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -4086,14 +4259,15 @@ const BatchDetailModal = ({
                         <th className="px-4 py-2.5 text-left">Артикул ВБ</th>
                         <th className="px-4 py-2.5 text-left">Цвет</th>
                         <th className="px-4 py-2.5 text-left">Размер</th>
-                        <th className="px-3 py-2.5 text-center">Единиц</th>
-                        {items.some((i) => i.boxes) && <th className="px-3 py-2.5 text-center">Коробов</th>}
-                        {items.some((i) => i.notes) && <th className="px-4 py-2.5 text-left">Склад</th>}
+                        <th className="px-3 py-2.5 text-center">{receptionTab === 'actual' ? 'Годное' : 'Единиц'}</th>
+                        {receptionTab === 'actual' && <th className="px-3 py-2.5 text-center">Брак</th>}
+                        {receptionHasBoxes && <th className="px-3 py-2.5 text-center">Коробов</th>}
+                        {receptionHasNotes && <th className="px-4 py-2.5 text-left">Склад</th>}
                         {canManageStageData && <th className="px-3 py-2.5" />}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {[...items].sort((a, b) => {
+                      {[...receptionVisibleItems].sort((a, b) => {
                         const aBox = a.product_name === 'Готовые короба' ? 1 : 0
                         const bBox = b.product_name === 'Готовые короба' ? 1 : 0
                         return aBox - bBox
@@ -4109,13 +4283,29 @@ const BatchDetailModal = ({
                           <td className="px-4 py-2.5 text-slate-500">{it.size ?? <span className="text-slate-300">—</span>}</td>
                           <td className="px-3 py-2.5 text-center">
                             {canManageStageData ? (
-                              <input type="number" min={0} value={receptionDraft[it.id] ?? it.qty_received}
-                                onChange={(e) => handleUpdateReceivedDraft(it.id, Number(e.target.value))}
+                              <input type="number" min={0} value={getReceptionQty(it)}
+                                onChange={(e) => handleUpdateReceptionDraft(it.id, Number(e.target.value))}
                                 className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-300"
                               />
-                            ) : <span className="font-medium">{it.qty_received}</span>}
+                            ) : <span className="font-medium">{getReceptionQty(it)}</span>}
                           </td>
-                          {items.some((i) => i.boxes) && (
+                          {receptionTab === 'actual' && (
+                            <td className="px-3 py-2.5 text-center">
+                              {canManageStageData ? (
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={receptionDefectDraft[it.id] ?? it.qty_defect ?? 0}
+                                  onChange={(e) => {
+                                    setReceptionDefectDraft((previous) => ({ ...previous, [it.id]: Number(e.target.value) }))
+                                    setIsDirty(true)
+                                  }}
+                                  className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-center text-sm outline-none focus:border-blue-300"
+                                />
+                              ) : <span className="font-medium">{receptionDefectDraft[it.id] ?? it.qty_defect ?? 0}</span>}
+                            </td>
+                          )}
+                          {receptionHasBoxes && (
                             <td className="px-3 py-2.5 text-center text-sm">
                               {it.product_name === 'Готовые короба' && canManageStageData
                                 ? <input type="number" min={1} value={receptionBoxesDraft[it.id] ?? it.boxes ?? 1}
@@ -4126,7 +4316,7 @@ const BatchDetailModal = ({
                                 : <span className="text-slate-300">—</span>}
                             </td>
                           )}
-                          {items.some((i) => i.notes) && (
+                          {receptionHasNotes && (
                             <td className="px-4 py-2.5 text-sm text-slate-500">{it.notes ?? <span className="text-slate-300">—</span>}</td>
                           )}
                           {canManageStageData && (
@@ -4151,9 +4341,10 @@ const BatchDetailModal = ({
                             </span>
                           )}
                         </td>
-                        <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, it) => s + (receptionDraft[it.id] ?? it.qty_received ?? 0), 0)}</td>
-                        {items.some((i) => i.boxes) && <td className="px-3 py-2.5 text-center text-slate-800">{items.reduce((s, i) => s + (receptionBoxesDraft[i.id] ?? i.boxes ?? 0), 0) || '—'}</td>}
-                        {items.some((i) => i.notes) && <td />}
+                        <td className="px-3 py-2.5 text-center text-slate-800">{receptionVisibleItems.reduce((sum, item) => sum + getReceptionQty(item), 0)}</td>
+                        {receptionTab === 'actual' && <td className="px-3 py-2.5 text-center text-slate-800">{receptionVisibleItems.reduce((sum, item) => sum + (receptionDefectDraft[item.id] ?? item.qty_defect ?? 0), 0)}</td>}
+                        {receptionHasBoxes && <td className="px-3 py-2.5 text-center text-slate-800">{receptionVisibleItems.reduce((sum, item) => sum + (receptionBoxesDraft[item.id] ?? item.boxes ?? 0), 0) || '—'}</td>}
+                        {receptionHasNotes && <td />}
                         {canManageStageData && <td />}
                       </tr>
                     </tfoot>
@@ -4161,7 +4352,9 @@ const BatchDetailModal = ({
                 </div>
               ) : (
                 <div className="rounded-2xl border-2 border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">
-                  Нет позиций — добавьте товар выше
+                  {receptionTab === 'declared'
+                    ? 'Нет заявленных позиций — добавьте товар выше'
+                    : 'Нет фактически принятых позиций — добавьте товар выше'}
                 </div>
               )}
             </div>
@@ -5776,7 +5969,8 @@ const BatchDetailModal = ({
                           try {
                             const created = await createSupply({
                               batch_id: batch.id,
-                              account_id: accountId,
+                              account_id: batch.account_id,
+                              pipeline_stage_id: displayPipelineStage?.id ?? null,
                               warehouse_id: wh.id,
                               warehouse_name: wh.name,
                               trip_id: null,
@@ -6178,7 +6372,7 @@ const BatchDetailModal = ({
                                   setSupplies((prev) => prev.map((candidate) => candidate.id === supply.id
                                     ? { ...candidate, trip_id: transferTripId, trip_line_id: line.id }
                                     : candidate))
-                                  const refreshed = await fetchSupplies(batch.id)
+                                  const refreshed = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
                                   setSupplies(refreshed)
                                   rebuildSlotsFromSupplies(refreshed)
                                   try { await onRefreshTrips?.() } catch { /* поставка уже передана; список обновится при следующей загрузке */ }
@@ -6830,7 +7024,8 @@ const BatchDetailModal = ({
                                     for (let n = from; n <= to; n++) nums.push(n)
                                   }
                                   if (nums.length === 0) return
-                                  const created = await Promise.all(nums.map((n) => createBox({ supply_id: supplyId, account_id: accountId, box_number: n })))
+                                  const supplyOwnerAccountId = supplies.find((s) => s.id === supplyId)?.account_id ?? batch.account_id
+                                  const created = await Promise.all(nums.map((n) => createBox({ supply_id: supplyId, account_id: supplyOwnerAccountId, box_number: n })))
                                   const newBoxes = created.map((b) => ({ ...b, items: [] }))
                                   const nextAvailableBoxNumber = Math.max(...newBoxes.map((box) => box.box_number)) + 1
                                   setSupplies((prev) => prev.map((s) => s.id === supplyId ? {
@@ -7327,7 +7522,7 @@ const BatchDetailModal = ({
                         )
                         // Если этап уже завершён — синхронизировать поставки со страницей Логистики
                         if (batch.current_stage !== 'logistics' && batch.store_id) {
-                          const freshSupplies = await fetchSupplies(batch.id)
+                          const freshSupplies = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
                           const receptionDateStr = receptionCompletedDate
                             ? new Date(receptionCompletedDate).toISOString().slice(0, 10)
                             : ''
@@ -7375,7 +7570,7 @@ const BatchDetailModal = ({
                             }
                           }
                           // Перезагрузить и перестроить визуальное состояние из БД
-                          const refreshed = await fetchSupplies(batch.id)
+                          const refreshed = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
                           setSupplies(refreshed)
                           rebuildSlotsFromSupplies(refreshed)
                         }
@@ -7394,8 +7589,8 @@ const BatchDetailModal = ({
                 </button>
               )}
 
-              {batch.current_stage !== 'done' && viewStage === batch.current_stage && (<>
-              {batch.current_stage === 'reception' && (
+              {activeSubStage !== 'done' && viewStage === activeSubStage && (<>
+              {activeSubStage === 'reception' && (
                 <button type="button" onClick={() => setPendingAdvance(true)}
                   disabled={isSavingStage || items.length === 0 || !canManageStageData}
                   className="flex w-64 items-center justify-between gap-2 whitespace-nowrap rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
@@ -7405,7 +7600,7 @@ const BatchDetailModal = ({
                   </svg>
                 </button>
               )}
-              {batch.current_stage === 'otk' && (() => {
+              {activeSubStage === 'otk' && (() => {
                 const tReceived = items.reduce((s, it) => s + (it.qty_received ?? 0), 0)
                 const tOtk = otkLogs.filter((l) => !otkDeletedIds.includes(l.id)).reduce((s, l) => s + (otkEdits[l.id]?.qty ?? l.qty) + (otkEdits[l.id]?.qty_defect ?? l.qty_defect), 0) + otkBuffer.reduce((s, e) => s + e.qty + e.qty_defect, 0)
                 const canAdvance = canManageStageData && (canManage || tOtk >= tReceived)
@@ -7420,11 +7615,11 @@ const BatchDetailModal = ({
                   </button>
                 )
               })()}
-              {(batch.current_stage === 'packaging' || batch.current_stage === 'marking' || batch.current_stage === 'packing' || batch.current_stage === 'logistics') && (
+              {(activeSubStage === 'packaging' || activeSubStage === 'marking' || activeSubStage === 'packing' || activeSubStage === 'logistics') && (
                 <button type="button" onClick={() => setPendingAdvance(true)}
                   disabled={isSavingStage || !canManageStageData}
                   className="flex w-56 items-center justify-between gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                  {`Завершить ${STAGE_LABELS[batch.current_stage]}`}
+                  {`Завершить ${STAGE_LABELS[activeSubStage]}`}
                   <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="M5 12h14M12 5l7 7-7 7" />
                   </svg>
@@ -7443,18 +7638,18 @@ const BatchDetailModal = ({
             <div className="px-6 py-5">
               <p className="font-semibold text-slate-800">Завершить этап?</p>
               <p className="mt-1 text-sm text-slate-500">
-                {`Этап «${STAGE_LABELS[batch.current_stage]}» будет завершён. Вернуться назад без участия администратора нельзя.`}
+                {`Этап «${STAGE_LABELS[activeSubStage]}» будет завершён. Вернуться назад без участия администратора нельзя.`}
               </p>
             </div>
             <div className="flex gap-3 border-t border-slate-100 px-6 py-4">
               <button type="button"
                 onClick={() => {
                   setPendingAdvance(false)
-                  if (batch.current_stage === 'reception') void handleSaveStageAndAdvance()
-                  else if (batch.current_stage === 'otk') void handleAdvanceOtk()
-                  else if (batch.current_stage === 'packaging') void handlePackagingAndAdvance()
-                  else if (batch.current_stage === 'marking') void handleMarkingAndAdvance()
-                  else if (batch.current_stage === 'packing' || batch.current_stage === 'logistics') void handleSaveStageAndAdvance()
+                  if (activeSubStage === 'reception') void handleSaveStageAndAdvance()
+                  else if (activeSubStage === 'otk') void handleAdvanceOtk()
+                  else if (activeSubStage === 'packaging') void handlePackagingAndAdvance()
+                  else if (activeSubStage === 'marking') void handleMarkingAndAdvance()
+                  else if (activeSubStage === 'packing' || activeSubStage === 'logistics') void handleSaveStageAndAdvance()
                 }}
                 disabled={isSavingStage}
                 className="flex-1 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
@@ -7542,7 +7737,7 @@ const BatchDetailModal = ({
                       if (key === 'otk' && otkLogs.length > 0 && !otkHistoryTabId) setOtkHistoryTabId(otkLogs[0].id)
                       if (key === 'marking') {
                         if (markingLogs.length === 0 && markingDeletedLogs.length === 0) {
-                          Promise.all([fetchMarkingLogs(batch.id), fetchDeletedMarkingLogs(batch.id)])
+                          Promise.all([fetchMarkingLogs(batch.id, displayPipelineStage?.id ?? null), fetchDeletedMarkingLogs(batch.id, displayPipelineStage?.id ?? null)])
                             .then(([active, deleted]) => {
                               setMarkingLogs(active)
                               setMarkingDeletedLogs(deleted)
@@ -7552,7 +7747,7 @@ const BatchDetailModal = ({
                             .catch(() => {})
                         } else {
                           // Всегда перезагружаем удалённые для актуального списка
-                          void fetchDeletedMarkingLogs(batch.id).then((deleted) => {
+                          void fetchDeletedMarkingLogs(batch.id, displayPipelineStage?.id ?? null).then((deleted) => {
                             setMarkingDeletedLogs(deleted)
                             const all = [...markingLogs, ...deleted].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
                             if (all.length > 0) setMarkingHistoryTabId(all[0].id)
@@ -7899,6 +8094,9 @@ const BatchDetailModal = ({
                 const totalQty = qKey ? items.reduce((s, it) => s + (Number(it[qKey] ?? 0)), 0) : 0
                 const activeItemId = historyItemId ?? items[0]?.id ?? null
                 const activeItem = items.find((it) => it.id === activeItemId) ?? items[0] ?? null
+                const activeReceptionHistory = otkHistoryStageTab === 'reception' && activeItem?.lineage_id
+                  ? receptionHistory.filter((entry) => entry.lineage_id === activeItem.lineage_id)
+                  : []
 
                 const fmt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })
 
@@ -8008,7 +8206,23 @@ const BatchDetailModal = ({
                       <div className="flex min-h-0 flex-1 flex-col">
                         <p className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-400">Журнал действий</p>
                         <div className="flex-1 overflow-y-scroll space-y-2 pr-1 [scrollbar-width:thin]">
-                          <div className="rounded-2xl bg-emerald-50 px-4 py-3">
+                          {otkHistoryStageTab === 'reception' && activeReceptionHistory.map((entry) => {
+                            const keys = Object.keys(entry.new_values).filter((key) => JSON.stringify(entry.old_values?.[key]) !== JSON.stringify(entry.new_values[key]))
+                            const labels: Record<string, string> = { barcode: 'Баркод', product_name: 'Товар', size: 'Размер', color: 'Цвет', article: 'Артикул', qty_declared: 'Заявлено', qty_good: 'Годное', qty_defect: 'Брак', boxes: 'Коробов', warehouse: 'Склад', is_excluded: 'Исключено' }
+                            const actionLabel = entry.action === 'created' ? 'Добавлено' : entry.action === 'declared_from_previous' ? 'Заявлено предыдущей стадией' : entry.action === 'excluded' ? 'Скорректировано: исключено' : entry.action === 'restored' ? 'Восстановлено' : 'Скорректировано'
+                            return (
+                              <div key={entry.id} className={`rounded-2xl px-4 py-3 ${entry.action === 'created' || entry.action === 'declared_from_previous' ? 'bg-emerald-50' : 'bg-amber-50'}`}>
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className={`text-xs font-semibold ${entry.action === 'created' || entry.action === 'declared_from_previous' ? 'text-emerald-700' : 'text-amber-700'}`}>{actionLabel}</span>
+                                  <span className="shrink-0 text-xs font-semibold text-slate-600">{fmt(entry.changed_at)}</span>
+                                </div>
+                                {keys.length > 0 && <div className="mt-2 space-y-0.5">{keys.map((key) => (
+                                  <p key={key} className="text-xs text-slate-600"><span className="font-medium">{labels[key] ?? key}:</span>{' '}{entry.old_values && <><span className="text-slate-400 line-through">{String(entry.old_values[key] ?? '—')}</span>{' → '}</>}<span className="text-slate-800">{String(entry.new_values[key] ?? '—')}</span></p>
+                                ))}</div>}
+                              </div>
+                            )
+                          })}
+                          {(otkHistoryStageTab !== 'reception' || activeReceptionHistory.length === 0) && <div className="rounded-2xl bg-emerald-50 px-4 py-3">
                             <div className="flex items-start justify-between gap-2">
                               <span className="text-xs font-semibold text-emerald-700">Создана</span>
                               <span className="shrink-0 text-xs font-semibold text-slate-600">{fmt(batch.created_at)}</span>
@@ -8018,7 +8232,7 @@ const BatchDetailModal = ({
                               <p className="text-xs text-slate-600">Принято: <span className="font-medium text-slate-800">{activeItem.qty_received} шт</span></p>
                               {activeItem.notes && <p className="text-xs text-slate-600">Примечание: <span className="font-medium text-slate-800">{activeItem.notes}</span></p>}
                             </div>
-                          </div>
+                          </div>}
                           {(activeItem.qty_marked != null || activeItem.qty_packed != null) && (
                             <div className="rounded-2xl bg-amber-50 px-4 py-3">
                               <div className="flex items-start justify-between gap-2">
@@ -9610,6 +9824,11 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
   }
 
   const handleDelete = async (batch: FulfillmentBatch) => {
+    if ((batchPipelineMap.get(batch.id)?.length ?? 0) > 0) {
+      setDeleteTarget(null)
+      setLoadError('Партию с пайплайном нельзя переместить в архив. Используйте фильтр по статусу.')
+      return
+    }
     setIsDeleting(true)
     try {
       await deleteBatch(batch.id)
@@ -9623,7 +9842,10 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
   const handleBulkDelete = async () => {
     setIsBulkDeleting(true)
     try {
-      const ids = [...selectedBatchIds]
+      const ids = [...selectedBatchIds].filter((id) => (batchPipelineMap.get(id)?.length ?? 0) === 0)
+      if (ids.length !== selectedBatchIds.size) {
+        setLoadError('Партии с пайплайном не перемещены в архив. Их можно скрыть фильтром по статусу.')
+      }
       for (const id of ids) {
         const batch = batches.find((b) => b.id === id)
         await deleteBatch(id)
@@ -10271,9 +10493,9 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                 <th className="w-8 px-3 py-3">
                   <input type="checkbox"
                     className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
-                    checked={filteredBatches.length > 0 && filteredBatches.every((b) => selectedBatchIds.has(b.id))}
+                    checked={filteredBatches.some((b) => (batchPipelineMap.get(b.id)?.length ?? 0) === 0) && filteredBatches.filter((b) => (batchPipelineMap.get(b.id)?.length ?? 0) === 0).every((b) => selectedBatchIds.has(b.id))}
                     onChange={(e) => {
-                      if (e.target.checked) setSelectedBatchIds(new Set(filteredBatches.map((b) => b.id)))
+                      if (e.target.checked) setSelectedBatchIds(new Set(filteredBatches.filter((b) => (batchPipelineMap.get(b.id)?.length ?? 0) === 0).map((b) => b.id)))
                       else setSelectedBatchIds(new Set())
                     }}
                   />
@@ -10302,9 +10524,10 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
             <tbody className="divide-y divide-slate-100">
               {filteredBatches.map((b) => {
                 const s = stores.find((st) => st.id === b.store_id)
-                const disc = b.otk_discrepancy
+                const disc = (batchPipelineMap.get(b.id)?.length ?? 0) > 0 ? null : b.otk_discrepancy
                 const isSelected = selectedBatchIds.has(b.id)
                 const isArchived = isArchiveTab
+                const hasBatchPipeline = (batchPipelineMap.get(b.id)?.length ?? 0) > 0
                 return (
                   <tr key={b.id} onClick={() => {
                       if (shareMenuPos) { setShareMenuPos(null); return }
@@ -10314,7 +10537,9 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                     <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox"
                         className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
-                        checked={isSelected}
+                        checked={!hasBatchPipeline && isSelected}
+                        disabled={hasBatchPipeline}
+                        title={hasBatchPipeline ? 'Партии с пайплайном не удаляются' : undefined}
                         onChange={(e) => {
                           setSelectedBatchIds((prev) => {
                             const next = new Set(prev)
@@ -10549,12 +10774,12 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                             </svg>
                           </button>
-                          <button type="button" onClick={() => setDeleteTarget(b)}
+                          {!hasBatchPipeline && <button type="button" onClick={() => setDeleteTarget(b)}
                             className="rounded-xl p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-400">
                             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                               <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
                             </svg>
-                          </button>
+                          </button>}
                         </div>
                       ) : null}
                     </td>
@@ -10736,9 +10961,10 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                     }
                     const b = batchItem
                     const s = stores.find((st) => st.id === b.store_id)
-                    const disc = b.otk_discrepancy
+                    const disc = (batchPipelineMap.get(b.id)?.length ?? 0) > 0 ? null : b.otk_discrepancy
                     const isSelected = selectedBatchIds.has(b.id)
                     const isArchived = isArchiveTab
+                    const hasBatchPipeline = (batchPipelineMap.get(b.id)?.length ?? 0) > 0
                     return (
                       <tr key={b.id} onClick={() => {
                           if (shareMenuPos) { setShareMenuPos(null); return }
@@ -10748,7 +10974,9 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                         <td className="w-8 px-3 py-3" onClick={(e) => e.stopPropagation()}>
                           <input type="checkbox"
                             className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
-                            checked={isSelected}
+                            checked={!hasBatchPipeline && isSelected}
+                            disabled={hasBatchPipeline}
+                            title={hasBatchPipeline ? 'Партии с пайплайном не удаляются' : undefined}
                             onChange={(e) => {
                               setSelectedBatchIds((prev) => {
                                 const next = new Set(prev)
@@ -10982,12 +11210,12 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                                 </svg>
                               </button>
-                              <button type="button" onClick={() => setDeleteTarget(b)}
+                              {!hasBatchPipeline && <button type="button" onClick={() => setDeleteTarget(b)}
                                 className="rounded-xl p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-400">
                                 <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                                   <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
                                 </svg>
-                              </button>
+                              </button>}
                             </div>
                           ) : null}
                         </td>
