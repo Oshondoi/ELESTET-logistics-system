@@ -2636,4 +2636,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - SQL применён в production Supabase. Контрольная транзакция с полным `ROLLBACK` подтвердила: неполная конфигурация отклонена без оставшейся партии, полная конфигурация создала ожидаемый snapshot; тестовых строк не осталось.
 - После последних UI-изменений успешны `git diff --check`, `npx tsc -b --pretty false` и `npm run build` (663 модуля).
 - Базовый опубликованный commit перед этой локальной работой — `fdae5ac`; активна ветка `main`.
-- Пользователь разрешил commit и push в `main` и `master`; после публикации активной должна остаться ветка `main`.
+- Функциональный commit `db1bd8f feat: require pipeline stage executors` отправлен в `main` и `master`; после публикации активной оставлена ветка `main`.

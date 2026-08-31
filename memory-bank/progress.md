@@ -1877,4 +1877,5 @@ MVP в активной разработке. Деплой на Vercel акти�
 - [x] `git diff --check`, TypeScript и production-сборка проходят; собрано 663 модуля.
 - [x] Старые snapshot-стадии с `partner_account_id = null` не мигрируются и сохраняют прежнюю трактовку `исполнитель — владелец`.
 - [x] SQL применён в production Supabase; контроль неполной и полной конфигурации выполнен транзакционно с `ROLLBACK`.
-- [ ] Git commit и push в `main` и `master` выполняются по полученному разрешению; активной должна остаться `main`.
+- [x] Функциональный commit `db1bd8f` отправлен в `main` и `master`; активной оставлена ветка `main`.
+- [x] Vercel завершил deploy: основной домен переключился на `assets/index-39SwJAyb.js`.
