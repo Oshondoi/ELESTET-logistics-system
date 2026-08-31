@@ -1087,3 +1087,120 @@ $$;
 
 revoke all on function public.sync_ready_box_supply(uuid, integer) from public;
 grant execute on function public.sync_ready_box_supply(uuid, integer) to authenticated;
+
+-- Владелец партии видит все стадии, но изменяет данные только там,
+-- где его компания сама является исполнителем стадии.
+drop policy if exists "bps_update_owner" on public.batch_pipeline_stages;
+drop policy if exists "bps_update_partner" on public.batch_pipeline_stages;
+drop policy if exists "bps_update_executor" on public.batch_pipeline_stages;
+create policy "bps_update_executor" on public.batch_pipeline_stages
+  for update
+  using (public.is_pipeline_stage_executor(id))
+  with check (public.is_pipeline_stage_executor(id));
+
+-- Стадии являются снимком пайплайна партии и напрямую не удаляются.
+drop policy if exists "bps_delete" on public.batch_pipeline_stages;
+
+-- Остаток партнёрской стадии доступен владельцу корневой партии для просмотра.
+drop policy if exists fulfillment_stage_stock_batch_owner_select on public.fulfillment_stage_stock;
+create policy fulfillment_stage_stock_batch_owner_select on public.fulfillment_stage_stock
+  for select using (
+    exists (
+      select 1
+      from public.fulfillment_batches batch
+      join public.account_members member on member.account_id = batch.account_id
+      where batch.id = fulfillment_stage_stock.batch_id
+        and member.user_id = auth.uid()
+    )
+  );
+
+-- Для обычной партии сохраняется прежнее право владельца. В pipeline право
+-- записи определяется исключительно исполнителем конкретной стадии.
+create or replace function public.can_manage_fulfillment_supply(p_supply_id uuid)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.fulfillment_supplies supply
+    where supply.id = p_supply_id
+      and (
+        (
+          supply.pipeline_stage_id is null
+          and exists (
+            select 1 from public.account_members member
+            where member.account_id = supply.account_id
+              and member.user_id = auth.uid()
+          )
+        )
+        or (
+          supply.pipeline_stage_id is not null
+          and public.is_pipeline_stage_executor(supply.pipeline_stage_id)
+        )
+      )
+  )
+$$;
+
+-- Старые owner-policy коробов остаются нужны обычным партиям. Триггеры ниже
+-- не дают этим политикам открыть запись в чужую pipeline-стадию.
+create or replace function public.guard_pipeline_box_change()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  v_stage_id uuid;
+begin
+  select supply.pipeline_stage_id into v_stage_id
+  from public.fulfillment_supplies supply
+  where supply.id = case when tg_op = 'DELETE' then old.supply_id else new.supply_id end;
+
+  if current_setting('app.pipeline_internal', true) = 'on' or v_stage_id is null then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+  if not public.is_pipeline_stage_executor(v_stage_id) then
+    raise exception 'Изменять короба стадии может только её исполнитель';
+  end if;
+  if tg_op = 'UPDATE' and old.supply_id is distinct from new.supply_id then
+    raise exception 'Нельзя переносить короб между поставками';
+  end if;
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+
+drop trigger if exists guard_pipeline_box_change_trigger on public.fulfillment_boxes;
+create trigger guard_pipeline_box_change_trigger
+before insert or update or delete on public.fulfillment_boxes
+for each row execute function public.guard_pipeline_box_change();
+
+create or replace function public.guard_pipeline_box_item_change()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  v_stage_id uuid;
+begin
+  select supply.pipeline_stage_id into v_stage_id
+  from public.fulfillment_boxes box
+  join public.fulfillment_supplies supply on supply.id = box.supply_id
+  where box.id = case when tg_op = 'DELETE' then old.box_id else new.box_id end;
+
+  if current_setting('app.pipeline_internal', true) = 'on' or v_stage_id is null then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+  if not public.is_pipeline_stage_executor(v_stage_id) then
+    raise exception 'Изменять содержимое коробов стадии может только её исполнитель';
+  end if;
+  if tg_op = 'UPDATE' and old.box_id is distinct from new.box_id then
+    raise exception 'Нельзя переносить товар между коробами прямым изменением';
+  end if;
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+
+drop trigger if exists guard_pipeline_box_item_change_trigger on public.fulfillment_box_items;
+create trigger guard_pipeline_box_item_change_trigger
+before insert or update or delete on public.fulfillment_box_items
+for each row execute function public.guard_pipeline_box_item_change();

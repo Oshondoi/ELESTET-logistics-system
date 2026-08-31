@@ -3645,7 +3645,7 @@ const BatchDetailModal = ({
               const keyMap: Record<string, keyof typeof batch> = { otk: 'stage_otk', packaging: 'stage_packaging', marking: 'stage_marking', packing: 'stage_packing', logistics: 'stage_logistics' }
               const stageKey = keyMap[s]
               const isEnabled = s === 'reception' || !stageKey || effectiveStageSource[stageKey] as boolean
-              const canToggle = (!activePipelineStage || stagePartnerLocked) && canManage && batch.status === 'active' && !isPast && !!stageKey && !isSavingBatchStages
+              const canToggle = !isPipelineLoading && pipelineStgs.length === 0 && canManage && batch.status === 'active' && !isPast && !!stageKey && !isSavingBatchStages
               const canReviewCompletedStage = displayPipelineStage?.status === 'done'
 
               const handleClick = () => {
