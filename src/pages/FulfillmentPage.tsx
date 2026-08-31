@@ -2827,23 +2827,53 @@ const BatchDetailModal = ({
     setIsAddingSaving(true)
     setError(null)
     try {
-      const existing = items.find((item) => !item.is_excluded && item.barcode.trim() === barcode)
+      const matchingItems = items.filter((item) => !item.is_excluded && item.barcode.trim() === barcode)
+      const existing = matchingItems.find((item) => !pendingItemIds.has(item.id)) ?? matchingItems[0]
       if (existing) {
-        const nextQty = getReceptionQty(existing) + qty
+        const duplicateItems = matchingItems.filter((item) => item.id !== existing.id)
+        const duplicateIds = new Set(duplicateItems.map((item) => item.id))
+        const declaredTotal = matchingItems.reduce((sum, item) => sum + (declaredDraft[item.id] ?? item.qty_declared ?? 0), 0)
+          + (receptionTab === 'declared' ? qty : 0)
+        const receivedTotal = matchingItems.reduce((sum, item) => sum + (receptionDraft[item.id] ?? item.qty_received ?? 0), 0)
+          + (receptionTab === 'actual' ? qty : 0)
+        const defectTotal = matchingItems.reduce((sum, item) => sum + (receptionDefectDraft[item.id] ?? item.qty_defect ?? 0), 0)
+        const next = items
+          .filter((item) => !duplicateIds.has(item.id))
+          .map((item) => item.id === existing.id && pendingItemIds.has(existing.id)
+            ? { ...item, qty_declared: declaredTotal, qty_received: receivedTotal, qty_defect: defectTotal }
+            : item)
+
         if (pendingItemIds.has(existing.id)) {
-          const next = items.map((item) => item.id === existing.id ? withReceptionQty(item, nextQty) : item)
-          setItems(next)
-          onItemsChanged(next)
-          if (receptionTab === 'actual') void recalcOtkDiscrepancy(next, otkLogs)
+          setDeclaredDraft((previous) => ({ ...previous, [existing.id]: declaredTotal }))
+          setReceptionDraft((previous) => ({ ...previous, [existing.id]: receivedTotal }))
+          setReceptionDefectDraft((previous) => ({ ...previous, [existing.id]: defectTotal }))
         } else {
-          setReceptionQtyDraft(existing.id, nextQty)
+          setDeclaredDraft((previous) => ({ ...previous, [existing.id]: declaredTotal }))
+          setReceptionDraft((previous) => ({ ...previous, [existing.id]: receivedTotal }))
+          setReceptionDefectDraft((previous) => ({ ...previous, [existing.id]: defectTotal }))
         }
+
+        setItems(next)
+        onItemsChanged(next)
+        setPendingItemIds((previous) => {
+          const updated = new Set(previous)
+          duplicateItems.forEach((item) => updated.delete(item.id))
+          return updated
+        })
         setPendingDeleteIds((previous) => {
-          if (!previous.has(existing.id)) return previous
           const next = new Set(previous)
           next.delete(existing.id)
+          duplicateItems.forEach((item) => {
+            if (!pendingItemIds.has(item.id)) next.add(item.id)
+          })
           return next
         })
+        if (receptionTab === 'actual') {
+          const effectiveNext = next.map((item) => item.id === existing.id
+            ? { ...item, qty_declared: declaredTotal, qty_received: receivedTotal, qty_defect: defectTotal }
+            : item)
+          void recalcOtkDiscrepancy(effectiveNext, otkLogs)
+        }
       } else {
         const tempId = `_local_${crypto.randomUUID()}`
         const localItem: FulfillmentItem = {
