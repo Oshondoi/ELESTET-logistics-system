@@ -2715,3 +2715,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Фото использует тот же `PhotoThumb`, что страница `Товары`. Для вложенной модалки уровень портала предпросмотра поднимается выше её overlay, поэтому увеличенное изображение теперь видно при наведении.
 - Изменений Supabase/SQL нет. `npx tsc -b --pretty false`, `npm run build` (666 модулей) и `git diff --check` проходят.
 - Функциональный commit: `c1604d3 Improve fulfillment catalog quantities`.
+- Функциональный и документирующий commits отправлены fast-forward в `origin/main` и `origin/master`; Vercel production отдаёт проверенный asset `assets/index-CfWcr4Qd.js`.
