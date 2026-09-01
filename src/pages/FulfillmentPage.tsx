@@ -8097,11 +8097,11 @@ const BatchDetailModal = ({
                           <td className="px-4 py-3 text-xs text-slate-400">{(product as Product & { category_parent?: string | null }).category_parent ?? '—'}</td>
                           <td className="px-4 py-2.5 text-xs text-slate-500">
                             {isSizeLess ? (
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="whitespace-nowrap">Без размера</span>
-                                {parentQtyRow ? (
+                              parentQtyRow ? (
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">Кол-во</span>
                                   <label className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">Кол-во</span>
+                                    <span className="whitespace-nowrap">Без размера</span>
                                     <input
                                       type="number"
                                       min={0}
@@ -8116,10 +8116,15 @@ const BatchDetailModal = ({
                                       className="h-9 w-24 rounded-xl border border-slate-200 bg-white px-3 text-center text-sm font-medium text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-blue-300 focus:ring-2 focus:ring-blue-100 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                                     />
                                   </label>
-                                ) : selectableSizeRows.length === 0 ? (
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="whitespace-nowrap">Без размера</span>
+                                  {selectableSizeRows.length === 0 ? (
                                   <span className="whitespace-nowrap text-[11px] text-rose-400">Нет баркода</span>
-                                ) : null}
-                              </div>
+                                  ) : null}
+                                </div>
+                              )
                             ) : (
                               <span className="inline-flex min-w-8 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-600">
                                 {sizeCount}
