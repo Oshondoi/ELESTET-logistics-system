@@ -438,7 +438,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           const refreshedMap = buildCatalogMap(refreshedCatalog)
           item = candidates.map((candidate) => refreshedMap.get(candidate)).find(Boolean)
         }
-        if (!item) throw new Error('QR WB не распознан. Проверьте, что это стикер заказа «На сборке». Для USB/BT-сканера включите английскую раскладку.')
+        if (!item) throw new Error('QR WB не распознан. Заказ должен находиться «На сборке» или «В доставке» до приёмки WB. Для USB/BT-сканера включите английскую раскладку.')
         const { data, error: scanError } = await (supabase as any).rpc('scan_fbs_wb_qr', {
           p_session_id: session.id,
           p_device_id: stableDeviceId,
@@ -447,7 +447,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         })
         if (scanError) throw new Error(scanErrorText(
           scanError,
-          'QR заказа WB не принят. Проверьте, что заказ находится «На сборке» и соответствует отсканированному товару и коробу.',
+          'QR заказа WB не принят. Проверьте, что заказ находится «На сборке» или «В доставке» до приёмки WB и соответствует отсканированному товару и коробу.',
         ))
         setSession((current) => current ? {
           ...current,

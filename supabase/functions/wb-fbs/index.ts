@@ -935,7 +935,7 @@ Deno.serve(async (req) => {
     if (action === 'get_scan_catalog') {
       const orderRows = await sbGet(
         'fbs_orders',
-        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=eq.confirm&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id,data`,
+        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=in.(confirm,complete)&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id,data`,
         true,
       )
       const eligibleFromSnapshot = new Set(orderRows.filter((row) => {
@@ -944,10 +944,10 @@ Deno.serve(async (req) => {
         const optional = Array.isArray(raw.optionalMeta) ? raw.optionalMeta.map(String) : []
         return required.includes('sgtin') || optional.includes('sgtin')
       }).map((row) => String(row.wb_order_id)))
-      const allConfirmIds = orderRows.map((row) => String(row.wb_order_id))
+      const allScannableIds = orderRows.map((row) => String(row.wb_order_id))
       const eligibleIdsSet = new Set(eligibleFromSnapshot)
-      for (let index = 0; index < allConfirmIds.length; index += 100) {
-        const batchIds = allConfirmIds.slice(index, index + 100)
+      for (let index = 0; index < allScannableIds.length; index += 100) {
+        const batchIds = allScannableIds.slice(index, index + 100)
         const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1077,8 +1077,9 @@ Deno.serve(async (req) => {
         const sgtin = String(pair.sgtin)
         try {
           const status = statusByOrder.get(orderId)
-          if (String(status?.supplierStatus ?? '') !== 'confirm' || String(status?.wbStatus ?? '') !== 'waiting') {
-            throw new Error('Заказ уже не находится на сборке')
+          const supplierStatus = String(status?.supplierStatus ?? '')
+          if (!['confirm', 'complete'].includes(supplierStatus) || String(status?.wbStatus ?? '') !== 'waiting') {
+            throw new Error('Заказ уже недоступен для КИЗ: он не находится на сборке или в доставке до приёмки WB')
           }
           const existingSgtins = currentSgtins(metaByOrder.get(orderId))
           if (existingSgtins.length > 0 && !existingSgtins.includes(sgtin)) {

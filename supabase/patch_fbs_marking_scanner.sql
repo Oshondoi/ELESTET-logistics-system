@@ -217,8 +217,8 @@ begin
   select * into v_order from public.fbs_orders
   where store_id = v_session.store_id and wb_order_id = p_order_id and is_in_latest_snapshot = true;
   if v_order.id is null then raise exception 'Заказ WB не найден в актуальных данных магазина'; end if;
-  if v_order.supplier_status <> 'confirm' or coalesce(v_order.wb_system_status, '') <> 'waiting' then
-    raise exception 'Заказ уже не находится на сборке';
+  if v_order.supplier_status not in ('confirm', 'complete') or coalesce(v_order.wb_system_status, '') <> 'waiting' then
+    raise exception 'Заказ уже недоступен для КИЗ: он не находится на сборке или в доставке до приёмки WB';
   end if;
   v_allowed := coalesce(v_order.data->'requiredMeta', '[]'::jsonb) ? 'sgtin'
     or coalesce(v_order.data->'optionalMeta', '[]'::jsonb) ? 'sgtin'
@@ -306,9 +306,10 @@ begin
 
   select * into v_order from public.fbs_orders
   where store_id = v_session.store_id and wb_order_id = v_session.pending_order_id
+    and is_in_latest_snapshot = true
   for update;
-  if v_order.id is null or v_order.supplier_status <> 'confirm' or coalesce(v_order.wb_system_status, '') <> 'waiting' then
-    raise exception 'Заказ уже не находится на сборке';
+  if v_order.id is null or v_order.supplier_status not in ('confirm', 'complete') or coalesce(v_order.wb_system_status, '') <> 'waiting' then
+    raise exception 'Заказ уже недоступен для КИЗ: он не находится на сборке или в доставке до приёмки WB';
   end if;
 
   insert into public.fbs_marking_pairs(
