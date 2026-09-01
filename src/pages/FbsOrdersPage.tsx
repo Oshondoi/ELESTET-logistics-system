@@ -84,8 +84,8 @@ function KizStatusBadge({ order }: { order: FbsOrder }) {
   if (order.shipStatus === 'pending' || (!order.requiresKiz && !order.kizStatus)) return null
   const sent = order.kizStatus === 'sent'
   const title = sent
-    ? 'КИЗ отправлен в Wildberries'
-    : 'КИЗ не отправлен в Wildberries'
+    ? 'КИЗ привязан к заказу в Wildberries'
+    : 'КИЗ не привязан к заказу в Wildberries'
   return (
     <div className="mt-1 flex">
       <span
@@ -1162,26 +1162,6 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       status: row.status as FbsStockAllocation['status'],
     }]))
 
-    const markingRows: any[] = []
-    for (let from = 0; ; from += 1000) {
-      const { data: pageRows, error: markingError } = await (supabase as any)
-        .from('fbs_marking_pairs')
-        .select('order_id,status,updated_at')
-        .eq('store_id', selectedStoreId)
-        .order('updated_at', { ascending: false })
-        .range(from, from + 999)
-      if (markingError && markingError.code !== '42P01') throw markingError
-      markingRows.push(...(pageRows ?? []))
-      if (markingError?.code === '42P01' || (pageRows ?? []).length < 1000) break
-    }
-    const markingStatusByOrderId = new Map<string, FbsOrder['kizStatus']>()
-    for (const row of (markingRows ?? [])) {
-      const orderId = String(row.order_id ?? '')
-      if (!orderId || markingStatusByOrderId.has(orderId)) continue
-      const status = String(row.status ?? '')
-      markingStatusByOrderId.set(orderId, status === 'sent' || status === 'error' ? status : 'draft')
-    }
-
     const { data: kizCatalogRows, error: kizCatalogError } = await (supabase as any)
       .from('fbs_wb_qr_catalog')
       .select('order_id')
@@ -1237,9 +1217,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           || kizEligibleOrderIds.has(String(row.wb_order_id))
           || (Array.isArray(d.requiredMeta) && d.requiredMeta.includes('sgtin'))
           || (Array.isArray(d.optionalMeta) && d.optionalMeta.includes('sgtin')),
-        kizStatus: kizStateByOrderId.get(String(row.wb_order_id))?.sent_to_wb === true
-          ? 'sent'
-          : (markingStatusByOrderId.get(String(row.wb_order_id)) ?? null),
+        kizStatus: kizStateByOrderId.get(String(row.wb_order_id))?.sent_to_wb === true ? 'sent' : null,
       } as FbsOrder
     })
     const enriched = await enrichWithCells(mapped)
@@ -1299,8 +1277,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   useEffect(() => {
     if (!selectedStoreId || (activeTab !== 'assembling' && activeTab !== 'delivering')) return
     let cancelled = false
-    const action = activeTab === 'assembling' ? 'get_scan_catalog' : 'get_kiz_order_states'
-    void invokeFbs(selectedStoreId, { action })
+    void invokeFbs(selectedStoreId, { action: 'get_kiz_order_states' })
       .then(() => {
         if (!cancelled) return readFromDb()
       })
@@ -1352,6 +1329,13 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       setError(null)
       try {
         const result = await invokeFbs(storeId, { action: 'sync_orders' })
+        if (activeTab === 'assembling' || activeTab === 'delivering') {
+          try {
+            await invokeFbs(storeId, { action: 'get_kiz_order_states' })
+          } catch (kizVerificationError) {
+            console.warn('Не удалось обновить подтверждение КИЗ из WB:', kizVerificationError)
+          }
+        }
         await Promise.all([readFromDb(), loadOpenSupplies(), loadClosedSupplies()])
         const serverSyncTime = typeof result.last_synced_at === 'string' ? new Date(result.last_synced_at) : null
         if (result.partial === true) {
@@ -1373,7 +1357,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       if (syncInFlightRef.current.get(storeId) === syncPromise) syncInFlightRef.current.delete(storeId)
     })
     return syncPromise
-  }, [selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies])
+  }, [selectedStoreId, activeTab, readFromDb, loadOpenSupplies, loadClosedSupplies])
 
   const handleProductSync = async () => {
     if (!selectedStoreId || syncingProducts) return

@@ -197,18 +197,25 @@ async function cacheKizOrderStates(
   accountId: string,
   storeId: string,
   metadata: Record<string, unknown>[],
+  requestedOrderIds: string[] = [],
 ) {
-  const rows = metadata.flatMap((meta) => {
+  const metadataByOrderId = new Map(metadata.flatMap((meta) => {
     const orderId = metadataOrderId(meta)
-    if (!orderId) return []
-    return [{
+    return orderId ? [[orderId, meta] as const] : []
+  }))
+  const orderIds = requestedOrderIds.length > 0
+    ? [...new Set(requestedOrderIds.map(String).filter(Boolean))]
+    : [...metadataByOrderId.keys()]
+  const rows = orderIds.map((orderId) => {
+    const meta = metadataByOrderId.get(orderId)
+    return {
       account_id: accountId,
       store_id: storeId,
       order_id: orderId,
       requires_kiz: metadataSupportsSgtin(meta),
       sent_to_wb: metadataSgtinSent(meta),
       checked_at: new Date().toISOString(),
-    }]
+    }
   })
   if (rows.length === 0) return
   await sbWrite(
@@ -218,6 +225,27 @@ async function cacheKizOrderStates(
     'on_conflict=store_id,order_id',
     'resolution=merge-duplicates,return=minimal',
   )
+}
+
+async function refreshKizOrderStatesFromWb(
+  apiKey: string,
+  accountId: string,
+  storeId: string,
+  orderIds: string[],
+) {
+  const uniqueOrderIds = [...new Set(orderIds.map(String).filter(Boolean))]
+  let checked = 0
+  for (let index = 0; index < uniqueOrderIds.length; index += 100) {
+    const batchIds = uniqueOrderIds.slice(index, index + 100)
+    const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: wbOrderIdsBody(batchIds),
+    })
+    await cacheKizOrderStates(accountId, storeId, metadataOrders(metaResponse), batchIds)
+    checked += batchIds.length
+  }
+  return checked
 }
 
 // ── WB helpers ───────────────────────────────────────────────────────────────
@@ -996,7 +1024,7 @@ Deno.serve(async (req) => {
           body: wbOrderIdsBody(batchIds),
         })
         const metadata = metadataOrders(metaResponse)
-        await cacheKizOrderStates(accountId, store_id, metadata)
+        await cacheKizOrderStates(accountId, store_id, metadata, batchIds)
         for (const meta of metadata) {
           if (metadataSupportsSgtin(meta)) eligibleIdsSet.add(metadataOrderId(meta))
         }
@@ -1078,21 +1106,11 @@ Deno.serve(async (req) => {
     if (action === 'get_kiz_order_states') {
       const orderRows = await sbGet(
         'fbs_orders',
-        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=eq.complete&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id&limit=1000`,
+        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=in.(confirm,complete)&is_in_latest_snapshot=eq.true&select=wb_order_id&limit=1000`,
         true,
       )
       const orderIds = orderRows.map((row) => String(row.wb_order_id ?? '')).filter(Boolean)
-      let checked = 0
-      for (let index = 0; index < orderIds.length; index += 100) {
-        const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: wbOrderIdsBody(orderIds.slice(index, index + 100)),
-        })
-        const metadata = metadataOrders(metaResponse)
-        await cacheKizOrderStates(accountId, store_id, metadata)
-        checked += metadata.length
-      }
+      const checked = await refreshKizOrderStatesFromWb(apiKey, accountId, store_id, orderIds)
       return ok({ checked, requested: orderIds.length })
     }
 
@@ -1147,10 +1165,13 @@ Deno.serve(async (req) => {
         headers: { 'Content-Type': 'application/json' },
         body: wbOrderIdsBody(orderIds),
       })
-      const metaByOrder = new Map(metadataOrders(metaResponse).map((meta) => [metadataOrderId(meta), meta]))
+      const initialMetadata = metadataOrders(metaResponse)
+      const metaByOrder = new Map(initialMetadata.map((meta) => [metadataOrderId(meta), meta]))
+      await cacheKizOrderStates(accountId, store_id, initialMetadata, orderIds)
 
       let sent = 0
       let lastMetadataWriteAt = 0
+      const sentOrderIds: string[] = []
       const failures: Array<{ orderId: string; error: string }> = []
       for (const pair of pairRows) {
         const pairId = String(pair.id)
@@ -1181,12 +1202,20 @@ Deno.serve(async (req) => {
             status: 'sent', error: null, sent_at: new Date().toISOString(), updated_at: new Date().toISOString(),
           }, `id=eq.${encodeURIComponent(pairId)}`)
           sent += 1
+          sentOrderIds.push(orderId)
         } catch (pairError) {
           const message = errorMessage(pairError)
           failures.push({ orderId, error: message })
           await sbWrite('fbs_marking_pairs', 'PATCH', {
             status: 'error', error: message, updated_at: new Date().toISOString(),
           }, `id=eq.${encodeURIComponent(pairId)}`)
+        }
+      }
+      if (sentOrderIds.length > 0) {
+        try {
+          await refreshKizOrderStatesFromWb(apiKey, accountId, store_id, sentOrderIds)
+        } catch (verificationError) {
+          console.error(JSON.stringify({ scope: 'wb-fbs', event: 'kiz_metadata_readback_failed', error: errorMessage(verificationError) }))
         }
       }
       const finishedAt = new Date().toISOString()
