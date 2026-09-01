@@ -1974,7 +1974,7 @@ MVP в активной разработке. Деплой на Vercel акти�
 - [x] TypeScript, production build (666 модулей) и `git diff --check` проходят; функциональный commit `8abdab1`.
 - [x] Commits отправлены в `origin/main` и `origin/master`; Vercel production отдаёт проверенный asset `assets/index-B4Sdc5YF.js`.
 
-## Готово 01.09.2026 — КИЗ на сборке и в доставке до приёмки WB
+## Опубликовано 01.09.2026 — КИЗ на сборке и в доставке до приёмки WB
 
 - [x] Каталог сканера включает актуальные `confirm + waiting` и `complete + waiting` заказы с поддержкой `sgtin`.
 - [x] Обе RPC и финальная отправка в WB используют ту же границу, поэтому UI и сервер не расходятся.
@@ -1982,3 +1982,4 @@ MVP в активной разработке. Деплой на Vercel акти�
 - [x] SQL проверен откатной production-транзакцией, применён и подтверждён через определения обеих RPC.
 - [x] Edge Function `wb-fbs` обновлена в production с версии 37 до 38.
 - [x] TypeScript, production build (666 модулей) и `git diff --check` проходят; функциональный commit `5bcccbc`.
+- [x] Commits отправлены в `origin/main` и `origin/master`; Vercel production отдаёт проверенный asset `assets/index-CxQxzUD0.js`.

@@ -2746,3 +2746,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Минимальный SQL-патч прошёл production-транзакцию с `ROLLBACK`, затем применён. Обе production RPC подтверждены через `pg_get_functiondef`; Edge Function `wb-fbs` обновлена с версии 37 до 38.
 - На момент проверки production содержал 317 актуальных `confirm + waiting` и 382 актуальных `complete + waiting`; остальные статусы фильтр не включает.
 - `npx tsc --noEmit`, production build (666 модулей) и `git diff --check` проходят. Функциональный commit: `5bcccbc`.
+- Функциональный и документирующий commits отправлены fast-forward в `origin/main` и `origin/master`; Vercel production отдаёт проверенный frontend-asset `assets/index-CxQxzUD0.js`.
