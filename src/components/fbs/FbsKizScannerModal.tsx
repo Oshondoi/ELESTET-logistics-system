@@ -38,6 +38,16 @@ type CatalogItem = {
   partB?: string
 }
 
+type ScanQrDiagnosis = {
+  found: boolean
+  orderId?: string
+  supportsSgtin?: boolean
+  orderFound?: boolean
+  isLatest?: boolean
+  supplierStatus?: string
+  wbStatus?: string
+}
+
 type ActiveBoxInfo = {
   boxId: string
   barcode: string
@@ -124,6 +134,34 @@ function scanErrorText(error: unknown, contextualFallback: string): string {
     || /\?{2,}|�|(?:Р.|С.){4,}/u.test(message)
     || (!/[А-Яа-яЁё]/u.test(message) && /[A-Za-z]/.test(message))
   return unreadable ? contextualFallback : message
+}
+
+function qrDiagnosisError(diagnosis: ScanQrDiagnosis): string {
+  if (!diagnosis.found) return 'Этот код отсутствует в каталоге официальных QR выбранного магазина.'
+  const orderId = diagnosis.orderId || 'неизвестен'
+  if (!diagnosis.orderFound) return `QR принадлежит заказу №${orderId}, но заказ отсутствует в данных выбранного магазина.`
+  if (!diagnosis.isLatest) return `Заказ №${orderId} не входит в актуальную синхронизацию магазина.`
+  if (diagnosis.supplierStatus === 'complete' && diagnosis.wbStatus === 'waiting') {
+    return `Заказ №${orderId} уже передан «В доставку». WB разрешает привязать КИЗ только пока заказ находится «На сборке».`
+  }
+  if (diagnosis.supplierStatus !== 'confirm' || diagnosis.wbStatus !== 'waiting') {
+    return `Заказ №${orderId} недоступен для КИЗ: статус продавца «${diagnosis.supplierStatus || 'не указан'}», статус WB «${diagnosis.wbStatus || 'не указан'}».`
+  }
+  if (!diagnosis.supportsSgtin) return `Для заказа №${orderId} Wildberries не разрешает метаданные КИЗ.`
+  return `QR заказа №${orderId} найден, но отсутствует в актуальном каталоге сканера.`
+}
+
+function pairErrorText(error: string, orderId: string): string {
+  const message = error.trim()
+  if (/FailedToUpdateMeta|Processing status/i.test(message)) {
+    return `Заказ №${orderId} уже не находится «На сборке». После передачи «В доставку» WB не разрешает изменять КИЗ.`
+  }
+  if (/\b429\b|Too Many Requests|rate limit exceeded/i.test(message)) {
+    return 'WB временно ограничил частоту запросов (HTTP 429). Повторите отправку после снятия лимита.'
+  }
+  const httpStatus = message.match(/\bWB\s+(\d{3})\b/i)?.[1]
+  if (httpStatus) return `WB отклонил КИЗ заказа №${orderId} (HTTP ${httpStatus}).`
+  return message
 }
 
 function signal(success: boolean) {
@@ -438,7 +476,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           const refreshedMap = buildCatalogMap(refreshedCatalog)
           item = candidates.map((candidate) => refreshedMap.get(candidate)).find(Boolean)
         }
-        if (!item) throw new Error('QR WB не распознан. Заказ должен находиться «На сборке» или «В доставке» до приёмки WB. Для USB/BT-сканера включите английскую раскладку.')
+        if (!item) {
+          const diagnosis = await invokeFbs(storeId, { action: 'diagnose_scan_qr', scan_values: candidates }) as ScanQrDiagnosis
+          throw new Error(qrDiagnosisError(diagnosis))
+        }
         const { data, error: scanError } = await (supabase as any).rpc('scan_fbs_wb_qr', {
           p_session_id: session.id,
           p_device_id: stableDeviceId,
@@ -447,7 +488,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         })
         if (scanError) throw new Error(scanErrorText(
           scanError,
-          'QR заказа WB не принят. Проверьте, что заказ находится «На сборке» или «В доставке» до приёмки WB и соответствует отсканированному товару и коробу.',
+          'QR заказа WB не принят серверной проверкой.',
         ))
         setSession((current) => current ? {
           ...current,
@@ -682,7 +723,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       })
       await Promise.all([loadPairs(session.id), loadSession(session.id)])
       if (Number(result.failed ?? 0) > 0) {
-        setError(`Отправлено: ${result.sent}. С ошибкой: ${result.failed}. Исправьте ошибки и повторите.`)
+        const messages = [...new Set(((result.failures ?? []) as Array<{ error?: string }>).map((failure) => String(failure.error ?? '').trim()).filter(Boolean))]
+        setError(messages.length === 1
+          ? `${messages[0]} Ошибок: ${result.failed}.`
+          : `Отправлено: ${result.sent}. С ошибкой: ${result.failed}. Причины указаны у заказов.`)
         signal(false)
       } else {
         setNotice(`Готово. В Wildberries отправлено КИЗ: ${result.sent}`)
@@ -905,7 +949,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                           <div className="min-w-0 flex-1">
                             <div className="text-sm font-semibold text-slate-800">Заказ № {pair.order_id}</div>
                             <div className="mt-0.5 truncate text-xs text-slate-500">{order?.productName || pair.product_snapshot.article || 'Товар'} · КИЗ: <span className="font-mono">{pair.sgtin}</span></div>
-                            {pair.error && <div className="mt-1 text-xs font-medium text-red-600">{pair.error}</div>}
+                            {pair.error && <div className="mt-1 text-xs font-medium text-red-600">{pairErrorText(pair.error, pair.order_id)}</div>}
                           </div>
                           <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${pair.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : pair.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-violet-100 text-violet-700'}`}>
                             {pair.status === 'sent' ? 'В WB' : pair.status === 'error' ? 'Ошибка' : 'Готово'}

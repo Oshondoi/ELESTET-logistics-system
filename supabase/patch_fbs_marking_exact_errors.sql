@@ -1,72 +1,8 @@
--- FBS КИЗ: распознавание реального GS1 DataMatrix без связи с товаром/GTIN.
--- Связь товара с GTIN не является частью сканирования и здесь не хранится.
+-- Restores the strict QR/KIZ scanner RPCs and gives an exact reason when an
+-- order has already been moved to delivery. Product-barcode scanning is not
+-- changed by this patch.
 
 begin;
-
-create or replace function public.is_valid_fbs_gtin14(p_gtin text)
-returns boolean language plpgsql immutable strict set search_path = public
-as $$
-declare v_sum integer := 0; v_index integer;
-begin
-  if p_gtin !~ '^[0-9]{14}$' then return false; end if;
-  for v_index in 1..13 loop
-    v_sum := v_sum + substring(p_gtin from v_index for 1)::integer
-      * case when mod(v_index, 2) = 1 then 3 else 1 end;
-  end loop;
-  return mod(10 - mod(v_sum, 10), 10) = substring(p_gtin from 14 for 1)::integer;
-end;
-$$;
-
-create or replace function public.normalize_fbs_kiz(p_value text)
-returns text language plpgsql immutable strict set search_path = public
-as $$
-declare
-  v_code text := regexp_replace(p_value, E'[\r\n\t]+$', '');
-  v_match text[];
-begin
-  v_code := replace(replace(replace(replace(
-    v_code, chr(8203), ''), chr(8204), ''), chr(8205), ''), chr(65279), '');
-  if v_code ~ E'^\][A-Za-z][0-9]' then v_code := substring(v_code from 4); end if;
-  while left(v_code, 1) = chr(29) loop v_code := substring(v_code from 2); end loop;
-  v_match := regexp_match(v_code, E'^\\(01\\)([0-9]{14})\\(21\\)(.+)$');
-  if v_match is not null then v_code := '01' || v_match[1] || '21' || v_match[2]; end if;
-  -- Аппаратный сканер может удалить внутренние GS и вернуть российский КМ
-  -- плоской строкой: serial(13) + 91 + key(4) + 92 + crypto.
-  v_match := regexp_match(v_code, E'^01([0-9]{14})21([!-~]{13})91([!-~]{4})92([!-~]+)$');
-  if v_match is not null then
-    v_code := '01' || v_match[1] || '21' || v_match[2]
-      || chr(29) || '91' || v_match[3] || chr(29) || '92' || v_match[4];
-  end if;
-  v_match := regexp_match(v_code, E'^([0-9]{14})([!-~]{13})$');
-  if v_match is not null then v_code := '01' || v_match[1] || '21' || v_match[2]; end if;
-  return v_code;
-end;
-$$;
-
-create or replace function public.is_valid_fbs_kiz(p_value text)
-returns boolean language plpgsql immutable strict set search_path = public
-as $$
-declare
-  v_code text := public.normalize_fbs_kiz(p_value);
-  v_parts text[];
-  v_index integer;
-begin
-  if char_length(v_code) not between 19 and 135 or v_code !~ '^01[0-9]{14}21' then return false; end if;
-  if not public.is_valid_fbs_gtin14(substring(v_code from 3 for 14)) then return false; end if;
-  v_parts := string_to_array(substring(v_code from 19), chr(29));
-  if coalesce(array_length(v_parts, 1), 0) < 1
-     or char_length(v_parts[1]) not between 1 and 20
-     or v_parts[1] !~ '^[!-~]+$' then return false; end if;
-  if coalesce(array_length(v_parts, 1), 0) > 1 then
-    for v_index in 2..array_length(v_parts, 1) loop
-      -- The cryptographic tail is verified by Wildberries. Here we only reject
-      -- an empty section or scanner control garbage after a GS separator.
-      if v_parts[v_index] = '' or v_parts[v_index] !~ '^[!-~]+$' then return false; end if;
-    end loop;
-  end if;
-  return true;
-end;
-$$;
 
 create or replace function public.scan_fbs_wb_qr(
   p_session_id uuid, p_device_id text, p_order_id text, p_wb_qr text
@@ -191,16 +127,6 @@ exception when unique_violation then raise exception 'Этот заказ, QR WB
 end;
 $$;
 
-drop function if exists public.get_fbs_product_gtin_link(uuid, text, text);
-drop function if exists public.set_fbs_product_gtin_link(uuid, text, text, text);
-drop table if exists public.fbs_product_gtin_links;
-
-revoke all on function public.is_valid_fbs_gtin14(text) from public, anon;
-grant execute on function public.is_valid_fbs_gtin14(text) to authenticated;
-revoke all on function public.normalize_fbs_kiz(text) from public, anon;
-grant execute on function public.normalize_fbs_kiz(text) to authenticated;
-revoke all on function public.is_valid_fbs_kiz(text) from public, anon;
-grant execute on function public.is_valid_fbs_kiz(text) to authenticated;
 revoke all on function public.scan_fbs_wb_qr(uuid, text, text, text) from public, anon;
 grant execute on function public.scan_fbs_wb_qr(uuid, text, text, text) to authenticated;
 revoke all on function public.scan_fbs_kiz(uuid, text, text) from public, anon;

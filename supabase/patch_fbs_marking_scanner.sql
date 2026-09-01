@@ -1,6 +1,9 @@
 -- Быстрое многопользовательское сканирование КИЗ для FBS.
 -- Каждое устройство работает в своей сессии, а уникальность заказа, QR WB и КИЗ
 -- контролируется общей БД внутри одного магазина.
+-- ВАЖНО: это bootstrap-патч. Актуальные строгие определения scan_fbs_wb_qr и
+-- scan_fbs_kiz находятся в patch_fbs_kiz_scan_validation.sql и последующих
+-- точечных патчах; не используйте этот файл отдельно для production-ремонта RPC.
 
 create table if not exists public.fbs_marking_sessions (
   id uuid primary key default gen_random_uuid(),
@@ -217,8 +220,8 @@ begin
   select * into v_order from public.fbs_orders
   where store_id = v_session.store_id and wb_order_id = p_order_id and is_in_latest_snapshot = true;
   if v_order.id is null then raise exception 'Заказ WB не найден в актуальных данных магазина'; end if;
-  if v_order.supplier_status not in ('confirm', 'complete') or coalesce(v_order.wb_system_status, '') <> 'waiting' then
-    raise exception 'Заказ уже недоступен для КИЗ: он не находится на сборке или в доставке до приёмки WB';
+  if v_order.supplier_status <> 'confirm' or coalesce(v_order.wb_system_status, '') <> 'waiting' then
+    raise exception 'КИЗ можно привязать только пока заказ находится «На сборке»';
   end if;
   v_allowed := coalesce(v_order.data->'requiredMeta', '[]'::jsonb) ? 'sgtin'
     or coalesce(v_order.data->'optionalMeta', '[]'::jsonb) ? 'sgtin'
@@ -308,8 +311,8 @@ begin
   where store_id = v_session.store_id and wb_order_id = v_session.pending_order_id
     and is_in_latest_snapshot = true
   for update;
-  if v_order.id is null or v_order.supplier_status not in ('confirm', 'complete') or coalesce(v_order.wb_system_status, '') <> 'waiting' then
-    raise exception 'Заказ уже недоступен для КИЗ: он не находится на сборке или в доставке до приёмки WB';
+  if v_order.id is null or v_order.supplier_status <> 'confirm' or coalesce(v_order.wb_system_status, '') <> 'waiting' then
+    raise exception 'КИЗ можно привязать только пока заказ находится «На сборке»';
   end if;
 
   insert into public.fbs_marking_pairs(

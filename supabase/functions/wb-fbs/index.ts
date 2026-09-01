@@ -334,6 +334,48 @@ async function wbPut(apiKey: string, path: string, body: unknown) {
   return null
 }
 
+function wbProblem(text: string): { code: string; message: string } {
+  try {
+    const parsed = parseWbJson(text) as Record<string, unknown>
+    return {
+      code: String(parsed.code ?? '').trim(),
+      message: String(parsed.message ?? parsed.detail ?? parsed.title ?? '').trim(),
+    }
+  } catch {
+    return { code: '', message: '' }
+  }
+}
+
+async function putWbOrderSgtin(apiKey: string, orderId: string, sgtin: string) {
+  let retrySeconds = 0
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    const response = await fetch(`${WB_BASE}/api/v3/orders/${encodeURIComponent(orderId)}/meta/sgtin`, {
+      method: 'PUT',
+      headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sgtins: [sgtin] }),
+    })
+    if (response.ok) return
+    if (response.status === 401 || response.status === 403) throw new Error('Нет доступа к Marketplace API WB')
+
+    const responseText = await response.text()
+    const problem = wbProblem(responseText)
+    if (response.status === 429) {
+      const headerSeconds = Number(response.headers.get('X-Ratelimit-Retry') ?? response.headers.get('Retry-After') ?? '')
+      retrySeconds = Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds : Math.min(2 ** attempt, 30)
+      if (attempt < 4) {
+        await sleep((retrySeconds * 1000) + 150)
+        continue
+      }
+      throw new Error(`WB временно ограничил частоту запросов. Повторите отправку через ${retrySeconds} сек.`)
+    }
+    if (response.status === 409 && (problem.code === 'FailedToUpdateMeta' || /Processing status|confirm/i.test(problem.message))) {
+      throw new Error('WB отклонил КИЗ: заказ уже не находится «На сборке». После передачи «В доставку» WB не разрешает изменять КИЗ.')
+    }
+    const wbCode = problem.code ? `, ${problem.code}` : ''
+    throw new Error(`WB отклонил КИЗ заказа №${orderId} (HTTP ${response.status}${wbCode}).`)
+  }
+}
+
 async function wbPatchNoContent(apiKey: string, path: string, rawBody?: string) {
   const r = await fetch(`${WB_BASE}${path}`, {
     method: 'PATCH',
@@ -935,7 +977,7 @@ Deno.serve(async (req) => {
     if (action === 'get_scan_catalog') {
       const orderRows = await sbGet(
         'fbs_orders',
-        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=in.(confirm,complete)&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id,data`,
+        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=eq.confirm&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id,data`,
         true,
       )
       const eligibleFromSnapshot = new Set(orderRows.filter((row) => {
@@ -944,10 +986,10 @@ Deno.serve(async (req) => {
         const optional = Array.isArray(raw.optionalMeta) ? raw.optionalMeta.map(String) : []
         return required.includes('sgtin') || optional.includes('sgtin')
       }).map((row) => String(row.wb_order_id)))
-      const allScannableIds = orderRows.map((row) => String(row.wb_order_id))
+      const allConfirmIds = orderRows.map((row) => String(row.wb_order_id))
       const eligibleIdsSet = new Set(eligibleFromSnapshot)
-      for (let index = 0; index < allScannableIds.length; index += 100) {
-        const batchIds = allScannableIds.slice(index, index + 100)
+      for (let index = 0; index < allConfirmIds.length; index += 100) {
+        const batchIds = allConfirmIds.slice(index, index + 100)
         const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -993,6 +1035,44 @@ Deno.serve(async (req) => {
         }] : []
       })
       return ok({ catalog, eligible: eligibleIds.length, missing: eligibleIds.length - catalog.length })
+    }
+
+    if (action === 'diagnose_scan_qr') {
+      const scanValues = Array.isArray(body.scan_values)
+        ? [...new Set(body.scan_values.map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, 8)
+        : []
+      if (scanValues.length === 0 || scanValues.some((value) => value.length > 300)) return err('Некорректный QR для диагностики')
+
+      let catalogRow: Record<string, unknown> | undefined
+      for (const scanValue of scanValues) {
+        const rows = await sbGet(
+          'fbs_wb_qr_catalog',
+          `store_id=eq.${encodeURIComponent(store_id)}&qr_value=eq.${encodeURIComponent(scanValue)}&select=order_id,supports_sgtin&limit=1`,
+          true,
+        )
+        if (rows[0]) {
+          catalogRow = rows[0]
+          break
+        }
+      }
+      if (!catalogRow) return ok({ found: false })
+
+      const orderId = String(catalogRow.order_id ?? '')
+      const orderRows = await sbGet(
+        'fbs_orders',
+        `store_id=eq.${encodeURIComponent(store_id)}&wb_order_id=eq.${encodeURIComponent(orderId)}&select=wb_order_id,supplier_status,wb_system_status,is_in_latest_snapshot&limit=1`,
+        true,
+      )
+      const order = orderRows[0]
+      return ok({
+        found: true,
+        orderId,
+        supportsSgtin: catalogRow.supports_sgtin === true,
+        orderFound: Boolean(order),
+        isLatest: order?.is_in_latest_snapshot === true,
+        supplierStatus: String(order?.supplier_status ?? ''),
+        wbStatus: String(order?.wb_system_status ?? ''),
+      })
     }
 
     if (action === 'get_kiz_order_states') {
@@ -1070,6 +1150,7 @@ Deno.serve(async (req) => {
       const metaByOrder = new Map(metadataOrders(metaResponse).map((meta) => [metadataOrderId(meta), meta]))
 
       let sent = 0
+      let lastMetadataWriteAt = 0
       const failures: Array<{ orderId: string; error: string }> = []
       for (const pair of pairRows) {
         const pairId = String(pair.id)
@@ -1078,15 +1159,23 @@ Deno.serve(async (req) => {
         try {
           const status = statusByOrder.get(orderId)
           const supplierStatus = String(status?.supplierStatus ?? '')
-          if (!['confirm', 'complete'].includes(supplierStatus) || String(status?.wbStatus ?? '') !== 'waiting') {
-            throw new Error('Заказ уже недоступен для КИЗ: он не находится на сборке или в доставке до приёмки WB')
+          const wbStatus = String(status?.wbStatus ?? '')
+          if (!status) throw new Error(`WB не вернул актуальный статус заказа №${orderId}.`)
+          if (supplierStatus === 'complete' && wbStatus === 'waiting') {
+            throw new Error(`Заказ №${orderId} уже передан «В доставку». WB разрешает привязать КИЗ только пока заказ находится «На сборке».`)
+          }
+          if (supplierStatus !== 'confirm' || wbStatus !== 'waiting') {
+            throw new Error(`КИЗ заказа №${orderId} нельзя отправить: статус продавца «${supplierStatus || 'не указан'}», статус WB «${wbStatus || 'не указан'}». WB принимает КИЗ только в статусе «На сборке».`)
           }
           const existingSgtins = currentSgtins(metaByOrder.get(orderId))
           if (existingSgtins.length > 0 && !existingSgtins.includes(sgtin)) {
             throw new Error('В Wildberries у заказа уже указан другой КИЗ')
           }
           if (!existingSgtins.includes(sgtin)) {
-            await wbPut(apiKey, `/api/v3/orders/${encodeURIComponent(orderId)}/meta/sgtin`, { sgtins: [sgtin] })
+            const intervalWait = 65 - (Date.now() - lastMetadataWriteAt)
+            if (intervalWait > 0) await sleep(intervalWait)
+            await putWbOrderSgtin(apiKey, orderId, sgtin)
+            lastMetadataWriteAt = Date.now()
           }
           await sbWrite('fbs_marking_pairs', 'PATCH', {
             status: 'sent', error: null, sent_at: new Date().toISOString(), updated_at: new Date().toISOString(),
