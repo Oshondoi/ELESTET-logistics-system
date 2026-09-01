@@ -1987,3 +1987,4 @@ MVP в активной разработке. Деплой на Vercel акти�
 - [x] Строгие RPC официального QR и формата КИЗ восстановлены и подтверждены в production; Edge Function `wb-fbs` обновлена до version 39.
 - [x] RPC проверки товарного баркода не менялся (MD5 до/после совпадает); задача по баркоду отложена.
 - [x] TypeScript, production build (666 модулей, asset `assets/index-gk4zESIm.js`) и `git diff --check` проходят; функциональный commit `c9f0f5b`.
+- [x] Commits `c9f0f5b`/`b26c945` отправлены в `origin/main`; Vercel production отдаёт проверенный asset `assets/index-gk4zESIm.js`.

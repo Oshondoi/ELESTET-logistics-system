@@ -2752,3 +2752,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Строгие production RPC `scan_fbs_wb_qr` и `scan_fbs_kiz` восстановлены точечным `supabase/patch_fbs_marking_exact_errors.sql`: официальный QR, формат КИЗ, актуальный snapshot и статус `confirm + waiting` подтверждены через `pg_get_functiondef`.
 - RPC `scan_fbs_product_barcode` не менялся: его production MD5 до и после патча одинаков (`ed7fbaa0c47c782152f3c44d1341883b`). Дальнейшая работа по баркоду отложена по решению пользователя.
 - Edge Function `wb-fbs` опубликована как production version 39. `npx tsc --noEmit`, production build (666 модулей, asset `assets/index-gk4zESIm.js`) и `git diff --check` проходят. Функциональный commit: `c9f0f5b`.
+- Функциональный и документирующий commits `c9f0f5b`/`b26c945` отправлены в `origin/main`; Vercel production подтверждён по asset `assets/index-gk4zESIm.js`.
