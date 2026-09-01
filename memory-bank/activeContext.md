@@ -2747,9 +2747,16 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 ## 2026-09-01 — точные ошибки QR/КИЗ и ответы WB
 
 - Общее сообщение с предположениями про вкладку и раскладку удалено. Edge-действие `diagnose_scan_qr` различает неизвестный официальный QR, отсутствующий/неактуальный заказ, отсутствие поддержки `sgtin`, конкретные статусы и уже переданный `В доставку` заказ.
-- До отправки каждой пары сервер повторно получает статусы WB. Для `complete + waiting` возвращается точная причина: после передачи `В доставку` WB не разрешает менять КИЗ.
+- До отправки каждой пары сервер повторно получает статусы WB. Для любого `supplierStatus = complete`, включая `wbStatus = sorted`, возвращается точная причина: после передачи `В доставку` WB не разрешает менять КИЗ. Технические коды статусов пользователю не показываются.
 - `409 FailedToUpdateMeta` и `429 Too Many Requests` больше не показываются сырым JSON. Для 429 соблюдается `X-Ratelimit-Retry`, выполняется до четырёх ограниченных попыток и при исчерпании сообщается точное время повтора.
 - Строгие production RPC `scan_fbs_wb_qr` и `scan_fbs_kiz` восстановлены точечным `supabase/patch_fbs_marking_exact_errors.sql`: официальный QR, формат КИЗ, актуальный snapshot и статус `confirm + waiting` подтверждены через `pg_get_functiondef`.
 - RPC `scan_fbs_product_barcode` не менялся: его production MD5 до и после патча одинаков (`ed7fbaa0c47c782152f3c44d1341883b`). Дальнейшая работа по баркоду отложена по решению пользователя.
 - Edge Function `wb-fbs` опубликована как production version 39. `npx tsc --noEmit`, production build (666 модулей, asset `assets/index-gk4zESIm.js`) и `git diff --check` проходят. Функциональный commit: `c9f0f5b`.
 - Функциональный и документирующий commits `c9f0f5b`/`b26c945` отправлены в `origin/main`; Vercel production подтверждён по asset `assets/index-gk4zESIm.js`.
+
+### Уточнение сообщения для всех `complete`
+
+- Клиентская диагностика, обе RPC и финальная серверная проверка теперь считают любой `supplierStatus = complete` уже переданным `В доставку`, независимо от `wbStatus` (`waiting`, `sorted` и других).
+- Оператор видит только предметное сообщение о передаче `В доставку` и допустимости КИЗ лишь `На сборке`; технические коды статусов не выводятся.
+- Production RPC подтверждены через `pg_get_functiondef`, MD5 RPC товарного баркода не изменился. Edge Function `wb-fbs` опубликована как version 40.
+- `npx tsc --noEmit`, production build (666 модулей, asset `assets/index-CdkUuFZb.js`) и `git diff --check` проходят. Функциональный commit: `d4da51b`.
