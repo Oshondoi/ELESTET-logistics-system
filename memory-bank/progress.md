@@ -1974,12 +1974,16 @@ MVP в активной разработке. Деплой на Vercel акти�
 - [x] TypeScript, production build (666 модулей) и `git diff --check` проходят; функциональный commit `8abdab1`.
 - [x] Commits отправлены в `origin/main` и `origin/master`; Vercel production отдаёт проверенный asset `assets/index-B4Sdc5YF.js`.
 
-## Опубликовано 01.09.2026 — КИЗ на сборке и в доставке до приёмки WB
+## Отменено 01.09.2026 — КИЗ в статусе «В доставке»
 
-- [x] Каталог сканера включает актуальные `confirm + waiting` и `complete + waiting` заказы с поддержкой `sgtin`.
-- [x] Обе RPC и финальная отправка в WB используют ту же границу, поэтому UI и сервер не расходятся.
-- [x] После смены `wb_system_status` с `waiting` заказ сканером не принимается.
-- [x] SQL проверен откатной production-транзакцией, применён и подтверждён через определения обеих RPC.
-- [x] Edge Function `wb-fbs` обновлена в production с версии 37 до 38.
-- [x] TypeScript, production build (666 модулей) и `git diff --check` проходят; функциональный commit `5bcccbc`.
-- [x] Commits отправлены в `origin/main` и `origin/master`; Vercel production отдаёт проверенный asset `assets/index-CxQxzUD0.js`.
+- [x] Расширение `confirm + waiting` → `confirm/complete + waiting` из commit `5bcccbc` отменено: WB разрешает изменение `sgtin` только в статусе `confirm`/`На сборке`.
+- [x] Определения RPC из опасного минимального патча больше не считаются каноническими; сам `patch_fbs_marking_delivery_eligibility.sql` удалён.
+
+## Опубликовано 01.09.2026 — точные ошибки сканера и отправки КИЗ
+
+- [x] Для непринятого QR показывается фактическая причина из каталога и статусов, без предположений про раскладку или вкладку.
+- [x] Для заказа `complete + waiting` показывается точное сообщение: заказ уже `В доставке`, а WB принимает КИЗ только `На сборке`.
+- [x] Сырые ответы `409 FailedToUpdateMeta` и `429 Too Many Requests` заменены понятными сообщениями; 429 повторяется с учётом `X-Ratelimit-Retry`.
+- [x] Строгие RPC официального QR и формата КИЗ восстановлены и подтверждены в production; Edge Function `wb-fbs` обновлена до version 39.
+- [x] RPC проверки товарного баркода не менялся (MD5 до/после совпадает); задача по баркоду отложена.
+- [x] TypeScript, production build (666 модулей, asset `assets/index-gk4zESIm.js`) и `git diff --check` проходят; функциональный commit `c9f0f5b`.

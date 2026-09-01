@@ -2737,13 +2737,18 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - TypeScript, production build (666 модулей) и `git diff --check` проходят. Функциональный commit: `8abdab1`.
 - Функциональный и документирующий commits отправлены fast-forward в `origin/main` и `origin/master`; Vercel production отдаёт проверенный asset `assets/index-B4Sdc5YF.js`.
 
-## 2026-09-01 — КИЗ после передачи заказа в доставку
+## 2026-09-01 — отменённое расширение КИЗ на «В доставке»
 
-- Сканер КИЗ теперь рассматривает актуальные заказы двух вкладок: `На сборке` (`confirm + waiting`) и `В доставке` (`complete + waiting`).
-- `waiting` является обязательной границей: после фактической приёмки WB заказ исключается независимо от вкладки поставщика.
-- Правило синхронно применено к каталогу QR, RPC сканирования QR заказа, RPC привязки КИЗ и финальной проверке перед отправкой метаданных в WB. Тексты ошибок описывают обе допустимые вкладки.
-- Вторая RPC-проверка дополнительно требует `is_in_latest_snapshot = true`; уникальность заказа, QR и КИЗ, блокировки устройств и проверка `sgtin` не менялись.
-- Минимальный SQL-патч прошёл production-транзакцию с `ROLLBACK`, затем применён. Обе production RPC подтверждены через `pg_get_functiondef`; Edge Function `wb-fbs` обновлена с версии 37 до 38.
-- На момент проверки production содержал 317 актуальных `confirm + waiting` и 382 актуальных `complete + waiting`; остальные статусы фильтр не включает.
-- `npx tsc --noEmit`, production build (666 модулей) и `git diff --check` проходят. Функциональный commit: `5bcccbc`.
-- Функциональный и документирующий commits отправлены fast-forward в `origin/main` и `origin/master`; Vercel production отдаёт проверенный frontend-asset `assets/index-CxQxzUD0.js`.
+- Решение из commit `5bcccbc`, допускавшее `complete + waiting`, отменено после фактического ответа WB и сверки официального API: `PUT /api/v3/orders/{orderId}/meta/sgtin` разрешён только для заказа `confirm`/`На сборке`.
+- `complete + waiting` означает уже переданный `В доставку` заказ. WB отвечает `409 FailedToUpdateMeta`, поэтому локально сканировать такую пару как отправляемую нельзя.
+- Актуальная граница снова едина во всех четырёх местах: каталог, RPC QR, RPC КИЗ и финальная отправка принимают только актуальный `confirm + waiting`.
+- Старый production-патч `patch_fbs_marking_delivery_eligibility.sql` удалён, поскольку он также мог перезаписать строгие определения RPC bootstrap-версиями.
+
+## 2026-09-01 — точные ошибки QR/КИЗ и ответы WB
+
+- Общее сообщение с предположениями про вкладку и раскладку удалено. Edge-действие `diagnose_scan_qr` различает неизвестный официальный QR, отсутствующий/неактуальный заказ, отсутствие поддержки `sgtin`, конкретные статусы и уже переданный `В доставку` заказ.
+- До отправки каждой пары сервер повторно получает статусы WB. Для `complete + waiting` возвращается точная причина: после передачи `В доставку` WB не разрешает менять КИЗ.
+- `409 FailedToUpdateMeta` и `429 Too Many Requests` больше не показываются сырым JSON. Для 429 соблюдается `X-Ratelimit-Retry`, выполняется до четырёх ограниченных попыток и при исчерпании сообщается точное время повтора.
+- Строгие production RPC `scan_fbs_wb_qr` и `scan_fbs_kiz` восстановлены точечным `supabase/patch_fbs_marking_exact_errors.sql`: официальный QR, формат КИЗ, актуальный snapshot и статус `confirm + waiting` подтверждены через `pg_get_functiondef`.
+- RPC `scan_fbs_product_barcode` не менялся: его production MD5 до и после патча одинаков (`ed7fbaa0c47c782152f3c44d1341883b`). Дальнейшая работа по баркоду отложена по решению пользователя.
+- Edge Function `wb-fbs` опубликована как production version 39. `npx tsc --noEmit`, production build (666 модулей, asset `assets/index-gk4zESIm.js`) и `git diff --check` проходят. Функциональный commit: `c9f0f5b`.
