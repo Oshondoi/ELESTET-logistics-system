@@ -29,7 +29,7 @@ begin
   select * into v_order from public.fbs_orders
   where store_id = v_session.store_id and wb_order_id = p_order_id and is_in_latest_snapshot = true;
   if v_order.id is null then raise exception 'Заказ WB не найден в актуальных данных магазина'; end if;
-  if v_order.supplier_status = 'complete' and coalesce(v_order.wb_system_status, '') = 'waiting' then
+  if v_order.supplier_status = 'complete' then
     raise exception 'Заказ №% уже передан «В доставку». WB разрешает привязать КИЗ только пока заказ находится «На сборке»', p_order_id;
   end if;
   if v_order.supplier_status <> 'confirm' or coalesce(v_order.wb_system_status, '') <> 'waiting' then
@@ -94,7 +94,7 @@ begin
   where store_id = v_session.store_id and wb_order_id = v_session.pending_order_id
     and is_in_latest_snapshot = true for update;
   if v_order.id is null then raise exception 'Заказ WB не найден в актуальных данных магазина'; end if;
-  if v_order.supplier_status = 'complete' and coalesce(v_order.wb_system_status, '') = 'waiting' then
+  if v_order.supplier_status = 'complete' then
     raise exception 'Заказ №% уже передан «В доставку». WB разрешает привязать КИЗ только пока заказ находится «На сборке»', v_session.pending_order_id;
   end if;
   if v_order.supplier_status <> 'confirm' or coalesce(v_order.wb_system_status, '') <> 'waiting' then

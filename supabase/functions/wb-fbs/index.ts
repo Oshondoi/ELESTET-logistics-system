@@ -1161,7 +1161,7 @@ Deno.serve(async (req) => {
           const supplierStatus = String(status?.supplierStatus ?? '')
           const wbStatus = String(status?.wbStatus ?? '')
           if (!status) throw new Error(`WB не вернул актуальный статус заказа №${orderId}.`)
-          if (supplierStatus === 'complete' && wbStatus === 'waiting') {
+          if (supplierStatus === 'complete') {
             throw new Error(`Заказ №${orderId} уже передан «В доставку». WB разрешает привязать КИЗ только пока заказ находится «На сборке».`)
           }
           if (supplierStatus !== 'confirm' || wbStatus !== 'waiting') {

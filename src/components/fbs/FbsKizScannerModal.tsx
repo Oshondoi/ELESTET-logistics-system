@@ -141,7 +141,7 @@ function qrDiagnosisError(diagnosis: ScanQrDiagnosis): string {
   const orderId = diagnosis.orderId || 'неизвестен'
   if (!diagnosis.orderFound) return `QR принадлежит заказу №${orderId}, но заказ отсутствует в данных выбранного магазина.`
   if (!diagnosis.isLatest) return `Заказ №${orderId} не входит в актуальную синхронизацию магазина.`
-  if (diagnosis.supplierStatus === 'complete' && diagnosis.wbStatus === 'waiting') {
+  if (diagnosis.supplierStatus === 'complete') {
     return `Заказ №${orderId} уже передан «В доставку». WB разрешает привязать КИЗ только пока заказ находится «На сборке».`
   }
   if (diagnosis.supplierStatus !== 'confirm' || diagnosis.wbStatus !== 'waiting') {
