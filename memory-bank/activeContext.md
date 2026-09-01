@@ -2727,3 +2727,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Для товаров без массива `sizes` теперь сохраняются все известные уникальные `products.barcodes`, а не только первый баркод.
 - Логика сохранения, точная группировка по баркоду, вкладки `Заявлено`/`Принято`, корректировки и hover-фото не менялись. Supabase/SQL не затронуты.
 - `npx tsc -b --pretty false`, `npm run build` (666 модулей) и `git diff --check` проходят. Функциональный commit: `be01131 Clarify fulfillment catalog size quantities`.
+- Функциональный и документирующий commits отправлены fast-forward в `origin/main` и `origin/master`; Vercel production отдаёт проверенный asset `assets/index-C2N0p_Ta.js`.
