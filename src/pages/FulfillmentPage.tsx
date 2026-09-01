@@ -104,6 +104,7 @@ import { buildFulfillmentBoxBarcode } from '../lib/fulfillmentBoxBarcode'
 import { buildFulfillmentBoxQrPdf } from '../lib/fulfillmentBoxQrPdf'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import { getStoreSelectorLabel } from '../lib/storeDisplay'
+import { pluralRu } from '../lib/utils'
 import {
   buildFulfillmentBoxContentsPdf,
   type FulfillmentBoxContentsFormat,
@@ -8126,8 +8127,8 @@ const BatchDetailModal = ({
                                 </div>
                               )
                             ) : (
-                              <span className="inline-flex min-w-8 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-600">
-                                {sizeCount}
+                              <span className="whitespace-nowrap font-medium text-slate-600">
+                                {sizeCount} {pluralRu(sizeCount, 'размер', 'размера', 'размеров')}
                               </span>
                             )}
                           </td>
