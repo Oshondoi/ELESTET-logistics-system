@@ -2735,3 +2735,4 @@ interface FulfillmentPackagingLog extends FulfillmentOtkLog {
 - Изменено только расположение подписей. Значение поля по-прежнему относится к единственному баркоду товара; раскрытие размерных вариантов, сохранение и группировка по баркоду не менялись.
 - Логика сканирования КИЗ не изменялась: расширение поиска с `На сборке` на `В доставке` оставлено на обсуждение.
 - TypeScript, production build (666 модулей) и `git diff --check` проходят. Функциональный commit: `8abdab1`.
+- Функциональный и документирующий commits отправлены fast-forward в `origin/main` и `origin/master`; Vercel production отдаёт проверенный asset `assets/index-B4Sdc5YF.js`.
