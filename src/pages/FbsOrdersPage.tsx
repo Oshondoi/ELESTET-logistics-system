@@ -939,6 +939,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [supplyQrBusyIds, setSupplyQrBusyIds] = useState<Set<string>>(new Set())
+  const [copiedSupplyId, setCopiedSupplyId] = useState<string | null>(null)
   const [assembleModal, setAssembleModal] = useState<{ ids: string[]; mode: 'assemble' | 'move'; sourceSupplyIds: string[] } | null>(null)
   const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
   const [newSupplyName, setNewSupplyName] = useState('')
@@ -956,6 +957,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   const [boxSelectionBusy, setBoxSelectionBusy] = useState(false)
   const [boxScanValue, setBoxScanValue] = useState('')
   const syncInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
+  const copiedSupplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const selectedStoreIdRef = useRef(selectedStoreId)
   const lastSyncedAtRef = useRef<Date | null>(null)
   selectedStoreIdRef.current = selectedStoreId
@@ -963,6 +965,24 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   useEffect(() => {
     setPickingListMenuOpen(false)
   }, [selected])
+
+  useEffect(() => () => {
+    if (copiedSupplyTimerRef.current) clearTimeout(copiedSupplyTimerRef.current)
+  }, [])
+
+  const copySupplyId = useCallback(async (supplyId: string) => {
+    try {
+      await navigator.clipboard.writeText(supplyId)
+      if (copiedSupplyTimerRef.current) clearTimeout(copiedSupplyTimerRef.current)
+      setCopiedSupplyId(supplyId)
+      copiedSupplyTimerRef.current = setTimeout(() => {
+        setCopiedSupplyId(null)
+        copiedSupplyTimerRef.current = null
+      }, 1600)
+    } catch {
+      setError('Не удалось скопировать QR-код поставки. Разрешите сайту доступ к буферу обмена и повторите попытку.')
+    }
+  }, [])
 
   useEffect(() => {
     if (!selectedStoreId) {
@@ -2524,7 +2544,24 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-slate-800">{supplyId === '__none__' ? 'Без поставки' : (supply?.name || supplyId)}</p>
                     </div>
-                    <span className="truncate font-mono text-xs font-semibold text-slate-700">{supplyId === '__none__' ? '—' : supplyId}</span>
+                    {supplyId === '__none__' ? (
+                      <span className="text-xs text-slate-400">—</span>
+                    ) : (
+                      <button
+                        type="button"
+                        title={copiedSupplyId === supplyId ? 'QR-код поставки скопирован' : 'Скопировать QR-код поставки'}
+                        aria-label={copiedSupplyId === supplyId ? `QR-код поставки ${supplyId} скопирован` : `Скопировать QR-код поставки ${supplyId}`}
+                        onClick={(event) => { event.stopPropagation(); void copySupplyId(supplyId) }}
+                        className={`group inline-flex min-w-0 max-w-full cursor-copy items-center gap-1 rounded px-1 py-0.5 font-mono text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-200 ${copiedSupplyId === supplyId ? 'bg-emerald-100 text-emerald-700' : 'text-slate-700 hover:bg-blue-50 hover:text-blue-600'}`}
+                      >
+                        <span className="truncate">{supplyId}</span>
+                        {copiedSupplyId === supplyId ? (
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m5 12 4 4L19 6" /></svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg>
+                        )}
+                      </button>
+                    )}
                     <div>{supplyId !== '__none__' && supply ? <SupplyWbStatus supply={supply} /> : <span className="text-xs text-slate-400">—</span>}</div>
                     <span className="text-xs text-slate-600">{scanTimestamp ?? '—'}</span>
                     <div className="min-w-0">
