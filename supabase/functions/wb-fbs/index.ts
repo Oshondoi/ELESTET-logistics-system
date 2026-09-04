@@ -55,6 +55,28 @@ async function sbGet(table: string, params: string, serviceRole = false): Promis
   return r.json()
 }
 
+// PostgREST ограничивает один ответ тысячей строк. Для фоновой сверки нужно
+// прочитать все активные заказы/поставки, поэтому идём диапазонами.
+async function sbGetAll(table: string, params: string, serviceRole = false): Promise<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = []
+  const key = serviceRole ? SUPABASE_SERVICE_KEY : SUPABASE_ANON_KEY
+  for (let offset = 0; offset < 1_000_000; offset += 1000) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Accept: 'application/json',
+        Range: `${offset}-${offset + 999}`,
+      },
+    })
+    if (!r.ok) throw new Error(`DB ${r.status}: ${await r.text()}`)
+    const page = await r.json() as Record<string, unknown>[]
+    rows.push(...page)
+    if (page.length < 1000) return rows
+  }
+  throw new Error(`DB pagination exceeded the safety limit for ${table}`)
+}
+
 async function sbWrite(
   table: string,
   method: 'POST' | 'PATCH',
@@ -481,7 +503,7 @@ function normalizeWbOrderStatus(status: Record<string, unknown>): WbOrderStatus 
   return { supplierStatus, wbStatus }
 }
 
-async function getAllOrdersForThirtyDays(apiKey: string, dateFromTs: number) {
+async function getAllOrdersForPeriod(apiKey: string, dateFromTs: number, dateToTs?: number) {
   const orders: Record<string, unknown>[] = []
   let cursor = '0'
   const seenCursors = new Set<string>()
@@ -491,6 +513,7 @@ async function getAllOrdersForThirtyDays(apiKey: string, dateFromTs: number) {
       limit: String(WB_PAGE_LIMIT),
       next: cursor,
       dateFrom: String(dateFromTs),
+      ...(dateToTs ? { dateTo: String(dateToTs) } : {}),
     })
     const pageOrders = Array.isArray(data?.orders) ? data.orders as Record<string, unknown>[] : []
     orders.push(...pageOrders)
@@ -630,71 +653,401 @@ async function writeSyncFailure(storeId: string, message: string) {
   if (!response.ok) console.error(JSON.stringify({ scope: 'wb-fbs', event: 'sync_error_write_failed', status: response.status, error: await response.text() }))
 }
 
+type SyncMode = 'incremental' | 'full'
+type SyncTrigger = 'automatic' | 'manual' | 'store_connected' | 'nightly'
+
+type NormalizedSupply = {
+  wb_supply_id: string
+  name: string | null
+  done: boolean
+  wb_created_at: string | null
+  wb_closed_at: string | null
+  wb_scan_at: string | null
+  destination_office_id: number | null
+  cargo_type: number | null
+  cross_border_type: number | null
+  is_b2b: boolean | null
+  raw_data: Record<string, unknown>
+}
+
+const finalWbStatuses = new Set([
+  'sold', 'canceled', 'canceled_by_client', 'declined_by_client', 'defect',
+])
+
+function nullableNumber(value: unknown): number | null {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+function nullableTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const timestamp = new Date(value)
+  return Number.isFinite(timestamp.getTime()) ? timestamp.toISOString() : null
+}
+
+function normalizeSupply(raw: Record<string, unknown>): NormalizedSupply | null {
+  const supplyId = String(raw.id ?? '').trim()
+  if (!supplyId) return null
+  return {
+    wb_supply_id: supplyId,
+    name: String(raw.name ?? '').trim() || null,
+    done: raw.done === true,
+    wb_created_at: nullableTimestamp(raw.createdAt ?? raw.created_at),
+    wb_closed_at: nullableTimestamp(raw.closedAt ?? raw.closed_at),
+    wb_scan_at: nullableTimestamp(raw.scanDt ?? raw.scan_dt),
+    destination_office_id: nullableNumber(raw.destinationOfficeId ?? raw.destination_office_id),
+    cargo_type: nullableNumber(raw.cargoType ?? raw.cargo_type),
+    cross_border_type: nullableNumber(raw.crossBorderType ?? raw.cross_border_type),
+    is_b2b: typeof raw.isB2b === 'boolean' ? raw.isB2b : null,
+    raw_data: raw,
+  }
+}
+
+function mergeSupply(left: Record<string, unknown>, right: Record<string, unknown>) {
+  const merged = { ...left, ...right }
+  for (const key of ['createdAt', 'closedAt', 'scanDt', 'name', 'destinationOfficeId', 'cargoType', 'crossBorderType']) {
+    if (right[key] == null || right[key] === '') merged[key] = left[key]
+  }
+  merged.done = left.done === true || right.done === true
+  return merged
+}
+
+async function getAllSupplyMetadata(apiKey: string) {
+  const [openSupplies, closedSupplies] = await Promise.all([
+    getAllSupplies(apiKey, false, WB_PAGE_LIMIT),
+    getAllSupplies(apiKey, true, WB_PAGE_LIMIT),
+  ])
+  const supplyMap = new Map<string, Record<string, unknown>>()
+  for (const supply of [...openSupplies, ...closedSupplies]) {
+    const supplyId = String(supply.id ?? '').trim()
+    if (!supplyId) continue
+    supplyMap.set(supplyId, supplyMap.has(supplyId) ? mergeSupply(supplyMap.get(supplyId)!, supply) : supply)
+  }
+  return [...supplyMap.values()]
+}
+
+function normalizedOrderRows(
+  orderMap: Map<string, Record<string, unknown>>,
+  statuses: Map<string, WbOrderStatus>,
+) {
+  return [...orderMap.entries()].map(([orderId, order]) => ({
+    wb_order_id: orderId,
+    supplier_status: statuses.get(orderId)!.supplierStatus,
+    wb_system_status: statuses.get(orderId)!.wbStatus,
+    supply_id: order.supplyId || null,
+    rid: order.rid ?? null,
+    article: order.article ?? null,
+    nm_id: order.nmId ?? null,
+    chrt_id: order.chrtId ?? null,
+    skus: Array.isArray(order.skus) ? order.skus : [],
+    price: order.price ?? 0,
+    warehouse_id: order.warehouseId ?? 0,
+    created_at: order.createdAt ?? null,
+    ddate: order.ddate || null,
+    data: order,
+  }))
+}
+
+function normalizedStatusRows(statuses: Map<string, WbOrderStatus>) {
+  return [...statuses.entries()].map(([orderId, status]) => ({
+    wb_order_id: orderId,
+    supplier_status: status.supplierStatus,
+    wb_system_status: status.wbStatus,
+  }))
+}
+
+async function syncOrdersIncremental(storeId: string, accountId: string, apiKey: string) {
+  const [newResult, cachedOrders] = await Promise.all([
+    wbGet(apiKey, '/api/v3/orders/new'),
+    sbGetAll(
+      'fbs_orders',
+      `store_id=eq.${encodeURIComponent(storeId)}&is_in_latest_snapshot=eq.true&select=wb_order_id,supplier_status,wb_system_status`,
+      true,
+    ),
+  ])
+  const newOrders = Array.isArray(newResult?.orders) ? newResult.orders as Record<string, unknown>[] : []
+  const newOrderIds = new Set(newOrders.map((order) => wbId(order.id)))
+  const activeOrderIds = cachedOrders
+    .filter((order) => {
+      const supplierStatus = String(order.supplier_status ?? '')
+      const wbStatus = String(order.wb_system_status ?? '')
+      return supplierStatus === 'new' || supplierStatus === 'confirm'
+        || (supplierStatus === 'complete' && !finalWbStatuses.has(wbStatus))
+    })
+    .map((order) => String(order.wb_order_id))
+  const idsToCheck = [...new Set([...activeOrderIds, ...newOrderIds])]
+  const statuses = await getOrderStatuses(apiKey, idsToCheck)
+  logNewOrdersReconciliation(statuses, newOrderIds)
+  const orderMap = new Map(newOrders.map((order) => [wbId(order.id), order]))
+  const nowIso = new Date().toISOString()
+  const counts = statusCounts(statuses, newOrderIds)
+  await sbRpc('apply_fbs_incremental_sync', {
+    p_store_id: storeId,
+    p_account_id: accountId,
+    p_synced_at: nowIso,
+    p_new_orders: normalizedOrderRows(orderMap, statuses),
+    p_statuses: normalizedStatusRows(statuses),
+    p_status_counts: counts,
+  })
+  return { synced: idsToCheck.length, new_orders: newOrders.length, counts, last_synced_at: nowIso }
+}
+
+async function getFullOrderHistory(apiKey: string, supplies: NormalizedSupply[]) {
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const supplyTimes = supplies
+    .map((supply) => supply.wb_created_at ? new Date(supply.wb_created_at).getTime() : Number.NaN)
+    .filter(Number.isFinite)
+  const fallbackStart = Date.now() - 30 * 24 * 3600_000
+  const historyStartMs = supplyTimes.length > 0 ? Math.min(...supplyTimes, fallbackStart) : fallbackStart
+  const orderMap = new Map<string, Record<string, unknown>>()
+  const maxWindowSeconds = (30 * 24 * 3600) - 1
+
+  for (let dateFrom = Math.floor(historyStartMs / 1000); dateFrom <= nowSeconds;) {
+    const dateTo = Math.min(dateFrom + maxWindowSeconds, nowSeconds)
+    const periodOrders = await getAllOrdersForPeriod(apiKey, dateFrom, dateTo)
+    for (const order of periodOrders) orderMap.set(wbId(order.id), order)
+    dateFrom = dateTo + 1
+  }
+  const newResult = await wbGet(apiKey, '/api/v3/orders/new')
+  const newOrders = Array.isArray(newResult?.orders) ? newResult.orders as Record<string, unknown>[] : []
+  for (const order of newOrders) orderMap.set(wbId(order.id), order)
+  return { orderMap, newOrderIds: new Set(newOrders.map((order) => wbId(order.id))), historyStartMs }
+}
+
+async function syncOrdersFull(storeId: string, accountId: string, apiKey: string, supplies: NormalizedSupply[]) {
+  const { orderMap, newOrderIds, historyStartMs } = await getFullOrderHistory(apiKey, supplies)
+  const statuses = await getOrderStatuses(apiKey, [...orderMap.keys()])
+  logNewOrdersReconciliation(statuses, newOrderIds)
+  const nowIso = new Date().toISOString()
+  const counts = statusCounts(statuses, newOrderIds)
+  await applySyncSnapshot({
+    storeId,
+    accountId,
+    syncedAt: nowIso,
+    snapshotFrom: new Date(historyStartMs).toISOString(),
+    orders: normalizedOrderRows(orderMap, statuses),
+    statuses: normalizedStatusRows(statuses),
+    counts,
+  })
+  await sbWrite(
+    'fbs_sync_log',
+    'PATCH',
+    { last_full_at: nowIso },
+    `store_id=eq.${encodeURIComponent(storeId)}`,
+    'return=minimal',
+  )
+  return { synced: orderMap.size, counts, last_synced_at: nowIso }
+}
+
+async function fetchSupplyMemberships(apiKey: string, supplies: NormalizedSupply[]) {
+  const memberships: Array<{ wb_supply_id: string; wb_order_id: string }> = []
+  const loadedSupplyIds: string[] = []
+  const failedSupplyIds: string[] = []
+  let nextIndex = 0
+
+  const worker = async () => {
+    while (nextIndex < supplies.length) {
+      const index = nextIndex
+      nextIndex += 1
+      const supply = supplies[index]
+      try {
+        const data = await wbGet(apiKey, `/api/marketplace/v3/supplies/${encodeURIComponent(supply.wb_supply_id)}/order-ids`)
+        const orderIds = Array.isArray(data?.orderIds) ? data.orderIds : []
+        for (const orderId of orderIds) {
+          const normalizedId = wbId(orderId)
+          if (normalizedId) memberships.push({ wb_supply_id: supply.wb_supply_id, wb_order_id: normalizedId })
+        }
+        loadedSupplyIds.push(supply.wb_supply_id)
+      } catch (membershipError) {
+        const message = errorMessage(membershipError)
+        if (message.includes('no_permission') || message.includes('WB 401') || message.includes('WB 403')) throw membershipError
+        failedSupplyIds.push(supply.wb_supply_id)
+        console.warn(JSON.stringify({
+          scope: 'wb-fbs', event: 'supply_membership_failed',
+          supply_id: supply.wb_supply_id, error: message,
+        }))
+      }
+      await sleep(410)
+    }
+  }
+  await Promise.all([worker(), worker()])
+  return { memberships, loadedSupplyIds, failedSupplyIds }
+}
+
+async function syncSupplyTimeline(
+  storeId: string,
+  accountId: string,
+  apiKey: string,
+  rawSupplies: Record<string, unknown>[],
+  mode: SyncMode,
+) {
+  const supplies = rawSupplies.map(normalizeSupply).filter((supply): supply is NormalizedSupply => Boolean(supply))
+  const existingRows = await sbGetAll(
+    'fbs_supplies',
+    `store_id=eq.${encodeURIComponent(storeId)}&select=wb_supply_id,done,wb_closed_at,wb_scan_at,last_orders_synced_at`,
+    true,
+  )
+  const existing = new Map(existingRows.map((row) => [String(row.wb_supply_id), row]))
+  const recentBoundary = Date.now() - 45 * 24 * 3600_000
+  const suppliesToLoad = supplies.filter((supply) => {
+    if (mode === 'full') return true
+    const previous = existing.get(supply.wb_supply_id)
+    const isRecent = supply.wb_created_at ? new Date(supply.wb_created_at).getTime() >= recentBoundary : false
+    if (!previous) return !supply.done || isRecent
+    return !supply.done
+      || !previous.last_orders_synced_at
+      || String(previous.wb_closed_at ?? '') !== String(supply.wb_closed_at ?? '')
+      || String(previous.wb_scan_at ?? '') !== String(supply.wb_scan_at ?? '')
+  })
+  const membershipResult = await fetchSupplyMemberships(apiKey, suppliesToLoad)
+  const membershipsBySupply = new Map<string, Array<{ wb_supply_id: string; wb_order_id: string }>>()
+  for (const membership of membershipResult.memberships) {
+    const rows = membershipsBySupply.get(membership.wb_supply_id) ?? []
+    rows.push(membership)
+    membershipsBySupply.set(membership.wb_supply_id, rows)
+  }
+  const loadedSet = new Set(membershipResult.loadedSupplyIds)
+  const nowIso = new Date().toISOString()
+  const aggregate = { supplies: 0, memberships: 0, attempts: 0 }
+
+  for (const supplyBatch of chunks(supplies, 200)) {
+    const loadedIds = supplyBatch.map((supply) => supply.wb_supply_id).filter((supplyId) => loadedSet.has(supplyId))
+    const memberships = loadedIds.flatMap((supplyId) => membershipsBySupply.get(supplyId) ?? [])
+    const result = await sbRpc<Record<string, number>>('apply_fbs_supply_sync_batch', {
+      p_store_id: storeId,
+      p_account_id: accountId,
+      p_synced_at: nowIso,
+      p_supplies: supplyBatch,
+      p_memberships: memberships,
+      p_loaded_supply_ids: loadedIds,
+      p_is_full: false,
+    })
+    aggregate.supplies += Number(result?.supplies ?? 0)
+    aggregate.memberships += Number(result?.memberships ?? 0)
+    aggregate.attempts += Number(result?.attempts ?? 0)
+  }
+  if (supplies.length === 0 || (mode === 'full' && membershipResult.failedSupplyIds.length === 0)) {
+    await sbRpc('apply_fbs_supply_sync_batch', {
+      p_store_id: storeId,
+      p_account_id: accountId,
+      p_synced_at: nowIso,
+      p_supplies: [],
+      p_memberships: [],
+      p_loaded_supply_ids: [],
+      p_is_full: mode === 'full' && membershipResult.failedSupplyIds.length === 0,
+    })
+  }
+  return {
+    ...aggregate,
+    received_supplies: supplies.length,
+    checked_memberships: membershipResult.loadedSupplyIds.length,
+    failed_memberships: membershipResult.failedSupplyIds.length,
+    failed_supply_ids: membershipResult.failedSupplyIds.slice(0, 20),
+    partial: membershipResult.failedSupplyIds.length > 0,
+  }
+}
+
+async function startSyncJob(storeId: string, mode: SyncMode, trigger: SyncTrigger, requestedBy: string | null) {
+  const rows = await sbRpc<Array<{ job_id: string; acquired: boolean; active_job_type: string }>>('start_fbs_sync_job', {
+    p_store_id: storeId,
+    p_job_type: mode,
+    p_trigger_source: trigger,
+    p_requested_by: requestedBy,
+  })
+  return rows[0]
+}
+
+async function finishSyncJob(jobId: string, status: 'completed' | 'failed' | 'skipped', counts: unknown, error: string | null) {
+  await sbRpc('finish_fbs_sync_job', {
+    p_job_id: jobId,
+    p_status: status,
+    p_result_counts: counts ?? {},
+    p_error: error,
+  })
+}
+
 const activeSyncs = new Map<string, Promise<Record<string, unknown>>>()
 
-async function syncOrders(storeId: string, apiKey: string): Promise<Record<string, unknown>> {
-  const dateFrom = new Date(Date.now() - 30 * 24 * 3600_000)
-  const dateFromTs = Math.floor(dateFrom.getTime() / 1000)
+async function syncStore(
+  storeId: string,
+  accountId: string,
+  apiKey: string,
+  mode: SyncMode,
+  trigger: SyncTrigger,
+  requestedBy: string | null,
+): Promise<Record<string, unknown>> {
+  const job = await startSyncJob(storeId, mode, trigger, requestedBy)
+  if (!job?.acquired) {
+    return { reused: true, job_id: job?.job_id, active_job_type: job?.active_job_type, partial: false }
+  }
 
   try {
-    const [allOrders, newResult] = await Promise.all([
-      getAllOrdersForThirtyDays(apiKey, dateFromTs),
-      wbGet(apiKey, '/api/v3/orders/new'),
-    ])
-    const newOrders = Array.isArray(newResult?.orders) ? newResult.orders as Record<string, unknown>[] : []
-    const newOrderIds = new Set(newOrders.map((order) => wbId(order.id)))
-    const orderMap = new Map<string, Record<string, unknown>>()
-    allOrders.forEach((order) => orderMap.set(wbId(order.id), order))
-    newOrders.forEach((order) => orderMap.set(wbId(order.id), order))
-
-    const statuses = await getOrderStatuses(apiKey, [...orderMap.keys()])
-    logNewOrdersReconciliation(statuses, newOrderIds)
-
-    const storeRows = await sbGet('stores', `id=eq.${encodeURIComponent(storeId)}&select=account_id&limit=1`, true)
-    const accountId = storeRows[0]?.account_id
-    if (!accountId) throw new Error('Магазин не найден')
-
-    const nowIso = new Date().toISOString()
-    const rows = Array.from(orderMap.entries())
-      .map(([orderId, order]) => ({
-        wb_order_id: orderId,
-        supplier_status: statuses.get(orderId)!.supplierStatus,
-        wb_system_status: statuses.get(orderId)!.wbStatus,
-        supply_id: order.supplyId || null,
-        rid: order.rid ?? null,
-        article: order.article ?? null,
-        nm_id: order.nmId ?? null,
-        chrt_id: order.chrtId ?? null,
-        skus: Array.isArray(order.skus) ? order.skus : [],
-        price: order.price ?? 0,
-        warehouse_id: order.warehouseId ?? 0,
-        created_at: order.createdAt ?? null,
-        ddate: order.ddate || null,
-        data: order,
-      }))
-
-    const statusRows = [...statuses.entries()].map(([orderId, status]) => ({
-      wb_order_id: orderId,
-      supplier_status: status.supplierStatus,
-      wb_system_status: status.wbStatus,
-    }))
-    const counts = statusCounts(statuses, newOrderIds)
-    await applySyncSnapshot({
-      storeId,
-      accountId: String(accountId),
-      syncedAt: nowIso,
-      snapshotFrom: dateFrom.toISOString(),
-      orders: rows,
-      statuses: statusRows,
-      counts,
-    })
-    console.log(JSON.stringify({ scope: 'wb-fbs', event: 'sync_finished', store_id: storeId, synced: rows.length, counts }))
-    return { synced: rows.length, partial: false, status_counts: counts, last_synced_at: nowIso }
+    const rawSupplies = await getAllSupplyMetadata(apiKey)
+    const normalizedSupplies = rawSupplies
+      .map(normalizeSupply)
+      .filter((supply): supply is NormalizedSupply => Boolean(supply))
+    const orderResult = mode === 'full'
+      ? await syncOrdersFull(storeId, accountId, apiKey, normalizedSupplies)
+      : await syncOrdersIncremental(storeId, accountId, apiKey)
+    const supplyResult = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, mode)
+    const result = {
+      mode,
+      synced: orderResult.synced,
+      status_counts: orderResult.counts,
+      supplies: supplyResult,
+      partial: supplyResult.partial,
+      last_synced_at: orderResult.last_synced_at,
+      job_id: job.job_id,
+    }
+    await finishSyncJob(job.job_id, 'completed', result, null)
+    console.log(JSON.stringify({ scope: 'wb-fbs', event: 'sync_finished', store_id: storeId, ...result }))
+    return result
   } catch (syncError) {
     const message = errorMessage(syncError)
-    await writeSyncFailure(storeId, message)
-    console.error(JSON.stringify({ scope: 'wb-fbs', event: 'sync_failed', store_id: storeId, error: message }))
+    await Promise.allSettled([
+      writeSyncFailure(storeId, message),
+      finishSyncJob(job.job_id, 'failed', {}, message),
+    ])
+    console.error(JSON.stringify({ scope: 'wb-fbs', event: 'sync_failed', store_id: storeId, mode, error: message }))
     throw syncError
+  }
+}
+
+async function syncAllStores(mode: SyncMode, trigger: SyncTrigger) {
+  const stores = await sbGetAll(
+    'stores',
+    'api_key=not.is.null&deleted_at=is.null&select=id,account_id,api_key',
+    true,
+  )
+  const results: Array<Record<string, unknown>> = []
+  let nextStore = 0
+  const worker = async () => {
+    while (nextStore < stores.length) {
+      const store = stores[nextStore]
+      nextStore += 1
+      const storeId = String(store.id)
+      try {
+        const result = await syncStore(
+          storeId,
+          String(store.account_id),
+          String(store.api_key),
+          mode,
+          trigger,
+          null,
+        )
+        results.push({ store_id: storeId, ok: true, ...result })
+      } catch (storeError) {
+        results.push({ store_id: storeId, ok: false, error: errorMessage(storeError) })
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(mode === 'full' ? 2 : 4, Math.max(stores.length, 1)) }, worker))
+  return {
+    mode,
+    stores: stores.length,
+    succeeded: results.filter((result) => result.ok === true).length,
+    failed: results.filter((result) => result.ok !== true).length,
+    results,
   }
 }
 
@@ -716,6 +1069,15 @@ Deno.serve(async (req) => {
 
     const body = await req.json()
     const { action, store_id, wb_warehouse_id, stocks } = body
+
+    // Серверный планировщик вызывает этот режим service-role токеном. Ошибка
+    // одного магазина сохраняется отдельно и не останавливает остальные.
+    if (action === 'sync_all_stores') {
+      if (!isServiceRole) return err('Доступно только системному планировщику', 403)
+      const requestedMode = body.mode === 'full' ? 'full' : 'incremental'
+      const trigger: SyncTrigger = requestedMode === 'full' ? 'nightly' : 'automatic'
+      return ok(await syncAllStores(requestedMode, trigger))
+    }
 
     if (!store_id) return err('store_id обязателен')
 
@@ -758,8 +1120,10 @@ Deno.serve(async (req) => {
 
     if (action === 'get_stocks') {
       const warehouseId = Number(wb_warehouse_id)
-      const rawChrtIds = Array.isArray(body.chrt_ids) ? body.chrt_ids : []
-      const chrtIds = Array.from(new Set(rawChrtIds.map(Number).filter((value) => Number.isSafeInteger(value) && value > 0)))
+      const rawChrtIds: unknown[] = Array.isArray(body.chrt_ids) ? body.chrt_ids : []
+      const chrtIds: number[] = Array.from(new Set(
+        rawChrtIds.map((value: unknown) => Number(value)).filter((value: number) => Number.isSafeInteger(value) && value > 0),
+      ))
       if (!Number.isSafeInteger(warehouseId) || warehouseId <= 0) return err('Выберите склад продавца Wildberries')
       if (!chrtIds.length) return ok({ stocks: [] })
       try {
@@ -895,17 +1259,25 @@ Deno.serve(async (req) => {
 
     if (action === 'get_orders_all') {
       // dateFrom/dateTo — Unix timestamp (seconds), обязательные limit + next
-      const { date_from_ts } = body as { date_from_ts?: number }
+      const { date_from_ts, date_to_ts } = body as { date_from_ts?: number; date_to_ts?: number }
       const thirtyDaysAgo = Math.floor((Date.now() - 30 * 24 * 3600_000) / 1000)
-      const orders = await getAllOrdersForThirtyDays(apiKey, date_from_ts ?? thirtyDaysAgo)
+      const orders = await getAllOrdersForPeriod(apiKey, date_from_ts ?? thirtyDaysAgo, date_to_ts)
       return ok({ orders, next: '0' })
     }
 
     if (action === 'sync_orders') {
+      const mode: SyncMode = body.mode === 'full' ? 'full' : 'incremental'
       const currentSync = activeSyncs.get(store_id)
       if (currentSync) return ok({ ...(await currentSync), reused: true })
 
-      const syncPromise = syncOrders(store_id, apiKey)
+      const syncPromise = syncStore(
+        store_id,
+        accountId,
+        apiKey,
+        mode,
+        mode === 'full' ? 'manual' : 'automatic',
+        isServiceRole ? null : userId,
+      )
       activeSyncs.set(store_id, syncPromise)
       try {
         return ok(await syncPromise)
@@ -1066,8 +1438,8 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'diagnose_scan_qr') {
-      const scanValues = Array.isArray(body.scan_values)
-        ? [...new Set(body.scan_values.map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, 8)
+      const scanValues: string[] = Array.isArray(body.scan_values)
+        ? [...new Set((body.scan_values as unknown[]).map((value: unknown) => String(value ?? '').trim()).filter(Boolean))].slice(0, 8)
         : []
       if (scanValues.length === 0 || scanValues.some((value) => value.length > 300)) return err('Некорректный QR для диагностики')
 

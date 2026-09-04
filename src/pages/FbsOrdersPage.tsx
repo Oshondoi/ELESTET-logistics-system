@@ -921,6 +921,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   const [loading, setLoading] = useState(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [syncNotice, setSyncNotice] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<TabKey>(() => {
     const saved = localStorage.getItem(tabLsKey)
     return (['pending','assembling','delivering','completed','cancelled','archive'].includes(saved ?? '') ? saved : 'pending') as TabKey
@@ -998,6 +999,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     }
     setSelected(new Set())
     setSelectedSupplyIds(new Set())
+    setSyncNotice(null)
   }, [accountId, selectedStoreId])
 
   useEffect(() => {
@@ -1339,17 +1341,18 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }, [selectedStoreId])
 
   // Синк с WB → upsert в fbs_orders → перечитываем из DB
-  const doSync = useCallback((): Promise<void> => {
+  const doSync = useCallback((mode: 'incremental' | 'full' = 'incremental'): Promise<void> => {
     if (!selectedStoreId) return Promise.resolve()
     const existingSync = syncInFlightRef.current.get(selectedStoreId)
-    if (existingSync) return existingSync
+    if (existingSync && mode === 'incremental') return existingSync
 
     const storeId = selectedStoreId
-    const syncPromise = (async () => {
+    const runSync = async () => {
       setLoading(true)
       setError(null)
+      if (mode === 'full') setSyncNotice('Полная сверка с Wildberries запущена. Загружаем заказы и поставки...')
       try {
-        const result = await invokeFbs(storeId, { action: 'sync_orders' })
+        const result = await invokeFbs(storeId, { action: 'sync_orders', mode })
         if (activeTab === 'assembling' || activeTab === 'delivering') {
           try {
             await invokeFbs(storeId, { action: 'get_kiz_order_states' })
@@ -1366,12 +1369,28 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           lastSyncedAtRef.current = successfulSync
           setLastSyncedAt(successfulSync)
         }
-      } catch {
-        setError(staleDataMessage(lastSyncedAtRef.current))
+        if (mode === 'full') {
+          if (result.reused === true) {
+            setSyncNotice('Для магазина уже выполняется синхронизация. После её завершения нажмите «Обновить» ещё раз для полной сверки.')
+          } else {
+            const supplyResult = result.supplies as Record<string, unknown> | undefined
+            const supplyCount = Number(supplyResult?.received_supplies ?? 0)
+            const membershipCount = Number(supplyResult?.memberships ?? 0)
+            setSyncNotice(`Полная сверка завершена: ${Number(result.synced ?? 0)} заказов, ${supplyCount} поставок, ${membershipCount} связей с заказами.`)
+          }
+        }
+      } catch (syncError) {
+        setError(mode === 'full'
+          ? `Полная сверка не завершена: ${syncError instanceof Error ? syncError.message : String(syncError)} Старые корректные данные сохранены.`
+          : staleDataMessage(lastSyncedAtRef.current))
+        if (mode === 'full') setSyncNotice(null)
       } finally {
         if (selectedStoreIdRef.current === storeId) setLoading(false)
       }
-    })()
+    }
+    const syncPromise = existingSync && mode === 'full'
+      ? existingSync.catch(() => undefined).then(runSync)
+      : runSync()
 
     syncInFlightRef.current.set(storeId, syncPromise)
     void syncPromise.finally(() => {
@@ -1415,7 +1434,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       .catch(() => setError(staleDataMessage(lastSyncedAtRef.current)))
 
     // Автосинк каждые 2 минуты — без нажатия "Обновить"
-    const timer = setInterval(() => { void doSync() }, 2 * 60_000)
+    const timer = setInterval(() => { void doSync('incremental') }, 2 * 60_000)
     return () => clearInterval(timer)
   }, [selectedStoreId])
 
@@ -1570,7 +1589,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       if (dispatchError) console.warn('Не удалось сразу перевести резерв FBS в ожидание WB:', dispatchError)
       setSelected(new Set())
       setSelectedSupplyIds(new Set())
-      await Promise.all([doSync(), loadOpenSupplies()])
+      await Promise.all([doSync('incremental'), loadOpenSupplies()])
     } catch (e) { alert(String(e)) }
     finally { setBusyIds((s) => { const n = new Set(s); ids.forEach((i) => n.delete(i)); return n }) }
   }
@@ -2170,7 +2189,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           ]}
         />
 
-        <button type="button" onClick={() => void doSync()} disabled={loading || !selectedStoreId}
+        <button type="button" onClick={() => void doSync('full')} disabled={loading || !selectedStoreId}
+          title="Полная сверка заказов и поставок с Wildberries"
           className="flex h-8 items-center gap-1.5 rounded-xl bg-violet-500 px-4 text-xs font-semibold text-white hover:bg-violet-600 disabled:opacity-50 transition">
           {loading
             ? <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="31" strokeDashoffset="10"/></svg>
@@ -2294,6 +2314,12 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       {error && (
         <div className="mx-5 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
           <span className="font-semibold">Данные могут быть устаревшими.</span>{' '}{error}
+        </div>
+      )}
+
+      {syncNotice && (
+        <div className="mx-5 mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs text-emerald-700">
+          {syncNotice}
         </div>
       )}
 

@@ -213,3 +213,13 @@
 - Parent supply rows use separate, borderless visual columns for supply name, QR code, WB processing status, QR scan time, order/accepted counts, warehouse, and actions. Do not merge these fields back into one inline metadata block.
 - A scanned QR is labelled `Поставка в обработке`; this confirms that WB started processing, not that every item was accepted. Item acceptance remains the separate `принято X/Y` value.
 - All order timers use total hours and minutes (`37ч 13мин`) and never convert elapsed time to days.
+
+## Official supply timeline (prepared 04.09.2026; not deployed)
+
+- `fbs_supplies` caches official supply fields including `createdAt`, `closedAt` and `scanDt`.
+- `fbs_supply_orders` stores membership by `store + supply + order`; `fbs_dispatch_attempts` stores one dispatch attempt for that exact membership, so re-shipping the same WB order in another supply does not overwrite the prior attempt.
+- Official `closedAt` supersedes an estimated local/status-observed dispatch timestamp. Official `scanDt` supersedes estimated acceptance only when the order status confirms item processing.
+- The legacy `fbs_dispatch_events` ledger remains intact and is used only for report rows not yet represented in the canonical attempt table.
+- Incremental sync reads new orders, statuses of active cached orders, all supply metadata and memberships for open/changed supplies. Full sync walks WB order history in bounded 30-day windows and refreshes every available supply membership.
+- Intended schedule: server-side incremental sync every 2 minutes for all stores and a nightly full reconciliation. Manual `Обновить` is a full reconciliation for the selected store.
+- Migration files: `supabase/patch_fbs_supply_timeline.sql` and `supabase/patch_fbs_supply_sync_cron.sql`. Production application is pending valid Supabase authorization.

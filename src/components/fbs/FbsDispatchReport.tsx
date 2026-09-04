@@ -149,7 +149,7 @@ export function FbsDispatchReport({
     setError(null)
     try {
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Bishkek'
-      const { data, error: requestError } = await (supabase as any).rpc('get_fbs_dispatch_report', {
+      const { data, error: requestError } = await (supabase as any).rpc('get_fbs_dispatch_report_v2', {
         p_account_id: accountId,
         p_store_id: storeId,
         p_period_from: from,
