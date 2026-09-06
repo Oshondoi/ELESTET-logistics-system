@@ -44,6 +44,7 @@ interface FbsOrder {
   wbSystemStatus: string
   isInLatestSnapshot: boolean
   supply_id: string | null
+  acceptedAt: string | null
   requiresKiz: boolean
   kizStatus: 'draft' | 'sent' | 'error' | null
 }
@@ -363,11 +364,29 @@ function ProductLocationsCell({ order }: { order: FbsOrder }) {
   )
 }
 
-function slaLabel(ddate: string, createdAt?: string): { text: string; cls: string } {
+function slaLabel(
+  ddate: string,
+  createdAt?: string,
+  acceptedAt?: string | null,
+  isAcceptedByWb = false,
+): { text: string; cls: string } {
   const hoursAndMinutes = (milliseconds: number) => {
     const totalMinutes = Math.max(0, Math.floor(Math.abs(milliseconds) / 60000))
     return `${Math.floor(totalMinutes / 60)}ч ${totalMinutes % 60}мин`
   }
+  // После официального scanDt поставки показываем зафиксированное время
+  // от создания заказа до приёмки WB. Оно больше не растёт каждый день.
+  if (acceptedAt && createdAt) {
+    const elapsed = new Date(acceptedAt).getTime() - new Date(createdAt).getTime()
+    if (!isNaN(elapsed) && elapsed >= 0) {
+      const h = Math.floor(elapsed / 3600000)
+      const cls = h >= 48 ? 'text-red-500 font-semibold' : h >= 24 ? 'text-amber-500' : 'text-slate-500'
+      return { text: hoursAndMinutes(elapsed), cls }
+    }
+  }
+  // Статус уже подтверждает приёмку, но точного scanDt нет: не выдаём
+  // постоянно растущий возраст заказа за время доставки.
+  if (isAcceptedByWb) return { text: '—', cls: 'text-slate-400' }
   // Если есть ddate — показываем остаток/просрочку
   if (ddate) {
     const diff = new Date(ddate).getTime() - Date.now()
@@ -1194,6 +1213,32 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       status: row.status as FbsStockAllocation['status'],
     }]))
 
+    const exactAcceptanceRows: any[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data: pageRows, error: pageError } = await (supabase as any)
+        .from('fbs_dispatch_attempts')
+        .select('wb_order_id,wb_supply_id,accepted_at,is_current_membership,updated_at')
+        .eq('store_id', storeId)
+        .eq('acceptance_source', 'wb_scan_dt')
+        .eq('acceptance_is_estimated', false)
+        .not('accepted_at', 'is', null)
+        .order('updated_at', { ascending: false })
+        .range(from, from + 999)
+      if (pageError?.code === '42P01') break
+      if (pageError) throw pageError
+      exactAcceptanceRows.push(...(pageRows ?? []))
+      if ((pageRows ?? []).length < 1000) break
+    }
+    const acceptanceRowsByOrderId = new Map<string, any[]>()
+    for (const acceptanceRow of exactAcceptanceRows) {
+      const orderId = String(acceptanceRow.wb_order_id ?? '')
+      if (!orderId) continue
+      acceptanceRowsByOrderId.set(orderId, [
+        ...(acceptanceRowsByOrderId.get(orderId) ?? []),
+        acceptanceRow,
+      ])
+    }
+
     const { data: kizCatalogRows, error: kizCatalogError } = await (supabase as any)
       .from('fbs_wb_qr_catalog')
       .select('order_id')
@@ -1219,11 +1264,18 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
 
     const mapped: FbsOrder[] = (rows ?? []).map((row: any) => {
       const d = row.data ?? {}
+      const orderId = String(row.wb_order_id)
       const supplierStatus = String(row.supplier_status ?? row.wb_status ?? '')
       const wbSystemStatus = String(row.wb_system_status ?? '')
       const isInLatestSnapshot = row.is_in_latest_snapshot !== false
+      const acceptanceRows = acceptanceRowsByOrderId.get(orderId) ?? []
+      const acceptanceRow = acceptanceRows.find((candidate: any) => (
+        candidate.is_current_membership === true && String(candidate.wb_supply_id) === String(row.supply_id ?? '')
+      )) ?? acceptanceRows.find((candidate: any) => String(candidate.wb_supply_id) === String(row.supply_id ?? ''))
+        ?? acceptanceRows.find((candidate: any) => candidate.is_current_membership === true)
+        ?? acceptanceRows[0]
       return {
-        id: String(row.wb_order_id),
+        id: orderId,
         rid: d.rid ?? row.rid ?? '',
         createdAt: row.created_at ?? '',
         ddate: row.ddate ?? '',
@@ -1253,11 +1305,12 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         wbSystemStatus,
         isInLatestSnapshot,
         supply_id: row.supply_id ?? null,
-        requiresKiz: kizStateByOrderId.get(String(row.wb_order_id))?.requires_kiz === true
-          || kizEligibleOrderIds.has(String(row.wb_order_id))
+        acceptedAt: acceptanceRow?.accepted_at ?? null,
+        requiresKiz: kizStateByOrderId.get(orderId)?.requires_kiz === true
+          || kizEligibleOrderIds.has(orderId)
           || (Array.isArray(d.requiredMeta) && d.requiredMeta.includes('sgtin'))
           || (Array.isArray(d.optionalMeta) && d.optionalMeta.includes('sgtin')),
-        kizStatus: kizStateByOrderId.get(String(row.wb_order_id))?.sent_to_wb === true ? 'sent' : null,
+        kizStatus: kizStateByOrderId.get(orderId)?.sent_to_wb === true ? 'sent' : null,
       } as FbsOrder
     })
     const enriched = await enrichWithCells(mapped)
@@ -1286,6 +1339,12 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     }
     const channel = (supabase as any)
       .channel(`fbs-stock:${selectedStoreId}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'fbs_orders', filter: `store_id=eq.${selectedStoreId}`,
+      }, scheduleRefresh)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'fbs_dispatch_attempts', filter: `store_id=eq.${selectedStoreId}`,
+      }, scheduleRefresh)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'fbs_stock_allocations', filter: `store_id=eq.${selectedStoreId}`,
       }, scheduleRefresh)
@@ -1364,6 +1423,48 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     })))
   }, [selectedStoreId])
 
+  useEffect(() => {
+    if (!supabase || !selectedStoreId) return
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleSupplyRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => {
+        void Promise.all([loadOpenSupplies(), loadClosedSupplies()])
+      }, 120)
+    }
+    const channel = (supabase as any)
+      .channel(`fbs-supplies:${selectedStoreId}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'fbs_supplies', filter: `store_id=eq.${selectedStoreId}`,
+      }, scheduleSupplyRefresh)
+      .subscribe()
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      void (supabase as any).removeChannel(channel)
+    }
+  }, [selectedStoreId, loadOpenSupplies, loadClosedSupplies])
+
+  const waitForServerSyncJob = useCallback(async (storeId: string, jobId: string) => {
+    if (!supabase) return null
+    const deadline = Date.now() + 150_000
+    while (Date.now() < deadline && selectedStoreIdRef.current === storeId) {
+      const { data: job, error: jobError } = await (supabase as any)
+        .from('fbs_sync_jobs')
+        .select('status,result_counts,error')
+        .eq('store_id', storeId)
+        .eq('id', jobId)
+        .maybeSingle()
+      if (jobError) throw jobError
+      if (job?.status === 'completed') {
+        return { ...(job.result_counts ?? {}), reused: true, job_id: jobId }
+      }
+      if (job?.status === 'failed') throw new Error(String(job.error || 'Синхронизация завершилась с ошибкой'))
+      if (job?.status === 'skipped') return { ...(job.result_counts ?? {}), reused: true, job_id: jobId }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000))
+    }
+    return null
+  }, [])
+
   // Синк с WB → upsert в fbs_orders → перечитываем из DB
   const doSync = useCallback((
     mode: 'incremental' | 'full' = 'incremental',
@@ -1379,17 +1480,24 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       setError(null)
       if (mode === 'full') setSyncNotice('Полная сверка с Wildberries запущена. Загружаем заказы и поставки...')
       try {
-        const result = await invokeFbs(storeId, { action: 'sync_orders', mode, trigger_source: triggerSource })
+        let result = await invokeFbs(storeId, { action: 'sync_orders', mode, trigger_source: triggerSource })
+        if (result.reused === true && result.throttled !== true && result.job_id && typeof result.synced !== 'number') {
+          const completedResult = await waitForServerSyncJob(storeId, String(result.job_id))
+          if (completedResult) result = completedResult
+        }
+        // Заказы и поставки должны появиться на экране сразу после основного
+        // синка; проверка КИЗ не должна задерживать переходы между вкладками.
+        await Promise.all([readFromDb(), loadOpenSupplies(), loadClosedSupplies()])
         try {
           await invokeFbs(storeId, {
             action: 'get_kiz_order_states',
             only_missing: mode === 'incremental',
             force: triggerSource === 'manual',
           })
+          await readFromDb()
         } catch (kizVerificationError) {
           console.warn('Не удалось обновить подтверждение КИЗ из WB:', kizVerificationError)
         }
-        await Promise.all([readFromDb(), loadOpenSupplies(), loadClosedSupplies()])
         if (selectedStoreIdRef.current !== storeId) return
         const serverSyncTime = typeof result.last_synced_at === 'string' ? new Date(result.last_synced_at) : null
         if (result.partial === true) {
@@ -1400,8 +1508,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           setLastSyncedAt(successfulSync)
         }
         if (mode === 'full') {
-          if (result.reused === true) {
-            setSyncNotice('Для магазина уже выполняется синхронизация. После её завершения нажмите «Обновить» ещё раз для полной сверки.')
+          if (result.reused === true && typeof result.synced !== 'number') {
+            setSyncNotice('Синхронизация магазина ещё выполняется. Экран обновится автоматически после её завершения.')
           } else if (result.partial === true) {
             setSyncNotice('Заказы обновлены, но Wildberries не вернул состав части поставок. Сохранённые данные не удалены; повторите полную сверку позже.')
           } else {
@@ -1429,7 +1537,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       if (syncInFlightRef.current.get(storeId) === syncPromise) syncInFlightRef.current.delete(storeId)
     })
     return syncPromise
-  }, [selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies])
+  }, [selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies, waitForServerSyncJob])
 
   const handleProductSync = async () => {
     if (!selectedStoreId || syncingProducts) return
@@ -1503,6 +1611,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     stockAllocation: null,
     supplierStatus: status === 'pending' ? 'new' : status === 'assembling' ? 'confirm' : 'complete',
     wbSystemStatus: 'waiting', isInLatestSnapshot: true, supply_id: null,
+    acceptedAt: null,
     requiresKiz: false, kizStatus: null,
   }), [])
 
@@ -2124,10 +2233,9 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     { key: 'cancelled',  label: 'Отменённые' },
     { key: 'archive',    label: 'Архив' },
   ]
-  const allCompletedOrders = orders.filter(isOfficialCompletedOrder)
-  const allCancelledOrders = orders.filter(isOfficialCancelledOrder)
-  const completedOrders = allCompletedOrders.filter(orderMatchesWarehouseFilter)
-  const cancelledOrders = allCancelledOrders.filter(orderMatchesWarehouseFilter)
+  const warehouseOrders = orders.filter(orderMatchesWarehouseFilter)
+  const completedOrders = warehouseOrders.filter(isOfficialCompletedOrder)
+  const cancelledOrders = warehouseOrders.filter(isOfficialCancelledOrder)
   const archiveEligibleOrders = orders.filter((order) => orderMatchesWarehouseFilter(order) && isArchiveEligibleOrder(order))
   const tabOrders = activeTab === 'completed'
     ? completedOrders
@@ -2303,18 +2411,18 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           // WB keeps all non-final complete orders inside "В доставке", but its
           // tab badge counts only orders not received by Wildberries yet.
           const count: number | null = key === 'delivering'
-            ? orders.filter((order) => (
+            ? warehouseOrders.filter((order) => (
               order.isInLatestSnapshot
               && order.supplierStatus === 'complete'
               && order.wbSystemStatus === 'waiting'
             )).length
             : key === 'completed'
-              ? allCompletedOrders.length
+              ? completedOrders.length
               : key === 'cancelled'
-                ? allCancelledOrders.length
+                ? cancelledOrders.length
                 : key === 'archive'
                   ? null
-                  : orders.filter((order) => order.shipStatus === key).length
+                  : warehouseOrders.filter((order) => order.shipStatus === key).length
           return (
             <button key={key} type="button"
               onClick={() => {
@@ -2738,7 +2846,12 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                           </thead>
                         <tbody>
                           {supplyOrders.map((order) => {
-                            const sla = slaLabel(order.ddate, order.createdAt)
+                            const sla = slaLabel(
+                              order.ddate,
+                              order.createdAt,
+                              order.acceptedAt,
+                              WB_ACCEPTED_ORDER_STATUSES.has(order.wbSystemStatus),
+                            )
                             const isBusy = busyIds.has(order.id)
                             return (
                               <tr key={order.id} className="border-b border-slate-100 hover:bg-white transition-colors">
@@ -2966,7 +3079,12 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
             </thead>
             <tbody>
               {tabOrders.map((order) => {
-                const sla = slaLabel(order.ddate, order.createdAt)
+                const sla = slaLabel(
+                  order.ddate,
+                  order.createdAt,
+                  order.acceptedAt,
+                  WB_ACCEPTED_ORDER_STATUSES.has(order.wbSystemStatus),
+                )
                 const isBusy = busyIds.has(order.id)
                 const isChecked = selected.has(order.id)
                 return (

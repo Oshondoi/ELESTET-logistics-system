@@ -620,7 +620,7 @@ async function getAllSupplies(apiKey: string, closed: boolean, requestedLimit = 
   throw new Error('WB supplies pagination exceeded the safety limit')
 }
 
-async function getOrderStatuses(apiKey: string, orderIds: string[]) {
+async function getOrderStatuses(apiKey: string, orderIds: string[], requireEveryOrder = true) {
   const statuses = new Map<string, WbOrderStatus>()
   for (const batch of chunks([...new Set(orderIds)], 1000)) {
     const data = await wbPostOrderIds(apiKey, '/api/v3/orders/status', batch)
@@ -630,7 +630,7 @@ async function getOrderStatuses(apiKey: string, orderIds: string[]) {
     }
   }
   const missingIds = orderIds.filter((orderId) => !statuses.has(orderId))
-  if (missingIds.length > 0) {
+  if (requireEveryOrder && missingIds.length > 0) {
     throw new Error(`WB не вернул статусы для ${missingIds.length} заказов: ${missingIds.slice(0, 10).join(', ')}`)
   }
   return statuses
@@ -776,22 +776,26 @@ function normalizedOrderRows(
   orderMap: Map<string, Record<string, unknown>>,
   statuses: Map<string, WbOrderStatus>,
 ) {
-  return [...orderMap.entries()].map(([orderId, order]) => ({
-    wb_order_id: orderId,
-    supplier_status: statuses.get(orderId)!.supplierStatus,
-    wb_system_status: statuses.get(orderId)!.wbStatus,
-    supply_id: order.supplyId || null,
-    rid: order.rid ?? null,
-    article: order.article ?? null,
-    nm_id: order.nmId ?? null,
-    chrt_id: order.chrtId ?? null,
-    skus: Array.isArray(order.skus) ? order.skus : [],
-    price: order.price ?? 0,
-    warehouse_id: order.warehouseId ?? 0,
-    created_at: order.createdAt ?? null,
-    ddate: order.ddate || null,
-    data: order,
-  }))
+  return [...orderMap.entries()].flatMap(([orderId, order]) => {
+    const status = statuses.get(orderId)
+    if (!status) return []
+    return [{
+      wb_order_id: orderId,
+      supplier_status: status.supplierStatus,
+      wb_system_status: status.wbStatus,
+      supply_id: order.supplyId || null,
+      rid: order.rid ?? null,
+      article: order.article ?? null,
+      nm_id: order.nmId ?? null,
+      chrt_id: order.chrtId ?? null,
+      skus: Array.isArray(order.skus) ? order.skus : [],
+      price: order.price ?? 0,
+      warehouse_id: order.warehouseId ?? 0,
+      created_at: order.createdAt ?? null,
+      ddate: order.ddate || null,
+      data: order,
+    }]
+  })
 }
 
 function normalizedStatusRows(statuses: Map<string, WbOrderStatus>) {
@@ -823,7 +827,11 @@ async function syncOrdersIncremental(storeId: string, accountId: string, apiKey:
     })
     .map((order) => String(order.wb_order_id))
   const idsToCheck = [...new Set([...activeOrderIds, ...newOrderIds])]
-  const statuses = await getOrderStatuses(apiKey, idsToCheck)
+  // Один исчезнувший из ответа WB старый заказ не должен блокировать обновление
+  // всех остальных активных заказов. Возвращённые статусы сохраняем, а
+  // отсутствующие строки оставляем без выдуманного финального статуса.
+  const statuses = await getOrderStatuses(apiKey, idsToCheck, false)
+  const missingStatusIds = idsToCheck.filter((orderId) => !statuses.has(orderId))
   logNewOrdersReconciliation(statuses, newOrderIds)
   const changedStatuses = new Map(
     [...statuses.entries()].filter(([orderId, status]) => {
@@ -848,6 +856,9 @@ async function syncOrdersIncremental(storeId: string, accountId: string, apiKey:
     synced: idsToCheck.length,
     new_orders: newOrders.length,
     changed_statuses: changedStatuses.size,
+    missing_statuses: missingStatusIds.length,
+    missing_status_ids: missingStatusIds.slice(0, 20),
+    partial: missingStatusIds.length > 0,
     counts,
     last_synced_at: nowIso,
   }
@@ -1023,6 +1034,13 @@ async function syncSupplyTimeline(
       p_loaded_supply_ids: loadedIds,
       p_is_full: false,
     })
+    await sbRpc('apply_fbs_order_supply_memberships', {
+      p_store_id: storeId,
+      p_account_id: accountId,
+      p_synced_at: nowIso,
+      p_memberships: memberships,
+      p_loaded_supply_ids: loadedIds,
+    })
     aggregate.supplies += Number(result?.supplies ?? 0)
     aggregate.memberships += Number(result?.memberships ?? 0)
     aggregate.attempts += Number(result?.attempts ?? 0)
@@ -1115,7 +1133,7 @@ async function syncStore(
       status_counts: orderResult.counts,
       supplies: supplyResult,
       kiz_checked: nightlyKizChecked,
-      partial: supplyResult.partial,
+      partial: supplyResult.partial || ('partial' in orderResult && orderResult.partial === true),
       last_synced_at: orderResult.last_synced_at,
       job_id: job.job_id,
     }
