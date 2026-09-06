@@ -71,6 +71,7 @@ type Props = {
   storeName: string
   orders: OrderView[]
   onClose: () => void
+  onKizStatesUpdated?: () => void | Promise<void>
 }
 
 const DEVICE_KEY = 'elestet_fbs_scanner_device_v1'
@@ -181,7 +182,7 @@ function signal(success: boolean) {
   }
 }
 
-export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onClose }: Props) {
+export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onClose, onKizStatesUpdated }: Props) {
   const stableDeviceId = useMemo(deviceId, [])
   const [session, setSession] = useState<ScanSession | null>(null)
   const [pairs, setPairs] = useState<ScanPair[]>([])
@@ -722,6 +723,13 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         action: 'submit_marking_session', session_id: session.id, device_id: stableDeviceId,
       })
       await Promise.all([loadPairs(session.id), loadSession(session.id)])
+      if (Number(result.sent ?? 0) > 0 && onKizStatesUpdated) {
+        try {
+          await onKizStatesUpdated()
+        } catch (refreshError) {
+          console.warn('Не удалось перечитать подтверждённые статусы КИЗ:', refreshError)
+        }
+      }
       if (Number(result.failed ?? 0) > 0) {
         const messages = [...new Set(((result.failures ?? []) as Array<{ error?: string }>).map((failure) => String(failure.error ?? '').trim()).filter(Boolean))]
         setError(messages.length === 1

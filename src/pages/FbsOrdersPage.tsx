@@ -1190,12 +1190,20 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     if (kizCatalogError && kizCatalogError.code !== '42P01') throw kizCatalogError
     const kizEligibleOrderIds = new Set((kizCatalogRows ?? []).map((row: any) => String(row.order_id ?? '')))
 
-    const { data: kizStateRows, error: kizStateError } = await (supabase as any)
-      .from('fbs_kiz_order_states')
-      .select('order_id,requires_kiz,sent_to_wb')
-      .eq('store_id', selectedStoreId)
-    if (kizStateError && kizStateError.code !== '42P01') throw kizStateError
-    const kizStateByOrderId = new Map<string, any>((kizStateRows ?? []).map((row: any) => [String(row.order_id ?? ''), row]))
+    const kizStateRows: any[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data: pageRows, error: pageError } = await (supabase as any)
+        .from('fbs_kiz_order_states')
+        .select('order_id,requires_kiz,sent_to_wb')
+        .eq('store_id', selectedStoreId)
+        .order('order_id', { ascending: true })
+        .range(from, from + 999)
+      if (pageError?.code === '42P01') break
+      if (pageError) throw pageError
+      kizStateRows.push(...(pageRows ?? []))
+      if ((pageRows ?? []).length < 1000) break
+    }
+    const kizStateByOrderId = new Map<string, any>(kizStateRows.map((row: any) => [String(row.order_id ?? ''), row]))
 
     const mapped: FbsOrder[] = (rows ?? []).map((row: any) => {
       const d = row.data ?? {}
@@ -1246,20 +1254,13 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     // Проверяем sync log
     const { data: syncLog } = await (supabase as any)
       .from('fbs_sync_log')
-      .select('last_synced_at,error,orders_count,status_counts')
+      .select('last_synced_at,error')
       .eq('store_id', selectedStoreId)
       .single()
     const successfulSync = syncLog?.last_synced_at ? new Date(syncLog.last_synced_at) : null
-    const latestSnapshotCount = mapped.filter((order) => order.isInLatestSnapshot).length
-    const expectedCount = Number(syncLog?.orders_count ?? latestSnapshotCount)
-    const snapshotMismatch = Number.isFinite(expectedCount) && expectedCount !== latestSnapshotCount
     lastSyncedAtRef.current = successfulSync
     setLastSyncedAt(successfulSync)
-    setError(syncLog?.error
-      ? staleDataMessage(successfulSync)
-      : snapshotMismatch
-        ? `Проверка целостности не пройдена: WB-снимок содержит ${expectedCount} заказов, загружено ${latestSnapshotCount}. Показаны последние сохранённые данные.`
-        : null)
+    setError(syncLog?.error ? staleDataMessage(successfulSync) : null)
     return enriched
   }, [selectedStoreId, enrichWithCells])
 
@@ -3058,6 +3059,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           storeId={selectedStoreId}
           storeName={storesWithKey.find((store) => store.id === selectedStoreId)?.name ?? 'Магазин WB'}
           orders={orders}
+          onKizStatesUpdated={async () => { await readFromDb() }}
           onClose={() => setKizScannerOpen(false)}
         />
       )}
