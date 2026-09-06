@@ -298,7 +298,7 @@ async function refreshKizOrderStatesFromWb(
 async function kizOrdersToRefresh(storeId: string, onlyMissing: boolean, forceRefresh: boolean) {
   const orderRows = await sbGetAll(
     'fbs_orders',
-    `store_id=eq.${encodeURIComponent(storeId)}&supplier_status=in.(confirm,complete)&is_in_latest_snapshot=eq.true&select=wb_order_id,data&order=wb_order_id.asc`,
+    `store_id=eq.${encodeURIComponent(storeId)}&supplier_status=in.(confirm,complete)&is_in_latest_snapshot=eq.true&select=wb_order_id,supplier_status,wb_system_status,data&order=wb_order_id.asc`,
     true,
   )
   const existingStates = await loadKizStateMap(storeId)
@@ -312,6 +312,13 @@ async function kizOrdersToRefresh(storeId: string, onlyMissing: boolean, forceRe
     const orderId = String(row.wb_order_id ?? '')
     if (!orderId) return []
     if (!onlyMissing) return [orderId]
+    const supplierStatus = String(row.supplier_status ?? '')
+    const wbStatus = String(row.wb_system_status ?? '')
+    // Быстрая проверка нужна только пока заказ находится на рабочем пути FBS.
+    // Завершённые и отменённые заказы уже не могут вернуться к отправке КИЗ.
+    const isActiveKizStage = (supplierStatus === 'confirm' && wbStatus === 'waiting')
+      || (supplierStatus === 'complete' && !finalWbStatuses.has(wbStatus))
+    if (!isActiveKizStage) return []
     const state = existingStates.get(orderId)
     if (state?.sent_to_wb === true) return []
     const checkedAt = state?.checked_at ? new Date(state.checked_at).getTime() : Number.NaN
@@ -1382,14 +1389,25 @@ Deno.serve(async (req) => {
       if (action === 'sync_store_service' && !isServiceRole) {
         return err('Доступно только системному планировщику', 403)
       }
-      const mode: SyncMode = body.mode === 'full' ? 'full' : 'incremental'
+      const requestedMode: SyncMode = body.mode === 'full' ? 'full' : 'incremental'
       const isManualRequest = action === 'sync_orders' && body.trigger_source === 'manual'
-      if (action === 'sync_orders' && mode === 'incremental' && !isManualRequest) {
-        const previousRows = await sbGet(
+      let mode = requestedMode
+      let isInitialFullSync = false
+      let previousRows: Record<string, unknown>[] = []
+      if (action === 'sync_orders' && requestedMode === 'incremental') {
+        previousRows = await sbGet(
           'fbs_sync_log',
-          `store_id=eq.${encodeURIComponent(store_id)}&select=last_incremental_at,last_synced_at&limit=1`,
+          `store_id=eq.${encodeURIComponent(store_id)}&select=last_full_at,last_incremental_at,last_synced_at&limit=1`,
           true,
         )
+        // Пока магазин ни разу не прошёл полную сверку, быстрой синхронизации
+        // недостаточно: WB /orders/new не возвращает уже взятые в работу заказы.
+        if (!previousRows[0]?.last_full_at) {
+          mode = 'full'
+          isInitialFullSync = true
+        }
+      }
+      if (action === 'sync_orders' && mode === 'incremental' && !isManualRequest) {
         const previousTimestamp = previousRows[0]?.last_incremental_at ?? previousRows[0]?.last_synced_at
         const previousTime = previousTimestamp ? new Date(String(previousTimestamp)).getTime() : Number.NaN
         if (Number.isFinite(previousTime) && Date.now() - previousTime < 5 * 60_000) {
@@ -1413,7 +1431,7 @@ Deno.serve(async (req) => {
         mode,
         action === 'sync_store_service'
           ? (mode === 'full' ? 'nightly' : 'automatic')
-          : (mode === 'full' || isManualRequest ? 'manual' : 'automatic'),
+          : (isInitialFullSync ? 'store_connected' : mode === 'full' || isManualRequest ? 'manual' : 'automatic'),
         isServiceRole ? null : userId,
       )
       activeSyncs.set(store_id, syncPromise)
