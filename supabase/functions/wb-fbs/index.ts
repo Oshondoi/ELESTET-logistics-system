@@ -113,7 +113,8 @@ async function sbRpc<T>(functionName: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`DB ${r.status}: ${await r.text()}`)
-  return r.json()
+  const responseText = await r.text()
+  return (responseText ? parseWbJson(responseText) : undefined) as T
 }
 
 type WbStickerCatalogRow = {
@@ -215,27 +216,48 @@ function metadataSgtinSent(value: Record<string, unknown> | undefined): boolean 
   return String(metadataDetail(value, 'sgtin')?.decision ?? '').toLowerCase() === 'filled'
 }
 
+type CachedKizState = {
+  requires_kiz?: boolean
+  sent_to_wb?: boolean
+  checked_at?: string
+}
+
+async function loadKizStateMap(storeId: string) {
+  const rows = await sbGetAll(
+    'fbs_kiz_order_states',
+    `store_id=eq.${encodeURIComponent(storeId)}&select=order_id,requires_kiz,sent_to_wb,checked_at&order=order_id.asc`,
+    true,
+  )
+  return new Map(rows.map((row) => [String(row.order_id ?? ''), row as CachedKizState]))
+}
+
 async function cacheKizOrderStates(
   accountId: string,
   storeId: string,
   metadata: Record<string, unknown>[],
   requestedOrderIds: string[] = [],
+  existingStates?: Map<string, CachedKizState>,
 ) {
   const metadataByOrderId = new Map(metadata.flatMap((meta) => {
     const orderId = metadataOrderId(meta)
     return orderId ? [[orderId, meta] as const] : []
   }))
+  const stateByOrderId = existingStates ?? await loadKizStateMap(storeId)
   const orderIds = requestedOrderIds.length > 0
-    ? [...new Set(requestedOrderIds.map(String).filter(Boolean))]
+    ? [...new Set(requestedOrderIds.map(String).filter((orderId) => Boolean(orderId) && metadataByOrderId.has(orderId)))]
     : [...metadataByOrderId.keys()]
   const rows = orderIds.map((orderId) => {
     const meta = metadataByOrderId.get(orderId)
+    const previous = stateByOrderId.get(orderId)
     return {
       account_id: accountId,
       store_id: storeId,
       order_id: orderId,
-      requires_kiz: metadataSupportsSgtin(meta),
-      sent_to_wb: metadataSgtinSent(meta),
+      // Подтверждённый WB зелёный статус нельзя снимать из-за пустого или
+      // неполного следующего ответа API. Отрицательный ответ лишь не добавляет
+      // нового подтверждения.
+      requires_kiz: previous?.requires_kiz === true || metadataSupportsSgtin(meta),
+      sent_to_wb: previous?.sent_to_wb === true || metadataSgtinSent(meta),
       checked_at: new Date().toISOString(),
     }
   })
@@ -247,6 +269,7 @@ async function cacheKizOrderStates(
     'on_conflict=store_id,order_id',
     'resolution=merge-duplicates,return=minimal',
   )
+  for (const row of rows) stateByOrderId.set(row.order_id, row)
 }
 
 async function refreshKizOrderStatesFromWb(
@@ -254,8 +277,10 @@ async function refreshKizOrderStatesFromWb(
   accountId: string,
   storeId: string,
   orderIds: string[],
+  knownStates?: Map<string, CachedKizState>,
 ) {
   const uniqueOrderIds = [...new Set(orderIds.map(String).filter(Boolean))]
+  const existingStates = knownStates ?? await loadKizStateMap(storeId)
   let checked = 0
   for (let index = 0; index < uniqueOrderIds.length; index += 100) {
     const batchIds = uniqueOrderIds.slice(index, index + 100)
@@ -264,7 +289,7 @@ async function refreshKizOrderStatesFromWb(
       headers: { 'Content-Type': 'application/json' },
       body: wbOrderIdsBody(batchIds),
     })
-    await cacheKizOrderStates(accountId, storeId, metadataOrders(metaResponse), batchIds)
+    await cacheKizOrderStates(accountId, storeId, metadataOrders(metaResponse), batchIds, existingStates)
     checked += batchIds.length
   }
   return checked
@@ -602,35 +627,6 @@ function logNewOrdersReconciliation(statuses: Map<string, WbOrderStatus>, newOrd
   }))
 }
 
-async function applySyncSnapshot(params: {
-  storeId: string
-  accountId: string
-  syncedAt: string
-  snapshotFrom: string
-  orders: Record<string, unknown>[]
-  statuses: Array<Record<string, string>>
-  counts: Record<string, unknown>
-}) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/apply_fbs_sync_snapshot`, {
-    method: 'POST',
-    headers: {
-      apikey: SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      p_store_id: params.storeId,
-      p_account_id: params.accountId,
-      p_synced_at: params.syncedAt,
-      p_snapshot_from: params.snapshotFrom,
-      p_orders: params.orders,
-      p_statuses: params.statuses,
-      p_status_counts: params.counts,
-    }),
-  })
-  if (!response.ok) throw new Error(`DB atomic sync failed ${response.status}: ${(await response.text()).slice(0, 500)}`)
-}
-
 async function writeSyncFailure(storeId: string, message: string) {
   const previousLog = (await sbGet('fbs_sync_log', `store_id=eq.${encodeURIComponent(storeId)}&select=last_synced_at,orders_count,status_counts,snapshot_from&limit=1`, true))[0]
   const response = await fetch(`${SUPABASE_URL}/rest/v1/fbs_sync_log?on_conflict=store_id`, {
@@ -712,10 +708,20 @@ function mergeSupply(left: Record<string, unknown>, right: Record<string, unknow
   return merged
 }
 
-async function getAllSupplyMetadata(apiKey: string) {
+async function getAllSupplyMetadata(apiKey: string, mode: SyncMode) {
+  // Быстрый режиму достаточно всех открытых и последней страницы закрытых
+  // поставок: именно там появляются только что переданные поставки. Полная
+  // сверка ночью и по отдельной кнопке проходит всю пагинацию закрытых.
+  const recentClosedPromise = mode === 'full'
+    ? getAllSupplies(apiKey, true, WB_PAGE_LIMIT)
+    : wbGet(apiKey, '/api/v3/supplies', {
+        limit: String(WB_PAGE_LIMIT),
+        next: '0',
+        isSupplyClosed: 'true',
+      }).then((data) => Array.isArray(data?.supplies) ? data.supplies as Record<string, unknown>[] : [])
   const [openSupplies, closedSupplies] = await Promise.all([
     getAllSupplies(apiKey, false, WB_PAGE_LIMIT),
-    getAllSupplies(apiKey, true, WB_PAGE_LIMIT),
+    recentClosedPromise,
   ])
   const supplyMap = new Map<string, Record<string, unknown>>()
   for (const supply of [...openSupplies, ...closedSupplies]) {
@@ -767,6 +773,7 @@ async function syncOrdersIncremental(storeId: string, accountId: string, apiKey:
   ])
   const newOrders = Array.isArray(newResult?.orders) ? newResult.orders as Record<string, unknown>[] : []
   const newOrderIds = new Set(newOrders.map((order) => wbId(order.id)))
+  const cachedByOrderId = new Map(cachedOrders.map((order) => [String(order.wb_order_id), order]))
   const activeOrderIds = cachedOrders
     .filter((order) => {
       const supplierStatus = String(order.supplier_status ?? '')
@@ -778,6 +785,14 @@ async function syncOrdersIncremental(storeId: string, accountId: string, apiKey:
   const idsToCheck = [...new Set([...activeOrderIds, ...newOrderIds])]
   const statuses = await getOrderStatuses(apiKey, idsToCheck)
   logNewOrdersReconciliation(statuses, newOrderIds)
+  const changedStatuses = new Map(
+    [...statuses.entries()].filter(([orderId, status]) => {
+      const previous = cachedByOrderId.get(orderId)
+      return !previous
+        || String(previous.supplier_status ?? '') !== status.supplierStatus
+        || String(previous.wb_system_status ?? '') !== status.wbStatus
+    }),
+  )
   const orderMap = new Map(newOrders.map((order) => [wbId(order.id), order]))
   const nowIso = new Date().toISOString()
   const counts = statusCounts(statuses, newOrderIds)
@@ -786,10 +801,16 @@ async function syncOrdersIncremental(storeId: string, accountId: string, apiKey:
     p_account_id: accountId,
     p_synced_at: nowIso,
     p_new_orders: normalizedOrderRows(orderMap, statuses),
-    p_statuses: normalizedStatusRows(statuses),
+    p_statuses: normalizedStatusRows(changedStatuses),
     p_status_counts: counts,
   })
-  return { synced: idsToCheck.length, new_orders: newOrders.length, counts, last_synced_at: nowIso }
+  return {
+    synced: idsToCheck.length,
+    new_orders: newOrders.length,
+    changed_statuses: changedStatuses.size,
+    counts,
+    last_synced_at: nowIso,
+  }
 }
 
 async function getFullOrderHistory(apiKey: string, supplies: NormalizedSupply[]) {
@@ -798,7 +819,13 @@ async function getFullOrderHistory(apiKey: string, supplies: NormalizedSupply[])
     .map((supply) => supply.wb_created_at ? new Date(supply.wb_created_at).getTime() : Number.NaN)
     .filter(Number.isFinite)
   const fallbackStart = Date.now() - 30 * 24 * 3600_000
-  const historyStartMs = supplyTimes.length > 0 ? Math.min(...supplyTimes, fallbackStart) : fallbackStart
+  // Заказ создаётся раньше поставки и может быть добавлен в неё значительно
+  // позже. Поэтому createdAt поставки нельзя использовать как нижнюю границу
+  // истории без запаса: WB фильтрует /orders именно по дате заказа.
+  const supplyHistoryStart = supplyTimes.length > 0
+    ? Math.min(...supplyTimes) - 90 * 24 * 3600_000
+    : fallbackStart
+  const historyStartMs = Math.min(supplyHistoryStart, fallbackStart)
   const orderMap = new Map<string, Record<string, unknown>>()
   const maxWindowSeconds = (30 * 24 * 3600) - 1
 
@@ -814,28 +841,36 @@ async function getFullOrderHistory(apiKey: string, supplies: NormalizedSupply[])
   return { orderMap, newOrderIds: new Set(newOrders.map((order) => wbId(order.id))), historyStartMs }
 }
 
-async function syncOrdersFull(storeId: string, accountId: string, apiKey: string, supplies: NormalizedSupply[]) {
+async function syncOrdersFull(
+  storeId: string,
+  accountId: string,
+  apiKey: string,
+  supplies: NormalizedSupply[],
+  syncId: string,
+) {
   const { orderMap, newOrderIds, historyStartMs } = await getFullOrderHistory(apiKey, supplies)
   const statuses = await getOrderStatuses(apiKey, [...orderMap.keys()])
   logNewOrdersReconciliation(statuses, newOrderIds)
   const nowIso = new Date().toISOString()
   const counts = statusCounts(statuses, newOrderIds)
-  await applySyncSnapshot({
-    storeId,
-    accountId,
-    syncedAt: nowIso,
-    snapshotFrom: new Date(historyStartMs).toISOString(),
-    orders: normalizedOrderRows(orderMap, statuses),
-    statuses: normalizedStatusRows(statuses),
-    counts,
+  const orderRows = normalizedOrderRows(orderMap, statuses)
+  for (const orderBatch of chunks(orderRows, 250)) {
+    await sbRpc('apply_fbs_full_sync_batch', {
+      p_store_id: storeId,
+      p_account_id: accountId,
+      p_sync_id: syncId,
+      p_synced_at: nowIso,
+      p_orders: orderBatch,
+    })
+  }
+  await sbRpc('finish_fbs_full_sync', {
+    p_store_id: storeId,
+    p_sync_id: syncId,
+    p_synced_at: nowIso,
+    p_snapshot_from: new Date(historyStartMs).toISOString(),
+    p_orders_count: orderMap.size,
+    p_status_counts: counts,
   })
-  await sbWrite(
-    'fbs_sync_log',
-    'PATCH',
-    { last_full_at: nowIso },
-    `store_id=eq.${encodeURIComponent(storeId)}`,
-    'return=minimal',
-  )
   return { synced: orderMap.size, counts, last_synced_at: nowIso }
 }
 
@@ -880,6 +915,7 @@ async function syncSupplyTimeline(
   apiKey: string,
   rawSupplies: Record<string, unknown>[],
   mode: SyncMode,
+  trigger: SyncTrigger,
 ) {
   const supplies = rawSupplies.map(normalizeSupply).filter((supply): supply is NormalizedSupply => Boolean(supply))
   const existingRows = await sbGetAll(
@@ -889,13 +925,38 @@ async function syncSupplyTimeline(
   )
   const existing = new Map(existingRows.map((row) => [String(row.wb_supply_id), row]))
   const recentBoundary = Date.now() - 45 * 24 * 3600_000
-  const suppliesToLoad = supplies.filter((supply) => {
+  const incrementalSuppliesToLoad = supplies.filter((supply) => {
     if (mode === 'full') return true
     const previous = existing.get(supply.wb_supply_id)
     const isRecent = supply.wb_created_at ? new Date(supply.wb_created_at).getTime() >= recentBoundary : false
     if (!previous) return !supply.done || isRecent
     return !supply.done
       || !previous.last_orders_synced_at
+      || String(previous.wb_closed_at ?? '') !== String(supply.wb_closed_at ?? '')
+      || String(previous.wb_scan_at ?? '') !== String(supply.wb_scan_at ?? '')
+  })
+  const fullRefreshBoundary = Date.now() - 20 * 3600_000
+  const pendingFullSupplies = mode === 'full' ? supplies.filter((supply) => {
+    const previous = existing.get(supply.wb_supply_id)
+    const lastOrdersSync = previous?.last_orders_synced_at
+      ? new Date(String(previous.last_orders_synced_at)).getTime()
+      : Number.NaN
+    return !Number.isFinite(lastOrdersSync) || lastOrdersSync < fullRefreshBoundary
+  }) : []
+  // Ночная история больших магазинов продолжается небольшими этапами. Ручная
+  // полная сверка выбранного магазина остаётся полной в одном запуске.
+  const suppliesToLoad = mode === 'full'
+    ? (trigger === 'nightly' ? pendingFullSupplies.slice(0, 40) : supplies)
+    : incrementalSuppliesToLoad
+  const fullMembershipComplete = mode === 'full'
+    && (trigger !== 'nightly' || pendingFullSupplies.length <= suppliesToLoad.length)
+  const membershipSupplyIds = new Set(suppliesToLoad.map((supply) => supply.wb_supply_id))
+  const suppliesToPersist = supplies.filter((supply) => {
+    const previous = existing.get(supply.wb_supply_id)
+    return (mode === 'full' && trigger !== 'nightly')
+      || !previous
+      || membershipSupplyIds.has(supply.wb_supply_id)
+      || Boolean(previous.done) !== supply.done
       || String(previous.wb_closed_at ?? '') !== String(supply.wb_closed_at ?? '')
       || String(previous.wb_scan_at ?? '') !== String(supply.wb_scan_at ?? '')
   })
@@ -910,7 +971,7 @@ async function syncSupplyTimeline(
   const nowIso = new Date().toISOString()
   const aggregate = { supplies: 0, memberships: 0, attempts: 0 }
 
-  for (const supplyBatch of chunks(supplies, 200)) {
+  for (const supplyBatch of chunks(suppliesToPersist, mode === 'full' ? 5 : 50)) {
     const loadedIds = supplyBatch.map((supply) => supply.wb_supply_id).filter((supplyId) => loadedSet.has(supplyId))
     const memberships = loadedIds.flatMap((supplyId) => membershipsBySupply.get(supplyId) ?? [])
     const result = await sbRpc<Record<string, number>>('apply_fbs_supply_sync_batch', {
@@ -926,7 +987,7 @@ async function syncSupplyTimeline(
     aggregate.memberships += Number(result?.memberships ?? 0)
     aggregate.attempts += Number(result?.attempts ?? 0)
   }
-  if (supplies.length === 0 || (mode === 'full' && membershipResult.failedSupplyIds.length === 0)) {
+  if (suppliesToPersist.length === 0 || (fullMembershipComplete && membershipResult.failedSupplyIds.length === 0)) {
     await sbRpc('apply_fbs_supply_sync_batch', {
       p_store_id: storeId,
       p_account_id: accountId,
@@ -934,16 +995,17 @@ async function syncSupplyTimeline(
       p_supplies: [],
       p_memberships: [],
       p_loaded_supply_ids: [],
-      p_is_full: mode === 'full' && membershipResult.failedSupplyIds.length === 0,
+      p_is_full: fullMembershipComplete && membershipResult.failedSupplyIds.length === 0,
     })
   }
   return {
     ...aggregate,
     received_supplies: supplies.length,
+    persisted_supplies: suppliesToPersist.length,
     checked_memberships: membershipResult.loadedSupplyIds.length,
     failed_memberships: membershipResult.failedSupplyIds.length,
     failed_supply_ids: membershipResult.failedSupplyIds.slice(0, 20),
-    partial: membershipResult.failedSupplyIds.length > 0,
+    partial: membershipResult.failedSupplyIds.length > 0 || (mode === 'full' && !fullMembershipComplete),
   }
 }
 
@@ -982,17 +1044,27 @@ async function syncStore(
   }
 
   try {
-    const rawSupplies = await getAllSupplyMetadata(apiKey)
+    const rawSupplies = await getAllSupplyMetadata(apiKey, mode)
     const normalizedSupplies = rawSupplies
       .map(normalizeSupply)
       .filter((supply): supply is NormalizedSupply => Boolean(supply))
-    const orderResult = mode === 'full'
-      ? await syncOrdersFull(storeId, accountId, apiKey, normalizedSupplies)
+    const previousSync = mode === 'full' && trigger === 'nightly'
+      ? (await sbGet('fbs_sync_log', `store_id=eq.${encodeURIComponent(storeId)}&select=last_full_at&limit=1`, true))[0]
+      : undefined
+    const previousFullAt = previousSync?.last_full_at
+      ? new Date(String(previousSync.last_full_at)).getTime()
+      : Number.NaN
+    const orderHistoryIsFresh = Number.isFinite(previousFullAt)
+      && previousFullAt >= Date.now() - 20 * 3600_000
+    const orderResult = mode === 'full' && !orderHistoryIsFresh
+      ? await syncOrdersFull(storeId, accountId, apiKey, normalizedSupplies, job.job_id)
       : await syncOrdersIncremental(storeId, accountId, apiKey)
-    const supplyResult = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, mode)
+    const supplyResult = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, mode, trigger)
     const result = {
       mode,
       synced: orderResult.synced,
+      new_orders: 'new_orders' in orderResult ? orderResult.new_orders : null,
+      changed_statuses: 'changed_statuses' in orderResult ? orderResult.changed_statuses : null,
       status_counts: orderResult.counts,
       supplies: supplyResult,
       partial: supplyResult.partial,
@@ -1265,8 +1337,31 @@ Deno.serve(async (req) => {
       return ok({ orders, next: '0' })
     }
 
-    if (action === 'sync_orders') {
+    if (action === 'sync_orders' || action === 'sync_store_service') {
+      if (action === 'sync_store_service' && !isServiceRole) {
+        return err('Доступно только системному планировщику', 403)
+      }
       const mode: SyncMode = body.mode === 'full' ? 'full' : 'incremental'
+      const isManualRequest = action === 'sync_orders' && body.trigger_source === 'manual'
+      if (action === 'sync_orders' && mode === 'incremental' && !isManualRequest) {
+        const previousRows = await sbGet(
+          'fbs_sync_log',
+          `store_id=eq.${encodeURIComponent(store_id)}&select=last_incremental_at,last_synced_at&limit=1`,
+          true,
+        )
+        const previousTimestamp = previousRows[0]?.last_incremental_at ?? previousRows[0]?.last_synced_at
+        const previousTime = previousTimestamp ? new Date(String(previousTimestamp)).getTime() : Number.NaN
+        if (Number.isFinite(previousTime) && Date.now() - previousTime < 5 * 60_000) {
+          return ok({
+            mode,
+            reused: true,
+            throttled: true,
+            partial: false,
+            synced: 0,
+            last_synced_at: new Date(previousTime).toISOString(),
+          })
+        }
+      }
       const currentSync = activeSyncs.get(store_id)
       if (currentSync) return ok({ ...(await currentSync), reused: true })
 
@@ -1275,7 +1370,9 @@ Deno.serve(async (req) => {
         accountId,
         apiKey,
         mode,
-        mode === 'full' ? 'manual' : 'automatic',
+        action === 'sync_store_service'
+          ? (mode === 'full' ? 'nightly' : 'automatic')
+          : (mode === 'full' || isManualRequest ? 'manual' : 'automatic'),
         isServiceRole ? null : userId,
       )
       activeSyncs.set(store_id, syncPromise)
@@ -1375,9 +1472,9 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'get_scan_catalog') {
-      const orderRows = await sbGet(
+      const orderRows = await sbGetAll(
         'fbs_orders',
-        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=eq.confirm&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id,data`,
+        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=eq.confirm&wb_system_status=eq.waiting&is_in_latest_snapshot=eq.true&select=wb_order_id,data&order=wb_order_id.asc`,
         true,
       )
       const eligibleFromSnapshot = new Set(orderRows.filter((row) => {
@@ -1388,6 +1485,7 @@ Deno.serve(async (req) => {
       }).map((row) => String(row.wb_order_id)))
       const allConfirmIds = orderRows.map((row) => String(row.wb_order_id))
       const eligibleIdsSet = new Set(eligibleFromSnapshot)
+      const existingKizStates = await loadKizStateMap(store_id)
       for (let index = 0; index < allConfirmIds.length; index += 100) {
         const batchIds = allConfirmIds.slice(index, index + 100)
         const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
@@ -1396,15 +1494,15 @@ Deno.serve(async (req) => {
           body: wbOrderIdsBody(batchIds),
         })
         const metadata = metadataOrders(metaResponse)
-        await cacheKizOrderStates(accountId, store_id, metadata, batchIds)
+        await cacheKizOrderStates(accountId, store_id, metadata, batchIds, existingKizStates)
         for (const meta of metadata) {
           if (metadataSupportsSgtin(meta)) eligibleIdsSet.add(metadataOrderId(meta))
         }
       }
       const eligibleIds = [...eligibleIdsSet].filter(Boolean)
-      const cachedRows = await sbGet(
+      const cachedRows = await sbGetAll(
         'fbs_wb_qr_catalog',
-        `store_id=eq.${encodeURIComponent(store_id)}&supports_sgtin=eq.true&select=order_id,qr_value,part_a,part_b`,
+        `store_id=eq.${encodeURIComponent(store_id)}&supports_sgtin=eq.true&select=order_id,qr_value,part_a,part_b&order=order_id.asc`,
         true,
       )
       const cachedByOrder = new Map(cachedRows.map((row) => [String(row.order_id), row]))
@@ -1476,14 +1574,39 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'get_kiz_order_states') {
-      const orderRows = await sbGet(
+      const onlyMissing = body.only_missing !== false
+      const forceRefresh = body.force === true
+      const orderRows = await sbGetAll(
         'fbs_orders',
-        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=in.(confirm,complete)&is_in_latest_snapshot=eq.true&select=wb_order_id&limit=1000`,
+        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=in.(confirm,complete)&is_in_latest_snapshot=eq.true&select=wb_order_id,data&order=wb_order_id.asc`,
         true,
       )
-      const orderIds = orderRows.map((row) => String(row.wb_order_id ?? '')).filter(Boolean)
-      const checked = await refreshKizOrderStatesFromWb(apiKey, accountId, store_id, orderIds)
-      return ok({ checked, requested: orderIds.length })
+      const existingStates = await loadKizStateMap(store_id)
+      const eligibleCatalogRows = onlyMissing ? await sbGetAll(
+        'fbs_wb_qr_catalog',
+        `store_id=eq.${encodeURIComponent(store_id)}&supports_sgtin=eq.true&select=order_id&order=order_id.asc`,
+        true,
+      ) : []
+      const eligibleCatalogIds = new Set(eligibleCatalogRows.map((row) => String(row.order_id ?? '')))
+      const orderIds = orderRows.flatMap((row) => {
+        const orderId = String(row.wb_order_id ?? '')
+        if (!orderId) return []
+        if (!onlyMissing) return [orderId]
+        const state = existingStates.get(orderId)
+        if (state?.sent_to_wb === true) return []
+        const checkedAt = state?.checked_at ? new Date(state.checked_at).getTime() : Number.NaN
+        if (!forceRefresh && Number.isFinite(checkedAt) && Date.now() - checkedAt < 5 * 60_000) return []
+        const raw = (row.data ?? {}) as Record<string, unknown>
+        const required = Array.isArray(raw.requiredMeta) ? raw.requiredMeta.map(String) : []
+        const optional = Array.isArray(raw.optionalMeta) ? raw.optionalMeta.map(String) : []
+        const requiresKiz = state?.requires_kiz === true
+          || eligibleCatalogIds.has(orderId)
+          || required.includes('sgtin')
+          || optional.includes('sgtin')
+        return requiresKiz ? [orderId] : []
+      })
+      const checked = await refreshKizOrderStatesFromWb(apiKey, accountId, store_id, orderIds, existingStates)
+      return ok({ checked, requested: orderIds.length, only_missing: onlyMissing })
     }
 
     if (action === 'submit_marking_session') {
@@ -1532,12 +1655,18 @@ Deno.serve(async (req) => {
         ? statusResponse as Record<string, unknown>[]
         : ((statusResponse as { orders?: Record<string, unknown>[] })?.orders ?? [])
       const statusByOrder = new Map(statusList.map((status) => [String(status.id ?? status.orderId ?? ''), status]))
-      const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: wbOrderIdsBody(orderIds),
-      })
-      const initialMetadata = metadataOrders(metaResponse)
+      // WB rejects large metadata reads even though the status endpoint accepts
+      // the same list. Their integration guidance recommends batches of 50-100.
+      const initialMetadata: Record<string, unknown>[] = []
+      for (let index = 0; index < orderIds.length; index += 100) {
+        const batchIds = orderIds.slice(index, index + 100)
+        const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: wbOrderIdsBody(batchIds),
+        })
+        initialMetadata.push(...metadataOrders(metaResponse))
+      }
       const metaByOrder = new Map(initialMetadata.map((meta) => [metadataOrderId(meta), meta]))
       await cacheKizOrderStates(accountId, store_id, initialMetadata, orderIds)
 
@@ -1584,6 +1713,21 @@ Deno.serve(async (req) => {
         }
       }
       if (sentOrderIds.length > 0) {
+        const confirmedAt = new Date().toISOString()
+        await sbWrite(
+          'fbs_kiz_order_states',
+          'POST',
+          [...new Set(sentOrderIds)].map((orderId) => ({
+            account_id: accountId,
+            store_id,
+            order_id: orderId,
+            requires_kiz: true,
+            sent_to_wb: true,
+            checked_at: confirmedAt,
+          })),
+          'on_conflict=store_id,order_id',
+          'resolution=merge-duplicates,return=minimal',
+        )
         try {
           await refreshKizOrderStatesFromWb(apiKey, accountId, store_id, sentOrderIds)
         } catch (verificationError) {

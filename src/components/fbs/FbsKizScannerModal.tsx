@@ -31,6 +31,10 @@ type ScanPair = {
   created_at: string
 }
 
+type RecoverableScanSession = ScanSession & {
+  recoverable_pair_count: number
+}
+
 type CatalogItem = {
   orderId: string
   qrValue: string
@@ -190,7 +194,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [catalogMissing, setCatalogMissing] = useState(0)
   const [activeBox, setActiveBox] = useState<ActiveBoxInfo | null>(null)
   const [selectingBox, setSelectingBox] = useState(false)
-  const [recoverableSessions, setRecoverableSessions] = useState<ScanSession[]>([])
+  const [recoverableSessions, setRecoverableSessions] = useState<RecoverableScanSession[]>([])
   const [value, setValue] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -275,8 +279,17 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       .select('session_id')
       .in('session_id', candidates.map((candidate) => candidate.id))
       .in('status', ['draft', 'error'])
-    const sessionsWithWork = new Set<string>((pairRows ?? []).map((row: { session_id: string }) => row.session_id))
-    setRecoverableSessions(candidates.filter((candidate) => Boolean(candidate.pending_order_id || candidate.pending_product_barcode) || (!pairsError && sessionsWithWork.has(candidate.id))))
+    const pairCounts = new Map<string, number>()
+    for (const row of (pairRows ?? []) as Array<{ session_id: string }>) {
+      pairCounts.set(row.session_id, (pairCounts.get(row.session_id) ?? 0) + 1)
+    }
+    setRecoverableSessions(candidates.flatMap((candidate) => {
+      const pairCount = pairCounts.get(candidate.id) ?? 0
+      const hasPendingScan = Boolean(candidate.pending_order_id || candidate.pending_product_barcode)
+      return hasPendingScan || (!pairsError && pairCount > 0)
+        ? [{ ...candidate, recoverable_pair_count: pairCount }]
+        : []
+    }))
   }, [storeId])
 
   useEffect(() => {
@@ -684,7 +697,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
-  const recoverSession = async (source: ScanSession) => {
+  const recoverSession = async (source: RecoverableScanSession) => {
     if (!supabase || !session || busy || !window.confirm(`Забрать сохранённые пары с устройства ${source.device_name || source.device_id.slice(0, 6)}?`)) return
     setBusy(true)
     setError('')
@@ -699,6 +712,28 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       setNotice(`Восстановлено пар: ${Number(data ?? 0)}`)
     } catch (recoverError) {
       setError(errorText(recoverError))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const discardSession = async (source: RecoverableScanSession) => {
+    if (!supabase || !session || busy) return
+    const pendingText = source.pending_order_id || source.pending_product_barcode
+      ? ' Незавершённое текущее сканирование также будет сброшено.'
+      : ''
+    if (!window.confirm(`Удалить неотправленные пары: ${source.recoverable_pair_count}?${pendingText} Отменить это действие нельзя.`)) return
+    setBusy(true)
+    setError('')
+    try {
+      const { data, error: discardError } = await (supabase as any).rpc('discard_fbs_marking_session', {
+        p_source_session_id: source.id,
+      })
+      if (discardError) throw discardError
+      await loadRecoverableSessions(session.id)
+      setNotice(`Удалено неотправленных пар: ${Number(data ?? 0)}`)
+    } catch (discardError) {
+      setError(errorText(discardError))
     } finally {
       setBusy(false)
     }
@@ -932,8 +967,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   <div className="mt-2 space-y-2">
                     {recoverableSessions.map((source) => (
                       <div key={source.id} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 text-xs text-slate-600">
-                        <span>{source.device_name || `Устройство ${source.device_id.slice(0, 6)}`} · нет связи более 2 минут</span>
-                        <button type="button" onClick={() => void recoverSession(source)} disabled={busy} className="shrink-0 font-semibold text-violet-700 hover:underline">Забрать работу</button>
+                        <span>{source.device_name || `Устройство ${source.device_id.slice(0, 6)}`} · сохранено пар: {source.recoverable_pair_count}</span>
+                        <div className="flex shrink-0 items-center gap-3">
+                          <button type="button" onClick={() => void recoverSession(source)} disabled={busy} className="font-semibold text-violet-700 hover:underline">Забрать работу</button>
+                          <button type="button" onClick={() => void discardSession(source)} disabled={busy} className="font-semibold text-red-600 hover:underline">Удалить</button>
+                        </div>
                       </div>
                     ))}
                   </div>

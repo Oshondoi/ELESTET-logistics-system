@@ -117,10 +117,21 @@ alter table public.fbs_sync_log
   add column if not exists supply_last_full_at timestamptz,
   add column if not exists incremental_status_counts jsonb not null default '{}'::jsonb;
 
+alter table public.fbs_orders
+  add column if not exists last_full_sync_id uuid;
+
+create index if not exists fbs_orders_full_sync_token_idx
+  on public.fbs_orders (store_id, last_full_sync_id);
+
 alter table public.fbs_supplies enable row level security;
 alter table public.fbs_supply_orders enable row level security;
 alter table public.fbs_dispatch_attempts enable row level security;
 alter table public.fbs_sync_jobs enable row level security;
+
+grant select on table public.fbs_supplies to authenticated;
+grant select on table public.fbs_supply_orders to authenticated;
+grant select on table public.fbs_dispatch_attempts to authenticated;
+grant select on table public.fbs_sync_jobs to authenticated;
 
 drop policy if exists "fbs_supplies: account members" on public.fbs_supplies;
 create policy "fbs_supplies: account members"
@@ -151,7 +162,8 @@ create policy "fbs_sync_jobs: account members"
   ));
 
 -- Запуск задачи с межпроцессной блокировкой на магазин. Зависшие задачи старше
--- 30 минут автоматически освобождаются перед новым запуском.
+-- 5 минут автоматически освобождаются перед новым запуском. Это больше
+-- предельного HTTP-времени Edge Function и не оставляет магазин заблокированным.
 create or replace function public.start_fbs_sync_job(
   p_store_id uuid,
   p_job_type text,
@@ -182,7 +194,7 @@ begin
       updated_at = timezone('utc', now())
   where store_id = p_store_id
     and status in ('queued', 'running')
-    and updated_at < timezone('utc', now()) - interval '30 minutes';
+    and updated_at < timezone('utc', now()) - interval '5 minutes';
 
   select job.id, job.job_type into v_job_id, v_active_type
   from public.fbs_sync_jobs job
@@ -332,6 +344,128 @@ $$;
 revoke all on function public.apply_fbs_incremental_sync(uuid, uuid, timestamptz, jsonb, jsonb, jsonb)
   from public, anon, authenticated;
 grant execute on function public.apply_fbs_incremental_sync(uuid, uuid, timestamptz, jsonb, jsonb, jsonb)
+  to service_role;
+
+-- Большой полный снимок записывается ограниченными порциями. До финального RPC
+-- старые строки остаются актуальными, поэтому таймаут или ошибка WB не очищают
+-- рабочий список заказов.
+create or replace function public.apply_fbs_full_sync_batch(
+  p_store_id uuid,
+  p_account_id uuid,
+  p_sync_id uuid,
+  p_synced_at timestamptz,
+  p_orders jsonb
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_count integer := 0;
+begin
+  if not exists (
+    select 1 from public.stores store
+    where store.id = p_store_id and store.account_id = p_account_id
+  ) then raise exception 'Магазин не принадлежит компании'; end if;
+
+  insert into public.fbs_orders (
+    account_id, store_id, wb_order_id, wb_status, supplier_status, wb_system_status,
+    supply_id, rid, article, nm_id, chrt_id, skus, price, warehouse_id,
+    created_at, ddate, data, synced_at, status_synced_at,
+    is_in_latest_snapshot, last_full_sync_id
+  )
+  select
+    p_account_id, p_store_id, order_row.wb_order_id,
+    coalesce(order_row.supplier_status, 'new'), order_row.supplier_status,
+    order_row.wb_system_status, order_row.supply_id, order_row.rid,
+    order_row.article, order_row.nm_id, order_row.chrt_id,
+    coalesce(order_row.skus, '[]'::jsonb), coalesce(order_row.price, 0),
+    coalesce(order_row.warehouse_id, 0), order_row.created_at, order_row.ddate,
+    coalesce(order_row.data, '{}'::jsonb), p_synced_at, p_synced_at,
+    true, p_sync_id
+  from jsonb_to_recordset(coalesce(p_orders, '[]'::jsonb)) as order_row(
+    wb_order_id text, supplier_status text, wb_system_status text, supply_id text,
+    rid text, article text, nm_id bigint, chrt_id bigint, skus jsonb, price integer,
+    warehouse_id integer, created_at timestamptz, ddate timestamptz, data jsonb
+  )
+  on conflict (store_id, wb_order_id) do update set
+    account_id = excluded.account_id,
+    wb_status = excluded.wb_status,
+    supplier_status = excluded.supplier_status,
+    wb_system_status = excluded.wb_system_status,
+    supply_id = coalesce(excluded.supply_id, fbs_orders.supply_id),
+    rid = coalesce(excluded.rid, fbs_orders.rid),
+    article = coalesce(excluded.article, fbs_orders.article),
+    nm_id = coalesce(excluded.nm_id, fbs_orders.nm_id),
+    chrt_id = coalesce(excluded.chrt_id, fbs_orders.chrt_id),
+    skus = case when excluded.skus = '[]'::jsonb then fbs_orders.skus else excluded.skus end,
+    price = excluded.price,
+    warehouse_id = excluded.warehouse_id,
+    created_at = coalesce(excluded.created_at, fbs_orders.created_at),
+    ddate = coalesce(excluded.ddate, fbs_orders.ddate),
+    data = case when excluded.data = '{}'::jsonb then fbs_orders.data else excluded.data end,
+    synced_at = excluded.synced_at,
+    status_synced_at = excluded.status_synced_at,
+    is_in_latest_snapshot = true,
+    last_full_sync_id = excluded.last_full_sync_id;
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+revoke all on function public.apply_fbs_full_sync_batch(uuid, uuid, uuid, timestamptz, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.apply_fbs_full_sync_batch(uuid, uuid, uuid, timestamptz, jsonb)
+  to service_role;
+
+create or replace function public.finish_fbs_full_sync(
+  p_store_id uuid,
+  p_sync_id uuid,
+  p_synced_at timestamptz,
+  p_snapshot_from timestamptz,
+  p_orders_count integer,
+  p_status_counts jsonb default '{}'::jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_store_id::text, 0));
+  if exists (
+    select 1 from public.fbs_sync_log sync_log
+    where sync_log.store_id = p_store_id and sync_log.last_synced_at > p_synced_at
+  ) then return; end if;
+
+  update public.fbs_orders order_row
+  set is_in_latest_snapshot = false
+  where order_row.store_id = p_store_id
+    and order_row.is_in_latest_snapshot
+    and order_row.last_full_sync_id is distinct from p_sync_id;
+
+  insert into public.fbs_sync_log (
+    store_id, last_synced_at, orders_count, error, status_counts,
+    snapshot_from, last_full_at
+  ) values (
+    p_store_id, p_synced_at, p_orders_count, null,
+    coalesce(p_status_counts, '{}'::jsonb), p_snapshot_from, p_synced_at
+  )
+  on conflict (store_id) do update set
+    last_synced_at = excluded.last_synced_at,
+    orders_count = excluded.orders_count,
+    error = null,
+    status_counts = excluded.status_counts,
+    snapshot_from = excluded.snapshot_from,
+    last_full_at = excluded.last_full_at;
+end;
+$$;
+
+revoke all on function public.finish_fbs_full_sync(uuid, uuid, timestamptz, timestamptz, integer, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.finish_fbs_full_sync(uuid, uuid, timestamptz, timestamptz, integer, jsonb)
   to service_role;
 
 -- Записывает поставки и загруженные связи одной транзакцией. Пустой массив
@@ -974,4 +1108,3 @@ revoke all on function public.get_fbs_dispatch_report_v2(uuid, uuid, date, date,
   from public, anon;
 grant execute on function public.get_fbs_dispatch_report_v2(uuid, uuid, date, date, text, uuid, bigint)
   to authenticated;
-

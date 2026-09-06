@@ -37,7 +37,28 @@ begin
   where id = p_session_id and created_by = auth.uid() and device_id = p_device_id
   for update;
 
-  if v_session.id is null or v_session.status not in ('active', 'partial') then
+  if v_session.id is null then
+    raise exception 'Активная сессия устройства не найдена';
+  end if;
+
+  -- Если Edge Function прервалась после захвата сессии, не оставляем
+  -- сканер заблокированным навсегда. Через две минуты безопасно возвращаем
+  -- сессию в partial: уже отсканированные пары при этом сохраняются.
+  if v_session.status = 'submitting' then
+    if coalesce(v_session.submit_started_at, v_session.updated_at) < now() - interval '2 minutes' then
+      update public.fbs_marking_sessions
+      set status = 'partial',
+          submit_started_at = null,
+          last_seen_at = now(),
+          updated_at = now()
+      where id = v_session.id
+      returning * into v_session;
+    else
+      raise exception 'Отправка КИЗ уже выполняется. Повторите через две минуты';
+    end if;
+  end if;
+
+  if v_session.status not in ('active', 'partial') then
     raise exception 'Активная сессия устройства не найдена';
   end if;
 
