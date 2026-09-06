@@ -1932,12 +1932,6 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
 
   const handleShip = async (supplyId: string, orders2ship: FbsOrder[]): Promise<boolean> => {
     if (!supabase) return false
-    const trackedOrders = orders2ship.filter((order) => order.productLocations.length > 0)
-    const ordersWithoutBox = trackedOrders.filter((order) => order.stockAllocation?.status !== 'reserved')
-    if (ordersWithoutBox.length > 0) {
-      alert(`Сначала выберите короб для ${ordersWithoutBox.length} ${ordersWithoutBox.length === 1 ? 'заказа' : 'заказов'} с товаром на складе.`)
-      return false
-    }
     const ids = orders2ship.map((o) => o.id)
     setBusyIds((s) => new Set([...s, ...ids]))
     try {

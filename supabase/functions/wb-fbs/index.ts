@@ -1557,13 +1557,6 @@ Deno.serve(async (req) => {
     if (action === 'deliver_supply') {
       const { supply_id } = body as { supply_id: string }
       if (!supply_id) return err('supply_id обязателен')
-      const missingReservations = Number(await sbRpc<number>('count_fbs_supply_orders_missing_stock_reservation', {
-        p_store_id: store_id,
-        p_supply_id: supply_id,
-      }))
-      if (missingReservations > 0) {
-        return err(`Сначала выберите короб для ${missingReservations} FBS-заказов с товаром на складе`)
-      }
       await wbPatchNoContent(apiKey, `/api/v3/supplies/${encodeURIComponent(supply_id)}/deliver`)
       return ok({ success: true })
     }
