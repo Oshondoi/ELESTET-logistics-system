@@ -295,6 +295,39 @@ async function refreshKizOrderStatesFromWb(
   return checked
 }
 
+async function kizOrdersToRefresh(storeId: string, onlyMissing: boolean, forceRefresh: boolean) {
+  const orderRows = await sbGetAll(
+    'fbs_orders',
+    `store_id=eq.${encodeURIComponent(storeId)}&supplier_status=in.(confirm,complete)&is_in_latest_snapshot=eq.true&select=wb_order_id,data&order=wb_order_id.asc`,
+    true,
+  )
+  const existingStates = await loadKizStateMap(storeId)
+  const eligibleCatalogRows = onlyMissing ? await sbGetAll(
+    'fbs_wb_qr_catalog',
+    `store_id=eq.${encodeURIComponent(storeId)}&supports_sgtin=eq.true&select=order_id&order=order_id.asc`,
+    true,
+  ) : []
+  const eligibleCatalogIds = new Set(eligibleCatalogRows.map((row) => String(row.order_id ?? '')))
+  const orderIds = orderRows.flatMap((row) => {
+    const orderId = String(row.wb_order_id ?? '')
+    if (!orderId) return []
+    if (!onlyMissing) return [orderId]
+    const state = existingStates.get(orderId)
+    if (state?.sent_to_wb === true) return []
+    const checkedAt = state?.checked_at ? new Date(state.checked_at).getTime() : Number.NaN
+    if (!forceRefresh && Number.isFinite(checkedAt) && Date.now() - checkedAt < 5 * 60_000) return []
+    const raw = (row.data ?? {}) as Record<string, unknown>
+    const required = Array.isArray(raw.requiredMeta) ? raw.requiredMeta.map(String) : []
+    const optional = Array.isArray(raw.optionalMeta) ? raw.optionalMeta.map(String) : []
+    const requiresKiz = state?.requires_kiz === true
+      || eligibleCatalogIds.has(orderId)
+      || required.includes('sgtin')
+      || optional.includes('sgtin')
+    return requiresKiz ? [orderId] : []
+  })
+  return { orderIds, existingStates }
+}
+
 // ── WB helpers ───────────────────────────────────────────────────────────────
 
 function sleep(ms: number) {
@@ -1060,6 +1093,13 @@ async function syncStore(
       ? await syncOrdersFull(storeId, accountId, apiKey, normalizedSupplies, job.job_id)
       : await syncOrdersIncremental(storeId, accountId, apiKey)
     const supplyResult = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, mode, trigger)
+    let nightlyKizChecked = 0
+    if (mode === 'full' && trigger === 'nightly') {
+      const { orderIds, existingStates } = await kizOrdersToRefresh(storeId, true, true)
+      nightlyKizChecked = await refreshKizOrderStatesFromWb(
+        apiKey, accountId, storeId, orderIds, existingStates,
+      )
+    }
     const result = {
       mode,
       synced: orderResult.synced,
@@ -1067,6 +1107,7 @@ async function syncStore(
       changed_statuses: 'changed_statuses' in orderResult ? orderResult.changed_statuses : null,
       status_counts: orderResult.counts,
       supplies: supplyResult,
+      kiz_checked: nightlyKizChecked,
       partial: supplyResult.partial,
       last_synced_at: orderResult.last_synced_at,
       job_id: job.job_id,
@@ -1576,35 +1617,7 @@ Deno.serve(async (req) => {
     if (action === 'get_kiz_order_states') {
       const onlyMissing = body.only_missing !== false
       const forceRefresh = body.force === true
-      const orderRows = await sbGetAll(
-        'fbs_orders',
-        `store_id=eq.${encodeURIComponent(store_id)}&supplier_status=in.(confirm,complete)&is_in_latest_snapshot=eq.true&select=wb_order_id,data&order=wb_order_id.asc`,
-        true,
-      )
-      const existingStates = await loadKizStateMap(store_id)
-      const eligibleCatalogRows = onlyMissing ? await sbGetAll(
-        'fbs_wb_qr_catalog',
-        `store_id=eq.${encodeURIComponent(store_id)}&supports_sgtin=eq.true&select=order_id&order=order_id.asc`,
-        true,
-      ) : []
-      const eligibleCatalogIds = new Set(eligibleCatalogRows.map((row) => String(row.order_id ?? '')))
-      const orderIds = orderRows.flatMap((row) => {
-        const orderId = String(row.wb_order_id ?? '')
-        if (!orderId) return []
-        if (!onlyMissing) return [orderId]
-        const state = existingStates.get(orderId)
-        if (state?.sent_to_wb === true) return []
-        const checkedAt = state?.checked_at ? new Date(state.checked_at).getTime() : Number.NaN
-        if (!forceRefresh && Number.isFinite(checkedAt) && Date.now() - checkedAt < 5 * 60_000) return []
-        const raw = (row.data ?? {}) as Record<string, unknown>
-        const required = Array.isArray(raw.requiredMeta) ? raw.requiredMeta.map(String) : []
-        const optional = Array.isArray(raw.optionalMeta) ? raw.optionalMeta.map(String) : []
-        const requiresKiz = state?.requires_kiz === true
-          || eligibleCatalogIds.has(orderId)
-          || required.includes('sgtin')
-          || optional.includes('sgtin')
-        return requiresKiz ? [orderId] : []
-      })
+      const { orderIds, existingStates } = await kizOrdersToRefresh(store_id, onlyMissing, forceRefresh)
       const checked = await refreshKizOrderStatesFromWb(apiKey, accountId, store_id, orderIds, existingStates)
       return ok({ checked, requested: orderIds.length, only_missing: onlyMissing })
     }
