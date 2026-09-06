@@ -44,6 +44,7 @@ import { TzPromptsPage } from './pages/TzPromptsPage'
 import { WmsPage } from './pages/WmsPage'
 import { FbsOrdersPage } from './pages/FbsOrdersPage'
 import { FbsInfoPage } from './pages/FbsInfoPage'
+import { FbsGuidePage } from './pages/FbsGuidePage'
 import { FinanceReportPage } from './pages/FinanceReportPage'
 import { PromotionPage } from './pages/PromotionPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
@@ -317,7 +318,7 @@ function App() {
     if (storedPage && storedPage in PAGE_ROUTES) return storedPage as PageKey
     return 'home'
   })
-  const [fbsSection, setFbsSection] = useState<'orders' | 'info'>('orders')
+  const [fbsSection, setFbsSection] = useState<'orders' | 'info' | 'guide'>('orders')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   // short_id партии из URL — для авто-открытия модалки
@@ -829,6 +830,7 @@ function App() {
             pageTabs={effectivePage === 'fbs' && isSuperAdmin ? [
               { label: 'FBS Заказы', active: fbsSection === 'orders', onClick: () => setFbsSection('orders') },
               { label: 'Инфо', active: fbsSection === 'info', onClick: () => setFbsSection('info') },
+              { label: 'Гайд', active: fbsSection === 'guide', onClick: () => setFbsSection('guide') },
             ] : undefined}
             userName={profileUserName}
             userEmail={session?.user?.email ?? ''}
@@ -1096,6 +1098,8 @@ function App() {
                   <PlanGatewall page="fbs" onUpgrade={() => setActivePage('subscription')} />
                 ) : isSuperAdmin && fbsSection === 'info' ? (
                   <FbsInfoPage />
+                ) : isSuperAdmin && fbsSection === 'guide' ? (
+                  <FbsGuidePage />
                 ) : (
                   <FbsOrdersPage
                     stores={stores}
