@@ -1,7 +1,20 @@
 const GS = '\u001d'
 
+const RU_TO_EN_KEYBOARD: Record<string, string> = {
+  'й': 'q', 'ц': 'w', 'у': 'e', 'к': 'r', 'е': 't', 'н': 'y', 'г': 'u', 'ш': 'i', 'щ': 'o', 'з': 'p', 'х': '[', 'ъ': ']',
+  'ф': 'a', 'ы': 's', 'в': 'd', 'а': 'f', 'п': 'g', 'р': 'h', 'о': 'j', 'л': 'k', 'д': 'l', 'ж': ';', 'э': "'",
+  'я': 'z', 'ч': 'x', 'с': 'c', 'м': 'v', 'и': 'b', 'т': 'n', 'ь': 'm', 'б': ',', 'ю': '.', 'ё': '`',
+  'Й': 'Q', 'Ц': 'W', 'У': 'E', 'К': 'R', 'Е': 'T', 'Н': 'Y', 'Г': 'U', 'Ш': 'I', 'Щ': 'O', 'З': 'P', 'Х': '{', 'Ъ': '}',
+  'Ф': 'A', 'Ы': 'S', 'В': 'D', 'А': 'F', 'П': 'G', 'Р': 'H', 'О': 'J', 'Л': 'K', 'Д': 'L', 'Ж': ':', 'Э': '"',
+  'Я': 'Z', 'Ч': 'X', 'С': 'C', 'М': 'V', 'И': 'B', 'Т': 'N', 'Ь': 'M', 'Б': '<', 'Ю': '>', 'Ё': '~',
+}
+
+export function normalizeScannerKeyboardLayout(value: string): string {
+  return [...value].map((char) => RU_TO_EN_KEYBOARD[char] ?? char).join('')
+}
+
 export function normalizeKizCode(value: string): string {
-  let code = value
+  let code = normalizeScannerKeyboardLayout(value)
     .replace(/[\r\n\t]+$/g, '')
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
 
@@ -53,6 +66,9 @@ export function kizValidationError(value: string): string | null {
   const match = /^01(\d{14})21([\s\S]+)$/.exec(code)
   if (!match) return 'Это не КИЗ: отсканируйте GS1 DataMatrix с товара.'
   if (!isValidGtin14(match[1])) return 'КИЗ содержит некорректный GTIN товара. Проверьте DataMatrix и повторите сканирование.'
+  if (/[^\x21-\x7E\x1D]/.test(code)) {
+    return 'КИЗ содержит нераспознанные символы. Проверьте раскладку и повторите сканирование.'
+  }
   // Scanner models represent the serial number, GS separators and the
   // cryptographic tail differently. WB is the source of truth for those parts;
   // locally we only distinguish a GS1 marking code from unrelated scan types.

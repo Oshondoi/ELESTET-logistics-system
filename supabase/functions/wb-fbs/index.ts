@@ -1491,6 +1491,69 @@ Deno.serve(async (req) => {
       return ok({ success: true })
     }
 
+    if (action === 'get_supply_boxes') {
+      const supplyId = String(body.supply_id ?? '').trim()
+      if (!supplyId) return err('supply_id обязателен')
+      const response = await wbGet(apiKey, `/api/v3/supplies/${encodeURIComponent(supplyId)}/trbx`)
+      const boxes = (Array.isArray(response?.trbxes) ? response.trbxes : [])
+        .map((box: Record<string, unknown>) => String(box?.id ?? '').trim())
+        .filter(Boolean)
+      return ok({ boxes })
+    }
+
+    if (action === 'add_supply_boxes') {
+      const supplyId = String(body.supply_id ?? '').trim()
+      const amount = Number(body.amount)
+      if (!supplyId) return err('supply_id обязателен')
+      if (!Number.isInteger(amount) || amount < 1 || amount > 1000) return err('Количество грузомест должно быть от 1 до 1000')
+      const response = await fetch(`${WB_BASE}/api/v3/supplies/${encodeURIComponent(supplyId)}/trbx`, {
+        method: 'POST',
+        headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount }),
+      })
+      if (response.status === 401 || response.status === 403) throw new Error('no_permission')
+      if (!response.ok) {
+        const responseText = await response.text()
+        const problem = wbProblem(responseText)
+        return err(problem.message || `Wildberries не создал грузоместа (HTTP ${response.status})`, response.status)
+      }
+      const result = parseWbJson(await response.text())
+      const boxes = (Array.isArray(result?.trbxIds) ? result.trbxIds : []).map(String).filter(Boolean)
+      return ok({ boxes })
+    }
+
+    if (action === 'delete_supply_boxes') {
+      const supplyId = String(body.supply_id ?? '').trim()
+      const boxIds = Array.isArray(body.box_ids) ? [...new Set(body.box_ids.map((value: unknown) => String(value).trim()).filter(Boolean))] : []
+      if (!supplyId) return err('supply_id обязателен')
+      if (!boxIds.length) return err('Выберите хотя бы одно грузоместо')
+      const response = await fetch(`${WB_BASE}/api/v3/supplies/${encodeURIComponent(supplyId)}/trbx`, {
+        method: 'DELETE',
+        headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trbxIds: boxIds }),
+      })
+      if (response.status === 401 || response.status === 403) throw new Error('no_permission')
+      if (!response.ok) {
+        const responseText = await response.text()
+        const problem = wbProblem(responseText)
+        return err(problem.message || `Wildberries не удалил грузоместа (HTTP ${response.status})`, response.status)
+      }
+      return ok({ success: true })
+    }
+
+    if (action === 'get_supply_box_stickers') {
+      const supplyId = String(body.supply_id ?? '').trim()
+      const boxIds = Array.isArray(body.box_ids) ? [...new Set(body.box_ids.map((value: unknown) => String(value).trim()).filter(Boolean))] : []
+      if (!supplyId) return err('supply_id обязателен')
+      if (!boxIds.length) return err('Сначала создайте грузоместа')
+      const response = await wbReadJson(apiKey, `/api/v3/supplies/${encodeURIComponent(supplyId)}/trbx/stickers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trbxIds: boxIds }),
+      }, { type: 'png' })
+      return ok({ stickers: Array.isArray(response?.stickers) ? response.stickers : [] })
+    }
+
     if (action === 'deliver_supply') {
       const { supply_id } = body as { supply_id: string }
       if (!supply_id) return err('supply_id обязателен')

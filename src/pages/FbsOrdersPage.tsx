@@ -123,7 +123,7 @@ interface FbsInternalWarehouse {
 }
 
 const ALL_WAREHOUSES_FILTER = 'all'
-const QUICK_SYNC_MAX_AGE_MS = 5 * 60_000
+const QUICK_SYNC_MAX_AGE_MS = 15 * 60_000
 
 interface WbSupply {
   id: string
@@ -133,6 +133,17 @@ interface WbSupply {
   createdAt?: string
   closedAt?: string | null
   scanDt?: string | null
+}
+
+interface SupplyDispatchModal {
+  supply: WbSupply
+  orders: FbsOrder[]
+  destination: 'pvz' | 'warehouse' | null
+  boxes: string[]
+  amount: string
+  loading: boolean
+  busy: boolean
+  error: string | null
 }
 
 interface FbsArchiveReport {
@@ -985,8 +996,13 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   const [boxSelectionOrder, setBoxSelectionOrder] = useState<FbsOrder | null>(null)
   const [boxSelectionBusy, setBoxSelectionBusy] = useState(false)
   const [boxScanValue, setBoxScanValue] = useState('')
+  const [dispatchModal, setDispatchModal] = useState<SupplyDispatchModal | null>(null)
   const syncInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
   const copiedSupplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const manualQuickRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingManualQuickRetryStoreRef = useRef<string | null>(null)
+  const dbReadGenerationRef = useRef(0)
+  const pageMountedRef = useRef(true)
   const selectedStoreIdRef = useRef(selectedStoreId)
   const lastSyncedAtRef = useRef<Date | null>(null)
   selectedStoreIdRef.current = selectedStoreId
@@ -995,8 +1011,13 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     setPickingListMenuOpen(false)
   }, [selected])
 
-  useEffect(() => () => {
-    if (copiedSupplyTimerRef.current) clearTimeout(copiedSupplyTimerRef.current)
+  useEffect(() => {
+    pageMountedRef.current = true
+    return () => {
+      pageMountedRef.current = false
+      if (copiedSupplyTimerRef.current) clearTimeout(copiedSupplyTimerRef.current)
+      if (manualQuickRetryTimerRef.current) clearTimeout(manualQuickRetryTimerRef.current)
+    }
   }, [])
 
   const copySupplyId = useCallback(async (supplyId: string) => {
@@ -1028,6 +1049,12 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     setSelected(new Set())
     setSelectedSupplyIds(new Set())
     setSyncNotice(null)
+    setDispatchModal(null)
+    pendingManualQuickRetryStoreRef.current = null
+    if (manualQuickRetryTimerRef.current) {
+      clearTimeout(manualQuickRetryTimerRef.current)
+      manualQuickRetryTimerRef.current = null
+    }
   }, [accountId, selectedStoreId])
 
   useEffect(() => {
@@ -1186,6 +1213,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   const readFromDb = useCallback(async () => {
     if (!supabase || !selectedStoreId) return
     const storeId = selectedStoreId
+    const readGeneration = ++dbReadGenerationRef.current
     const rows: any[] = []
     for (let from = 0; ; from += 1000) {
       const { data: pageRows, error: pageError } = await (supabase as any)
@@ -1322,7 +1350,9 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       .eq('store_id', storeId)
       .single()
     const successfulSync = syncLog?.last_synced_at ? new Date(syncLog.last_synced_at) : null
-    if (selectedStoreIdRef.current !== storeId) return enriched
+    // Несколько realtime/ручных перечитываний могут идти одновременно.
+    // Только самое новое из них имеет право менять экран.
+    if (selectedStoreIdRef.current !== storeId || dbReadGenerationRef.current !== readGeneration) return enriched
     setOrders(enriched)
     lastSyncedAtRef.current = successfulSync
     setLastSyncedAt(successfulSync)
@@ -1475,8 +1505,9 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     if (existingSync && mode === 'incremental') return existingSync
 
     const storeId = selectedStoreId
+    const showBlockingLoader = triggerSource === 'manual'
     const runSync = async () => {
-      setLoading(true)
+      if (showBlockingLoader) setLoading(true)
       setError(null)
       if (mode === 'full') setSyncNotice('Полная сверка с Wildberries запущена. Загружаем заказы и поставки...')
       try {
@@ -1525,7 +1556,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           : staleDataMessage(lastSyncedAtRef.current))
         if (mode === 'full') setSyncNotice(null)
       } finally {
-        if (selectedStoreIdRef.current === storeId) setLoading(false)
+        if (showBlockingLoader && selectedStoreIdRef.current === storeId) setLoading(false)
       }
     }
     const syncPromise = existingSync && mode === 'full'
@@ -1538,6 +1569,34 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     })
     return syncPromise
   }, [selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies, waitForServerSyncJob])
+
+  const clearManualQuickRetry = useCallback(() => {
+    if (manualQuickRetryTimerRef.current) clearTimeout(manualQuickRetryTimerRef.current)
+    manualQuickRetryTimerRef.current = null
+    pendingManualQuickRetryStoreRef.current = null
+  }, [])
+
+  const handleManualQuickSync = useCallback(async () => {
+    if (!selectedStoreId) return
+    const storeId = selectedStoreId
+    clearManualQuickRetry()
+    await doSync('incremental', 'manual')
+    if (!pageMountedRef.current || selectedStoreIdRef.current !== storeId) return
+    manualQuickRetryTimerRef.current = setTimeout(() => {
+      manualQuickRetryTimerRef.current = null
+      if (selectedStoreIdRef.current !== storeId) return
+      if (document.visibilityState === 'hidden') {
+        pendingManualQuickRetryStoreRef.current = storeId
+        return
+      }
+      void doSync('incremental', 'automatic')
+    }, 60_000)
+  }, [clearManualQuickRetry, doSync, selectedStoreId])
+
+  const handleFullSync = useCallback(() => {
+    clearManualQuickRetry()
+    return doSync('full', 'manual')
+  }, [clearManualQuickRetry, doSync])
 
   const handleProductSync = async () => {
     if (!selectedStoreId || syncingProducts) return
@@ -1561,7 +1620,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   // Пока страница открыта, сеть опрашивается только когда сохранённые данные
-  // выбранного магазина старше пяти минут. Сам таймер лишь проверяет возраст.
+  // выбранного магазина старше пятнадцати минут. Сам таймер лишь проверяет возраст.
   useEffect(() => {
     if (!selectedStoreId) return
     const storeId = selectedStoreId
@@ -1587,15 +1646,37 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       .catch(() => setError(staleDataMessage(lastSyncedAtRef.current)))
 
     const timer = window.setInterval(syncIfStale, 30_000)
-    const onFocus = () => syncIfStale()
+    let visibleRefreshTimer: ReturnType<typeof setTimeout> | null = null
+    const refreshAfterReturn = () => {
+      if (visibleRefreshTimer) clearTimeout(visibleRefreshTimer)
+      visibleRefreshTimer = setTimeout(() => {
+        visibleRefreshTimer = null
+        if (cancelled || selectedStoreIdRef.current !== storeId || document.visibilityState === 'hidden') return
+        void Promise.all([
+          readFromDb(),
+          loadOpenSupplies(),
+          loadClosedSupplies(),
+        ]).then(() => {
+          if (cancelled || selectedStoreIdRef.current !== storeId) return
+          if (pendingManualQuickRetryStoreRef.current === storeId) {
+            pendingManualQuickRetryStoreRef.current = null
+            void doSync('incremental', 'automatic')
+            return
+          }
+          syncIfStale()
+        }).catch(() => setError(staleDataMessage(lastSyncedAtRef.current)))
+      }, 80)
+    }
+    const onFocus = () => refreshAfterReturn()
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') syncIfStale()
+      if (document.visibilityState === 'visible') refreshAfterReturn()
     }
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       cancelled = true
       window.clearInterval(timer)
+      if (visibleRefreshTimer) clearTimeout(visibleRefreshTimer)
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
@@ -1733,13 +1814,129 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     }
   }
 
-  const handleShip = async (supplyId: string, orders2ship: FbsOrder[]) => {
-    if (!supabase) return
+  const getSupplyBoxes = async (supplyId: string): Promise<string[]> => {
+    const response = await invokeFbs(selectedStoreId, { action: 'get_supply_boxes', supply_id: supplyId })
+    return (Array.isArray(response.boxes) ? response.boxes : []).map(String).filter(Boolean)
+  }
+
+  const openSupplyDispatchModal = async (supply: WbSupply, orders2ship: FbsOrder[]) => {
+    const storeId = selectedStoreId
+    setDispatchModal({
+      supply,
+      orders: orders2ship,
+      destination: null,
+      boxes: [],
+      amount: '1',
+      loading: true,
+      busy: false,
+      error: null,
+    })
+    try {
+      const boxes = await getSupplyBoxes(supply.id)
+      if (selectedStoreIdRef.current !== storeId) return
+      setDispatchModal((current) => current?.supply.id === supply.id
+        ? { ...current, boxes, destination: boxes.length > 0 ? 'pvz' : current.destination, loading: false }
+        : current)
+    } catch (boxError) {
+      setDispatchModal((current) => current?.supply.id === supply.id
+        ? { ...current, loading: false, error: boxError instanceof Error ? boxError.message : String(boxError) }
+        : current)
+    }
+  }
+
+  const refreshDispatchBoxes = async (supplyId: string) => {
+    const boxes = await getSupplyBoxes(supplyId)
+    setDispatchModal((current) => current?.supply.id === supplyId ? { ...current, boxes } : current)
+    return boxes
+  }
+
+  const addSupplyBoxes = async () => {
+    if (!dispatchModal || dispatchModal.busy) return
+    const supplyId = dispatchModal.supply.id
+    const amount = Number(dispatchModal.amount)
+    if (!Number.isInteger(amount) || amount < 1 || amount > 1000) {
+      setDispatchModal((current) => current?.supply.id === supplyId
+        ? { ...current, error: 'Укажите количество коробов от 1 до 1000.' }
+        : current)
+      return
+    }
+    setDispatchModal((current) => current?.supply.id === supplyId ? { ...current, busy: true, error: null } : current)
+    try {
+      await invokeFbs(selectedStoreId, { action: 'add_supply_boxes', supply_id: supplyId, amount })
+      await refreshDispatchBoxes(supplyId)
+      setDispatchModal((current) => current?.supply.id === supplyId ? { ...current, amount: '1' } : current)
+    } catch (boxError) {
+      // POST нельзя автоматически повторять: ответ мог потеряться уже после
+      // создания коробов. Перечитываем список WB и показываем точный итог.
+      await refreshDispatchBoxes(supplyId).catch(() => undefined)
+      setDispatchModal((current) => current?.supply.id === supplyId
+        ? { ...current, error: boxError instanceof Error ? boxError.message : String(boxError) }
+        : current)
+    } finally {
+      setDispatchModal((current) => current?.supply.id === supplyId ? { ...current, busy: false } : current)
+    }
+  }
+
+  const deleteSupplyBoxes = async (boxIds: string[]) => {
+    if (!dispatchModal || dispatchModal.busy || boxIds.length === 0) return
+    const supplyId = dispatchModal.supply.id
+    const question = boxIds.length === 1 ? 'Удалить это грузоместо?' : `Удалить все грузоместа (${boxIds.length})?`
+    if (!window.confirm(question)) return
+    setDispatchModal((current) => current?.supply.id === supplyId ? { ...current, busy: true, error: null } : current)
+    try {
+      await invokeFbs(selectedStoreId, { action: 'delete_supply_boxes', supply_id: supplyId, box_ids: boxIds })
+      await refreshDispatchBoxes(supplyId)
+    } catch (boxError) {
+      await refreshDispatchBoxes(supplyId).catch(() => undefined)
+      setDispatchModal((current) => current?.supply.id === supplyId
+        ? { ...current, error: boxError instanceof Error ? boxError.message : String(boxError) }
+        : current)
+    } finally {
+      setDispatchModal((current) => current?.supply.id === supplyId ? { ...current, busy: false } : current)
+    }
+  }
+
+  const printSupplyBoxes = async (boxIds: string[]) => {
+    if (!dispatchModal || dispatchModal.busy || boxIds.length === 0) return
+    const supplyId = dispatchModal.supply.id
+    const previewWindow = window.open('', '_blank')
+    if (previewWindow) previewWindow.document.body.innerHTML = '<div style="font:14px Arial;padding:24px;color:#475569">Получаем QR грузомест из Wildberries…</div>'
+    setDispatchModal((current) => current?.supply.id === supplyId ? { ...current, busy: true, error: null } : current)
+    try {
+      const response = await invokeFbs(selectedStoreId, {
+        action: 'get_supply_box_stickers', supply_id: supplyId, box_ids: boxIds,
+      })
+      const stickers = (Array.isArray(response.stickers) ? response.stickers : []) as Array<{ barcode?: string; file?: string }>
+      const pages = stickers
+        .filter((sticker) => typeof sticker.file === 'string' && sticker.file.length > 0)
+        .map((sticker, index): StickerPageImage => ({
+          data: `data:image/png;base64,${sticker.file}`,
+          format: 'PNG',
+          alias: `wb-cargo-${supplyId}-${index + 1}`,
+        }))
+      if (pages.length !== boxIds.length) {
+        throw new Error(`Wildberries вернул ${pages.length} QR из ${boxIds.length}. Поставка должна содержать заказы.`)
+      }
+      const url = buildStickerPdfUrl(pages)
+      if (previewWindow) previewWindow.location.href = url
+      else window.open(url, '_blank')
+    } catch (printError) {
+      previewWindow?.close()
+      setDispatchModal((current) => current?.supply.id === supplyId
+        ? { ...current, error: printError instanceof Error ? printError.message : String(printError) }
+        : current)
+    } finally {
+      setDispatchModal((current) => current?.supply.id === supplyId ? { ...current, busy: false } : current)
+    }
+  }
+
+  const handleShip = async (supplyId: string, orders2ship: FbsOrder[]): Promise<boolean> => {
+    if (!supabase) return false
     const trackedOrders = orders2ship.filter((order) => order.productLocations.length > 0)
     const ordersWithoutBox = trackedOrders.filter((order) => order.stockAllocation?.status !== 'reserved')
     if (ordersWithoutBox.length > 0) {
       alert(`Сначала выберите короб для ${ordersWithoutBox.length} ${ordersWithoutBox.length === 1 ? 'заказа' : 'заказов'} с товаром на складе.`)
-      return
+      return false
     }
     const ids = orders2ship.map((o) => o.id)
     setBusyIds((s) => new Set([...s, ...ids]))
@@ -1753,9 +1950,27 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       if (dispatchError) console.warn('Не удалось сразу перевести резерв FBS в ожидание WB:', dispatchError)
       setSelected(new Set())
       setSelectedSupplyIds(new Set())
+      setDispatchModal(null)
       await Promise.all([doSync('incremental'), loadOpenSupplies()])
-    } catch (e) { alert(String(e)) }
+      return true
+    } catch (e) {
+      alert(String(e))
+      return false
+    }
     finally { setBusyIds((s) => { const n = new Set(s); ids.forEach((i) => n.delete(i)); return n }) }
+  }
+
+  const deliverFromDispatchModal = async () => {
+    if (!dispatchModal || dispatchModal.loading || dispatchModal.busy || !dispatchModal.destination) return
+    if (dispatchModal.destination === 'pvz' && dispatchModal.boxes.length === 0) {
+      setDispatchModal((current) => current ? { ...current, error: 'Для ПВЗ сначала создайте хотя бы одно грузоместо.' } : current)
+      return
+    }
+    if (dispatchModal.destination === 'warehouse' && dispatchModal.boxes.length > 0) {
+      const confirmed = window.confirm('В поставке уже есть грузоместа для ПВЗ. Передать её на склад или в СЦ всё равно?')
+      if (!confirmed) return
+    }
+    await handleShip(dispatchModal.supply.id, dispatchModal.orders)
   }
 
   const getWbStickerFiles = async (ordersToPrint: FbsOrder[]): Promise<Map<string, string>> => {
@@ -2353,7 +2568,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           ]}
         />
 
-        <button type="button" onClick={() => void doSync('incremental', 'manual')} disabled={loading || !selectedStoreId}
+        <button type="button" onClick={() => void handleManualQuickSync()} disabled={loading || !selectedStoreId}
           title="Получить новые заказы и изменения активных заказов и поставок"
           className="flex h-8 items-center gap-1.5 rounded-xl bg-violet-500 px-4 text-xs font-semibold text-white hover:bg-violet-600 disabled:opacity-50 transition">
           {loading
@@ -2362,7 +2577,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           {loading ? 'Загрузка...' : 'Обновить'}
         </button>
 
-        <button type="button" onClick={() => void doSync('full')} disabled={loading || !selectedStoreId}
+        <button type="button" onClick={() => void handleFullSync()} disabled={loading || !selectedStoreId}
           title="Заново сверить с Wildberries всю доступную историю заказов, поставок и КИЗ"
           className="flex h-8 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">
           Полная сверка с WB
@@ -2803,7 +3018,10 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                         {isAssemblingTab && (
                           <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
                             disabled={busyIds.size > 0}
-                            onClick={(e) => { e.stopPropagation(); void handleShip(supplyId, supplyOrders) }}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void openSupplyDispatchModal(supply ?? { id: supplyId, name: supplyId }, supplyOrders)
+                            }}
                             className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-wait disabled:opacity-40">
                             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <path d="M5 12h14m-5-5 5 5-5 5" />
@@ -3035,7 +3253,10 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                     <button
                       type="button"
                       disabled={busyIds.size > 0}
-                      onClick={() => void handleShip(selectedParentEntry[0], selectedParentEntry[1].orders)}
+                      onClick={() => {
+                        const [supplyId, group] = selectedParentEntry
+                        void openSupplyDispatchModal(group.supply ?? { id: supplyId, name: supplyId }, group.orders)
+                      }}
                       className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-emerald-200 px-3 text-xs font-semibold text-emerald-600 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-40"
                     >
                       Передать в доставку
@@ -3258,6 +3479,146 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           </div>
         </div>
       )}
+
+      {dispatchModal && (() => {
+        const shippingBusy = dispatchModal.orders.some((order) => busyIds.has(order.id))
+        const modalBusy = dispatchModal.busy || shippingBusy
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+            onClick={() => { if (!modalBusy) setDispatchModal(null) }}
+          >
+            <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+                <div className="min-w-0">
+                  <h2 className="text-xl font-bold text-slate-900">Подготовить поставку к передаче</h2>
+                  <p className="mt-1 truncate text-sm text-slate-500">{dispatchModal.supply.name} · {dispatchModal.orders.length} заказов</p>
+                </div>
+                <button
+                  type="button"
+                  title="Закрыть"
+                  aria-label="Закрыть"
+                  disabled={modalBusy}
+                  onClick={() => setDispatchModal(null)}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 disabled:cursor-wait disabled:opacity-40"
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 6 12 12M18 6 6 18" strokeLinecap="round" /></svg>
+                </button>
+              </div>
+
+              <div className="overflow-y-auto px-6 py-5">
+                <p className="mb-3 text-sm font-semibold text-slate-800">Куда повезёте поставку?</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    disabled={modalBusy || dispatchModal.loading}
+                    onClick={() => setDispatchModal((current) => current ? { ...current, destination: 'pvz', error: null } : current)}
+                    className={`rounded-2xl border p-4 text-left transition ${dispatchModal.destination === 'pvz' ? 'border-violet-400 bg-violet-50 ring-2 ring-violet-100' : 'border-slate-200 hover:border-violet-200 hover:bg-violet-50/50'}`}
+                  >
+                    <span className="block text-sm font-bold text-slate-900">В ПВЗ</span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">Нужен отдельный QR на каждый транспортировочный короб.</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={modalBusy || dispatchModal.loading}
+                    onClick={() => setDispatchModal((current) => current ? { ...current, destination: 'warehouse', error: null } : current)}
+                    className={`rounded-2xl border p-4 text-left transition ${dispatchModal.destination === 'warehouse' ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-100' : 'border-slate-200 hover:border-emerald-200 hover:bg-emerald-50/50'}`}
+                  >
+                    <span className="block text-sm font-bold text-slate-900">На склад или в СЦ</span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">Грузоместа не нужны. После передачи появится общий QR поставки.</span>
+                  </button>
+                </div>
+
+                {dispatchModal.loading ? (
+                  <div className="py-10 text-center text-sm text-slate-400">Проверяем грузоместа в Wildberries…</div>
+                ) : dispatchModal.destination === 'pvz' ? (
+                  <div className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">Грузоместа: {dispatchModal.boxes.length}</p>
+                        <p className="mt-1 text-xs text-slate-500">1 грузоместо = 1 транспортировочный короб. Раскладывать заказы по коробам в системе не нужно.</p>
+                      </div>
+                      {dispatchModal.boxes.length > 0 && (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={modalBusy}
+                            onClick={() => void printSupplyBoxes(dispatchModal.boxes)}
+                            className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-wait disabled:opacity-40"
+                          >
+                            Распечатать все QR
+                          </button>
+                          <button
+                            type="button"
+                            disabled={modalBusy}
+                            onClick={() => void deleteSupplyBoxes(dispatchModal.boxes)}
+                            className="rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-40"
+                          >
+                            Удалить все
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 flex gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        value={dispatchModal.amount}
+                        disabled={modalBusy}
+                        onChange={(event) => setDispatchModal((current) => current ? { ...current, amount: event.target.value, error: null } : current)}
+                        className="w-28 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                        aria-label="Количество новых грузомест"
+                      />
+                      <button
+                        type="button"
+                        disabled={modalBusy || !dispatchModal.amount}
+                        onClick={() => void addSupplyBoxes()}
+                        className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-wait disabled:opacity-40"
+                      >
+                        Добавить короба
+                      </button>
+                    </div>
+
+                    {dispatchModal.boxes.length > 0 && (
+                      <div className="mt-4 max-h-48 space-y-2 overflow-y-auto">
+                        {dispatchModal.boxes.map((boxId, index) => (
+                          <div key={boxId} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-600">Короб {index + 1}: {boxId}</span>
+                            <button type="button" disabled={modalBusy} onClick={() => void printSupplyBoxes([boxId])} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-violet-600 transition hover:bg-violet-50 disabled:opacity-40">QR</button>
+                            <button type="button" disabled={modalBusy} onClick={() => void deleteSupplyBoxes([boxId])} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-500 transition hover:bg-red-50 disabled:opacity-40">Удалить</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : dispatchModal.destination === 'warehouse' ? (
+                  <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-800">
+                    Передадим поставку в доставку. Затем на вкладке «В доставке» можно распечатать официальный QR поставки для склада или СЦ.
+                  </div>
+                ) : null}
+
+                {dispatchModal.error && (
+                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{dispatchModal.error}</div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 px-6 py-4">
+                <button type="button" disabled={modalBusy} onClick={() => setDispatchModal(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-wait disabled:opacity-40">Отмена</button>
+                <button
+                  type="button"
+                  disabled={modalBusy || dispatchModal.loading || !dispatchModal.destination || (dispatchModal.destination === 'pvz' && dispatchModal.boxes.length === 0)}
+                  onClick={() => void deliverFromDispatchModal()}
+                  className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {shippingBusy ? 'Передаём…' : dispatchModal.destination === 'pvz' ? 'Передать грузоместа в доставку' : 'Передать поставку в доставку'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {kizScannerOpen && selectedStoreId && (
         <FbsKizScannerModal

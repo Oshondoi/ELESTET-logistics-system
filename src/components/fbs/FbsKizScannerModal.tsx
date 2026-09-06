@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { ensureAuthenticatedSession } from '../../lib/authSession'
 import { invokeFbs } from '../../services/fbsApi'
-import { kizValidationError, normalizeKizCode } from '../../lib/kizCode'
+import { kizValidationError, normalizeKizCode, normalizeScannerKeyboardLayout } from '../../lib/kizCode'
 import { showToast } from '../ui/Toast'
 
 type ScanSession = {
@@ -93,23 +93,35 @@ function cleanScan(value: string, trimSpaces: boolean): string {
   return trimSpaces ? withoutTerminator.trim() : withoutTerminator
 }
 
-const RU_TO_EN_KEYBOARD: Record<string, string> = {
-  'й': 'q', 'ц': 'w', 'у': 'e', 'к': 'r', 'е': 't', 'н': 'y', 'г': 'u', 'ш': 'i', 'щ': 'o', 'з': 'p', 'х': '[', 'ъ': ']',
-  'ф': 'a', 'ы': 's', 'в': 'd', 'а': 'f', 'п': 'g', 'р': 'h', 'о': 'j', 'л': 'k', 'д': 'l', 'ж': ';', 'э': "'",
-  'я': 'z', 'ч': 'x', 'с': 'c', 'м': 'v', 'и': 'b', 'т': 'n', 'ь': 'm', 'б': ',', 'ю': '.', 'ё': '`',
-  'Й': 'Q', 'Ц': 'W', 'У': 'E', 'К': 'R', 'Е': 'T', 'Н': 'Y', 'Г': 'U', 'Ш': 'I', 'Щ': 'O', 'З': 'P', 'Х': '{', 'Ъ': '}',
-  'Ф': 'A', 'Ы': 'S', 'В': 'D', 'А': 'F', 'П': 'G', 'Р': 'H', 'О': 'J', 'Л': 'K', 'Д': 'L', 'Ж': ':', 'Э': '"',
-  'Я': 'Z', 'Ч': 'X', 'С': 'C', 'М': 'V', 'И': 'B', 'Т': 'N', 'Ь': 'M', 'Б': '<', 'Ю': '>', 'Ё': '~',
-}
-
 function scanCandidates(value: string): string[] {
   const cleaned = cleanScan(value, true)
   const withoutScannerPrefix = /^\][A-Za-z]\d/.test(cleaned) ? cleaned.slice(3) : cleaned
   const values = [cleaned, withoutScannerPrefix]
   for (const candidate of [...values]) {
-    values.push([...candidate].map((char) => RU_TO_EN_KEYBOARD[char] ?? char).join(''))
+    values.push(normalizeScannerKeyboardLayout(candidate))
   }
   return [...new Set(values.filter(Boolean))]
+}
+
+const US_PRINTABLE_BY_CODE: Record<string, readonly [string, string]> = {
+  Backquote: ['`', '~'], Digit1: ['1', '!'], Digit2: ['2', '@'], Digit3: ['3', '#'],
+  Digit4: ['4', '$'], Digit5: ['5', '%'], Digit6: ['6', '^'], Digit7: ['7', '&'],
+  Digit8: ['8', '*'], Digit9: ['9', '('], Digit0: ['0', ')'], Minus: ['-', '_'], Equal: ['=', '+'],
+  BracketLeft: ['[', '{'], BracketRight: [']', '}'], Backslash: ['\\', '|'],
+  Semicolon: [';', ':'], Quote: ["'", '"'], Comma: [',', '<'], Period: ['.', '>'], Slash: ['/', '?'],
+  Numpad0: ['0', '0'], Numpad1: ['1', '1'], Numpad2: ['2', '2'], Numpad3: ['3', '3'],
+  Numpad4: ['4', '4'], Numpad5: ['5', '5'], Numpad6: ['6', '6'], Numpad7: ['7', '7'],
+  Numpad8: ['8', '8'], Numpad9: ['9', '9'], NumpadDecimal: ['.', '.'], NumpadDivide: ['/', '/'],
+  NumpadMultiply: ['*', '*'], NumpadSubtract: ['-', '-'], NumpadAdd: ['+', '+'],
+}
+
+function usAsciiFromKeyboardEvent(event: KeyboardEvent): string | null {
+  if (/^Key[A-Z]$/.test(event.code)) {
+    const letter = event.code.slice(3).toLowerCase()
+    return event.shiftKey ? letter.toUpperCase() : letter
+  }
+  const pair = US_PRINTABLE_BY_CODE[event.code]
+  return pair ? pair[event.shiftKey ? 1 : 0] : null
 }
 
 function buildCatalogMap(items: CatalogItem[]): Map<string, CatalogItem> {
@@ -628,15 +640,21 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         return
       }
 
-      if (document.activeElement === input) return
       if (event.ctrlKey || event.metaKey || event.altKey) return
 
-      if (event.key.length === 1) {
+      const ascii = usAsciiFromKeyboardEvent(event)
+      if (ascii !== null) {
         event.preventDefault()
-        appendScannerValue(event.key)
+        event.stopPropagation()
+        appendScannerValue(ascii)
       } else if (event.key === 'Enter') {
+        if (document.activeElement !== input) {
+          event.preventDefault()
+          focusInput()
+        }
+      } else if (document.activeElement !== input && event.key.length === 1) {
         event.preventDefault()
-        focusInput()
+        appendScannerValue(normalizeScannerKeyboardLayout(event.key))
       }
     }
     const handleDocumentKeyUp = (event: KeyboardEvent) => {
@@ -934,7 +952,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                     <input
                       ref={inputRef}
                       value={value}
-                      onChange={(event) => setValue(event.target.value)}
+                      onChange={(event) => setValue(normalizeScannerKeyboardLayout(event.target.value))}
                       disabled={busy}
                       autoComplete="off"
                       spellCheck={false}
