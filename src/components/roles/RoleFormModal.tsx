@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
-import type { Account, ResolvedUser, Role, RoleFormValues, RolePermissions } from '../../types'
+import type { Account, ResolvedUser, Role, RoleFormValues, RolePermissions, Store } from '../../types'
 import { DEFAULT_PERMISSIONS } from '../../types'
 import { resolveAccountUser } from '../../services/roleService'
 
@@ -44,7 +44,14 @@ const PERMISSION_GROUPS: PermGroup[] = [
   {
     label: 'FBS Заказы',
     items: [
-      { key: 'fbs_stocks_manage', label: 'Управление остатками на складах WB' },
+      { key: 'fbs_view', label: 'Просмотр FBS' },
+      { key: 'fbs_assembly', label: 'Сборка, КИЗ и печать' },
+    ],
+    subItems: [
+      { key: 'fbs_sync', label: 'Быстрое обновление' },
+      { key: 'fbs_full_sync', label: 'Полная сверка с WB' },
+      { key: 'fbs_dispatch', label: 'Передача поставки в доставку' },
+      { key: 'fbs_stocks_manage', label: 'Изменение остатков на складах WB' },
     ],
   },
   {
@@ -323,6 +330,7 @@ interface RoleFormModalProps {
   open: boolean
   initialValues?: Role
   accounts: Account[]
+  stores: Store[]
   currentAccountId: string
   onClose: () => void
   onSubmit: (values: RoleFormValues) => Promise<void>
@@ -333,6 +341,7 @@ export const RoleFormModal = ({
   open,
   initialValues,
   accounts,
+  stores,
   currentAccountId,
   onClose,
   onSubmit,
@@ -341,6 +350,7 @@ export const RoleFormModal = ({
   const isEdit = Boolean(initialValues)
   const [name, setName] = useState('')
   const [permissions, setPermissions] = useState<RolePermissions>({ ...DEFAULT_PERMISSIONS })
+  const [fbsStoreIds, setFbsStoreIds] = useState<string[] | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [cloneOpen, setCloneOpen] = useState(false)
@@ -359,6 +369,7 @@ export const RoleFormModal = ({
     if (open) {
       setName(initialValues?.name ?? '')
       setPermissions(initialValues ? { ...DEFAULT_PERMISSIONS, ...initialValues.permissions } : { ...DEFAULT_PERMISSIONS })
+      setFbsStoreIds(initialValues?.fbs_store_ids ?? null)
       setError(null)
       setEmailInput('')
       setUserIdInput('')
@@ -445,7 +456,15 @@ export const RoleFormModal = ({
   }
 
   const setPerm = (key: keyof RolePermissions, value: boolean) => {
-    setPermissions((prev) => ({ ...prev, [key]: value }))
+    setPermissions((prev) => {
+      const next = { ...prev, [key]: value }
+      const fbsKeys: Array<keyof RolePermissions> = [
+        'fbs_sync', 'fbs_full_sync', 'fbs_assembly', 'fbs_dispatch', 'fbs_stocks_manage',
+      ]
+      if (value && fbsKeys.includes(key)) next.fbs_view = true
+      if (key === 'fbs_view' && !value) fbsKeys.forEach((fbsKey) => { next[fbsKey] = false })
+      return next
+    })
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -467,6 +486,7 @@ export const RoleFormModal = ({
       await onSubmit({
         name: name.trim(),
         permissions,
+        fbs_store_ids: fbsStoreIds,
         assigned_user_ids: assignedUserIds,
       })
       onClose()
@@ -514,6 +534,43 @@ export const RoleFormModal = ({
                 onOpenExtended={setExtendedGroup}
               />
             ))}
+
+            {permissions.fbs_view && (
+              <div className="rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-3">
+                <div className="text-xs font-semibold text-violet-700">Магазины FBS</div>
+                <div className="mt-2 flex flex-wrap gap-4 text-sm text-slate-700">
+                  <label className="flex items-center gap-2">
+                    <input type="radio" checked={fbsStoreIds === null} onChange={() => setFbsStoreIds(null)} />
+                    Все магазины компании
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" checked={fbsStoreIds !== null} onChange={() => setFbsStoreIds([])} />
+                    Только выбранные
+                  </label>
+                </div>
+                {fbsStoreIds !== null && (
+                  <div className="mt-3 grid max-h-36 gap-1 overflow-y-auto rounded-xl border border-violet-100 bg-white p-2">
+                    {stores.length === 0 ? (
+                      <span className="px-2 py-1 text-xs text-slate-400">В компании пока нет магазинов</span>
+                    ) : stores.map((store) => (
+                      <label key={store.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
+                        <input
+                          type="checkbox"
+                          checked={fbsStoreIds.includes(store.id)}
+                          onChange={(event) => setFbsStoreIds((current) => {
+                            const selected = current ?? []
+                            return event.target.checked
+                              ? [...new Set([...selected, store.id])]
+                              : selected.filter((id) => id !== store.id)
+                          })}
+                        />
+                        <span>{store.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {error ? <p className="text-sm text-rose-500">{error}</p> : null}

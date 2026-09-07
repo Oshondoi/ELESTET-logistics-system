@@ -5,16 +5,19 @@ interface FbsStoreSelectProps {
   value: string
   stores: Array<Pick<Store, 'id' | 'name' | 'supplier' | 'supplier_full' | 'store_code'>>
   onChange: (storeId: string) => void
+  disabled?: boolean
 }
 
-export const FbsStoreSelect = ({ value, stores, onChange }: FbsStoreSelectProps) => (
+export const FbsStoreSelect = ({ value, stores, onChange, disabled = false }: FbsStoreSelectProps) => (
   <label className="space-y-1.5 text-xs font-semibold text-slate-600">
     <span className="block">Магазин</span>
     <select
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="h-9 min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400"
+      disabled={disabled}
+      className="h-9 min-w-[180px] rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none transition focus:border-violet-400 disabled:bg-slate-50 disabled:text-slate-400"
     >
+      <option value="">Выберите магазин</option>
       {stores.map((store) => (
         <option key={store.id} value={store.id}>{getStoreSelectorLabel(store)}</option>
       ))}

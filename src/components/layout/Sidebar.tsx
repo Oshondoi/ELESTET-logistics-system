@@ -77,7 +77,7 @@ const items = [
   {
     key: 'fbs',
     label: 'FBS Заказы',
-    permKey: null,
+    permKey: 'fbs_view' as keyof import('../../types').RolePermissions,
     icon: (
       <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3" />

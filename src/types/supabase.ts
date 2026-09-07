@@ -323,6 +323,7 @@ export interface Database {
           account_id: string
           name: string
           permissions: Json
+          fbs_store_ids: string[] | null
           created_at: string
         }
         Insert: {
@@ -330,6 +331,7 @@ export interface Database {
           account_id: string
           name: string
           permissions?: Json
+          fbs_store_ids?: string[] | null
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['roles']['Insert']>

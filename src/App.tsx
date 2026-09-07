@@ -533,7 +533,7 @@ function App() {
     reviews: 'reviews_view',
     invoices: null,
     wms: 'wms_view',
-    fbs: null,
+    fbs: 'fbs_view',
     roles: 'roles_manage',
     admin: null,
     glossary: null,
@@ -1021,6 +1021,7 @@ function App() {
                 <RolesPage
                   roles={roles}
                   accounts={accounts}
+                  stores={stores}
                   activeAccountId={activeAccount?.id ?? ''}
                   activeAccountShortId={activeAccount?.short_id ?? null}
                   isLoading={isRolesLoading}
@@ -1029,6 +1030,7 @@ function App() {
                   onDelete={removeRole}
                   onClone={cloneRoleToAccount}
                   canManage={permissions.roles_manage && !isReadOnly}
+                  isOwnerOrAdmin={isOwnerOrAdmin}
                 />
               ) : effectivePage === 'stickers' ? (
                 <StickersPage
@@ -1101,11 +1103,7 @@ function App() {
                 ) : isSuperAdmin && fbsSection === 'guide' ? (
                   <FbsGuidePage />
                 ) : (
-                  <FbsOrdersPage
-                    stores={stores}
-                    accountId={activeAccount?.id ?? ''}
-                    canManageStocks={(isOwnerOrAdmin || permissions.fbs_stocks_manage) && !isReadOnly}
-                  />
+                  <FbsOrdersPage accountId={activeAccount?.id ?? ''} />
                 )
               ) : effectivePage === 'diary' ? (
                 <DiaryPage

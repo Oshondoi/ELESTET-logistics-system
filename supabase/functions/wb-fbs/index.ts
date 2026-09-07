@@ -529,24 +529,48 @@ async function fetchWbStocks(apiKey: string, warehouseId: number, chrtIds: numbe
   return result
 }
 
-async function canManageFbsStocks(accountId: string, userId: string, isServiceRole: boolean) {
-  if (isServiceRole) return true
-  const members = await sbGet(
-    'account_members',
-    `account_id=eq.${encodeURIComponent(accountId)}&user_id=eq.${encodeURIComponent(userId)}&select=role&limit=1`,
-    true,
-  )
-  if (members.some((member) => ['owner', 'admin'].includes(String(member.role ?? '')))) return true
+type FbsPermission = 'fbs_view' | 'fbs_sync' | 'fbs_full_sync' | 'fbs_assembly' | 'fbs_dispatch' | 'fbs_stocks_manage'
 
-  const assignments = await sbGet(
-    'role_assignments',
-    `account_id=eq.${encodeURIComponent(accountId)}&user_id=eq.${encodeURIComponent(userId)}&select=roles!inner(permissions)`,
-    true,
-  )
-  return assignments.some((assignment) => {
-    const role = assignment.roles as { permissions?: Record<string, unknown> } | undefined
-    return role?.permissions?.fbs_stocks_manage === true
-  })
+function permissionForFbsAction(action: string, body: Record<string, unknown>): FbsPermission {
+  if (action === 'sync_orders') return body.mode === 'full' ? 'fbs_full_sync' : 'fbs_sync'
+  if (action === 'update_stocks') return 'fbs_stocks_manage'
+  if (['deliver_supply', 'get_supply_boxes', 'add_supply_boxes', 'delete_supply_boxes'].includes(action)) {
+    return 'fbs_dispatch'
+  }
+  if ([
+    'create_supply', 'add_order_to_supply', 'get_supply_box_stickers', 'get_supply_qr',
+    'get_scan_catalog', 'diagnose_scan_qr', 'get_kiz_order_states', 'submit_marking_session',
+    'get_sticker',
+  ].includes(action)) return 'fbs_assembly'
+  return 'fbs_view'
+}
+
+async function canUseFbsStore(userId: string, storeId: string, permission: FbsPermission) {
+  return await sbRpc<boolean>('fbs_user_can_access_store', {
+    p_user_id: userId,
+    p_store_id: storeId,
+    p_permission: permission,
+  }) === true
+}
+
+async function auditFbsAction(
+  accountId: string,
+  storeId: string,
+  userId: string,
+  action: string,
+  permission: FbsPermission,
+) {
+  try {
+    await sbWrite('fbs_action_audit', 'POST', {
+      account_id: accountId,
+      store_id: storeId,
+      user_id: userId,
+      action,
+      details: { permission },
+    }, '', 'return=minimal')
+  } catch (auditError) {
+    console.error(JSON.stringify({ scope: 'wb-fbs', event: 'action_audit_failed', action, error: errorMessage(auditError) }))
+  }
 }
 
 function stockUpdateError(error: unknown) {
@@ -1219,22 +1243,22 @@ Deno.serve(async (req) => {
 
     if (!store_id) return err('store_id обязателен')
 
-    // Verify user has access to store via RLS (use user's token)
-    const anonKey = SUPABASE_ANON_KEY
-    const accessRows = isServiceRole ? [{ id: store_id }] : await (async () => {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/stores?id=eq.${encodeURIComponent(store_id)}&select=id&limit=1`, {
-        headers: { apikey: anonKey, Authorization: authHdr, Accept: 'application/json' },
-      })
-      if (!r.ok) return []
-      return r.json() as Promise<Record<string, unknown>[]>
-    })()
-    if (!accessRows.length) return err('Нет доступа к магазину', 403)
-
     // Get api_key via service role
     const storeRows = await sbGet(`stores`, `id=eq.${encodeURIComponent(store_id)}&select=api_key,account_id&limit=1`, true)
     const apiKey = storeRows[0]?.api_key as string | undefined
     const accountId = String(storeRows[0]?.account_id ?? '')
     if (!apiKey) return err('API ключ магазина не указан')
+
+    const requiredPermission = permissionForFbsAction(String(action ?? ''), body)
+    if (!isServiceRole && !await canUseFbsStore(userId, String(store_id), requiredPermission)) {
+      return err('Нет права на это действие FBS или магазин не разрешён', 403)
+    }
+    if (!isServiceRole && [
+      'sync_orders', 'update_stocks', 'create_supply', 'add_order_to_supply',
+      'add_supply_boxes', 'delete_supply_boxes', 'deliver_supply', 'submit_marking_session',
+    ].includes(String(action ?? ''))) {
+      await auditFbsAction(accountId, String(store_id), userId, String(action), requiredPermission)
+    }
 
     // ── Actions ────────────────────────────────────────────────────────────
 
@@ -1278,10 +1302,6 @@ Deno.serve(async (req) => {
       if (!Number.isSafeInteger(warehouseId) || warehouseId <= 0) return err('Выберите склад продавца Wildberries')
       if (!Array.isArray(stocks) || stocks.length === 0) return err('Добавьте хотя бы одно изменение остатка')
       if (stocks.length > 5000) return err('За одну операцию можно изменить не более 5000 позиций')
-      if (!await canManageFbsStocks(accountId, userId, isServiceRole)) {
-        return err('У вас нет права изменять остатки FBS', 403)
-      }
-
       const normalized = stocks.map((stock: unknown) => {
         const value = stock as Record<string, unknown>
         return {

@@ -10,8 +10,11 @@ import { FbsStocksPanel } from '../components/fbs/FbsStocksPanel'
 import { FbsDispatchReport } from '../components/fbs/FbsDispatchReport'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { FbsWarehouseSelect } from '../components/fbs/FbsWarehouseSelect'
+import { fetchFbsWorkContexts } from '../services/fbsAccessService'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
-import type { Product, Store } from '../types'
+import { DEFAULT_PERMISSIONS } from '../types'
+import type { Product } from '../types'
+import type { FbsWorkContext } from '../services/fbsAccessService'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -931,22 +934,28 @@ function tabForOfficialWbStatus(
 }
 
 interface Props {
-  stores: Store[]
   accountId: string
-  canManageStocks: boolean
 }
 
-export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
-  const storesWithKey = useMemo(() => stores.filter((s) => s.api_key), [stores])
-
+export function FbsOrdersPage({ accountId }: Props) {
   const lsKey = `fbs_store_${accountId}`
+  const companyLsKey = `fbs_company_${accountId}`
   const tabLsKey = `fbs_tab_${accountId}`
   // localStorage хранит только настройки интерфейса. Статусы заказов всегда приходят из WB.
 
-  const [selectedStoreId, setSelectedStoreId] = useState<string>(() => {
-    const saved = localStorage.getItem(lsKey)
-    return (saved && storesWithKey.some((s) => s.id === saved)) ? saved : (storesWithKey[0]?.id ?? '')
-  })
+  const [workContexts, setWorkContexts] = useState<FbsWorkContext[]>([])
+  const [workContextsLoading, setWorkContextsLoading] = useState(true)
+  const [workContextsError, setWorkContextsError] = useState<string | null>(null)
+  const [selectedCompanyId, setSelectedCompanyId] = useState(() => localStorage.getItem(companyLsKey) || accountId)
+  const [selectedStoreId, setSelectedStoreId] = useState(() => localStorage.getItem(lsKey) || '')
+  const selectedContext = useMemo(
+    () => workContexts.find((context) => context.company_id === selectedCompanyId) ?? null,
+    [selectedCompanyId, workContexts],
+  )
+  const storesWithKey = selectedContext?.stores ?? []
+  const workingAccountId = selectedContext?.company_id ?? accountId
+  const fbsPermissions = selectedContext?.permissions ?? DEFAULT_PERMISSIONS
+  const canManageStocks = fbsPermissions.fbs_stocks_manage
   const [orders, setOrders] = useState<FbsOrder[]>([])
   const [wbWarehouses, setWbWarehouses] = useState<WbWarehouse[]>([])
   const [wbOffices, setWbOffices] = useState<WbOffice[]>([])
@@ -1020,6 +1029,40 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    setWorkContextsLoading(true)
+    setWorkContextsError(null)
+    void fetchFbsWorkContexts(accountId)
+      .then((contexts) => {
+        if (cancelled) return
+        setWorkContexts(contexts)
+        const savedCompanyId = localStorage.getItem(`fbs_company_${accountId}`)
+        const nextContext = contexts.find((context) => context.company_id === savedCompanyId)
+          ?? contexts.find((context) => context.company_id === accountId)
+          ?? contexts[0]
+          ?? null
+        const nextCompanyId = nextContext?.company_id ?? ''
+        setSelectedCompanyId(nextCompanyId)
+        if (nextCompanyId) localStorage.setItem(`fbs_company_${accountId}`, nextCompanyId)
+        const savedStoreId = savedCompanyId ? localStorage.getItem(`fbs_store_${accountId}`) : null
+        setSelectedStoreId(savedStoreId && nextContext?.stores.some((store) => store.id === savedStoreId) ? savedStoreId : '')
+        if (!savedStoreId || !nextContext?.stores.some((store) => store.id === savedStoreId)) {
+          localStorage.removeItem(`fbs_store_${accountId}`)
+        }
+      })
+      .catch((contextError) => {
+        if (cancelled) return
+        setWorkContexts([])
+        setSelectedStoreId('')
+        setWorkContextsError(contextError instanceof Error ? contextError.message : 'Не удалось загрузить доступ FBS')
+      })
+      .finally(() => {
+        if (!cancelled) setWorkContextsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [accountId])
+
   const copySupplyId = useCallback(async (supplyId: string) => {
     try {
       await navigator.clipboard.writeText(supplyId)
@@ -1058,20 +1101,20 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }, [accountId, selectedStoreId])
 
   useEffect(() => {
-    if (!supabase || !accountId) return
+    if (!supabase || !workingAccountId) return
     let cancelled = false
     setInternalWarehouses([])
     void (supabase as any)
       .from('wms_warehouses')
       .select('id,name,wb_warehouse_id')
-      .eq('account_id', accountId)
+      .eq('account_id', workingAccountId)
       .eq('fbs_enabled', true)
       .then(({ data }: { data: FbsInternalWarehouse[] | null }) => {
         if (cancelled) return
         setInternalWarehouses((data ?? []).filter((warehouse) => warehouse.wb_warehouse_id))
       })
     return () => { cancelled = true }
-  }, [accountId])
+  }, [workingAccountId])
 
   // Склад продавца и связанный официальный пункт приёмки FBS загружаются одним запросом.
   useEffect(() => {
@@ -1170,7 +1213,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     const allBarcodes = [...new Set(productEnriched.flatMap((order) => order.productBarcode ? [order.productBarcode] : order.skus))]
     if (allBarcodes.length === 0) return productEnriched
     const { data: locationRows, error: locationError } = await (supabase as any).rpc('get_fbs_product_locations', {
-      p_account_id: accountId,
+      p_account_id: workingAccountId,
       p_barcodes: allBarcodes,
     })
     if (locationError) throw locationError
@@ -1207,7 +1250,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       productLocations: (order.productBarcode ? locationsByBarcode.get(order.productBarcode) : undefined)
         ?? order.skus.flatMap((sku) => locationsByBarcode.get(sku) ?? []),
     }))
-  }, [accountId, selectedStoreId])
+  }, [selectedStoreId, workingAccountId])
 
   // Читаем заказы из fbs_orders (Supabase DB)
   const readFromDb = useCallback(async () => {
@@ -1379,7 +1422,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         event: '*', schema: 'public', table: 'fbs_stock_allocations', filter: `store_id=eq.${selectedStoreId}`,
       }, scheduleRefresh)
       .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'fulfillment_box_items', filter: `account_id=eq.${accountId}`,
+        event: '*', schema: 'public', table: 'fulfillment_box_items', filter: `account_id=eq.${workingAccountId}`,
       }, scheduleRefresh)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'fbs_marking_pairs', filter: `store_id=eq.${selectedStoreId}`,
@@ -1395,7 +1438,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       if (refreshTimer) clearTimeout(refreshTimer)
       void (supabase as any).removeChannel(channel)
     }
-  }, [accountId, selectedStoreId, readFromDb])
+  }, [selectedStoreId, readFromDb, workingAccountId])
 
   const loadOpenSupplies = useCallback(async () => {
     if (!supabase || !selectedStoreId) return
@@ -1501,6 +1544,14 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     triggerSource: 'manual' | 'automatic' = 'manual',
   ): Promise<void> => {
     if (!selectedStoreId) return Promise.resolve()
+    if (mode === 'full' && !fbsPermissions.fbs_full_sync) {
+      setError('У вас нет права на полную сверку с WB.')
+      return Promise.resolve()
+    }
+    if (mode === 'incremental' && !fbsPermissions.fbs_sync) {
+      if (triggerSource === 'manual') setError('У вас нет права на быстрое обновление FBS.')
+      return Promise.resolve()
+    }
     const existingSync = syncInFlightRef.current.get(selectedStoreId)
     if (existingSync && mode === 'incremental') return existingSync
 
@@ -1568,7 +1619,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       if (syncInFlightRef.current.get(storeId) === syncPromise) syncInFlightRef.current.delete(storeId)
     })
     return syncPromise
-  }, [selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies, waitForServerSyncJob])
+  }, [fbsPermissions.fbs_full_sync, fbsPermissions.fbs_sync, selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies, waitForServerSyncJob])
 
   const clearManualQuickRetry = useCallback(() => {
     if (manualQuickRetryTimerRef.current) clearTimeout(manualQuickRetryTimerRef.current)
@@ -1577,7 +1628,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }, [])
 
   const handleManualQuickSync = useCallback(async () => {
-    if (!selectedStoreId) return
+    if (!selectedStoreId || !fbsPermissions.fbs_sync) return
     const storeId = selectedStoreId
     clearManualQuickRetry()
     await doSync('incremental', 'manual')
@@ -1591,7 +1642,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       }
       void doSync('incremental', 'automatic')
     }, 60_000)
-  }, [clearManualQuickRetry, doSync, selectedStoreId])
+  }, [clearManualQuickRetry, doSync, fbsPermissions.fbs_sync, selectedStoreId])
 
   const handleFullSync = useCallback(() => {
     clearManualQuickRetry()
@@ -1680,7 +1731,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [selectedStoreId, doSync, loadClosedSupplies, loadOpenSupplies, readFromDb])
+  }, [fbsPermissions.fbs_sync, selectedStoreId, doSync, loadClosedSupplies, loadOpenSupplies, readFromDb])
 
   const mapRawOrder = useCallback((o: any, status: FbsOrder['shipStatus']): FbsOrder => ({
     id: String(o.id), rid: o.rid ?? '', createdAt: o.createdAt ?? '', ddate: o.ddate ?? '',
@@ -1704,6 +1755,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     mode: 'assemble' | 'move' = 'assemble',
     sourceSupplyIds: string[] = [],
   ) => {
+    if (!fbsPermissions.fbs_assembly) return
     const date = new Date().toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: 'numeric' })
     const storeName = storesWithKey.find((store) => store.id === selectedStoreId)?.name?.trim() || 'Магазин'
     setNewSupplyName(`${storeName} ${date}`)
@@ -1717,6 +1769,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   const handleAssemble = async (ids: string[], existingSupplyId?: string) => {
+    if (!fbsPermissions.fbs_assembly) return
     const operationMode = assembleModal?.mode ?? 'assemble'
     setBusyIds((s) => new Set([...s, ...ids]))
     setAssembleModal(null)
@@ -1763,7 +1816,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   const reserveOrderFromBox = async (order: FbsOrder, location: ProductLocation) => {
-    if (!supabase || boxSelectionBusy) return
+    if (!supabase || boxSelectionBusy || !fbsPermissions.fbs_assembly) return
     setBoxSelectionBusy(true)
     try {
       const { error: reservationError } = await (supabase as any).rpc('reserve_fbs_order_from_box', {
@@ -1796,7 +1849,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   const releaseOrderBoxReservation = async (order: FbsOrder) => {
-    if (!supabase || boxSelectionBusy || order.stockAllocation?.status !== 'reserved') return
+    if (!supabase || boxSelectionBusy || !fbsPermissions.fbs_assembly || order.stockAllocation?.status !== 'reserved') return
     setBoxSelectionBusy(true)
     try {
       const { error: releaseError } = await (supabase as any).rpc('release_fbs_order_box_reservation', {
@@ -1820,6 +1873,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   const openSupplyDispatchModal = async (supply: WbSupply, orders2ship: FbsOrder[]) => {
+    if (!fbsPermissions.fbs_dispatch) return
     const storeId = selectedStoreId
     setDispatchModal({
       supply,
@@ -1897,7 +1951,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   const printSupplyBoxes = async (boxIds: string[]) => {
-    if (!dispatchModal || dispatchModal.busy || boxIds.length === 0) return
+    if (!dispatchModal || dispatchModal.busy || boxIds.length === 0 || !fbsPermissions.fbs_assembly) return
     const supplyId = dispatchModal.supply.id
     const previewWindow = window.open('', '_blank')
     if (previewWindow) previewWindow.document.body.innerHTML = '<div style="font:14px Arial;padding:24px;color:#475569">Получаем QR грузомест из Wildberries…</div>'
@@ -1931,7 +1985,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   const handleShip = async (supplyId: string, orders2ship: FbsOrder[]): Promise<boolean> => {
-    if (!supabase) return false
+    if (!supabase || !fbsPermissions.fbs_dispatch) return false
     const ids = orders2ship.map((o) => o.id)
     setBusyIds((s) => new Set([...s, ...ids]))
     try {
@@ -1986,7 +2040,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   const handleSupplyQrPrint = async (supplyId: string) => {
-    if (activeTab !== 'delivering' || supplyQrBusyIds.has(supplyId)) return
+    if (activeTab !== 'delivering' || supplyQrBusyIds.has(supplyId) || !fbsPermissions.fbs_assembly) return
     const previewWindow = window.open('', '_blank')
     if (previewWindow) previewWindow.document.body.innerHTML = '<div style="font:14px Arial;padding:24px;color:#475569">Получаем QR поставки из Wildberries…</div>'
     setSupplyQrBusyIds((current) => new Set(current).add(supplyId))
@@ -2015,9 +2069,9 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
   }
 
   const openStickerPrintModal = (ordersToPrint: FbsOrder[], supply: WbSupply | null, mode: StickerPrintModal['mode']) => {
-    if (ordersToPrint.length === 0) return
+    if (ordersToPrint.length === 0 || !fbsPermissions.fbs_assembly) return
     setPickingListMenuOpen(false)
-    const savedOptions = loadStickerPrintOptions(accountId)
+    const savedOptions = loadStickerPrintOptions(workingAccountId)
     setStickerPrintModal({
       orders: ordersToPrint,
       supply,
@@ -2373,7 +2427,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
       const { error: insertError } = await (supabase as any)
         .from('fbs_archive_reports')
         .insert({
-          account_id: accountId,
+          account_id: workingAccountId,
           store_id: selectedStoreId,
           period_from: archivePeriodFrom,
           period_to: archivePeriodTo,
@@ -2420,15 +2474,20 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     }
   }
 
-  // ─── No stores guard ────────────────────────────────────────────────────────
-
-  if (storesWithKey.length === 0) {
+  if (workContextsLoading) {
     return (
       <div className="flex h-full items-center justify-center p-8 text-center">
-        <div className="max-w-sm">
-          <div className="mb-3 text-2xl">🔑</div>
-          <p className="text-sm font-semibold text-slate-700">Нет магазинов с API ключом</p>
-          <p className="mt-1 text-xs text-slate-500">Добавьте API ключ WB в настройках магазина</p>
+        <p className="text-sm font-medium text-slate-500">Загружаем доступ FBS...</p>
+      </div>
+    )
+  }
+
+  if (workContextsError && workContexts.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center p-8 text-center">
+        <div className="max-w-md rounded-2xl border border-rose-100 bg-rose-50 px-5 py-4">
+          <p className="text-sm font-semibold text-rose-700">Не удалось загрузить доступ FBS</p>
+          <p className="mt-1 text-xs text-rose-600">{workContextsError}</p>
         </div>
       </div>
     )
@@ -2488,7 +2547,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
 
   const handleStoreChange = (nextStoreId: string) => {
     setSelectedStoreId(nextStoreId)
-    localStorage.setItem(lsKey, nextStoreId)
+    if (nextStoreId) localStorage.setItem(lsKey, nextStoreId)
+    else localStorage.removeItem(lsKey)
     setOrders([])
     setOpenSupplies([])
     setClosedSupplies([])
@@ -2501,6 +2561,16 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
     setLoading(false)
     setLastSyncedAt(null)
     lastSyncedAtRef.current = null
+  }
+
+  const handleCompanyChange = (nextCompanyId: string) => {
+    if (!nextCompanyId || nextCompanyId === selectedCompanyId) return
+    setSelectedCompanyId(nextCompanyId)
+    localStorage.setItem(companyLsKey, nextCompanyId)
+    handleStoreChange('')
+    setWbWarehouses([])
+    setWbOffices([])
+    setInternalWarehouses([])
   }
 
   // ─── Render ─────────────────────────────────────────────────────────────────
@@ -2527,15 +2597,26 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
             {section.label}
           </button>
         ))}
-        {pageSection === 'dispatches' && (
-          <div id="fbs-dispatch-period-controls" className="ml-auto shrink-0 pb-2" />
-        )}
+        <div className="ml-auto flex shrink-0 items-end gap-3 pb-2">
+          {pageSection === 'dispatches' && <div id="fbs-dispatch-period-controls" />}
+          <label className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700">
+            <span className="whitespace-nowrap">Компания</span>
+            <select
+              value={selectedCompanyId}
+              onChange={(event) => handleCompanyChange(event.target.value)}
+              className="max-w-[260px] bg-transparent text-sm font-semibold text-slate-800 outline-none"
+            >
+              {workContexts.map((context) => (
+                <option key={context.company_id} value={context.company_id}>{context.company_name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {/* Toolbar */}
-      {pageSection !== 'dispatches' && (
       <div className="flex flex-wrap items-end gap-3 border-b border-slate-200 bg-white px-5 py-3">
-        <FbsStoreSelect value={selectedStoreId} stores={storesWithKey} onChange={handleStoreChange} />
+        <FbsStoreSelect value={selectedStoreId} stores={storesWithKey} onChange={handleStoreChange} disabled={!selectedContext} />
         {pageSection === 'stocks' && <div id="fbs-stocks-warehouse-controls" className="contents" />}
 
         {pageSection === 'orders' && <>
@@ -2562,7 +2643,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           ]}
         />
 
-        <button type="button" onClick={() => void handleManualQuickSync()} disabled={loading || !selectedStoreId}
+        <button type="button" onClick={() => void handleManualQuickSync()} disabled={loading || !selectedStoreId || !fbsPermissions.fbs_sync}
           title="Получить новые заказы и изменения активных заказов и поставок"
           className="flex h-8 items-center gap-1.5 rounded-xl bg-violet-500 px-4 text-xs font-semibold text-white hover:bg-violet-600 disabled:opacity-50 transition">
           {loading
@@ -2571,20 +2652,20 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
           {loading ? 'Загрузка...' : 'Обновить'}
         </button>
 
-        <button type="button" onClick={() => void handleFullSync()} disabled={loading || !selectedStoreId}
+        <button type="button" onClick={() => void handleFullSync()} disabled={loading || !selectedStoreId || !fbsPermissions.fbs_full_sync}
           title="Заново сверить с Wildberries всю доступную историю заказов, поставок и КИЗ"
           className="flex h-8 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">
           Полная сверка с WB
         </button>
 
-        <button type="button" onClick={() => setKizScannerOpen(true)} disabled={!selectedStoreId}
+        <button type="button" onClick={() => setKizScannerOpen(true)} disabled={!selectedStoreId || !fbsPermissions.fbs_assembly}
           className="flex h-8 items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-4 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 disabled:opacity-40">
           <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 5v4M3 5h4M21 5v4M21 5h-4M3 19v-4M3 19h4M21 19v-4M21 19h-4"/><path d="M7 12h10"/></svg>
           Сканировать КИЗ
         </button>
 
         {/* Массовые действия */}
-        {selectedTab.length > 0 && activeTab === 'pending' && (
+        {fbsPermissions.fbs_assembly && selectedTab.length > 0 && activeTab === 'pending' && (
           <button type="button" onClick={() => void openAssembleModal(selectedTab.map((o) => o.id))}
             className="h-8 rounded-xl bg-amber-500 px-4 text-xs font-semibold text-white hover:bg-amber-600 transition">
             Взять в сборку ({selectedTab.length})
@@ -2592,12 +2673,24 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         )}
         </>}
       </div>
-      )}
 
-      {pageSection === 'stocks' ? (
+      {!selectedStoreId ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center bg-slate-50 p-8 text-center">
+          <div className="max-w-sm rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
+            <p className="text-sm font-semibold text-slate-800">
+              {storesWithKey.length > 0 ? 'Выберите магазин' : 'Нет доступных магазинов FBS'}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {storesWithKey.length > 0
+                ? 'До выбора магазина данные не загружаются и синхронизация не запускается.'
+                : 'Для этой компании вам не разрешён ни один магазин с API-ключом WB.'}
+            </p>
+          </div>
+        </div>
+      ) : pageSection === 'stocks' ? (
         <FbsStocksPanel
-          key={`${accountId}:${selectedStoreId}`}
-          accountId={accountId}
+          key={`${workingAccountId}:${selectedStoreId}`}
+          accountId={workingAccountId}
           storeId={selectedStoreId}
           warehouses={stockWbWarehouses}
           canManage={canManageStocks}
@@ -2605,12 +2698,10 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
         />
       ) : pageSection === 'dispatches' ? (
         <FbsDispatchReport
-          key={`${accountId}:${selectedStoreId}`}
-          accountId={accountId}
+          key={`${workingAccountId}:${selectedStoreId}`}
+          accountId={workingAccountId}
           storeId={selectedStoreId}
-          stores={storesWithKey}
           wbDestinations={dispatchWbDestinations}
-          onStoreChange={handleStoreChange}
           periodControlsContainerId="fbs-dispatch-period-controls"
         />
       ) : <>
@@ -2985,7 +3076,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                     {!isCompletedGroupedTab && supplyId !== '__none__' && supplyOrders.length > 0 && (
                       <div className="flex items-center justify-end gap-2">
                         <button type="button" title="Распечатать стикеры поставки" aria-label="Распечатать стикеры поставки"
-                          disabled={busyIds.size > 0}
+                          disabled={busyIds.size > 0 || !fbsPermissions.fbs_assembly}
                           onClick={(e) => { e.stopPropagation(); openStickerPrintModal(supplyOrders, supply ?? { id: supplyId, name: supplyId }, 'supply') }}
                           className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-wait disabled:opacity-40">
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -2995,7 +3086,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                             type="button"
                             title="Распечатать официальный QR поставки WB"
                             aria-label="Распечатать официальный QR поставки WB"
-                            disabled={supplyQrBusyIds.has(supplyId)}
+                            disabled={supplyQrBusyIds.has(supplyId) || !fbsPermissions.fbs_assembly}
                             onClick={(event) => { event.stopPropagation(); void handleSupplyQrPrint(supplyId) }}
                             className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-700 transition hover:bg-violet-100 disabled:cursor-wait disabled:opacity-40"
                           >
@@ -3011,7 +3102,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                         )}
                         {isAssemblingTab && (
                           <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
-                            disabled={busyIds.size > 0}
+                            disabled={busyIds.size > 0 || !fbsPermissions.fbs_dispatch}
                             onClick={(e) => {
                               e.stopPropagation()
                               void openSupplyDispatchModal(supply ?? { id: supplyId, name: supplyId }, supplyOrders)
@@ -3098,7 +3189,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                                 </td>
                                 <td className="px-4 py-2">
                                   <ProductLocationsCell order={order} />
-                                  {isAssemblingTab && order.productLocations.length > 0 && (
+                                  {isAssemblingTab && fbsPermissions.fbs_assembly && order.productLocations.length > 0 && (
                                     <button
                                       type="button"
                                       disabled={isBusy}
@@ -3122,7 +3213,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                                 )}
                                 <td className="px-4 py-2">
                                   <div className="flex items-center gap-1.5">
-                                    {isAssemblingTab && supplyId !== '__none__' && (
+                                    {isAssemblingTab && fbsPermissions.fbs_assembly && supplyId !== '__none__' && (
                                       <button
                                         type="button"
                                         title="Перенести в другую поставку"
@@ -3135,7 +3226,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                                         </svg>
                                       </button>
                                     )}
-                                    {!isCompletedGroupedTab && (
+                                    {!isCompletedGroupedTab && fbsPermissions.fbs_assembly && (
                                       <button type="button" title="Выбрать стикеры для печати" disabled={isBusy} onClick={() => openStickerPrintModal([order], null, 'selected')}
                                         className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
                                         <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -3175,7 +3266,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                               Печать
                             </button>
-                            {isAssemblingTab && supplyId !== '__none__' && (
+                            {isAssemblingTab && fbsPermissions.fbs_assembly && supplyId !== '__none__' && (
                               <button
                                 type="button"
                                 disabled={busyIds.size > 0}
@@ -3243,7 +3334,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                       Печать
                     </button>
                   )}
-                  {isAssemblingTab && selectedParentEntry && selectedParentEntry[1].orders.length > 0 && (
+                  {isAssemblingTab && fbsPermissions.fbs_dispatch && selectedParentEntry && selectedParentEntry[1].orders.length > 0 && (
                     <button
                       type="button"
                       disabled={busyIds.size > 0}
@@ -3346,7 +3437,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         {/* Действия для Новых — 3-точечное меню */}
-                        {activeTab === 'pending' && (
+                        {activeTab === 'pending' && fbsPermissions.fbs_assembly && (
                           <div className="relative">
                             <button type="button" disabled={isBusy}
                               onClick={(e) => { e.stopPropagation(); setOrderMenuId(orderMenuId === order.id ? null : order.id) }}
@@ -3616,7 +3707,7 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
 
       {kizScannerOpen && selectedStoreId && (
         <FbsKizScannerModal
-          accountId={accountId}
+          accountId={workingAccountId}
           storeId={selectedStoreId}
           storeName={storesWithKey.find((store) => store.id === selectedStoreId)?.name ?? 'Магазин WB'}
           orders={orders}
@@ -3693,8 +3784,8 @@ export function FbsOrdersPage({ stores, accountId, canManageStocks }: Props) {
                           if (!current) return null
                           const nextValue = !current.options[option.key]
                           const nextOptions = { ...current.options, [option.key]: nextValue }
-                          saveStickerPrintOptions(accountId, {
-                            ...loadStickerPrintOptions(accountId),
+                          saveStickerPrintOptions(workingAccountId, {
+                            ...loadStickerPrintOptions(workingAccountId),
                             [option.key]: nextValue,
                           })
                           return { ...current, options: nextOptions }

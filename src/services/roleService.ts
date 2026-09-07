@@ -61,6 +61,7 @@ export const createRoleInSupabase = async (accountId: string, values: RoleFormVa
       account_id: accountId,
       name: values.name.trim(),
       permissions: values.permissions as unknown as import('../types/supabase').Json,
+      fbs_store_ids: values.fbs_store_ids ?? null,
     })
     .select()
     .single()
@@ -82,6 +83,7 @@ export const updateRoleInSupabase = async (roleId: string, values: Partial<RoleF
   const payload = {
     ...(values.name !== undefined ? { name: values.name.trim() } : {}),
     ...(values.permissions !== undefined ? { permissions: values.permissions as unknown as import('../types/supabase').Json } : {}),
+    ...(values.fbs_store_ids !== undefined ? { fbs_store_ids: values.fbs_store_ids } : {}),
   }
 
   const { data, error } = await supabase
@@ -114,7 +116,13 @@ export const cloneRoleToAccountInSupabase = async (
 
   const { data, error } = await supabase
     .from('roles')
-    .insert({ account_id: targetAccountId, name: role.name, permissions: role.permissions as unknown as import('../types/supabase').Json })
+    .insert({
+      account_id: targetAccountId,
+      name: role.name,
+      permissions: role.permissions as unknown as import('../types/supabase').Json,
+      // UUID магазинов принадлежат исходной компании и не могут переноситься.
+      fbs_store_ids: null,
+    })
     .select()
     .single()
 

@@ -1,5 +1,5 @@
 ﻿import { supabase } from '../lib/supabase'
-import type { BatchNotification, ExecutorOption, OutsourcePartner } from '../types'
+import type { BatchNotification, ExecutorOption, FbsOutsourceAccess, OutsourcePartner, RolePermissions } from '../types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabase as any
@@ -77,4 +77,28 @@ export async function respondToPartnerRequest(
 export async function removePartner(connectionId: string): Promise<void> {
   const { error } = await db.rpc('remove_partner', { p_connection_id: connectionId })
   if (error) throw new Error(error.message)
+}
+
+export async function fetchFbsOutsourceAccess(connectionId: string): Promise<FbsOutsourceAccess> {
+  const { data, error } = await db.rpc('get_fbs_outsource_access', {
+    p_connection_id: connectionId,
+  })
+  if (error) throw new Error(error.message)
+  return data as FbsOutsourceAccess
+}
+
+export async function saveFbsOutsourceAccess(
+  connectionId: string,
+  storeIds: string[],
+  permissions: Partial<RolePermissions>,
+  enabled: boolean,
+): Promise<FbsOutsourceAccess> {
+  const { data, error } = await db.rpc('save_fbs_outsource_access', {
+    p_connection_id: connectionId,
+    p_store_ids: storeIds,
+    p_permissions: permissions,
+    p_enabled: enabled,
+  })
+  if (error) throw new Error(error.message)
+  return data as FbsOutsourceAccess
 }

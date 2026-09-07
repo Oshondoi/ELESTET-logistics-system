@@ -163,6 +163,11 @@ export interface RolePermissions {
   wms_history: boolean
   wms_inventory: boolean
   // FBS заказы
+  fbs_view: boolean
+  fbs_sync: boolean
+  fbs_full_sync: boolean
+  fbs_assembly: boolean
+  fbs_dispatch: boolean
   fbs_stocks_manage: boolean
   // Администрирование
   roles_manage: boolean
@@ -201,6 +206,11 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   wms_manage: false,
   wms_history: false,
   wms_inventory: false,
+  fbs_view: false,
+  fbs_sync: false,
+  fbs_full_sync: false,
+  fbs_assembly: false,
+  fbs_dispatch: false,
   fbs_stocks_manage: false,
   roles_manage: false,
   members_manage: false,
@@ -238,6 +248,11 @@ export const FULL_PERMISSIONS: RolePermissions = {
   wms_manage: true,
   wms_history: true,
   wms_inventory: true,
+  fbs_view: true,
+  fbs_sync: true,
+  fbs_full_sync: true,
+  fbs_assembly: true,
+  fbs_dispatch: true,
   fbs_stocks_manage: true,
   roles_manage: true,
   members_manage: true,
@@ -248,6 +263,7 @@ export interface Role {
   account_id: string
   name: string
   permissions: RolePermissions
+  fbs_store_ids: string[] | null
   assigned_users: ResolvedUser[]
   created_at: string
 }
@@ -255,7 +271,17 @@ export interface Role {
 export interface RoleFormValues {
   name: string
   permissions: RolePermissions
+  fbs_store_ids?: string[] | null
   assigned_user_ids?: string[]
+}
+
+export interface FbsOutsourceAccess {
+  client_account_id: string
+  executor_account_id: string
+  enabled: boolean
+  store_ids: string[]
+  permissions: Partial<RolePermissions>
+  stores: Array<Pick<Store, 'id' | 'name' | 'store_code' | 'supplier' | 'supplier_full'>>
 }
 
 export interface ResolvedUser {

@@ -3,9 +3,7 @@ import { createPortal } from 'react-dom'
 import { supabase } from '../../lib/supabase'
 import { toUserMessage } from '../../lib/userMessage'
 import { PhotoThumb } from '../ui/PhotoThumb'
-import { FbsStoreSelect } from './FbsStoreSelect'
 import { FbsWarehouseSelect } from './FbsWarehouseSelect'
-import type { Store } from '../../types'
 
 interface DispatchReportRow {
   product_barcode: string
@@ -24,9 +22,7 @@ interface DispatchReportRow {
 interface Props {
   accountId: string
   storeId: string
-  stores: Array<Pick<Store, 'id' | 'name' | 'supplier' | 'supplier_full' | 'store_code'>>
   wbDestinations: Array<{ id: number; name: string }>
-  onStoreChange: (storeId: string) => void
   periodControlsContainerId: string
 }
 
@@ -114,9 +110,7 @@ async function copyText(value: string) {
 export function FbsDispatchReport({
   accountId,
   storeId,
-  stores,
   wbDestinations,
-  onStoreChange,
   periodControlsContainerId,
 }: Props) {
   const filtersStorageKey = useMemo(() => `fbs_dispatch_filters_${accountId}_${storeId}`, [accountId, storeId])
@@ -331,7 +325,6 @@ export function FbsDispatchReport({
       <div className="shrink-0 space-y-4 pb-4">
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-end gap-3">
-            <FbsStoreSelect value={storeId} stores={stores} onChange={onStoreChange} />
             <FbsWarehouseSelect
               value={wbOfficeId}
               onChange={setWbOfficeId}

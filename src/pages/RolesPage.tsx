@@ -2,6 +2,7 @@
 import { supabase } from '../lib/supabase'
 import { getLogoUrl } from '../lib/companyLogo'
 import { RoleFormModal } from '../components/roles/RoleFormModal'
+import { Modal } from '../components/ui/Modal'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal'
@@ -10,8 +11,11 @@ import {
   sendPartnerRequest,
   respondToPartnerRequest,
   removePartner,
+  fetchFbsOutsourceAccess,
+  saveFbsOutsourceAccess,
 } from '../services/outsourceService'
-import type { Account, Role, RoleFormValues, OutsourcePartner } from '../types'
+import { DEFAULT_PERMISSIONS } from '../types'
+import type { Account, FbsOutsourceAccess, Role, RoleFormValues, OutsourcePartner, RolePermissions, Store } from '../types'
 
 // ─── Иконка щита ─────────────────────────────────────────────
 
@@ -49,6 +53,12 @@ const permLabels: Record<string, string> = {
   reviews_manage: 'Отзывы (ответы)',
   reviews_ai: 'ИИ-ответы',
   reviews_automation: 'Автоматизация отзывов',
+  fbs_view: 'FBS (просмотр)',
+  fbs_sync: 'FBS (обновление)',
+  fbs_full_sync: 'FBS (полная сверка)',
+  fbs_assembly: 'FBS (сборка и КИЗ)',
+  fbs_dispatch: 'FBS (передача)',
+  fbs_stocks_manage: 'FBS (остатки WB)',
   roles_manage: 'Управление ролями',
   members_manage: 'Управление участниками',
 }
@@ -150,6 +160,7 @@ const RoleRow = ({ role, onEdit, onDelete, canManage = true }: RoleRowProps) => 
 interface RolesPageProps {
   roles: Role[]
   accounts: Account[]
+  stores: Store[]
   activeAccountId: string
   activeAccountShortId?: number | null
   isLoading: boolean
@@ -158,11 +169,13 @@ interface RolesPageProps {
   onDelete: (roleId: string) => Promise<void>
   onClone: (role: Role, targetAccountId: string) => Promise<void>
   canManage?: boolean
+  isOwnerOrAdmin?: boolean
 }
 
 export const RolesPage = ({
   roles,
   accounts,
+  stores,
   activeAccountId,
   activeAccountShortId,
   isLoading,
@@ -171,6 +184,7 @@ export const RolesPage = ({
   onDelete,
   onClone,
   canManage = true,
+  isOwnerOrAdmin = false,
 }: RolesPageProps) => {
   // Главные вкладки (с запоминанием в localStorage)
   const [mainTab, setMainTab] = useState<'employees' | 'outsource'>(
@@ -218,6 +232,11 @@ export const RolesPage = ({
   // Аутсорс: ответ на приглашение (по id → состояние)
   const [respondingId, setRespondingId] = useState<string | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null)
+  const [fbsAccessTarget, setFbsAccessTarget] = useState<OutsourcePartner | null>(null)
+  const [fbsAccess, setFbsAccess] = useState<FbsOutsourceAccess | null>(null)
+  const [fbsAccessLoading, setFbsAccessLoading] = useState(false)
+  const [fbsAccessSaving, setFbsAccessSaving] = useState(false)
+  const [fbsAccessError, setFbsAccessError] = useState<string | null>(null)
 
   const loadPartners = useCallback(async () => {
     if (!activeAccountId) return
@@ -291,6 +310,53 @@ export const RolesPage = ({
       alert(e instanceof Error ? e.message : 'Ошибка')
     } finally {
       setRemovingId(null)
+    }
+  }
+
+  const openFbsAccess = async (partner: OutsourcePartner) => {
+    setFbsAccessTarget(partner)
+    setFbsAccess(null)
+    setFbsAccessError(null)
+    setFbsAccessLoading(true)
+    try {
+      setFbsAccess(await fetchFbsOutsourceAccess(partner.connection_id))
+    } catch (e) {
+      setFbsAccessError(e instanceof Error ? e.message : 'Не удалось загрузить доступ FBS')
+    } finally {
+      setFbsAccessLoading(false)
+    }
+  }
+
+  const updateFbsAccessPermission = (key: keyof RolePermissions, value: boolean) => {
+    setFbsAccess((current) => {
+      if (!current) return current
+      const permissions = { ...DEFAULT_PERMISSIONS, ...current.permissions, [key]: value }
+      const actionKeys: Array<keyof RolePermissions> = [
+        'fbs_sync', 'fbs_full_sync', 'fbs_assembly', 'fbs_dispatch', 'fbs_stocks_manage',
+      ]
+      if (value && actionKeys.includes(key)) permissions.fbs_view = true
+      if (key === 'fbs_view' && !value) actionKeys.forEach((actionKey) => { permissions[actionKey] = false })
+      return { ...current, permissions }
+    })
+  }
+
+  const handleSaveFbsAccess = async () => {
+    if (!fbsAccessTarget || !fbsAccess) return
+    setFbsAccessSaving(true)
+    setFbsAccessError(null)
+    try {
+      const saved = await saveFbsOutsourceAccess(
+        fbsAccessTarget.connection_id,
+        fbsAccess.store_ids,
+        fbsAccess.permissions,
+        fbsAccess.enabled,
+      )
+      setFbsAccess(saved)
+      setFbsAccessTarget(null)
+    } catch (e) {
+      setFbsAccessError(e instanceof Error ? e.message : 'Не удалось сохранить доступ FBS')
+    } finally {
+      setFbsAccessSaving(false)
     }
   }
 
@@ -425,7 +491,7 @@ export const RolesPage = ({
           {/* Подвкладки */}
           <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 w-fit">
             {([
-              { key: 'partners', label: 'Аутсорс' },
+              { key: 'partners', label: 'Исполнители' },
               { key: 'services', label: 'Заказчики' },
               { key: 'invites', label: 'Приглашения' },
             ] as const).map((tab) => (
@@ -521,14 +587,25 @@ export const RolesPage = ({
                           <span className="font-mono text-xs text-slate-400 flex-shrink-0">C{p.partner_short_id}</span>
                           <span className="text-sm font-semibold text-slate-900 truncate">{p.partner_name}</span>
                         </div>
-                        <button
-                          type="button"
-                          disabled={removingId === p.connection_id}
-                          onClick={() => void handleRemovePartner(p.connection_id)}
-                          className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
-                        >
-                          {removingId === p.connection_id ? 'Удаление...' : 'Удалить'}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {isOwnerOrAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => void openFbsAccess(p)}
+                              className="rounded-xl bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 transition hover:bg-violet-100"
+                            >
+                              Доступ FBS
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={removingId === p.connection_id}
+                            onClick={() => void handleRemovePartner(p.connection_id)}
+                            className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                          >
+                            {removingId === p.connection_id ? 'Удаление...' : 'Удалить'}
+                          </button>
+                        </div>
                       </div>
                     ))}
                 </Card>
@@ -720,11 +797,99 @@ export const RolesPage = ({
         open={modalOpen}
         initialValues={editingRole ?? undefined}
         accounts={accounts}
+        stores={stores}
         currentAccountId={activeAccountId}
         onClose={() => { setModalOpen(false); setEditingRole(null) }}
         onSubmit={handleSubmit}
         onClone={onClone}
       />
+
+      <Modal
+        open={Boolean(fbsAccessTarget)}
+        title="Доступ исполнителя к FBS"
+        description={fbsAccessTarget ? `Компания «${fbsAccessTarget.partner_name}»` : undefined}
+        onClose={() => { if (!fbsAccessSaving) setFbsAccessTarget(null) }}
+        footer={fbsAccess ? (
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setFbsAccessTarget(null)} disabled={fbsAccessSaving}>Отмена</Button>
+            <Button onClick={() => void handleSaveFbsAccess()} disabled={fbsAccessSaving}>
+              {fbsAccessSaving ? 'Сохранение...' : 'Сохранить'}
+            </Button>
+          </div>
+        ) : undefined}
+      >
+        {fbsAccessLoading ? (
+          <div className="py-8 text-center text-sm text-slate-400">Загрузка...</div>
+        ) : fbsAccessError ? (
+          <div className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-600">{fbsAccessError}</div>
+        ) : fbsAccess ? (
+          <div className="space-y-5">
+            <label className="flex items-center justify-between gap-4 rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-3">
+              <span>
+                <span className="block text-sm font-semibold text-slate-800">Разрешить работу с FBS</span>
+                <span className="block text-xs text-slate-500">Доступ действует только для выбранных магазинов и действий</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={fbsAccess.enabled}
+                onChange={(event) => setFbsAccess((current) => current ? { ...current, enabled: event.target.checked } : current)}
+                className="h-5 w-5 accent-violet-600"
+              />
+            </label>
+
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Магазины</p>
+              <div className="grid max-h-44 gap-1 overflow-y-auto rounded-2xl border border-slate-200 p-2">
+                {fbsAccess.stores.length === 0 ? (
+                  <span className="px-2 py-2 text-sm text-slate-400">Нет магазинов с API-ключом WB</span>
+                ) : fbsAccess.stores.map((store) => (
+                  <label key={store.id} className="flex items-center gap-2 rounded-xl px-2 py-2 text-sm hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={fbsAccess.store_ids.includes(store.id)}
+                      onChange={(event) => setFbsAccess((current) => current ? {
+                        ...current,
+                        store_ids: event.target.checked
+                          ? [...new Set([...current.store_ids, store.id])]
+                          : current.store_ids.filter((id) => id !== store.id),
+                      } : current)}
+                      className="accent-violet-600"
+                    />
+                    <span>{store.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Действия</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {([
+                  ['fbs_view', 'Просмотр FBS'],
+                  ['fbs_sync', 'Быстрое обновление'],
+                  ['fbs_full_sync', 'Полная сверка с WB'],
+                  ['fbs_assembly', 'Сборка, КИЗ и печать'],
+                  ['fbs_dispatch', 'Передача в доставку'],
+                  ['fbs_stocks_manage', 'Изменение остатков WB'],
+                ] as Array<[keyof RolePermissions, string]>).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 rounded-xl border border-slate-100 px-3 py-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={fbsAccess.permissions[key] === true}
+                      onChange={(event) => updateFbsAccessPermission(key, event.target.checked)}
+                      className="accent-violet-600"
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {fbsAccess.enabled && fbsAccess.store_ids.length === 0 && (
+              <p className="text-xs font-medium text-amber-600">Выберите хотя бы один магазин — без этого доступа не будет.</p>
+            )}
+          </div>
+        ) : null}
+      </Modal>
 
       <DeleteConfirmModal
         open={Boolean(deleteTarget)}
