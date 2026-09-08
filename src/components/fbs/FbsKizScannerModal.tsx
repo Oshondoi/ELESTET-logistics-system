@@ -814,6 +814,47 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
+  const removeAllPairs = async () => {
+    if (!supabase || !session || busy) return
+    const removablePairs = pairs.filter((pair) => pair.status === 'draft' || pair.status === 'error')
+    if (removablePairs.length === 0) return
+    if (!window.confirm(`Удалить все неотправленные пары: ${removablePairs.length}? Отменить это действие нельзя.`)) return
+
+    setBusy(true)
+    setError('')
+    setNotice('')
+    let removed = 0
+    const failures: string[] = []
+    try {
+      for (let index = 0; index < removablePairs.length; index += 20) {
+        const chunk = removablePairs.slice(index, index + 20)
+        const results = await Promise.all(chunk.map((pair) => (supabase as any).rpc('delete_fbs_marking_pair', {
+          p_pair_id: pair.id,
+          p_device_id: stableDeviceId,
+        })))
+        results.forEach((result: { error?: unknown }) => {
+          if (result.error) failures.push(errorText(result.error))
+          else removed += 1
+        })
+      }
+      setSelectedPair(null)
+      await loadPairs(session.id)
+      if (failures.length > 0) {
+        setError(`Удалено пар: ${removed}. Не удалено: ${failures.length}. ${failures[0]}`)
+        signal(false)
+      } else {
+        setNotice(`Очередь очищена. Удалено пар: ${removed}`)
+        signal(true)
+      }
+    } catch (removeError) {
+      await loadPairs(session.id)
+      setError(errorText(removeError))
+      signal(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const recoverSession = async (source: RecoverableScanSession) => {
     if (!supabase || !session || busy || !window.confirm(`Забрать сохранённые пары с устройства ${source.device_name || source.device_id.slice(0, 6)}?`)) return
     setBusy(true)
@@ -1183,7 +1224,19 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
               <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 sm:mt-5">
                 <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
                   <span className="text-sm font-semibold text-slate-700">Отсканированные пары</span>
-                  {testKizScan && pairs.length > 0 && <span className="text-[10px] font-semibold text-emerald-700 sm:text-xs">Нажмите на заказ — покажем данные скана</span>}
+                  <div className="flex min-w-0 items-center justify-end gap-3">
+                    {testKizScan && pairs.length > 0 && <span className="hidden text-xs font-semibold text-emerald-700 sm:inline">Нажмите на заказ — покажем данные скана</span>}
+                    {(draftCount + errorCount) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void removeAllPairs()}
+                        disabled={busy}
+                        className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Очистить очередь
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {pairs.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-400">Пока ничего не отсканировано</div> : (
                   <div className="divide-y divide-slate-100">
