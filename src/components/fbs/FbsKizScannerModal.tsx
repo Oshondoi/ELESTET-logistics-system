@@ -4,6 +4,7 @@ import { ensureAuthenticatedSession } from '../../lib/authSession'
 import { invokeFbs } from '../../services/fbsApi'
 import { kizValidationError, normalizeKizCode, normalizeScannerKeyboardLayout } from '../../lib/kizCode'
 import { showToast } from '../ui/Toast'
+import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url'
 
 type ScanSession = {
   id: string
@@ -91,6 +92,10 @@ function deviceId(): string {
 function cleanScan(value: string, trimSpaces: boolean): string {
   const withoutTerminator = value.replace(/[\r\n]+$/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '')
   return trimSpaces ? withoutTerminator.trim() : withoutTerminator
+}
+
+function scannerBytesToString(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
 }
 
 function scanCandidates(value: string): string[] {
@@ -212,15 +217,19 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [testKizScan, setTestKizScan] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [cameraError, setCameraError] = useState('')
+  const [cameraLoading, setCameraLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const altNumpadDigitsRef = useRef('')
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const cameraResultRef = useRef<(value: string) => void>(() => undefined)
   const sessionRef = useRef<ScanSession | null>(null)
+  const testKizScanRef = useRef(false)
   sessionRef.current = session
+  testKizScanRef.current = testKizScan
 
   const ordersById = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders])
   const catalogByScan = useMemo(() => buildCatalogMap(catalog), [catalog])
@@ -564,13 +573,17 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     if (!cameraOpen) {
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
       cameraStreamRef.current = null
+      setCameraLoading(false)
       return
     }
 
     let cancelled = false
     let handled = false
     let controls: { stop(): void } | null = null
+    let scanTimer: number | null = null
+    const useTestKizDecoder = testKizScanRef.current && Boolean(sessionRef.current?.pending_order_id)
     setCameraError('')
+    setCameraLoading(useTestKizDecoder)
     void (async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера не поддерживается браузером')
@@ -586,23 +599,79 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         if (!cameraVideoRef.current) return
         cameraVideoRef.current.srcObject = stream
         await cameraVideoRef.current.play()
-        const { BrowserMultiFormatReader } = await import('@zxing/browser')
-        if (cancelled || !cameraVideoRef.current) return
-        const reader = new BrowserMultiFormatReader()
-        controls = await reader.decodeFromStream(stream, cameraVideoRef.current, (result) => {
-          if (!result || handled || cancelled) return
-          handled = true
-          const scannedValue = (result as unknown as { getText(): string }).getText()
-          setCameraOpen(false)
-          cameraResultRef.current(scannedValue)
-        })
+        if (useTestKizDecoder) {
+          const { prepareZXingModule, readBarcodes } = await import('zxing-wasm/reader')
+          await prepareZXingModule({
+            fireImmediately: true,
+            overrides: {
+              locateFile: (path: string, prefix: string) => path.endsWith('.wasm') ? zxingReaderWasmUrl : `${prefix}${path}`,
+            },
+          })
+          if (cancelled || !cameraVideoRef.current) return
+          setCameraLoading(false)
+
+          const canvas = document.createElement('canvas')
+          const context = canvas.getContext('2d', { willReadFrequently: true })
+          if (!context) throw new Error('Canvas недоступен')
+
+          const scanFrame = async () => {
+            if (cancelled || handled) return
+            const video = cameraVideoRef.current
+            if (video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
+              const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight))
+              const width = Math.max(1, Math.round(video.videoWidth * scale))
+              const height = Math.max(1, Math.round(video.videoHeight * scale))
+              if (canvas.width !== width) canvas.width = width
+              if (canvas.height !== height) canvas.height = height
+              context.drawImage(video, 0, 0, width, height)
+              try {
+                const results = await readBarcodes(context.getImageData(0, 0, width, height), {
+                  formats: ['DataMatrix'],
+                  maxNumberOfSymbols: 1,
+                  textMode: 'Plain',
+                  tryHarder: true,
+                  tryRotate: true,
+                  tryInvert: true,
+                })
+                const result = results.find((candidate) => candidate.isValid && candidate.bytes.length > 0)
+                if (result && !cancelled && !handled) {
+                  handled = true
+                  setCameraOpen(false)
+                  cameraResultRef.current(scannerBytesToString(result.bytes))
+                  return
+                }
+              } catch {
+                if (!cancelled) setCameraError('ТЕСТ скан не смог обработать кадр. Выключите режим и используйте обычное сканирование.')
+              }
+            }
+            if (!cancelled && !handled) scanTimer = window.setTimeout(() => { void scanFrame() }, 140)
+          }
+          void scanFrame()
+        } else {
+          const { BrowserMultiFormatReader } = await import('@zxing/browser')
+          if (cancelled || !cameraVideoRef.current) return
+          const reader = new BrowserMultiFormatReader()
+          controls = await reader.decodeFromStream(stream, cameraVideoRef.current, (result) => {
+            if (!result || handled || cancelled) return
+            handled = true
+            const scannedValue = (result as unknown as { getText(): string }).getText()
+            setCameraOpen(false)
+            cameraResultRef.current(scannedValue)
+          })
+        }
       } catch {
-        if (!cancelled) setCameraError('Не удалось открыть камеру. Разрешите доступ к камере в браузере или используйте сканер.')
+        if (!cancelled) {
+          setCameraLoading(false)
+          setCameraError(useTestKizDecoder
+            ? 'Не удалось запустить ТЕСТ скан. Выключите режим и используйте обычное сканирование.'
+            : 'Не удалось открыть камеру. Разрешите доступ к камере в браузере или используйте сканер.')
+        }
       }
     })()
 
     return () => {
       cancelled = true
+      if (scanTimer !== null) window.clearTimeout(scanTimer)
       controls?.stop()
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
       cameraStreamRef.current = null
@@ -926,6 +995,25 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       />
                       <span className="relative h-5 w-9 shrink-0 rounded-full bg-slate-200 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-violet-600 peer-checked:after:translate-x-4 peer-disabled:opacity-50" />
                     </label>
+                    <button
+                      type="button"
+                      aria-pressed={testKizScan}
+                      disabled={busy || cameraOpen}
+                      onClick={() => setTestKizScan((enabled) => !enabled)}
+                      className={`col-span-2 flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-colors sm:rounded-2xl sm:px-4 sm:py-3 ${
+                        testKizScan
+                          ? 'border-emerald-400 bg-emerald-50 text-emerald-800'
+                          : 'border-slate-300 bg-white text-slate-700 hover:border-violet-300'
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
+                    >
+                      <span>
+                        <span className="block text-xs font-bold sm:text-sm">ТЕСТ скан</span>
+                        <span className="block text-[10px] font-medium text-slate-500 sm:text-xs">Новый метод работает только для КИЗа через камеру</span>
+                      </span>
+                      <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${testKizScan ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        {testKizScan ? 'Включён' : 'Выключен'}
+                      </span>
+                    </button>
                   </div>
                 )}
                 {boxEnabled && activeBox && !boxScanMode && session?.status !== 'completed' && (
@@ -1042,7 +1130,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
             <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 text-white">
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold">Наведите камеру на {scanTarget}</div>
-                <div className="mt-0.5 text-[11px] text-white/60">Код распознается автоматически</div>
+                <div className="mt-0.5 text-[11px] text-white/60">
+                  {testKizScan && session?.pending_order_id ? 'ТЕСТ скан · исходные данные DataMatrix' : 'Код распознается автоматически'}
+                </div>
               </div>
               <button type="button" onClick={() => setCameraOpen(false)} className="flex h-10 shrink-0 items-center rounded-xl bg-white/15 px-4 text-sm font-semibold hover:bg-white/25">Закрыть</button>
             </div>
@@ -1051,6 +1141,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
                 <div className="aspect-square w-full max-w-[300px] rounded-3xl border-2 border-white/80 shadow-[0_0_0_999px_rgba(0,0,0,0.28)]" />
               </div>
+              {cameraLoading && <div className="absolute inset-x-4 bottom-6 rounded-2xl bg-slate-900/90 px-4 py-3 text-center text-xs font-medium text-white">Запускаем ТЕСТ скан…</div>}
               {cameraError && <div className="absolute inset-x-4 bottom-6 rounded-2xl bg-red-500/90 px-4 py-3 text-center text-xs font-medium text-white">{cameraError}</div>}
             </div>
           </div>
