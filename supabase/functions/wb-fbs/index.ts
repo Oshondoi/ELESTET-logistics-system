@@ -1748,6 +1748,9 @@ Deno.serve(async (req) => {
       if (!existingSession || existingSession.created_by !== userId || existingSession.device_id !== deviceId) {
         return err('Сессия этого устройства не найдена', 404)
       }
+      if (existingSession.device_identity_required === true && existingSession.device_named !== true) {
+        return err('Сначала присвойте имя устройству', 409)
+      }
       if (existingSession.pending_order_id) return err('Сначала завершите или сбросьте ожидающую пару')
       if (existingSession.status === 'completed') return ok({ success: true, sent: 0, failed: 0, alreadyCompleted: true })
       if (existingSession.status === 'submitting') {
@@ -1764,6 +1767,7 @@ Deno.serve(async (req) => {
       )
       if (claimed.length === 0) return err('Сессию уже завершает другое окно или устройство', 409)
 
+      try {
       const pairRows = await sbGet(
         'fbs_marking_pairs',
         `session_id=eq.${encodeURIComponent(sessionId)}&status=in.(draft,error)&select=*&order=created_at.asc`,
@@ -1771,6 +1775,15 @@ Deno.serve(async (req) => {
       )
       if (pairRows.length === 0) {
         await sbWrite('fbs_marking_sessions', 'PATCH', { status: 'active', submit_started_at: null, updated_at: new Date().toISOString() }, `id=eq.${encodeURIComponent(sessionId)}`)
+        await sbWrite('fbs_marking_history', 'POST', {
+          event_type: 'session_submission_failed',
+          account_id: accountId,
+          store_id,
+          session_id: sessionId,
+          actor_user_id: userId,
+          device_id: deviceId,
+          event_data: { error: 'В сессии нет новых пар для отправки' },
+        }, '', 'return=minimal')
         return err('В сессии нет новых пар для отправки')
       }
 
@@ -1867,6 +1880,30 @@ Deno.serve(async (req) => {
         status: 'partial', submit_started_at: null, last_seen_at: finishedAt, updated_at: finishedAt,
       }, `id=eq.${encodeURIComponent(sessionId)}`)
       return ok({ success: failures.length === 0, sent, failed: failures.length, failures })
+      } catch (submissionError) {
+        const message = errorMessage(submissionError)
+        const failedAt = new Date().toISOString()
+        try {
+          await sbWrite(
+            'fbs_marking_sessions',
+            'PATCH',
+            { status: 'partial', submit_started_at: null, last_seen_at: failedAt, updated_at: failedAt },
+            `id=eq.${encodeURIComponent(sessionId)}&status=eq.submitting`,
+          )
+          await sbWrite('fbs_marking_history', 'POST', {
+            event_type: 'session_submission_failed',
+            account_id: accountId,
+            store_id,
+            session_id: sessionId,
+            actor_user_id: userId,
+            device_id: deviceId,
+            event_data: { error: message },
+          }, '', 'return=minimal')
+        } catch (historyError) {
+          console.error(JSON.stringify({ scope: 'wb-fbs', event: 'marking_submission_history_failed', error: errorMessage(historyError) }))
+        }
+        throw submissionError
+      }
     }
 
     if (action === 'get_sticker') {

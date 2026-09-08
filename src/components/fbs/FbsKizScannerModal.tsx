@@ -19,6 +19,11 @@ type ScanSession = {
   started_at: string
   last_seen_at?: string
   device_name?: string
+  device_named: boolean
+  device_identity_required: boolean
+  active_scanner_model: ScannerModel | null
+  scanner_test_status: ScannerTestStatus
+  scanner_tested_at?: string | null
 }
 
 type ScanPair = {
@@ -93,7 +98,60 @@ type Props = {
 }
 
 const DEVICE_KEY = 'elestet_fbs_scanner_device_v1'
+const DEVICE_PROFILE_KEY = 'elestet_fbs_scanner_profile_v1'
 const GS = '\u001d'
+
+const SCANNER_MODELS = [
+  'АТОЛ SB5100',
+  'MERTECH 2310 P2D HR SUPERLEAD',
+  'Zebra DS2208',
+  'Honeywell Voyager XP 1470g',
+  'Datalogic QuickScan QD2590',
+] as const
+
+type ScannerModel = typeof SCANNER_MODELS[number]
+type ScannerTestStatus = 'untested' | 'passed' | 'failed'
+
+type DeviceProfile = {
+  deviceName: string
+  scannerModel: ScannerModel | null
+  scannerTestStatus: ScannerTestStatus
+}
+
+const EMPTY_DEVICE_PROFILE: DeviceProfile = {
+  deviceName: '',
+  scannerModel: null,
+  scannerTestStatus: 'untested',
+}
+
+function isScannerModel(value: unknown): value is ScannerModel {
+  return typeof value === 'string' && (SCANNER_MODELS as readonly string[]).includes(value)
+}
+
+function readDeviceProfile(): DeviceProfile {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Partial<DeviceProfile>
+    return {
+      deviceName: typeof saved.deviceName === 'string' ? saved.deviceName.trim().slice(0, 80) : '',
+      scannerModel: isScannerModel(saved.scannerModel) ? saved.scannerModel : null,
+      scannerTestStatus: saved.scannerTestStatus === 'passed' || saved.scannerTestStatus === 'failed'
+        ? saved.scannerTestStatus
+        : 'untested',
+    }
+  } catch {
+    return EMPTY_DEVICE_PROFILE
+  }
+}
+
+function writeDeviceProfile(profile: DeviceProfile) {
+  localStorage.setItem(DEVICE_PROFILE_KEY, JSON.stringify(profile))
+}
+
+function supportsUsbScannerSelection(): boolean {
+  const userAgent = navigator.userAgent || ''
+  const ipadInDesktopMode = /Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1
+  return !ipadInDesktopMode && !/Android|iPhone|iPad|iPod|Windows Phone|Mobile/i.test(userAgent)
+}
 
 function deviceId(): string {
   const saved = localStorage.getItem(DEVICE_KEY)
@@ -230,6 +288,8 @@ function signal(success: boolean) {
 
 export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onClose, onKizStatesUpdated }: Props) {
   const stableDeviceId = useMemo(deviceId, [])
+  const scannerSelectionVisible = useMemo(supportsUsbScannerSelection, [])
+  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile>(readDeviceProfile)
   const [session, setSession] = useState<ScanSession | null>(null)
   const [pairs, setPairs] = useState<ScanPair[]>([])
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
@@ -250,6 +310,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [cameraOpen, setCameraOpen] = useState(false)
   const [cameraError, setCameraError] = useState('')
   const [cameraLoading, setCameraLoading] = useState(false)
+  const [deviceNameDialogOpen, setDeviceNameDialogOpen] = useState(false)
+  const [deviceNameInput, setDeviceNameInput] = useState('')
+  const [scannerDialogOpen, setScannerDialogOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const altNumpadDigitsRef = useRef('')
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -268,6 +331,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     return barcode ? [barcode] : []
   })), [catalog, ordersById])
   const pendingOrder = session?.pending_order_id ? ordersById.get(session.pending_order_id) : null
+  const deviceReady = Boolean(session?.device_identity_required && session.device_named)
 
   useEffect(() => {
     if (error) showToast(error, 'error')
@@ -350,23 +414,38 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       setLoading(true)
       try {
         await ensureAuthenticatedSession()
+        const localProfile = readDeviceProfile()
+        setDeviceProfile(localProfile)
         const [sessionResult, catalogResult] = await Promise.all([
           (supabase as any).rpc('start_fbs_marking_session', {
             p_account_id: accountId,
             p_store_id: storeId,
             p_device_id: stableDeviceId,
-            p_device_name: `Браузер ${stableDeviceId.slice(0, 6)}`,
+            p_device_name: localProfile.deviceName || `Браузер ${stableDeviceId.slice(0, 6)}`,
           }),
           invokeFbs(storeId, { action: 'get_scan_catalog' }),
         ])
         if (sessionResult.error) throw sessionResult.error
         if (cancelled) return
-        const preferenceResult = await (supabase as any).rpc('apply_fbs_marking_preferences', {
-          p_session_id: (sessionResult.data as ScanSession).id,
+        const startedSession = sessionResult.data as ScanSession
+        const configuredResult = await (supabase as any).rpc('configure_fbs_marking_device', {
+          p_session_id: startedSession.id,
           p_device_id: stableDeviceId,
+          p_device_name: localProfile.deviceName,
+          p_device_named: Boolean(localProfile.deviceName),
+          p_scanner_model: scannerSelectionVisible ? localProfile.scannerModel : null,
+          p_scanner_test_status: scannerSelectionVisible ? localProfile.scannerTestStatus : 'untested',
         })
-        if (preferenceResult.error) throw preferenceResult.error
-        const nextSession = preferenceResult.data as ScanSession
+        if (configuredResult.error) throw configuredResult.error
+        let nextSession = configuredResult.data as ScanSession
+        if (nextSession.device_named) {
+          const preferenceResult = await (supabase as any).rpc('apply_fbs_marking_preferences', {
+            p_session_id: nextSession.id,
+            p_device_id: stableDeviceId,
+          })
+          if (preferenceResult.error) throw preferenceResult.error
+          nextSession = preferenceResult.data as ScanSession
+        }
         setSession(nextSession)
         setCatalog((catalogResult.catalog ?? []) as CatalogItem[])
         setCatalogMissing(Number(catalogResult.missing ?? 0))
@@ -378,7 +457,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       }
     })()
     return () => { cancelled = true }
-  }, [accountId, loadActiveBox, loadPairs, loadRecoverableSessions, stableDeviceId, storeId])
+  }, [accountId, loadActiveBox, loadPairs, loadRecoverableSessions, scannerSelectionVisible, stableDeviceId, storeId])
 
   useEffect(() => {
     if (!supabase || !session?.id) return
@@ -408,11 +487,102 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
   useEffect(() => {
     const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false
-    if (!coarsePointer && !cameraOpen && !busy && !loading && session?.status !== 'completed') inputRef.current?.focus()
-  }, [busy, cameraOpen, loading, session?.pending_order_id, session?.pending_product_barcode, session?.status])
+    if (deviceReady && !coarsePointer && !cameraOpen && !busy && !loading && session?.status !== 'completed') inputRef.current?.focus()
+  }, [busy, cameraOpen, deviceReady, loading, session?.pending_order_id, session?.pending_product_barcode, session?.status])
+
+  const openDeviceNameDialog = () => {
+    setDeviceNameInput(deviceProfile.deviceName || (session?.device_named ? session.device_name ?? '' : ''))
+    setDeviceNameDialogOpen(true)
+  }
+
+  const saveDeviceName = async () => {
+    if (!supabase || !session || busy) return
+    const nextName = deviceNameInput.trim().slice(0, 80)
+    if (nextName.length < 2) {
+      setError('Введите понятное имя устройства: минимум 2 символа')
+      return
+    }
+
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const nextProfile: DeviceProfile = { ...deviceProfile, deviceName: nextName }
+      const { data, error: configureError } = await (supabase as any).rpc('configure_fbs_marking_device', {
+        p_session_id: session.id,
+        p_device_id: stableDeviceId,
+        p_device_name: nextName,
+        p_device_named: true,
+        p_scanner_model: scannerSelectionVisible ? nextProfile.scannerModel : null,
+        p_scanner_test_status: scannerSelectionVisible ? nextProfile.scannerTestStatus : 'untested',
+      })
+      if (configureError) throw configureError
+
+      let nextSession = data as ScanSession
+      writeDeviceProfile(nextProfile)
+      setDeviceProfile(nextProfile)
+      setSession(nextSession)
+      setDeviceNameDialogOpen(false)
+      if (!session.device_named && ['active', 'partial', 'submitting'].includes(nextSession.status)) {
+        const preferenceResult = await (supabase as any).rpc('apply_fbs_marking_preferences', {
+          p_session_id: nextSession.id,
+          p_device_id: stableDeviceId,
+        })
+        if (preferenceResult.error) throw preferenceResult.error
+        nextSession = preferenceResult.data as ScanSession
+        setSession(nextSession)
+      }
+
+      setNotice(session.device_named ? 'Имя устройства изменено' : 'Устройство готово к работе')
+      window.requestAnimationFrame(() => inputRef.current?.focus())
+    } catch (saveError) {
+      setError(errorText(saveError))
+      signal(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const selectScannerModel = async (model: ScannerModel | null) => {
+    if (!supabase || !session || busy || !deviceReady || !scannerSelectionVisible) return
+    if (model === deviceProfile.scannerModel) {
+      setScannerDialogOpen(false)
+      return
+    }
+
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const nextProfile: DeviceProfile = {
+        ...deviceProfile,
+        scannerModel: model,
+        scannerTestStatus: 'untested',
+      }
+      const { data, error: configureError } = await (supabase as any).rpc('configure_fbs_marking_device', {
+        p_session_id: session.id,
+        p_device_id: stableDeviceId,
+        p_device_name: deviceProfile.deviceName,
+        p_device_named: true,
+        p_scanner_model: model,
+        p_scanner_test_status: 'untested',
+      })
+      if (configureError) throw configureError
+      writeDeviceProfile(nextProfile)
+      setDeviceProfile(nextProfile)
+      setSession(data as ScanSession)
+      setScannerDialogOpen(false)
+      setNotice(model ? `Выбран сканер: ${model}` : 'Сканер не выбран. Обычный ввод и камера доступны')
+    } catch (configureError) {
+      setError(errorText(configureError))
+      signal(false)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const setBarcodeMode = async (enabled: boolean) => {
-    if (!supabase || !session || busy) return
+    if (!supabase || !session || busy || !deviceReady) return
     setBusy(true)
     setError('')
     try {
@@ -433,7 +603,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   const setBoxMode = async (enabled: boolean) => {
-    if (!supabase || !session || busy) return
+    if (!supabase || !session || busy || !deviceReady) return
     setBusy(true)
     setError('')
     try {
@@ -458,7 +628,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   const handleScan = async (rawValue?: string) => {
-    if (!supabase || !session || busy || session.status === 'completed') return
+    if (!supabase || !session || busy || !deviceReady || session.status === 'completed') return
     setError('')
     setNotice('')
     setBusy(true)
@@ -600,10 +770,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   cameraResultRef.current = (scannedValue: string) => { void handleScan(scannedValue) }
 
   useEffect(() => {
-    if (!cameraOpen) {
+    if (!cameraOpen || !deviceReady) {
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
       cameraStreamRef.current = null
       setCameraLoading(false)
+      if (!deviceReady) setCameraOpen(false)
       return
     }
 
@@ -706,13 +877,13 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
       cameraStreamRef.current = null
     }
-  }, [cameraOpen])
+  }, [cameraOpen, deviceReady])
 
   // Аппаратный сканер работает как клавиатура. Даже если сотрудник случайно
   // кликнул по заголовку, списку или кнопке, первый символ следующего скана
   // возвращает ввод в единственное рабочее поле этой модалки.
   useEffect(() => {
-    if (cameraOpen || busy || loading || session?.status === 'completed') return
+    if (!deviceReady || cameraOpen || busy || loading || session?.status === 'completed') return
 
     const focusInput = () => inputRef.current?.focus({ preventScroll: true })
     const appendScannerValue = (chunk: string) => {
@@ -776,10 +947,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       document.removeEventListener('keyup', handleDocumentKeyUp, true)
       altNumpadDigitsRef.current = ''
     }
-  }, [busy, cameraOpen, loading, session?.status])
+  }, [busy, cameraOpen, deviceReady, loading, session?.status])
 
   const releasePending = async () => {
-    if (!supabase || !session || busy) return
+    if (!supabase || !session || busy || !deviceReady) return
     setBusy(true)
     setError('')
     try {
@@ -798,7 +969,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   const removePair = async (pair: ScanPair) => {
-    if (!supabase || !session || !['draft', 'error'].includes(pair.status) || !window.confirm(`Удалить пару заказа №${pair.order_id}?`)) return
+    if (!supabase || !session || !deviceReady || !['draft', 'error'].includes(pair.status) || !window.confirm(`Удалить пару заказа №${pair.order_id}?`)) return
     setBusy(true)
     try {
       const { error: removeError } = await (supabase as any).rpc('delete_fbs_marking_pair', {
@@ -815,7 +986,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   const removeAllPairs = async () => {
-    if (!supabase || !session || busy) return
+    if (!supabase || !session || busy || !deviceReady) return
     const removablePairs = pairs.filter((pair) => pair.status === 'draft' || pair.status === 'error')
     if (removablePairs.length === 0) return
     if (!window.confirm(`Удалить все неотправленные пары: ${removablePairs.length}? Отменить это действие нельзя.`)) return
@@ -856,7 +1027,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   const recoverSession = async (source: RecoverableScanSession) => {
-    if (!supabase || !session || busy || !window.confirm(`Забрать сохранённые пары с устройства ${source.device_name || source.device_id.slice(0, 6)}?`)) return
+    if (!supabase || !session || busy || !deviceReady || !window.confirm(`Забрать сохранённые пары с устройства ${source.device_name || source.device_id.slice(0, 6)}?`)) return
     setBusy(true)
     setError('')
     try {
@@ -876,7 +1047,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   const discardSession = async (source: RecoverableScanSession) => {
-    if (!supabase || !session || busy) return
+    if (!supabase || !session || busy || !deviceReady) return
     const pendingText = source.pending_order_id || source.pending_product_barcode
       ? ' Незавершённое текущее сканирование также будет сброшено.'
       : ''
@@ -886,6 +1057,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     try {
       const { data, error: discardError } = await (supabase as any).rpc('discard_fbs_marking_session', {
         p_source_session_id: source.id,
+        p_target_session_id: session.id,
+        p_device_id: stableDeviceId,
       })
       if (discardError) throw discardError
       await loadRecoverableSessions(session.id)
@@ -955,7 +1128,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   const finish = async () => {
-    if (!session || busy) return
+    if (!session || busy || !deviceReady) return
     if (session.pending_order_id || session.pending_product_barcode) {
       setError('Сначала завершите текущую пару или сбросьте её')
       signal(false)
@@ -1016,7 +1189,18 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const selectedPairOrder = selectedPair ? ordersById.get(selectedPair.order_id) : null
   const selectedKizParts = selectedPair?.sgtin.split(GS) ?? []
   const selectedKizMatch = selectedPair ? /^01(\d{14})21([^\u001d]+)/.exec(selectedPair.sgtin) : null
+  const scannerStatusLabel = deviceProfile.scannerTestStatus === 'passed'
+    ? 'Проверен'
+    : deviceProfile.scannerTestStatus === 'failed'
+      ? 'Тест не пройден'
+      : 'Не проверен'
+  const scannerStatusClass = deviceProfile.scannerTestStatus === 'passed'
+    ? 'border-emerald-200 bg-emerald-100 text-emerald-700'
+    : deviceProfile.scannerTestStatus === 'failed'
+      ? 'border-red-200 bg-red-100 text-red-700'
+      : 'border-slate-200 bg-slate-100 text-slate-600'
   const openCamera = () => {
+    if (!deviceReady) return
     inputRef.current?.blur()
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
     setCameraOpen(true)
@@ -1040,7 +1224,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         className="flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-white"
         onClick={(event) => event.stopPropagation()}
         onPointerDownCapture={(event) => {
-          if (cameraOpen || (window.matchMedia?.('(pointer: coarse)').matches ?? false)) return
+          if (!deviceReady || cameraOpen || (window.matchMedia?.('(pointer: coarse)').matches ?? false)) return
           const target = event.target as HTMLElement
           if (target.closest('input, textarea, select, button, a, [contenteditable="true"]')) return
           window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
@@ -1049,7 +1233,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         <header className="flex shrink-0 items-start justify-between border-b border-slate-100 px-4 py-3 sm:px-6 sm:py-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900 sm:text-xl">Сканирование КИЗ</h2>
-            <p className="mt-1 text-xs text-slate-500">{storeName} · устройство {stableDeviceId.slice(0, 6)}</p>
+            <p className="mt-1 text-xs text-slate-500">{storeName} · {session?.device_named ? session.device_name : 'имя устройства не задано'}</p>
           </div>
           <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200">×</button>
         </header>
@@ -1060,6 +1244,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           ) : (
             <>
               <section className={`rounded-2xl border-2 p-3 text-center sm:rounded-3xl sm:p-6 ${session?.pending_order_id ? 'border-emerald-300 bg-emerald-50' : 'border-violet-300 bg-violet-50'}`}>
+                {!deviceReady && (
+                  <div className="mx-auto mb-3 max-w-2xl rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 sm:mb-4 sm:text-sm">
+                    Сначала назовите устройство кнопкой внизу. До этого сканирование заблокировано.
+                  </div>
+                )}
                 <div className="mx-auto mb-3 max-w-xl sm:mb-4 sm:px-2">
                   <div className="fbs-scan-steps flex items-start">
                     {allScanSteps.map((step) => {
@@ -1109,7 +1298,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       <input
                         type="checkbox"
                         checked={boxEnabled}
-                        disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
+                        disabled={!deviceReady || busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
                         onChange={(event) => void setBoxMode(event.target.checked)}
                         className="peer sr-only"
                       />
@@ -1120,16 +1309,33 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       <input
                         type="checkbox"
                         checked={Boolean(session?.barcode_scan_enabled)}
-                        disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
+                        disabled={!deviceReady || busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)}
                         onChange={(event) => void setBarcodeMode(event.target.checked)}
                         className="peer sr-only"
                       />
                       <span className="relative h-5 w-9 shrink-0 rounded-full bg-slate-200 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-violet-600 peer-checked:after:translate-x-4 peer-disabled:opacity-50" />
                     </label>
+                    {scannerSelectionVisible && (
+                      <button
+                        type="button"
+                        disabled={!deviceReady || busy || cameraOpen}
+                        onClick={() => setScannerDialogOpen(true)}
+                        className="col-span-2 flex min-h-[58px] items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-center transition-colors hover:border-violet-300 disabled:cursor-not-allowed disabled:opacity-50 sm:rounded-2xl sm:px-4 sm:py-3"
+                      >
+                        {deviceProfile.scannerModel ? (
+                          <span className={`inline-flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold sm:text-sm ${scannerStatusClass}`}>
+                            <span className="truncate">{deviceProfile.scannerModel}</span>
+                            <span className="rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-bold uppercase sm:text-[10px]">{scannerStatusLabel}</span>
+                          </span>
+                        ) : (
+                          <span className="text-xs font-semibold text-slate-500 sm:text-sm">Сканер не выбран</span>
+                        )}
+                      </button>
+                    )}
                     <button
                       type="button"
                       aria-pressed={testKizScan}
-                      disabled={busy || cameraOpen}
+                      disabled={!deviceReady || busy || cameraOpen}
                       onClick={() => setTestKizScan((enabled) => !enabled)}
                       className={`col-span-2 flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-colors sm:rounded-2xl sm:px-4 sm:py-3 ${
                         testKizScan
@@ -1154,7 +1360,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       <div className="mt-0.5 truncate text-sm font-bold text-slate-900">P-{activeBox.batchNumber} · S-{activeBox.supplyNumber} · Короб {activeBox.boxNumber}</div>
                       <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">{activeBox.barcode}</div>
                     </div>
-                    <button type="button" disabled={busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)} onClick={() => { setSelectingBox(true); setValue(''); window.requestAnimationFrame(() => inputRef.current?.focus()) }} className="shrink-0 rounded-xl border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40">Сменить</button>
+                    <button type="button" disabled={!deviceReady || busy || Boolean(session?.pending_order_id || session?.pending_product_barcode)} onClick={() => { setSelectingBox(true); setValue(''); window.requestAnimationFrame(() => inputRef.current?.focus()) }} className="shrink-0 rounded-xl border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40">Сменить</button>
                   </div>
                 )}
                 {session?.pending_product_barcode && !session.pending_order_id && (
@@ -1172,7 +1378,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       ref={inputRef}
                       value={value}
                       onChange={(event) => setValue(normalizeScannerKeyboardLayout(event.target.value))}
-                      disabled={busy}
+                      disabled={!deviceReady || busy}
                       autoComplete="off"
                       spellCheck={false}
                       placeholder={boxScanMode ? 'QR короба' : barcodeStep ? 'Баркод товара' : session?.pending_order_id ? 'КИЗ' : 'QR заказа WB'}
@@ -1180,7 +1386,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                     />
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={!deviceReady || busy}
                       onClick={openCamera}
                       className="flex h-12 w-12 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-40 sm:h-auto sm:w-auto sm:rounded-2xl sm:px-4 sm:py-3"
                       title="Сканировать камерой телефона"
@@ -1188,11 +1394,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3h5Z"/><circle cx="12" cy="13" r="3"/></svg>
                       <span className="hidden sm:inline">Камера</span>
                     </button>
-                    <button type="submit" disabled={busy || value.length === 0} className="col-span-2 h-12 rounded-xl bg-violet-600 px-6 text-sm font-semibold text-white disabled:opacity-40 sm:col-span-1 sm:h-auto sm:rounded-2xl sm:py-3">{busy ? 'Сохраняем…' : 'Принять'}</button>
+                    <button type="submit" disabled={!deviceReady || busy || value.length === 0} className="col-span-2 h-12 rounded-xl bg-violet-600 px-6 text-sm font-semibold text-white disabled:opacity-40 sm:col-span-1 sm:h-auto sm:rounded-2xl sm:py-3">{busy ? 'Сохраняем…' : 'Принять'}</button>
                   </form>
                 )}
                 {(session?.pending_order_id || session?.pending_product_barcode) && session.status !== 'completed' && (
-                  <button type="button" onClick={() => void releasePending()} disabled={busy} className="mt-3 text-xs font-medium text-slate-500 underline hover:text-red-600">Сбросить текущую пару</button>
+                  <button type="button" onClick={() => void releasePending()} disabled={!deviceReady || busy} className="mt-3 text-xs font-medium text-slate-500 underline hover:text-red-600 disabled:opacity-40">Сбросить текущую пару</button>
                 )}
               </section>
 
@@ -1206,8 +1412,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       <div key={source.id} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 text-xs text-slate-600">
                         <span>{source.device_name || `Устройство ${source.device_id.slice(0, 6)}`} · сохранено пар: {source.recoverable_pair_count}</span>
                         <div className="flex shrink-0 items-center gap-3">
-                          <button type="button" onClick={() => void recoverSession(source)} disabled={busy} className="font-semibold text-violet-700 hover:underline">Забрать работу</button>
-                          <button type="button" onClick={() => void discardSession(source)} disabled={busy} className="font-semibold text-red-600 hover:underline">Удалить</button>
+                          <button type="button" onClick={() => void recoverSession(source)} disabled={!deviceReady || busy} className="font-semibold text-violet-700 hover:underline disabled:opacity-40">Забрать работу</button>
+                          <button type="button" onClick={() => void discardSession(source)} disabled={!deviceReady || busy} className="font-semibold text-red-600 hover:underline disabled:opacity-40">Удалить</button>
                         </div>
                       </div>
                     ))}
@@ -1230,7 +1436,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       <button
                         type="button"
                         onClick={() => void removeAllPairs()}
-                        disabled={busy}
+                        disabled={!deviceReady || busy}
                         className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         Очистить очередь
@@ -1265,7 +1471,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                           <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${pair.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : pair.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-violet-100 text-violet-700'}`}>
                             {pair.status === 'sent' ? 'В WB' : pair.status === 'error' ? 'Ошибка' : 'Готово'}
                           </span>
-                          {['draft', 'error'].includes(pair.status) && <button type="button" title="Удалить ошибочную пару" onClick={(event) => { event.stopPropagation(); void removePair(pair) }} disabled={busy} className="text-lg text-slate-300 hover:text-red-500">×</button>}
+                          {['draft', 'error'].includes(pair.status) && <button type="button" title="Удалить ошибочную пару" onClick={(event) => { event.stopPropagation(); void removePair(pair) }} disabled={!deviceReady || busy} className="text-lg text-slate-300 hover:text-red-500 disabled:opacity-40">×</button>}
                         </div>
                       )
                     })}
@@ -1276,13 +1482,91 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           )}
         </div>
 
-        <footer className="grid shrink-0 grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] items-center gap-2 border-t border-slate-100 px-3 pt-3 [padding-bottom:max(0.75rem,env(safe-area-inset-bottom))] sm:flex sm:justify-between sm:px-6 sm:py-4">
-          <span className="hidden text-xs text-slate-500 sm:block">QR WB и КИЗ уникальны. Товарный баркод можно повторять в следующей паре.</span>
-          <div className="contents sm:flex sm:gap-2">
+        <footer className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-t border-slate-100 px-3 pt-3 [padding-bottom:max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
+          <button
+            type="button"
+            onClick={openDeviceNameDialog}
+            disabled={loading || busy || !session}
+            className={`flex h-12 min-w-0 items-center gap-2 rounded-xl border px-3 text-left text-xs font-semibold transition-colors disabled:opacity-40 sm:h-auto sm:max-w-sm sm:px-4 sm:py-2.5 sm:text-sm ${
+              deviceReady
+                ? 'border-slate-200 bg-white text-slate-700 hover:border-violet-300 hover:text-violet-700'
+                : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+            }`}
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg>
+            <span className="min-w-0 truncate">{deviceReady ? session?.device_name : 'Назвать устройство'}</span>
+            {deviceReady && <span className="shrink-0 text-[10px] font-medium text-slate-400">Изменить</span>}
+          </button>
+          <div className="flex shrink-0 gap-2">
             <button type="button" onClick={onClose} className={`h-12 rounded-xl border border-slate-200 px-3 text-sm font-medium text-slate-600 sm:h-auto sm:px-4 sm:py-2.5 ${session?.status === 'completed' ? 'col-span-2' : ''}`}>Закрыть</button>
-            {session?.status !== 'completed' && <button type="button" onClick={() => void finish()} disabled={busy || loading || pairs.length === 0} className="h-12 whitespace-nowrap rounded-xl bg-violet-600 px-3 text-sm font-semibold text-white disabled:opacity-40 sm:h-auto sm:px-5 sm:py-2.5"><span className="sm:hidden">Отправить в WB</span><span className="hidden sm:inline">Завершить и отправить в WB</span></button>}
+            {session?.status !== 'completed' && <button type="button" onClick={() => void finish()} disabled={!deviceReady || busy || loading || pairs.length === 0} className="h-12 whitespace-nowrap rounded-xl bg-violet-600 px-3 text-sm font-semibold text-white disabled:opacity-40 sm:h-auto sm:px-5 sm:py-2.5"><span className="sm:hidden">Отправить</span><span className="hidden sm:inline">Завершить и отправить в WB</span></button>}
           </div>
         </footer>
+
+        {deviceNameDialogOpen && (
+          <div className="fixed inset-0 z-[130] flex h-[100dvh] items-end justify-center bg-slate-950/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label="Имя устройства" onClick={() => { if (!busy) setDeviceNameDialogOpen(false) }}>
+            <form className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-6" onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void saveDeviceName() }}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Имя устройства</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">Например: «Ноутбук упаковки» или «Телефон склада».</p>
+                </div>
+                <button type="button" disabled={busy} onClick={() => setDeviceNameDialogOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200 disabled:opacity-40">×</button>
+              </div>
+              <input
+                autoFocus
+                value={deviceNameInput}
+                onChange={(event) => setDeviceNameInput(event.target.value.slice(0, 80))}
+                disabled={busy}
+                maxLength={80}
+                placeholder="Введите имя устройства"
+                className="mt-5 h-12 w-full rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:opacity-50"
+              />
+              <div className="mt-5 flex justify-end gap-2">
+                <button type="button" disabled={busy} onClick={() => setDeviceNameDialogOpen(false)} className="h-11 rounded-xl border border-slate-200 px-4 text-sm font-medium text-slate-600 disabled:opacity-40">Отмена</button>
+                <button type="submit" disabled={busy || deviceNameInput.trim().length < 2} className="h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white disabled:opacity-40">{busy ? 'Сохраняем…' : 'Сохранить'}</button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {scannerDialogOpen && scannerSelectionVisible && (
+          <div className="fixed inset-0 z-[125] flex h-[100dvh] items-end justify-center bg-slate-950/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label="Выбор USB-сканера" onClick={() => { if (!busy) setScannerDialogOpen(false) }}>
+            <div className="flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">USB-сканер</h3>
+                  <p className="mt-1 text-xs text-slate-500">На этом устройстве одновременно выбирается одна модель.</p>
+                </div>
+                <button type="button" disabled={busy} onClick={() => setScannerDialogOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200 disabled:opacity-40">×</button>
+              </div>
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4 sm:p-5">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void selectScannerModel(null)}
+                  className={`flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition-colors disabled:opacity-40 ${deviceProfile.scannerModel === null ? 'border-violet-400 bg-violet-50 text-violet-800' : 'border-slate-200 text-slate-700 hover:border-violet-300'}`}
+                >
+                  <span>Сканер не выбран</span>
+                  {deviceProfile.scannerModel === null && <span className="text-violet-600">✓</span>}
+                </button>
+                {SCANNER_MODELS.map((model) => (
+                  <button
+                    key={model}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void selectScannerModel(model)}
+                    className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition-colors disabled:opacity-40 ${deviceProfile.scannerModel === model ? 'border-violet-400 bg-violet-50 text-violet-800' : 'border-slate-200 text-slate-700 hover:border-violet-300'}`}
+                  >
+                    <span>{model}</span>
+                    {deviceProfile.scannerModel === model && <span className="shrink-0 text-violet-600">✓</span>}
+                  </button>
+                ))}
+              </div>
+              <div className="border-t border-slate-100 px-4 py-3 text-center text-[11px] text-slate-500 sm:px-5">Выбор пока ничего не перенастраивает и не ограничивает работу.</div>
+            </div>
+          </div>
+        )}
 
         {selectedPair && testKizScan && (
           <div className="fixed inset-0 z-[110] flex h-[100dvh] items-end justify-center bg-slate-950/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label={`Данные скана заказа ${selectedPair.order_id}`} onClick={() => setSelectedPair(null)}>
