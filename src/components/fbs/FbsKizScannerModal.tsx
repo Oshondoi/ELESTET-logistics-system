@@ -27,7 +27,14 @@ type ScanPair = {
   wb_qr: string
   sgtin: string
   status: 'draft' | 'sending' | 'sent' | 'error'
-  product_snapshot: { nm_id?: number; article?: string; barcode?: string; supply_id?: string }
+  product_snapshot: {
+    nm_id?: number
+    chrt_id?: number
+    article?: string
+    barcode?: string
+    supply_id?: string
+    source_box_id?: string
+  }
   error: string | null
   created_at: string
 }
@@ -68,6 +75,12 @@ type OrderView = {
   productSize: string | null
   productBarcode: string | null
   supply_id: string | null
+  nmId?: number
+  article?: string
+  photoUrl?: string | null
+  productBrand?: string | null
+  productColor?: string | null
+  productVendorCode?: string | null
 }
 
 type Props = {
@@ -80,6 +93,7 @@ type Props = {
 }
 
 const DEVICE_KEY = 'elestet_fbs_scanner_device_v1'
+const GS = '\u001d'
 
 function deviceId(): string {
   const saved = localStorage.getItem(DEVICE_KEY)
@@ -96,6 +110,17 @@ function cleanScan(value: string, trimSpaces: boolean): string {
 
 function scannerBytesToString(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
+}
+
+function scanTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function scanCandidates(value: string): string[] {
@@ -218,6 +243,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [testKizScan, setTestKizScan] = useState(false)
+  const [selectedPair, setSelectedPair] = useState<ScanPair | null>(null)
+  const [selectedPairBox, setSelectedPairBox] = useState<ActiveBoxInfo | null>(null)
+  const [selectedPairBoxLoading, setSelectedPairBoxLoading] = useState(false)
+  const [selectedPairBoxError, setSelectedPairBoxError] = useState('')
   const [cameraOpen, setCameraOpen] = useState(false)
   const [cameraError, setCameraError] = useState('')
   const [cameraLoading, setCameraLoading] = useState(false)
@@ -228,6 +257,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const cameraResultRef = useRef<(value: string) => void>(() => undefined)
   const sessionRef = useRef<ScanSession | null>(null)
   const testKizScanRef = useRef(false)
+  const pairDetailsRequestRef = useRef(0)
   sessionRef.current = session
   testKizScanRef.current = testKizScan
 
@@ -826,6 +856,63 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
+  const openPairDetails = async (pair: ScanPair) => {
+    if (!supabase || !testKizScan) return
+    const requestId = pairDetailsRequestRef.current + 1
+    pairDetailsRequestRef.current = requestId
+    setSelectedPair(pair)
+    setSelectedPairBox(null)
+    setSelectedPairBoxError('')
+    const sourceBoxId = pair.product_snapshot.source_box_id
+    if (!sourceBoxId) {
+      setSelectedPairBoxLoading(false)
+      return
+    }
+    if (activeBox?.boxId === sourceBoxId) {
+      setSelectedPairBox(activeBox)
+      setSelectedPairBoxLoading(false)
+      return
+    }
+
+    setSelectedPairBoxLoading(true)
+    try {
+      const { data: box, error: boxError } = await (supabase as any)
+        .from('fulfillment_boxes')
+        .select('id, barcode, box_number, supply_id')
+        .eq('id', sourceBoxId)
+        .maybeSingle()
+      if (boxError) throw boxError
+      if (!box) throw new Error('Короб не найден')
+      const { data: supply, error: supplyError } = await (supabase as any)
+        .from('fulfillment_supplies')
+        .select('supply_number, batch_id')
+        .eq('id', box.supply_id)
+        .maybeSingle()
+      if (supplyError) throw supplyError
+      if (!supply) throw new Error('Приёмка короба не найдена')
+      const { data: batch, error: batchError } = await (supabase as any)
+        .from('fulfillment_batches')
+        .select('short_id, name')
+        .eq('id', supply.batch_id)
+        .maybeSingle()
+      if (batchError) throw batchError
+      if (!batch) throw new Error('Партия короба не найдена')
+      if (pairDetailsRequestRef.current !== requestId) return
+      setSelectedPairBox({
+        boxId: String(box.id),
+        barcode: String(box.barcode ?? ''),
+        boxNumber: Number(box.box_number),
+        supplyNumber: Number(supply.supply_number),
+        batchNumber: Number(batch.short_id),
+        batchName: String(batch.name ?? ''),
+      })
+    } catch (boxLoadError) {
+      if (pairDetailsRequestRef.current === requestId) setSelectedPairBoxError(errorText(boxLoadError))
+    } finally {
+      if (pairDetailsRequestRef.current === requestId) setSelectedPairBoxLoading(false)
+    }
+  }
+
   const finish = async () => {
     if (!session || busy) return
     if (session.pending_order_id || session.pending_product_barcode) {
@@ -885,6 +972,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         ? (boxEnabled ? 2 : 1)
         : totalSteps - 1
   const scanTarget = boxScanMode ? 'QR короба' : barcodeStep ? 'баркод товара' : session?.pending_order_id ? 'КИЗ' : 'QR WB'
+  const selectedPairOrder = selectedPair ? ordersById.get(selectedPair.order_id) : null
+  const selectedKizParts = selectedPair?.sgtin.split(GS) ?? []
+  const selectedKizMatch = selectedPair ? /^01(\d{14})21([^\u001d]+)/.exec(selectedPair.sgtin) : null
   const openCamera = () => {
     inputRef.current?.blur()
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
@@ -1091,22 +1181,38 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
               </div>
 
               <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 sm:mt-5">
-                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">Отсканированные пары</div>
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-700">Отсканированные пары</span>
+                  {testKizScan && pairs.length > 0 && <span className="text-[10px] font-semibold text-emerald-700 sm:text-xs">Нажмите на заказ — покажем данные скана</span>}
+                </div>
                 {pairs.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-400">Пока ничего не отсканировано</div> : (
                   <div className="divide-y divide-slate-100">
                     {pairs.map((pair) => {
                       const order = ordersById.get(pair.order_id)
                       return (
-                        <div key={pair.id} className="flex items-center gap-4 px-4 py-3">
+                        <div
+                          key={pair.id}
+                          role={testKizScan ? 'button' : undefined}
+                          tabIndex={testKizScan ? 0 : undefined}
+                          onClick={() => { if (testKizScan) void openPairDetails(pair) }}
+                          onKeyDown={(event) => {
+                            if (testKizScan && (event.key === 'Enter' || event.key === ' ')) {
+                              event.preventDefault()
+                              void openPairDetails(pair)
+                            }
+                          }}
+                          className={`flex items-center gap-3 px-4 py-3 text-left transition-colors sm:gap-4 ${testKizScan ? 'cursor-pointer hover:bg-emerald-50/60 focus:bg-emerald-50/60 focus:outline-none' : ''}`}
+                        >
                           <div className="min-w-0 flex-1">
                             <div className="text-sm font-semibold text-slate-800">Заказ № {pair.order_id}</div>
                             <div className="mt-0.5 truncate text-xs text-slate-500">{order?.productName || pair.product_snapshot.article || 'Товар'} · КИЗ: <span className="font-mono">{pair.sgtin}</span></div>
                             {pair.error && <div className="mt-1 text-xs font-medium text-red-600">{pairErrorText(pair.error, pair.order_id)}</div>}
                           </div>
+                          {testKizScan && <span className="hidden text-xs font-semibold text-emerald-700 sm:inline">Данные</span>}
                           <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${pair.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : pair.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-violet-100 text-violet-700'}`}>
                             {pair.status === 'sent' ? 'В WB' : pair.status === 'error' ? 'Ошибка' : 'Готово'}
                           </span>
-                          {['draft', 'error'].includes(pair.status) && <button type="button" title="Удалить ошибочную пару" onClick={() => void removePair(pair)} disabled={busy} className="text-lg text-slate-300 hover:text-red-500">×</button>}
+                          {['draft', 'error'].includes(pair.status) && <button type="button" title="Удалить ошибочную пару" onClick={(event) => { event.stopPropagation(); void removePair(pair) }} disabled={busy} className="text-lg text-slate-300 hover:text-red-500">×</button>}
                         </div>
                       )
                     })}
@@ -1124,6 +1230,115 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
             {session?.status !== 'completed' && <button type="button" onClick={() => void finish()} disabled={busy || loading || pairs.length === 0} className="h-12 whitespace-nowrap rounded-xl bg-violet-600 px-3 text-sm font-semibold text-white disabled:opacity-40 sm:h-auto sm:px-5 sm:py-2.5"><span className="sm:hidden">Отправить в WB</span><span className="hidden sm:inline">Завершить и отправить в WB</span></button>}
           </div>
         </footer>
+
+        {selectedPair && testKizScan && (
+          <div className="fixed inset-0 z-[110] flex h-[100dvh] items-end justify-center bg-slate-950/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label={`Данные скана заказа ${selectedPair.order_id}`} onClick={() => setSelectedPair(null)}>
+            <div className="flex max-h-[94dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-h-[90dvh] sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
+              <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-4 py-4 sm:px-6">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-lg font-bold text-slate-900">Данные скана</h3>
+                    <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase text-emerald-700">ТЕСТ скан</span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">Заказ № {selectedPair.order_id} · {scanTime(selectedPair.created_at)}</div>
+                </div>
+                <button type="button" onClick={() => setSelectedPair(null)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200">×</button>
+              </header>
+
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 sm:space-y-4 sm:p-5">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-2xl bg-slate-50 px-3 py-2.5">
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Магазин WB</div>
+                    <div className="mt-1 truncate text-sm font-semibold text-slate-800">{storeName}</div>
+                  </div>
+                  <div className="rounded-2xl bg-slate-50 px-3 py-2.5">
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Состояние пары</div>
+                    <div className={`mt-1 text-sm font-semibold ${selectedPair.status === 'sent' ? 'text-emerald-700' : selectedPair.status === 'error' ? 'text-red-600' : 'text-violet-700'}`}>
+                      {selectedPair.status === 'sent' ? 'Передана в WB' : selectedPair.status === 'error' ? 'Ошибка отправки' : selectedPair.status === 'sending' ? 'Отправляется' : 'Ожидает отправки'}
+                    </div>
+                  </div>
+                </div>
+
+                <section className="rounded-2xl border border-violet-200 bg-violet-50/60 p-3 sm:p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-violet-500">QR заказа WB</div>
+                      <div className="mt-1 text-sm font-bold text-slate-900">Задание № {selectedPair.order_id}</div>
+                    </div>
+                    <span className="rounded-lg bg-white px-2 py-1 text-[10px] font-semibold text-violet-600 shadow-sm">QR принят</span>
+                  </div>
+                  <div className="mt-2 break-all rounded-xl bg-white px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-600">{selectedPair.wb_qr}</div>
+                </section>
+
+                <section className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 sm:p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-emerald-600">КИЗ, сохранённый системой</div>
+                    <div className="text-[10px] font-semibold text-emerald-700">Байт: {selectedPair.sgtin.length} · GS: {Math.max(0, selectedKizParts.length - 1)}</div>
+                  </div>
+                  <div className="mt-2 break-all rounded-xl bg-slate-950 px-3 py-3 font-mono text-xs leading-6 text-emerald-200">
+                    {selectedKizParts.map((part, index) => (
+                      <span key={`${index}-${part}`}>
+                        {index > 0 && <span className="mx-1 inline-flex rounded bg-amber-400 px-1.5 py-0.5 align-middle text-[9px] font-black leading-none text-slate-950">GS</span>}
+                        {part}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <span className="text-[10px] text-slate-400">GTIN</span>
+                      <div className="break-all font-mono text-xs font-semibold text-slate-700">{selectedKizMatch?.[1] ?? 'Не определён'}</div>
+                    </div>
+                    <div className="rounded-xl bg-white px-3 py-2">
+                      <span className="text-[10px] text-slate-400">Серийный номер</span>
+                      <div className="break-all font-mono text-xs font-semibold text-slate-700">{selectedKizMatch?.[2] ?? 'Не определён'}</div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 p-3 sm:p-4">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Товар</div>
+                  <div className="mt-2 flex gap-3">
+                    {selectedPairOrder?.photoUrl && <img src={selectedPairOrder.photoUrl} alt="" className="h-16 w-12 shrink-0 rounded-xl object-cover" />}
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold leading-snug text-slate-900">{selectedPairOrder?.productName || selectedPair.product_snapshot.article || 'Товар WB'}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {[selectedPairOrder?.productBrand, selectedPairOrder?.productColor, selectedPairOrder?.productSize].filter(Boolean).join(' · ') || 'Характеристики не получены'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div className="rounded-xl bg-slate-50 px-3 py-2"><span className="text-[10px] text-slate-400">Арт. WB</span><div className="font-mono text-xs font-semibold text-slate-700">{selectedPair.product_snapshot.nm_id ?? selectedPairOrder?.nmId ?? '—'}</div></div>
+                    <div className="rounded-xl bg-slate-50 px-3 py-2"><span className="text-[10px] text-slate-400">Артикул</span><div className="truncate text-xs font-semibold text-slate-700">{selectedPairOrder?.productVendorCode || selectedPair.product_snapshot.article || selectedPairOrder?.article || '—'}</div></div>
+                    <div className="rounded-xl bg-slate-50 px-3 py-2"><span className="text-[10px] text-slate-400">Баркод товара</span><div className="break-all font-mono text-xs font-semibold text-slate-700">{selectedPair.product_snapshot.barcode || selectedPairOrder?.productBarcode || 'Не использовался'}</div></div>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 p-3 sm:p-4">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Короб</div>
+                  {!selectedPair.product_snapshot.source_box_id ? (
+                    <div className="mt-2 text-sm text-slate-500">Контроль короба для этой пары не использовался.</div>
+                  ) : selectedPairBoxLoading ? (
+                    <div className="mt-2 text-sm text-slate-500">Загружаем данные короба…</div>
+                  ) : selectedPairBox ? (
+                    <div className="mt-2">
+                      <div className="text-sm font-bold text-slate-900">P-{selectedPairBox.batchNumber} · S-{selectedPairBox.supplyNumber} · Короб {selectedPairBox.boxNumber}</div>
+                      <div className="mt-1 text-xs text-slate-500">Магазин WB: <b className="text-slate-700">{storeName}</b>{selectedPairBox.batchName ? ` · ${selectedPairBox.batchName}` : ''}</div>
+                      <div className="mt-2 break-all rounded-xl bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700">{selectedPairBox.barcode || 'ШК короба не получен'}</div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-sm text-red-600">{selectedPairBoxError || `Данные короба ${selectedPair.product_snapshot.source_box_id} не найдены`}</div>
+                  )}
+                </section>
+
+                {selectedPair.error && <div className="rounded-2xl bg-red-50 px-4 py-3 text-xs font-medium text-red-700">{pairErrorText(selectedPair.error, selectedPair.order_id)}</div>}
+              </div>
+
+              <footer className="shrink-0 border-t border-slate-100 p-3 sm:px-5 sm:py-4">
+                <button type="button" onClick={() => setSelectedPair(null)} className="h-11 w-full rounded-xl bg-slate-900 text-sm font-semibold text-white hover:bg-slate-800">Закрыть</button>
+              </footer>
+            </div>
+          </div>
+        )}
 
         {cameraOpen && session?.status !== 'completed' && (
           <div className="fixed inset-0 z-[100] flex h-[100dvh] flex-col bg-slate-950" role="dialog" aria-modal="true" aria-label={`Сканирование камерой: ${scanTarget}`}>
