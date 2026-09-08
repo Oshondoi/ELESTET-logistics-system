@@ -302,7 +302,6 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [testKizScan, setTestKizScan] = useState(false)
   const [selectedPair, setSelectedPair] = useState<ScanPair | null>(null)
   const [selectedPairBox, setSelectedPairBox] = useState<ActiveBoxInfo | null>(null)
   const [selectedPairBoxLoading, setSelectedPairBoxLoading] = useState(false)
@@ -319,10 +318,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const cameraResultRef = useRef<(value: string) => void>(() => undefined)
   const sessionRef = useRef<ScanSession | null>(null)
-  const testKizScanRef = useRef(false)
   const pairDetailsRequestRef = useRef(0)
   sessionRef.current = session
-  testKizScanRef.current = testKizScan
 
   const ordersById = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders])
   const catalogByScan = useMemo(() => buildCatalogMap(catalog), [catalog])
@@ -782,9 +779,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     let handled = false
     let controls: { stop(): void } | null = null
     let scanTimer: number | null = null
-    const useTestKizDecoder = testKizScanRef.current && Boolean(sessionRef.current?.pending_order_id)
+    const useRawKizDecoder = Boolean(sessionRef.current?.pending_order_id)
     setCameraError('')
-    setCameraLoading(useTestKizDecoder)
+    setCameraLoading(useRawKizDecoder)
     void (async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера не поддерживается браузером')
@@ -800,7 +797,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         if (!cameraVideoRef.current) return
         cameraVideoRef.current.srcObject = stream
         await cameraVideoRef.current.play()
-        if (useTestKizDecoder) {
+        if (useRawKizDecoder) {
           const { prepareZXingModule, readBarcodes } = await import('zxing-wasm/reader')
           await prepareZXingModule({
             fireImmediately: true,
@@ -842,7 +839,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   return
                 }
               } catch {
-                if (!cancelled) setCameraError('ТЕСТ скан не смог обработать кадр. Выключите режим и используйте обычное сканирование.')
+                if (!cancelled) setCameraError('Не удалось прочитать КИЗ. Наведите камеру ровно на DataMatrix и повторите.')
               }
             }
             if (!cancelled && !handled) scanTimer = window.setTimeout(() => { void scanFrame() }, 140)
@@ -863,8 +860,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       } catch {
         if (!cancelled) {
           setCameraLoading(false)
-          setCameraError(useTestKizDecoder
-            ? 'Не удалось запустить ТЕСТ скан. Выключите режим и используйте обычное сканирование.'
+          setCameraError(useRawKizDecoder
+            ? 'Не удалось запустить сканирование КИЗа. Повторите или введите КИЗ сканером.'
             : 'Не удалось открыть камеру. Разрешите доступ к камере в браузере или используйте сканер.')
         }
       }
@@ -1071,7 +1068,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   const openPairDetails = async (pair: ScanPair) => {
-    if (!supabase || !testKizScan) return
+    if (!supabase) return
     const requestId = pairDetailsRequestRef.current + 1
     pairDetailsRequestRef.current = requestId
     setSelectedPair(pair)
@@ -1332,25 +1329,6 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                         )}
                       </button>
                     )}
-                    <button
-                      type="button"
-                      aria-pressed={testKizScan}
-                      disabled={!deviceReady || busy || cameraOpen}
-                      onClick={() => setTestKizScan((enabled) => !enabled)}
-                      className={`col-span-2 flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-colors sm:rounded-2xl sm:px-4 sm:py-3 ${
-                        testKizScan
-                          ? 'border-emerald-400 bg-emerald-50 text-emerald-800'
-                          : 'border-slate-300 bg-white text-slate-700 hover:border-violet-300'
-                      } disabled:cursor-not-allowed disabled:opacity-50`}
-                    >
-                      <span>
-                        <span className="block text-xs font-bold sm:text-sm">ТЕСТ скан</span>
-                        <span className="block text-[10px] font-medium text-slate-500 sm:text-xs">Новый метод работает только для КИЗа через камеру</span>
-                      </span>
-                      <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${testKizScan ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                        {testKizScan ? 'Включён' : 'Выключен'}
-                      </span>
-                    </button>
                   </div>
                 )}
                 {boxEnabled && activeBox && !boxScanMode && session?.status !== 'completed' && (
@@ -1431,7 +1409,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                 <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
                   <span className="text-sm font-semibold text-slate-700">Отсканированные пары</span>
                   <div className="flex min-w-0 items-center justify-end gap-3">
-                    {testKizScan && pairs.length > 0 && <span className="hidden text-xs font-semibold text-emerald-700 sm:inline">Нажмите на заказ — покажем данные скана</span>}
+                    {pairs.length > 0 && <span className="hidden text-xs font-semibold text-emerald-700 sm:inline">Нажмите на заказ — покажем данные скана</span>}
                     {(draftCount + errorCount) > 0 && (
                       <button
                         type="button"
@@ -1451,23 +1429,23 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                       return (
                         <div
                           key={pair.id}
-                          role={testKizScan ? 'button' : undefined}
-                          tabIndex={testKizScan ? 0 : undefined}
-                          onClick={() => { if (testKizScan) void openPairDetails(pair) }}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => void openPairDetails(pair)}
                           onKeyDown={(event) => {
-                            if (testKizScan && (event.key === 'Enter' || event.key === ' ')) {
+                            if (event.key === 'Enter' || event.key === ' ') {
                               event.preventDefault()
                               void openPairDetails(pair)
                             }
                           }}
-                          className={`flex items-center gap-3 px-4 py-3 text-left transition-colors sm:gap-4 ${testKizScan ? 'cursor-pointer hover:bg-emerald-50/60 focus:bg-emerald-50/60 focus:outline-none' : ''}`}
+                          className="flex cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-emerald-50/60 focus:bg-emerald-50/60 focus:outline-none sm:gap-4"
                         >
                           <div className="min-w-0 flex-1">
                             <div className="text-sm font-semibold text-slate-800">Заказ № {pair.order_id}</div>
                             <div className="mt-0.5 truncate text-xs text-slate-500">{order?.productName || pair.product_snapshot.article || 'Товар'} · КИЗ: <span className="font-mono">{pair.sgtin}</span></div>
                             {pair.error && <div className="mt-1 text-xs font-medium text-red-600">{pairErrorText(pair.error, pair.order_id)}</div>}
                           </div>
-                          {testKizScan && <span className="hidden text-xs font-semibold text-emerald-700 sm:inline">Данные</span>}
+                          <span className="hidden text-xs font-semibold text-emerald-700 sm:inline">Данные</span>
                           <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${pair.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : pair.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-violet-100 text-violet-700'}`}>
                             {pair.status === 'sent' ? 'В WB' : pair.status === 'error' ? 'Ошибка' : 'Готово'}
                           </span>
@@ -1568,15 +1546,12 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           </div>
         )}
 
-        {selectedPair && testKizScan && (
+        {selectedPair && (
           <div className="fixed inset-0 z-[110] flex h-[100dvh] items-end justify-center bg-slate-950/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label={`Данные скана заказа ${selectedPair.order_id}`} onClick={() => setSelectedPair(null)}>
             <div className="flex max-h-[94dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-h-[90dvh] sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
               <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-4 py-4 sm:px-6">
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-lg font-bold text-slate-900">Данные скана</h3>
-                    <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase text-emerald-700">ТЕСТ скан</span>
-                  </div>
+                  <h3 className="text-lg font-bold text-slate-900">Данные скана</h3>
                   <div className="mt-1 text-xs text-slate-500">Заказ № {selectedPair.order_id} · {scanTime(selectedPair.created_at)}</div>
                 </div>
                 <button type="button" onClick={() => setSelectedPair(null)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200">×</button>
@@ -1683,7 +1658,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold">Наведите камеру на {scanTarget}</div>
                 <div className="mt-0.5 text-[11px] text-white/60">
-                  {testKizScan && session?.pending_order_id ? 'ТЕСТ скан · исходные данные DataMatrix' : 'Код распознается автоматически'}
+                  {session?.pending_order_id ? 'КИЗ считывается напрямую из DataMatrix' : 'Код распознается автоматически'}
                 </div>
               </div>
               <button type="button" onClick={() => setCameraOpen(false)} className="flex h-10 shrink-0 items-center rounded-xl bg-white/15 px-4 text-sm font-semibold hover:bg-white/25">Закрыть</button>
@@ -1693,7 +1668,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
                 <div className="aspect-square w-full max-w-[300px] rounded-3xl border-2 border-white/80 shadow-[0_0_0_999px_rgba(0,0,0,0.28)]" />
               </div>
-              {cameraLoading && <div className="absolute inset-x-4 bottom-6 rounded-2xl bg-slate-900/90 px-4 py-3 text-center text-xs font-medium text-white">Запускаем ТЕСТ скан…</div>}
+              {cameraLoading && <div className="absolute inset-x-4 bottom-6 rounded-2xl bg-slate-900/90 px-4 py-3 text-center text-xs font-medium text-white">Запускаем сканирование КИЗа…</div>}
               {cameraError && <div className="absolute inset-x-4 bottom-6 rounded-2xl bg-red-500/90 px-4 py-3 text-center text-xs font-medium text-white">{cameraError}</div>}
             </div>
           </div>
