@@ -2079,8 +2079,9 @@ export function FbsOrdersPage({ accountId }: Props) {
         }))
       }
       // Экран и БД уже получили подтверждённое действие. Фоновая проверка
-      // сверяет ответ WB, но не удерживает пользователя в старой вкладке.
-      void doSync('incremental', fastSyncV2Enabled ? 'automatic' : 'manual')
+      // сверяет ответ WB, но не включает ручной загрузчик и не удерживает
+      // пользователя в старой вкладке даже при legacy sync.
+      void doSync('incremental', 'automatic')
       if (failedIds.length > 0 && failedIds.length < ids.length) {
         alert(`Часть заказов ${operationMode === 'move' ? 'перенесена' : 'добавлена'}. Не удалось ${operationMode === 'move' ? 'перенести' : 'добавить'}: ${failedIds.join(', ')} (возможно устарели или не соответствуют складу поставки)`)
       } else if (failedIds.length === ids.length) {
