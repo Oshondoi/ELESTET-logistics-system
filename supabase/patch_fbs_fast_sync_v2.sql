@@ -328,11 +328,11 @@ begin
     new.synced_at := greatest(old.synced_at, new.synced_at);
   end if;
 
-  -- Membership syncs only change supply_id and synced_at. If an older request
-  -- finishes after a local command, greatest(...) leaves synced_at unchanged;
-  -- in that case the older membership must not move the order backwards.
+  -- A membership observed strictly before the current projection must not move
+  -- the order backwards. Equal timestamps belong to the same sync run: the
+  -- authoritative membership phase is allowed to complete that run.
   if new.supply_id is distinct from old.supply_id
-     and old.synced_at is not null and new.synced_at <= old.synced_at then
+     and old.synced_at is not null and new.synced_at < old.synced_at then
     new.supply_id := old.supply_id;
     new.synced_at := old.synced_at;
   end if;

@@ -1739,20 +1739,20 @@ Deno.serve(async (req) => {
       if (!r.ok) throw new Error(`WB ${r.status}: ${await r.text()}`)
       const created = await r.json() as Record<string, unknown>
       let localSaved = false
-      if (await isFastSyncV2Enabled(String(store_id))) {
-        try {
-          await sbRpc('record_fbs_supply_created_v2', {
-            p_store_id: String(store_id),
-            p_supply_id: String(created.id ?? ''),
-            p_name: String(created.name ?? name ?? ''),
-            p_raw_data: created,
-          })
-          localSaved = true
-        } catch (localSaveError) {
-          // WB уже создал поставку. Ошибка локального сохранения не должна
-          // провоцировать повторный POST и создание второй поставки.
-          console.error(JSON.stringify({ scope: 'wb-fbs', event: 'created_supply_local_save_failed', store_id, supply_id: created.id, error: String(localSaveError) }))
-        }
+      try {
+        // The local projection is part of a confirmed command, not of the sync
+        // engine rollout. Realtime clients must see the new supply immediately.
+        await sbRpc('record_fbs_supply_created_v2', {
+          p_store_id: String(store_id),
+          p_supply_id: String(created.id ?? ''),
+          p_name: String(created.name ?? name ?? ''),
+          p_raw_data: created,
+        })
+        localSaved = true
+      } catch (localSaveError) {
+        // WB has already created the supply. Never repeat the POST: a background
+        // reconciliation will repair the local projection if this write failed.
+        console.error(JSON.stringify({ scope: 'wb-fbs', event: 'created_supply_local_save_failed', store_id, supply_id: created.id, error: String(localSaveError) }))
       }
       return ok({ ...created, local_saved: localSaved })
     }
@@ -1774,20 +1774,21 @@ Deno.serve(async (req) => {
       }
       if (!r.ok) throw new Error(`WB ${r.status}: ${await r.text()}`)
       let localSaved = false
-      if (await isFastSyncV2Enabled(String(store_id))) {
-        try {
-          await sbRpc('record_fbs_order_added_to_supply_v2', {
-            p_store_id: String(store_id),
-            p_order_id: String(order_id),
-            p_supply_id: String(supply_id),
-            p_requested_by: isServiceRole ? null : userId,
-          })
-          localSaved = true
-        } catch (localSaveError) {
-          // PATCH WB уже принят. Возвращаем успех и даём фоновому синку
-          // восстановить локальную проекцию вместо опасного повтора команды.
-          console.error(JSON.stringify({ scope: 'wb-fbs', event: 'assembled_order_local_save_failed', store_id, supply_id, order_id, error: String(localSaveError) }))
-        }
+      try {
+        // WB accepted the command, so persist the same transition immediately.
+        // This is independent from the fast-sync feature flag: every open
+        // employee session receives the shared change through Realtime.
+        await sbRpc('record_fbs_order_added_to_supply_v2', {
+          p_store_id: String(store_id),
+          p_order_id: String(order_id),
+          p_supply_id: String(supply_id),
+          p_requested_by: isServiceRole ? null : userId,
+        })
+        localSaved = true
+      } catch (localSaveError) {
+        // WB has already accepted the PATCH. Never repeat it: a background sync
+        // will repair the local projection without duplicating the command.
+        console.error(JSON.stringify({ scope: 'wb-fbs', event: 'assembled_order_local_save_failed', store_id, supply_id, order_id, error: String(localSaveError) }))
       }
       return ok({ success: true, local_saved: localSaved })
     }

@@ -41,7 +41,7 @@ begin
   -- clear the old link before applying its current membership list.
   update public.fbs_orders order_row
   set supply_id = null,
-      synced_at = greatest(coalesce(order_row.synced_at, p_synced_at), p_synced_at)
+      synced_at = p_synced_at
   where order_row.store_id = p_store_id
     and order_row.supply_id = any(coalesce(p_loaded_supply_ids, array[]::text[]))
     and not exists (
@@ -57,7 +57,7 @@ begin
 
   update public.fbs_orders order_row
   set supply_id = membership_row.wb_supply_id,
-      synced_at = greatest(coalesce(order_row.synced_at, p_synced_at), p_synced_at)
+      synced_at = p_synced_at
   from (
     select distinct on (parsed.wb_order_id) parsed.wb_order_id, parsed.wb_supply_id
     from jsonb_to_recordset(coalesce(p_memberships, '[]'::jsonb)) as parsed(
