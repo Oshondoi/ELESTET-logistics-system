@@ -1059,6 +1059,14 @@ export function FbsOrdersPage({ accountId }: Props) {
   const [newSupplyName, setNewSupplyName] = useState('')
   const [openSupplies, setOpenSupplies] = useState<WbSupply[]>([])
   const [closedSupplies, setClosedSupplies] = useState<WbSupply[]>([])
+  const currentSupplyOrderCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const order of orders) {
+      if (!order.isInLatestSnapshot || !order.supply_id) continue
+      counts.set(order.supply_id, (counts.get(order.supply_id) ?? 0) + 1)
+    }
+    return counts
+  }, [orders])
   const [loadingSupplies, setLoadingSupplies] = useState(false)
   const [deleteSupplyModal, setDeleteSupplyModal] = useState<{
     supply: WbSupply
@@ -4254,19 +4262,25 @@ export function FbsOrdersPage({ accountId }: Props) {
                   ) : openSupplies.filter((sup) => !assembleModal.sourceSupplyIds.includes(sup.id)).length === 0 ? (
                     <p className="py-4 text-center text-sm text-slate-400">Нет открытых поставок на WB</p>
                   ) : (
-                    openSupplies.filter((sup) => !assembleModal.sourceSupplyIds.includes(sup.id)).map((sup) => (
-                      <button key={sup.id} type="button"
-                        onClick={() => void handleAssemble(assembleModal.ids, sup.id)}
-                        className="w-full flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-left hover:border-violet-300 hover:bg-violet-50 transition-colors">
-                        <div>
-                          <p className="text-sm font-medium text-slate-800">{sup.name}</p>
-                          <p className="text-xs text-slate-400 font-mono">{sup.id}</p>
-                        </div>
-                        {sup.ordersCount != null && (
-                          <span className="text-xs text-slate-400">{sup.ordersCount} зак.</span>
-                        )}
-                      </button>
-                    ))
+                    <>
+                      <div className="grid grid-cols-[minmax(0,1fr)_7rem] items-center px-4 pb-1 text-xs font-medium text-slate-400">
+                        <span>Поставка</span>
+                        <span className="text-right">Заказов</span>
+                      </div>
+                      {openSupplies.filter((sup) => !assembleModal.sourceSupplyIds.includes(sup.id)).map((sup) => (
+                        <button key={sup.id} type="button"
+                          onClick={() => void handleAssemble(assembleModal.ids, sup.id)}
+                          className="grid w-full grid-cols-[minmax(0,1fr)_7rem] items-center rounded-2xl border border-slate-200 px-4 py-3 text-left transition-colors hover:border-violet-300 hover:bg-violet-50">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-slate-800">{sup.name}</p>
+                            <p className="truncate font-mono text-xs text-slate-400">{sup.id}</p>
+                          </div>
+                          <span className="text-right text-sm font-semibold tabular-nums text-slate-700">
+                            {currentSupplyOrderCounts.get(sup.id) ?? 0}
+                          </span>
+                        </button>
+                      ))}
+                    </>
                   )}
                 </div>
               )}
