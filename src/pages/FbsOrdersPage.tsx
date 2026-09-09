@@ -127,6 +127,8 @@ interface FbsInternalWarehouse {
 
 const ALL_WAREHOUSES_FILTER = 'all'
 const QUICK_SYNC_MAX_AGE_MS = 15 * 60_000
+const ACTIVE_FAST_SYNC_MAX_AGE_MS = 30_000
+const OPTIMISTIC_SUPPLY_TRANSITION_TTL_MS = 10 * 60_000
 
 interface WbSupply {
   id: string
@@ -136,6 +138,30 @@ interface WbSupply {
   createdAt?: string
   closedAt?: string | null
   scanDt?: string | null
+}
+
+interface OptimisticOrderSupply {
+  supplyId: string
+  expiresAt: number
+}
+
+interface OptimisticCreatedSupply {
+  supply: WbSupply
+  expiresAt: number
+}
+
+function wbSupplyFromDbRow(row: any, optimisticName?: string): WbSupply {
+  const supplyId = String(row.wb_supply_id)
+  const dbName = String(row.name ?? '').trim()
+  return {
+    id: supplyId,
+    name: (dbName && dbName !== supplyId ? dbName : optimisticName?.trim()) || dbName || supplyId,
+    ordersCount: row.raw_data?.ordersCount,
+    done: row.done === true,
+    createdAt: row.wb_created_at,
+    closedAt: row.wb_closed_at ?? null,
+    scanDt: row.wb_scan_at ?? null,
+  }
 }
 
 interface SupplyDispatchModal {
@@ -933,6 +959,43 @@ function tabForOfficialWbStatus(
   return 'archive'
 }
 
+function reconcileOptimisticOrderSupply(
+  orderId: string,
+  supplierStatus: string,
+  wbSystemStatus: string,
+  isInLatestSnapshot: boolean,
+  supplyId: string | null,
+  pendingTransitions: Map<string, OptimisticOrderSupply>,
+) {
+  const pending = pendingTransitions.get(orderId)
+  if (!pending) return { supplierStatus, wbSystemStatus, isInLatestSnapshot, supplyId }
+
+  const dbTab = tabForOfficialWbStatus(supplierStatus, wbSystemStatus, isInLatestSnapshot)
+  const transitionExpired = pending.expiresAt <= Date.now()
+  const orderIsFinal = dbTab === 'completed' || dbTab === 'cancelled'
+  const membershipConfirmed = supplyId === pending.supplyId
+    && (supplierStatus === 'confirm' || supplierStatus === 'complete')
+
+  if (transitionExpired || orderIsFinal) {
+    pendingTransitions.delete(orderId)
+    return { supplierStatus, wbSystemStatus, isInLatestSnapshot, supplyId }
+  }
+
+  // Подтверждённую строку БД показываем как есть, но короткое время храним
+  // защиту: запоздавшее realtime-событие могло быть создано раньше неё.
+  if (membershipConfirmed) return { supplierStatus, wbSystemStatus, isInLatestSnapshot, supplyId }
+
+  // WB и наша БД обновляют статус заказа и состав поставки не атомарно.
+  // Пока обе части не подтвердились, сохраняем уже подтверждённое пользователю
+  // действие и не показываем временную строку «Без поставки».
+  return {
+    supplierStatus: 'confirm',
+    wbSystemStatus: 'waiting',
+    isInLatestSnapshot: true,
+    supplyId: pending.supplyId,
+  }
+}
+
 interface Props {
   accountId: string
 }
@@ -966,7 +1029,9 @@ export function FbsOrdersPage({ accountId }: Props) {
     const savedSection = localStorage.getItem(`fbs_section_${accountId}`)
     return savedSection === 'stocks' || savedSection === 'dispatches' ? savedSection : 'orders'
   })
-  const [loading, setLoading] = useState(false)
+  const [quickSyncLoading, setQuickSyncLoading] = useState(false)
+  const [fullSyncLoading, setFullSyncLoading] = useState(false)
+  const [fastSyncV2Enabled, setFastSyncV2Enabled] = useState<boolean | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [syncNotice, setSyncNotice] = useState<string | null>(null)
@@ -995,6 +1060,11 @@ export function FbsOrdersPage({ accountId }: Props) {
   const [openSupplies, setOpenSupplies] = useState<WbSupply[]>([])
   const [closedSupplies, setClosedSupplies] = useState<WbSupply[]>([])
   const [loadingSupplies, setLoadingSupplies] = useState(false)
+  const [deleteSupplyModal, setDeleteSupplyModal] = useState<{
+    supply: WbSupply
+    busy: boolean
+    error: string | null
+  } | null>(null)
   const [orderMenuId, setOrderMenuId] = useState<string | null>(null)
   const [expandedSupplyIds, setExpandedSupplyIds] = useState<Set<string>>(new Set())
   const [pickingListMenuOpen, setPickingListMenuOpen] = useState(false)
@@ -1014,7 +1084,12 @@ export function FbsOrdersPage({ accountId }: Props) {
   const pageMountedRef = useRef(true)
   const selectedStoreIdRef = useRef(selectedStoreId)
   const lastSyncedAtRef = useRef<Date | null>(null)
+  const ordersRef = useRef<FbsOrder[]>([])
+  const optimisticSupplyNamesRef = useRef<Map<string, string>>(new Map())
+  const optimisticOrderSuppliesRef = useRef<Map<string, OptimisticOrderSupply>>(new Map())
+  const optimisticCreatedSuppliesRef = useRef<Map<string, OptimisticCreatedSupply>>(new Map())
   selectedStoreIdRef.current = selectedStoreId
+  ordersRef.current = orders
 
   useEffect(() => {
     setPickingListMenuOpen(false)
@@ -1031,6 +1106,10 @@ export function FbsOrdersPage({ accountId }: Props) {
 
   useEffect(() => {
     let cancelled = false
+    optimisticSupplyNamesRef.current.clear()
+    optimisticOrderSuppliesRef.current.clear()
+    optimisticCreatedSuppliesRef.current.clear()
+    setFastSyncV2Enabled(null)
     setWorkContextsLoading(true)
     setWorkContextsError(null)
     void fetchFbsWorkContexts(accountId)
@@ -1099,6 +1178,26 @@ export function FbsOrdersPage({ accountId }: Props) {
       manualQuickRetryTimerRef.current = null
     }
   }, [accountId, selectedStoreId])
+
+  useEffect(() => {
+    if (!selectedStoreId) {
+      setFastSyncV2Enabled(null)
+      return
+    }
+    const storeId = selectedStoreId
+    let cancelled = false
+    setFastSyncV2Enabled(null)
+    void invokeFbs(storeId, { action: 'get_fbs_sync_mode' })
+      .then((result) => {
+        if (!cancelled && selectedStoreIdRef.current === storeId) {
+          setFastSyncV2Enabled(result.fast_sync_v2_enabled === true)
+        }
+      })
+      .catch(() => {
+        if (!cancelled && selectedStoreIdRef.current === storeId) setFastSyncV2Enabled(false)
+      })
+    return () => { cancelled = true }
+  }, [selectedStoreId])
 
   useEffect(() => {
     if (!supabase || !workingAccountId) return
@@ -1336,9 +1435,15 @@ export function FbsOrdersPage({ accountId }: Props) {
     const mapped: FbsOrder[] = (rows ?? []).map((row: any) => {
       const d = row.data ?? {}
       const orderId = String(row.wb_order_id)
-      const supplierStatus = String(row.supplier_status ?? row.wb_status ?? '')
-      const wbSystemStatus = String(row.wb_system_status ?? '')
-      const isInLatestSnapshot = row.is_in_latest_snapshot !== false
+      const reconciledState = reconcileOptimisticOrderSupply(
+        orderId,
+        String(row.supplier_status ?? row.wb_status ?? ''),
+        String(row.wb_system_status ?? ''),
+        row.is_in_latest_snapshot !== false,
+        row.supply_id == null ? null : String(row.supply_id),
+        optimisticOrderSuppliesRef.current,
+      )
+      const { supplierStatus, wbSystemStatus, isInLatestSnapshot, supplyId } = reconciledState
       const acceptanceRows = acceptanceRowsByOrderId.get(orderId) ?? []
       const acceptanceRow = acceptanceRows.find((candidate: any) => (
         candidate.is_current_membership === true && String(candidate.wb_supply_id) === String(row.supply_id ?? '')
@@ -1375,7 +1480,7 @@ export function FbsOrdersPage({ accountId }: Props) {
         supplierStatus,
         wbSystemStatus,
         isInLatestSnapshot,
-        supply_id: row.supply_id ?? null,
+        supply_id: supplyId,
         acceptedAt: acceptanceRow?.accepted_at ?? null,
         requiresKiz: kizStateByOrderId.get(orderId)?.requires_kiz === true
           || kizEligibleOrderIds.has(orderId)
@@ -1410,11 +1515,51 @@ export function FbsOrdersPage({ accountId }: Props) {
       if (refreshTimer) clearTimeout(refreshTimer)
       refreshTimer = setTimeout(() => { void readFromDb() }, 120)
     }
+    const applyOrderChange = (payload: any) => {
+      if (!fastSyncV2Enabled || payload.eventType !== 'UPDATE') {
+        scheduleRefresh()
+        return
+      }
+      const row = payload.new ?? {}
+      const orderId = String(row.wb_order_id ?? '')
+      if (!orderId || !ordersRef.current.some((order) => order.id === orderId)) {
+        scheduleRefresh()
+        return
+      }
+      const supplierStatus = String(row.supplier_status ?? row.wb_status ?? '')
+      const wbSystemStatus = String(row.wb_system_status ?? '')
+      const isInLatestSnapshot = row.is_in_latest_snapshot !== false
+      const reconciledState = reconcileOptimisticOrderSupply(
+        orderId,
+        supplierStatus,
+        wbSystemStatus,
+        isInLatestSnapshot,
+        row.supply_id == null ? null : String(row.supply_id),
+        optimisticOrderSuppliesRef.current,
+      )
+      setOrders((previous) => previous.map((order) => order.id === orderId ? {
+        ...order,
+        supplierStatus: reconciledState.supplierStatus,
+        wbSystemStatus: reconciledState.wbSystemStatus,
+        isInLatestSnapshot: reconciledState.isInLatestSnapshot,
+        supply_id: reconciledState.supplyId,
+        shipStatus: tabForOfficialWbStatus(
+          reconciledState.supplierStatus,
+          reconciledState.wbSystemStatus,
+          reconciledState.isInLatestSnapshot,
+        ),
+      } : order))
+      const syncedAt = row.synced_at ? new Date(row.synced_at) : null
+      if (syncedAt && Number.isFinite(syncedAt.getTime())) {
+        lastSyncedAtRef.current = syncedAt
+        setLastSyncedAt(syncedAt)
+      }
+    }
     const channel = (supabase as any)
       .channel(`fbs-stock:${selectedStoreId}`)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'fbs_orders', filter: `store_id=eq.${selectedStoreId}`,
-      }, scheduleRefresh)
+      }, applyOrderChange)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'fbs_dispatch_attempts', filter: `store_id=eq.${selectedStoreId}`,
       }, scheduleRefresh)
@@ -1438,7 +1583,7 @@ export function FbsOrdersPage({ accountId }: Props) {
       if (refreshTimer) clearTimeout(refreshTimer)
       void (supabase as any).removeChannel(channel)
     }
-  }, [selectedStoreId, readFromDb, workingAccountId])
+  }, [fastSyncV2Enabled, selectedStoreId, readFromDb, workingAccountId])
 
   const loadOpenSupplies = useCallback(async () => {
     if (!supabase || !selectedStoreId) return
@@ -1457,15 +1602,22 @@ export function FbsOrdersPage({ accountId }: Props) {
       if ((pageRows ?? []).length < 1000) break
     }
     if (selectedStoreIdRef.current !== storeId) return
-    setOpenSupplies(data.map((s: any) => ({
-      id: String(s.wb_supply_id),
-      name: s.name || String(s.wb_supply_id),
-      ordersCount: s.raw_data?.ordersCount,
-      done: s.done,
-      createdAt: s.wb_created_at,
-      closedAt: s.wb_closed_at ?? null,
-      scanDt: s.wb_scan_at ?? null,
-    })))
+    const supplies = data.map((row) => {
+      const supplyId = String(row.wb_supply_id)
+      const dbName = String(row.name ?? '').trim()
+      const supply = wbSupplyFromDbRow(row, optimisticSupplyNamesRef.current.get(supplyId))
+      if (dbName && dbName !== supplyId) optimisticSupplyNamesRef.current.delete(supplyId)
+      return supply
+    })
+    const now = Date.now()
+    for (const [supplyId, optimistic] of optimisticCreatedSuppliesRef.current.entries()) {
+      if (optimistic.expiresAt <= now) {
+        optimisticCreatedSuppliesRef.current.delete(supplyId)
+      } else if (!supplies.some((supply) => supply.id === supplyId)) {
+        supplies.unshift(optimistic.supply)
+      }
+    }
+    setOpenSupplies(supplies)
   }, [selectedStoreId])
 
   const loadClosedSupplies = useCallback(async () => {
@@ -1485,15 +1637,13 @@ export function FbsOrdersPage({ accountId }: Props) {
       if ((pageRows ?? []).length < 1000) break
     }
     if (selectedStoreIdRef.current !== storeId) return
-    setClosedSupplies(data.map((s: any) => ({
-      id: String(s.wb_supply_id),
-      name: s.name || String(s.wb_supply_id),
-      ordersCount: s.raw_data?.ordersCount,
-      done: s.done,
-      createdAt: s.wb_created_at,
-      closedAt: s.wb_closed_at ?? null,
-      scanDt: s.wb_scan_at ?? null,
-    })))
+    setClosedSupplies(data.map((row) => {
+      const supplyId = String(row.wb_supply_id)
+      const dbName = String(row.name ?? '').trim()
+      const supply = wbSupplyFromDbRow(row, optimisticSupplyNamesRef.current.get(supplyId))
+      if (dbName && dbName !== supplyId) optimisticSupplyNamesRef.current.delete(supplyId)
+      return supply
+    }))
   }, [selectedStoreId])
 
   useEffect(() => {
@@ -1505,17 +1655,47 @@ export function FbsOrdersPage({ accountId }: Props) {
         void Promise.all([loadOpenSupplies(), loadClosedSupplies()])
       }, 120)
     }
+    const applySupplyChange = (payload: any) => {
+      if (!fastSyncV2Enabled) {
+        scheduleSupplyRefresh()
+        return
+      }
+      const row = payload.new ?? payload.old ?? {}
+      const supplyId = String(row.wb_supply_id ?? '')
+      if (!supplyId) {
+        scheduleSupplyRefresh()
+        return
+      }
+      if (payload.eventType === 'DELETE') {
+        optimisticCreatedSuppliesRef.current.delete(supplyId)
+        optimisticSupplyNamesRef.current.delete(supplyId)
+        setOpenSupplies((previous) => previous.filter((supply) => supply.id !== supplyId))
+        setClosedSupplies((previous) => previous.filter((supply) => supply.id !== supplyId))
+        return
+      }
+      const dbName = String(row.name ?? '').trim()
+      const supply = wbSupplyFromDbRow(row, optimisticSupplyNamesRef.current.get(supplyId))
+      if (dbName && dbName !== supplyId) optimisticSupplyNamesRef.current.delete(supplyId)
+      const upsert = (previous: WbSupply[]) => [supply, ...previous.filter((item) => item.id !== supply.id)]
+      if (supply.done) {
+        setOpenSupplies((previous) => previous.filter((item) => item.id !== supply.id))
+        setClosedSupplies(upsert)
+      } else {
+        setClosedSupplies((previous) => previous.filter((item) => item.id !== supply.id))
+        setOpenSupplies(upsert)
+      }
+    }
     const channel = (supabase as any)
       .channel(`fbs-supplies:${selectedStoreId}`)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'fbs_supplies', filter: `store_id=eq.${selectedStoreId}`,
-      }, scheduleSupplyRefresh)
+      }, applySupplyChange)
       .subscribe()
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer)
       void (supabase as any).removeChannel(channel)
     }
-  }, [selectedStoreId, loadOpenSupplies, loadClosedSupplies])
+  }, [fastSyncV2Enabled, selectedStoreId, loadOpenSupplies, loadClosedSupplies])
 
   const waitForServerSyncJob = useCallback(async (storeId: string, jobId: string) => {
     if (!supabase) return null
@@ -1552,16 +1732,58 @@ export function FbsOrdersPage({ accountId }: Props) {
       if (triggerSource === 'manual') setError('У вас нет права на быстрое обновление FBS.')
       return Promise.resolve()
     }
-    const existingSync = syncInFlightRef.current.get(selectedStoreId)
+    const storeId = selectedStoreId
+    const useFastOrdersLane = mode === 'incremental' && fastSyncV2Enabled
+    const syncKey = useFastOrdersLane ? `${storeId}:fast-orders` : `${storeId}:legacy`
+    const existingSync = syncInFlightRef.current.get(syncKey)
     if (existingSync && mode === 'incremental') return existingSync
 
-    const storeId = selectedStoreId
     const showBlockingLoader = triggerSource === 'manual'
     const runSync = async () => {
-      if (showBlockingLoader) setLoading(true)
+      if (showBlockingLoader) {
+        if (mode === 'full') setFullSyncLoading(true)
+        else setQuickSyncLoading(true)
+      }
       setError(null)
       if (mode === 'full') setSyncNotice('Полная сверка с Wildberries запущена. Загружаем заказы и поставки...')
       try {
+        if (useFastOrdersLane) {
+          // Поставки обновляются независимо и никогда не удерживают кнопку.
+          // Realtime применит их по строкам, а перечитывание страхует браузеры,
+          // в которых событие подписки пришло раньше завершения запроса.
+          void invokeFbs(storeId, { action: 'sync_supplies_fast', trigger_source: triggerSource })
+            .then((supplyResult) => supplyResult.fallback === true
+              ? undefined
+              : Promise.all([loadOpenSupplies(), loadClosedSupplies()]))
+            .catch((supplyError) => {
+              console.warn('Фоновое обновление поставок FBS не завершено:', supplyError)
+            })
+
+          const fastResult = await invokeFbs(storeId, {
+            action: 'sync_orders_fast',
+            trigger_source: triggerSource,
+          })
+          if (fastResult.fallback !== true) {
+            // Один актуальный снимок БД. Проверка КИЗ и повторное чтение в
+            // быстрый путь не входят и не задерживают пользователя.
+            await readFromDb()
+            if (selectedStoreIdRef.current !== storeId) return
+            const serverSyncTime = typeof fastResult.last_synced_at === 'string'
+              ? new Date(fastResult.last_synced_at)
+              : null
+            if (fastResult.partial === true) {
+              setError(staleDataMessage(serverSyncTime ?? lastSyncedAtRef.current))
+            } else if (serverSyncTime && Number.isFinite(serverSyncTime.getTime())) {
+              lastSyncedAtRef.current = serverSyncTime
+              setLastSyncedAt(serverSyncTime)
+            }
+            return
+          }
+          // Если флаг отключили между открытием страницы и нажатием кнопки,
+          // безопасно продолжаем по неизменённому legacy-пути.
+          setFastSyncV2Enabled(false)
+        }
+
         let result = await invokeFbs(storeId, { action: 'sync_orders', mode, trigger_source: triggerSource })
         if (result.reused === true && result.throttled !== true && result.job_id && typeof result.synced !== 'number') {
           const completedResult = await waitForServerSyncJob(storeId, String(result.job_id))
@@ -1607,19 +1829,22 @@ export function FbsOrdersPage({ accountId }: Props) {
           : staleDataMessage(lastSyncedAtRef.current))
         if (mode === 'full') setSyncNotice(null)
       } finally {
-        if (showBlockingLoader && selectedStoreIdRef.current === storeId) setLoading(false)
+        if (showBlockingLoader && selectedStoreIdRef.current === storeId) {
+          if (mode === 'full') setFullSyncLoading(false)
+          else setQuickSyncLoading(false)
+        }
       }
     }
     const syncPromise = existingSync && mode === 'full'
       ? existingSync.catch(() => undefined).then(runSync)
       : runSync()
 
-    syncInFlightRef.current.set(storeId, syncPromise)
+    syncInFlightRef.current.set(syncKey, syncPromise)
     void syncPromise.finally(() => {
-      if (syncInFlightRef.current.get(storeId) === syncPromise) syncInFlightRef.current.delete(storeId)
+      if (syncInFlightRef.current.get(syncKey) === syncPromise) syncInFlightRef.current.delete(syncKey)
     })
     return syncPromise
-  }, [fbsPermissions.fbs_full_sync, fbsPermissions.fbs_sync, selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies, waitForServerSyncJob])
+  }, [fastSyncV2Enabled, fbsPermissions.fbs_full_sync, fbsPermissions.fbs_sync, selectedStoreId, readFromDb, loadOpenSupplies, loadClosedSupplies, waitForServerSyncJob])
 
   const clearManualQuickRetry = useCallback(() => {
     if (manualQuickRetryTimerRef.current) clearTimeout(manualQuickRetryTimerRef.current)
@@ -1633,6 +1858,9 @@ export function FbsOrdersPage({ accountId }: Props) {
     clearManualQuickRetry()
     await doSync('incremental', 'manual')
     if (!pageMountedRef.current || selectedStoreIdRef.current !== storeId) return
+    // В v2 актуальность поддерживает короткий независимый order-lane.
+    // Старый повтор через минуту остаётся только у магазинов на legacy.
+    if (fastSyncV2Enabled) return
     manualQuickRetryTimerRef.current = setTimeout(() => {
       manualQuickRetryTimerRef.current = null
       if (selectedStoreIdRef.current !== storeId) return
@@ -1642,7 +1870,7 @@ export function FbsOrdersPage({ accountId }: Props) {
       }
       void doSync('incremental', 'automatic')
     }, 60_000)
-  }, [clearManualQuickRetry, doSync, fbsPermissions.fbs_sync, selectedStoreId])
+  }, [clearManualQuickRetry, doSync, fastSyncV2Enabled, fbsPermissions.fbs_sync, selectedStoreId])
 
   const handleFullSync = useCallback(() => {
     clearManualQuickRetry()
@@ -1670,16 +1898,17 @@ export function FbsOrdersPage({ accountId }: Props) {
     }
   }
 
-  // Пока страница открыта, сеть опрашивается только когда сохранённые данные
-  // выбранного магазина старше пятнадцати минут. Сам таймер лишь проверяет возраст.
+  // На fast-v2 открытая вкладка проверяет активные статусы примерно раз в
+  // 30 секунд. Legacy-магазины сохраняют прежний интервал 15 минут.
   useEffect(() => {
-    if (!selectedStoreId) return
+    if (!selectedStoreId || fastSyncV2Enabled === null) return
     const storeId = selectedStoreId
     let cancelled = false
     const syncIfStale = () => {
       if (cancelled || selectedStoreIdRef.current !== storeId || document.visibilityState === 'hidden') return
       const previousSync = lastSyncedAtRef.current
-      const stale = !previousSync || (Date.now() - previousSync.getTime()) >= QUICK_SYNC_MAX_AGE_MS
+      const maxAge = fastSyncV2Enabled ? ACTIVE_FAST_SYNC_MAX_AGE_MS : QUICK_SYNC_MAX_AGE_MS
+      const stale = !previousSync || (Date.now() - previousSync.getTime()) >= maxAge
       if (stale) void doSync('incremental', 'automatic')
     }
 
@@ -1691,7 +1920,8 @@ export function FbsOrdersPage({ accountId }: Props) {
       .then(() => {
         if (cancelled || selectedStoreIdRef.current !== storeId) return
         const previousSync = lastSyncedAtRef.current
-        const stale = !previousSync || (Date.now() - previousSync.getTime()) >= QUICK_SYNC_MAX_AGE_MS
+        const maxAge = fastSyncV2Enabled ? ACTIVE_FAST_SYNC_MAX_AGE_MS : QUICK_SYNC_MAX_AGE_MS
+        const stale = !previousSync || (Date.now() - previousSync.getTime()) >= maxAge
         if (stale) void doSync('incremental', 'automatic')
       })
       .catch(() => setError(staleDataMessage(lastSyncedAtRef.current)))
@@ -1731,7 +1961,7 @@ export function FbsOrdersPage({ accountId }: Props) {
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [fbsPermissions.fbs_sync, selectedStoreId, doSync, loadClosedSupplies, loadOpenSupplies, readFromDb])
+  }, [fastSyncV2Enabled, fbsPermissions.fbs_sync, selectedStoreId, doSync, loadClosedSupplies, loadOpenSupplies, readFromDb])
 
   const mapRawOrder = useCallback((o: any, status: FbsOrder['shipStatus']): FbsOrder => ({
     id: String(o.id), rid: o.rid ?? '', createdAt: o.createdAt ?? '', ddate: o.ddate ?? '',
@@ -1770,7 +2000,10 @@ export function FbsOrdersPage({ accountId }: Props) {
 
   const handleAssemble = async (ids: string[], existingSupplyId?: string) => {
     if (!fbsPermissions.fbs_assembly) return
+    const storeId = selectedStoreId
     const operationMode = assembleModal?.mode ?? 'assemble'
+    const originalOrders = new Map(ordersRef.current.filter((order) => ids.includes(order.id)).map((order) => [order.id, order]))
+    let optimisticSupplyId: string | null = null
     setBusyIds((s) => new Set([...s, ...ids]))
     setAssembleModal(null)
     try {
@@ -1780,35 +2013,84 @@ export function FbsOrdersPage({ accountId }: Props) {
       } else {
         const storeName = storesWithKey.find((store) => store.id === selectedStoreId)?.name?.trim() || 'Магазин'
         const defaultName = `${storeName} ${new Date().toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: 'numeric' })}`
-        const supRes = await invokeFbs(selectedStoreId, { action: 'create_supply', name: newSupplyName.trim() || defaultName })
+        const supplyName = newSupplyName.trim() || defaultName
+        const supRes = await invokeFbs(storeId, { action: 'create_supply', name: supplyName })
         supplyId = supRes.id as string
         if (!supplyId) throw new Error('WB не вернул ID поставки')
+        if (selectedStoreIdRef.current === storeId) {
+          const displayedSupplyName = String(supRes.name ?? supplyName).trim() || supplyName
+          optimisticSupplyNamesRef.current.set(supplyId, displayedSupplyName)
+          const createdSupply: WbSupply = {
+            id: supplyId,
+            name: displayedSupplyName,
+            ordersCount: 0,
+            done: false,
+            createdAt: new Date().toISOString(),
+            closedAt: null,
+            scanDt: null,
+          }
+          optimisticCreatedSuppliesRef.current.set(supplyId, {
+            supply: createdSupply,
+            expiresAt: Date.now() + OPTIMISTIC_SUPPLY_TRANSITION_TTL_MS,
+          })
+          setOpenSupplies((previous) => [createdSupply, ...previous.filter((supply) => supply.id !== supplyId)])
+        }
+      }
+      optimisticSupplyId = supplyId
+      const existingSupply = openSupplies.find((supply) => supply.id === supplyId)
+      if (existingSupply?.name && existingSupply.name !== supplyId) {
+        optimisticSupplyNamesRef.current.set(supplyId, existingSupply.name)
+      }
+      const transitionExpiresAt = Date.now() + OPTIMISTIC_SUPPLY_TRANSITION_TTL_MS
+      ids.forEach((orderId) => optimisticOrderSuppliesRef.current.set(orderId, { supplyId, expiresAt: transitionExpiresAt }))
+      if (selectedStoreIdRef.current === storeId) {
+        // Проецируем весь переход одним кадром до сетевых запросов. Поэтому
+        // новая поставка не успевает отрисоваться пустой рядом с «Без поставки».
+        setOrders((previous) => previous.map((order) => ids.includes(order.id)
+          ? { ...order, shipStatus: 'assembling' as const, supplierStatus: 'confirm', wbSystemStatus: 'waiting', supply_id: supplyId }
+          : order))
       }
       const failedIds: string[] = []
       for (const orderId of ids) {
         try {
-          const res = await invokeFbs(selectedStoreId, { action: 'add_order_to_supply', supply_id: supplyId, order_id: orderId })
+          const res = await invokeFbs(storeId, { action: 'add_order_to_supply', supply_id: supplyId, order_id: orderId })
           if (res.success === false) failedIds.push(orderId)
         } catch { failedIds.push(orderId) }
       }
       const successIds = ids.filter((id) => !failedIds.includes(id))
-      if (successIds.length > 0) {
+      failedIds.forEach((orderId) => optimisticOrderSuppliesRef.current.delete(orderId))
+      if (successIds.length > 0 && selectedStoreIdRef.current === storeId) {
         setOrders((previous) => previous.map((order) => successIds.includes(order.id)
           ? { ...order, shipStatus: 'assembling' as const, supplierStatus: 'confirm', wbSystemStatus: 'waiting', supply_id: supplyId }
           : order))
+        setOpenSupplies((previous) => previous.map((supply) => supply.id === supplyId
+          ? { ...supply, ordersCount: Math.max(0, Number(supply.ordersCount ?? 0)) + successIds.length }
+          : supply))
         setSelected((previous) => {
           const next = new Set(previous)
           successIds.forEach((id) => next.delete(id))
           return next
         })
       }
-      void doSync()
+      if (failedIds.length > 0 && selectedStoreIdRef.current === storeId) {
+        setOrders((previous) => previous.map((order) => {
+          const originalOrder = originalOrders.get(order.id)
+          return originalOrder && failedIds.includes(order.id) ? originalOrder : order
+        }))
+      }
+      // Экран и БД уже получили подтверждённое действие. Фоновая проверка
+      // сверяет ответ WB, но не удерживает пользователя в старой вкладке.
+      void doSync('incremental', fastSyncV2Enabled ? 'automatic' : 'manual')
       if (failedIds.length > 0 && failedIds.length < ids.length) {
         alert(`Часть заказов ${operationMode === 'move' ? 'перенесена' : 'добавлена'}. Не удалось ${operationMode === 'move' ? 'перенести' : 'добавить'}: ${failedIds.join(', ')} (возможно устарели или не соответствуют складу поставки)`)
       } else if (failedIds.length === ids.length) {
         alert(`Не удалось ${operationMode === 'move' ? 'перенести' : 'добавить'} заказы в поставку: ${failedIds.join(', ')}. Возможно они устарели или не соответствуют складу.`)
       }
     } catch (e) {
+      ids.forEach((orderId) => optimisticOrderSuppliesRef.current.delete(orderId))
+      if (optimisticSupplyId && selectedStoreIdRef.current === storeId) {
+        setOrders((previous) => previous.map((order) => originalOrders.get(order.id) ?? order))
+      }
       alert(`${operationMode === 'move' ? 'Ошибка при переносе' : 'Ошибка при переводе в сборку'}: ${String(e)}`)
     } finally {
       setBusyIds((s) => { const n = new Set(s); ids.forEach(i => n.delete(i)); return n })
@@ -1895,6 +2177,42 @@ export function FbsOrdersPage({ accountId }: Props) {
       setDispatchModal((current) => current?.supply.id === supply.id
         ? { ...current, loading: false, error: boxError instanceof Error ? boxError.message : String(boxError) }
         : current)
+    }
+  }
+
+  const handleDeleteSupply = async () => {
+    if (!deleteSupplyModal || deleteSupplyModal.busy || !fbsPermissions.fbs_assembly) return
+    const storeId = selectedStoreId
+    const supply = deleteSupplyModal.supply
+    setDeleteSupplyModal((current) => current ? { ...current, busy: true, error: null } : null)
+    try {
+      await invokeFbs(storeId, { action: 'delete_supply', supply_id: supply.id })
+      if (selectedStoreIdRef.current !== storeId) return
+      optimisticSupplyNamesRef.current.delete(supply.id)
+      optimisticCreatedSuppliesRef.current.delete(supply.id)
+      for (const [orderId, transition] of optimisticOrderSuppliesRef.current.entries()) {
+        if (transition.supplyId === supply.id) optimisticOrderSuppliesRef.current.delete(orderId)
+      }
+      setOpenSupplies((current) => current.filter((item) => item.id !== supply.id))
+      setClosedSupplies((current) => current.filter((item) => item.id !== supply.id))
+      setSelectedSupplyIds((current) => {
+        const next = new Set(current)
+        next.delete(supply.id)
+        return next
+      })
+      setExpandedSupplyIds((current) => {
+        const next = new Set(current)
+        next.delete(supply.id)
+        return next
+      })
+      setDeleteSupplyModal(null)
+    } catch (deleteError) {
+      if (selectedStoreIdRef.current !== storeId) return
+      setDeleteSupplyModal((current) => current ? {
+        ...current,
+        busy: false,
+        error: String(deleteError).replace(/^Error:\s*/, ''),
+      } : null)
     }
   }
 
@@ -1986,19 +2304,42 @@ export function FbsOrdersPage({ accountId }: Props) {
 
   const handleShip = async (supplyId: string, orders2ship: FbsOrder[]): Promise<boolean> => {
     if (!supabase || !fbsPermissions.fbs_dispatch) return false
+    const storeId = selectedStoreId
     const ids = orders2ship.map((o) => o.id)
     setBusyIds((s) => new Set([...s, ...ids]))
     try {
       // Статус меняет только WB: сначала передаём целую поставку в доставку.
-      await invokeFbs(selectedStoreId, { action: 'deliver_supply', supply_id: supplyId })
-      const { error: dispatchError } = await (supabase as any).rpc('mark_fbs_supply_dispatched', {
-        p_store_id: selectedStoreId,
+      await invokeFbs(storeId, { action: 'deliver_supply', supply_id: supplyId })
+      const dispatchRpc = fastSyncV2Enabled ? 'mark_fbs_supply_dispatched_v2' : 'mark_fbs_supply_dispatched'
+      const { error: dispatchError } = await (supabase as any).rpc(dispatchRpc, {
+        p_store_id: storeId,
         p_supply_id: supplyId,
       })
       if (dispatchError) console.warn('Не удалось сразу перевести резерв FBS в ожидание WB:', dispatchError)
+      if (selectedStoreIdRef.current === storeId) {
+        const closedAt = new Date().toISOString()
+        setOrders((previous) => previous.map((order) => ids.includes(order.id)
+          ? { ...order, shipStatus: 'delivering' as const, supplierStatus: 'complete', wbSystemStatus: 'waiting', supply_id: supplyId }
+          : order))
+        setOpenSupplies((previous) => previous.filter((supply) => supply.id !== supplyId))
+        setClosedSupplies((previous) => {
+          const source = openSupplies.find((supply) => supply.id === supplyId)
+            ?? previous.find((supply) => supply.id === supplyId)
+          const delivered: WbSupply = {
+            ...(source ?? { id: supplyId, name: supplyId }),
+            done: true,
+            closedAt,
+          }
+          return [delivered, ...previous.filter((supply) => supply.id !== supplyId)]
+        })
+      }
       setSelected(new Set())
       setSelectedSupplyIds(new Set())
       setDispatchModal(null)
+      if (fastSyncV2Enabled) {
+        void doSync('incremental', 'automatic')
+        return true
+      }
       await Promise.all([doSync('incremental'), loadOpenSupplies()])
       return true
     } catch (e) {
@@ -2546,6 +2887,10 @@ export function FbsOrdersPage({ accountId }: Props) {
   }
 
   const handleStoreChange = (nextStoreId: string) => {
+    optimisticSupplyNamesRef.current.clear()
+    optimisticOrderSuppliesRef.current.clear()
+    optimisticCreatedSuppliesRef.current.clear()
+    setFastSyncV2Enabled(null)
     setSelectedStoreId(nextStoreId)
     if (nextStoreId) localStorage.setItem(lsKey, nextStoreId)
     else localStorage.removeItem(lsKey)
@@ -2554,11 +2899,13 @@ export function FbsOrdersPage({ accountId }: Props) {
     setClosedSupplies([])
     setArchiveReports([])
     setArchiveNotice(null)
+    setDeleteSupplyModal(null)
     setSelected(new Set())
     setSelectedSupplyIds(new Set())
     setProductSyncNotice(null)
     setError(null)
-    setLoading(false)
+    setQuickSyncLoading(false)
+    setFullSyncLoading(false)
     setLastSyncedAt(null)
     lastSyncedAtRef.current = null
   }
@@ -2643,19 +2990,19 @@ export function FbsOrdersPage({ accountId }: Props) {
           ]}
         />
 
-        <button type="button" onClick={() => void handleManualQuickSync()} disabled={loading || !selectedStoreId || !fbsPermissions.fbs_sync}
+        <button type="button" onClick={() => void handleManualQuickSync()} disabled={quickSyncLoading || fastSyncV2Enabled === null || !selectedStoreId || !fbsPermissions.fbs_sync}
           title="Получить новые заказы и изменения активных заказов и поставок"
           className="flex h-8 items-center gap-1.5 rounded-xl bg-violet-500 px-4 text-xs font-semibold text-white hover:bg-violet-600 disabled:opacity-50 transition">
-          {loading
+          {quickSyncLoading
             ? <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="31" strokeDashoffset="10"/></svg>
             : <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>}
-          {loading ? 'Загрузка...' : 'Обновить'}
+          {quickSyncLoading ? 'Загрузка...' : 'Обновить'}
         </button>
 
-        <button type="button" onClick={() => void handleFullSync()} disabled={loading || !selectedStoreId || !fbsPermissions.fbs_full_sync}
+        <button type="button" onClick={() => void handleFullSync()} disabled={fullSyncLoading || !selectedStoreId || !fbsPermissions.fbs_full_sync}
           title="Заново сверить с Wildberries всю доступную историю заказов, поставок и КИЗ"
           className="flex h-8 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">
-          Полная сверка с WB
+          {fullSyncLoading ? 'Полная сверка...' : 'Полная сверка с WB'}
         </button>
 
         <button type="button" onClick={() => setKizScannerOpen(true)} disabled={!selectedStoreId || !fbsPermissions.fbs_assembly}
@@ -2891,7 +3238,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                         <th className="px-5 py-3 text-left font-semibold">Заказов</th>
                         <th className="px-5 py-3 text-left font-semibold">Создан</th>
                         <th className="px-5 py-3 text-left font-semibold">Хранение</th>
-                        <th className="px-5 py-3 text-right font-semibold">Действия</th>
+                        <th className="sticky right-0 z-10 border-l border-slate-200 bg-slate-50 px-5 py-3 text-right font-semibold shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)]">Действия</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2904,7 +3251,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                             <td className="px-5 py-3 font-semibold text-slate-900">{report.rows_count}</td>
                             <td className="px-5 py-3 text-slate-500">{new Date(report.created_at).toLocaleString('ru-RU')}</td>
                             <td className="px-5 py-3 text-slate-500">Удалится через {daysLeft} дн.</td>
-                            <td className="px-5 py-3">
+                            <td className="sticky right-0 z-[4] border-l border-slate-200 bg-white px-5 py-3 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)]">
                               <div className="flex justify-end gap-2">
                                 <button type="button" title="Скачать XLSX" onClick={() => void downloadArchiveReport(report)} className="flex h-8 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200 px-3 font-semibold text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700">
                                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -2927,7 +3274,7 @@ export function FbsOrdersPage({ accountId }: Props) {
         </div>
       )}
 
-      {!loading && activeTab !== 'archive' && tabOrders.length === 0 && !(activeTab === 'assembling' && showEmptyOpenSupplies && openSupplies.length > 0) && !error && (
+      {!quickSyncLoading && !fullSyncLoading && activeTab !== 'archive' && tabOrders.length === 0 && !(activeTab === 'assembling' && showEmptyOpenSupplies && openSupplies.length > 0) && !error && (
         <div className="flex h-full items-center justify-center text-sm text-slate-400">
           {orders.length === 0 ? 'Загрузка...' : `Нет заказов в статусе "${tabs.find(t => t.key === activeTab)?.label}"`}
         </div>
@@ -2945,7 +3292,11 @@ export function FbsOrdersPage({ accountId }: Props) {
           const key = o.supply_id ?? '__none__'
           const supplyDirectory = isAssemblingTab ? openSupplies : closedSupplies
           if (!supplyGroups.has(key)) supplyGroups.set(key, {
-            supply: supplyDirectory.find((supply) => supply.id === key) ?? null,
+            supply: supplyDirectory.find((supply) => supply.id === key)
+              ?? optimisticCreatedSuppliesRef.current.get(key)?.supply
+              ?? (optimisticSupplyNamesRef.current.get(key)
+                ? { id: key, name: optimisticSupplyNamesRef.current.get(key)! }
+                : null),
             orders: [],
           })
           supplyGroups.get(key)!.orders.push(o)
@@ -2967,7 +3318,7 @@ export function FbsOrdersPage({ accountId }: Props) {
         }
         return (
           <div className="flex-1 overflow-auto [scrollbar-gutter:stable]">
-            <div className="sticky top-0 z-10 grid min-w-[1260px] grid-cols-[18px_18px_minmax(220px,1.35fr)_minmax(160px,0.9fr)_minmax(170px,1fr)_minmax(180px,1fr)_minmax(100px,0.55fr)_minmax(150px,0.85fr)_80px] items-center gap-x-4 border-b border-slate-200 bg-white px-4 py-2.5 text-[11px] font-semibold text-slate-500">
+            <div className="sticky top-0 z-10 grid min-w-[1360px] grid-cols-[18px_18px_minmax(220px,1.35fr)_minmax(160px,0.9fr)_minmax(170px,1fr)_minmax(180px,1fr)_minmax(100px,0.55fr)_minmax(150px,0.85fr)_176px] items-center gap-x-4 border-b border-slate-200 bg-white px-4 py-2.5 text-[11px] font-semibold text-slate-500">
               <span aria-hidden="true" />
               <input
                 type="checkbox"
@@ -2984,7 +3335,7 @@ export function FbsOrdersPage({ accountId }: Props) {
               <span>Время сканирования QR-кода</span>
               <span>Заказы</span>
               <span>Склад</span>
-              <span aria-hidden="true" />
+              <span className="sticky right-0 z-20 flex h-full items-center justify-end border-l border-slate-200 bg-white px-2 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)]">Действия</span>
             </div>
             {supplyGroupEntries.map(([supplyId, group]) => {
               const { supply, orders: supplyOrders } = group
@@ -3023,7 +3374,7 @@ export function FbsOrdersPage({ accountId }: Props) {
               return (
                 <div key={supplyId} className="border-b border-slate-200">
                   {/* Строка поставки (родитель) */}
-                  <div className={`grid min-h-[68px] min-w-[1260px] cursor-pointer grid-cols-[18px_18px_minmax(220px,1.35fr)_minmax(160px,0.9fr)_minmax(170px,1fr)_minmax(180px,1fr)_minmax(100px,0.55fr)_minmax(150px,0.85fr)_80px] items-center gap-x-4 px-4 py-3 transition-colors ${isParentSelected ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'}`} onClick={toggle}>
+                  <div className={`group grid min-h-[68px] min-w-[1360px] cursor-pointer grid-cols-[18px_18px_minmax(220px,1.35fr)_minmax(160px,0.9fr)_minmax(170px,1fr)_minmax(180px,1fr)_minmax(100px,0.55fr)_minmax(150px,0.85fr)_176px] items-center gap-x-4 px-4 py-3 transition-colors ${isParentSelected ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'}`} onClick={toggle}>
                     <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M9 18l6-6-6-6" />
                     </svg>
@@ -3073,21 +3424,25 @@ export function FbsOrdersPage({ accountId }: Props) {
                         <div className="mt-1 truncate text-[10px] text-slate-400">Ваш склад: {supplyWarehouse.sellerName}</div>
                       </div>
                     ) : <span className="text-xs text-slate-400">—</span>}
-                    {!isCompletedGroupedTab && supplyId !== '__none__' && supplyOrders.length > 0 && (
-                      <div className="flex items-center justify-end gap-2">
+                    <div
+                      className={`sticky right-0 z-[5] flex min-h-[44px] items-center justify-end gap-2 border-l border-slate-200 px-2 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${isParentSelected ? 'bg-violet-50' : 'bg-white group-hover:bg-slate-50'}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {!isCompletedGroupedTab && supplyId !== '__none__' && supplyOrders.length > 0 && (
                         <button type="button" title="Распечатать стикеры поставки" aria-label="Распечатать стикеры поставки"
                           disabled={busyIds.size > 0 || !fbsPermissions.fbs_assembly}
-                          onClick={(e) => { e.stopPropagation(); openStickerPrintModal(supplyOrders, supply ?? { id: supplyId, name: supplyId }, 'supply') }}
+                          onClick={() => openStickerPrintModal(supplyOrders, supply ?? { id: supplyId, name: supplyId }, 'supply')}
                           className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-wait disabled:opacity-40">
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                         </button>
-                        {isDeliveringTab && (
+                      )}
+                      {isDeliveringTab && supplyId !== '__none__' && supplyOrders.length > 0 && (
                           <button
                             type="button"
                             title="Распечатать официальный QR поставки WB"
                             aria-label="Распечатать официальный QR поставки WB"
                             disabled={supplyQrBusyIds.has(supplyId) || !fbsPermissions.fbs_assembly}
-                            onClick={(event) => { event.stopPropagation(); void handleSupplyQrPrint(supplyId) }}
+                            onClick={() => void handleSupplyQrPrint(supplyId)}
                             className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-700 transition hover:bg-violet-100 disabled:cursor-wait disabled:opacity-40"
                           >
                             {supplyQrBusyIds.has(supplyId) ? (
@@ -3099,23 +3454,34 @@ export function FbsOrdersPage({ accountId }: Props) {
                               </svg>
                             )}
                           </button>
-                        )}
-                        {isAssemblingTab && (
+                      )}
+                      {isAssemblingTab && supplyId !== '__none__' && supplyOrders.length > 0 && (
                           <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
                             disabled={busyIds.size > 0 || !fbsPermissions.fbs_dispatch}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              void openSupplyDispatchModal(supply ?? { id: supplyId, name: supplyId }, supplyOrders)
-                            }}
+                            onClick={() => void openSupplyDispatchModal(supply ?? { id: supplyId, name: supplyId }, supplyOrders)}
                             className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-wait disabled:opacity-40">
                             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <path d="M5 12h14m-5-5 5 5-5 5" />
                             </svg>
                           </button>
-                        )}
-                      </div>
-                    )}
-                    {(isCompletedGroupedTab || supplyId === '__none__' || supplyOrders.length === 0) && <span aria-hidden="true" />}
+                      )}
+                      {isAssemblingTab && supplyId !== '__none__' && fbsPermissions.fbs_assembly && (
+                        <button
+                          type="button"
+                          title={totalOrderCount > 0 ? 'Удалить можно только пустую поставку' : 'Удалить пустую поставку'}
+                          aria-label="Удалить поставку"
+                          disabled={busyIds.size > 0 || totalOrderCount > 0 || supply?.done === true}
+                          onClick={() => setDeleteSupplyModal({
+                            supply: supply ?? { id: supplyId, name: supplyId, done: false },
+                            busy: false,
+                            error: null,
+                          })}
+                          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300 disabled:opacity-70"
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 10v6m4-6v6"/></svg>
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {/* Аккордеон — заказы */}
                   <div style={{ display: 'grid', gridTemplateRows: isExpanded ? '1fr' : '0fr', transition: 'grid-template-rows 220ms ease' }}>
@@ -3123,7 +3489,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                       {supplyOrders.length === 0 ? (
                         <div className="border-t border-slate-100 bg-slate-50/50 px-12 py-4 text-xs text-slate-400">В поставке пока нет заказов</div>
                       ) : <div className="border-t border-slate-100 bg-slate-50/50">
-                        <table className="w-full text-xs">
+                        <table className="w-full min-w-[1360px] text-xs">
                           <thead className="border-b border-slate-200 bg-slate-100/70 text-slate-500">
                             <tr>
                               <th className="w-8 px-3 py-2">
@@ -3144,7 +3510,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                               <th className="px-4 py-2 text-left font-semibold">Время</th>
                               <th className="px-4 py-2 text-left font-semibold">Склад FBS</th>
                               {isDeliveringTab && <th className="px-4 py-2 text-left font-semibold">Статус WB</th>}
-                              <th className="px-4 py-2 text-left font-semibold">{isCompletedGroupedTab ? 'Статус' : 'Действия'}</th>
+                              <th className="sticky right-0 z-10 border-l border-slate-200 bg-slate-100 px-4 py-2 text-left font-semibold shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)]">{isCompletedGroupedTab ? 'Статус' : 'Действия'}</th>
                             </tr>
                           </thead>
                         <tbody>
@@ -3211,7 +3577,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                                     <WbOrderStatusBadge order={order} />
                                   </td>
                                 )}
-                                <td className="px-4 py-2">
+                                <td className="sticky right-0 z-[4] border-l border-slate-200 bg-slate-50 px-4 py-2 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)]">
                                   <div className="flex items-center gap-1.5">
                                     {isAssemblingTab && fbsPermissions.fbs_assembly && supplyId !== '__none__' && (
                                       <button
@@ -3365,7 +3731,7 @@ export function FbsOrdersPage({ accountId }: Props) {
 
       {tabOrders.length > 0 && activeTab !== 'assembling' && activeTab !== 'delivering' && !(activeTab === 'completed' && groupCompletedBySupplies) && (
         <div className="flex-1 overflow-auto [scrollbar-gutter:stable]">
-          <table className="w-full text-xs">
+          <table className="w-full min-w-[1260px] text-xs">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-white">
               <tr>
                 {activeTab !== 'completed' && activeTab !== 'cancelled' && (
@@ -3380,7 +3746,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                 <th className="px-4 py-3 text-right font-semibold text-slate-500">Кол-во</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Склад FBS</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-500">Время</th>
-                <th className="px-4 py-3 text-left font-semibold text-slate-500">{activeTab === 'completed' || activeTab === 'cancelled' ? 'Статус' : ''}</th>
+                <th className="sticky right-0 z-20 border-l border-slate-200 bg-white px-4 py-3 text-left font-semibold text-slate-500 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)]">{activeTab === 'completed' || activeTab === 'cancelled' ? 'Статус' : 'Действия'}</th>
               </tr>
             </thead>
             <tbody>
@@ -3434,7 +3800,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                     <td className="px-4 py-3"><FbsStockQuantityCell order={order} /></td>
                     <td className="max-w-48 px-4 py-3">{renderWbWarehouseCell(order)}</td>
                     <td className={`px-4 py-3 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
-                    <td className="px-4 py-3">
+                    <td className={`sticky right-0 z-[4] border-l border-slate-200 px-4 py-3 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${isChecked ? 'bg-violet-50' : 'bg-white'}`}>
                       <div className="flex items-center gap-1.5">
                         {/* Действия для Новых — 3-точечное меню */}
                         {activeTab === 'pending' && fbsPermissions.fbs_assembly && (
@@ -3490,6 +3856,36 @@ export function FbsOrdersPage({ accountId }: Props) {
       {/* Клик вне меню — закрываем */}
       {orderMenuId !== null && (
         <div className="fixed inset-0 z-40" onClick={() => setOrderMenuId(null)} />
+      )}
+
+      {deleteSupplyModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+          onClick={() => { if (!deleteSupplyModal.busy) setDeleteSupplyModal(null) }}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="px-6 pb-3 pt-6">
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-red-50 text-red-600">
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 10v6m4-6v6"/></svg>
+              </div>
+              <h2 className="text-lg font-bold text-slate-900">Удалить пустую поставку?</h2>
+              <p className="mt-2 text-sm leading-5 text-slate-500">
+                «{deleteSupplyModal.supply.name}» будет удалена в Wildberries и исчезнет из ELESTET.
+              </p>
+              <p className="mt-2 font-mono text-xs text-slate-400">{deleteSupplyModal.supply.id}</p>
+              {deleteSupplyModal.error && (
+                <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-600">{deleteSupplyModal.error}</div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-6 pb-6 pt-3">
+              <button type="button" disabled={deleteSupplyModal.busy} onClick={() => setDeleteSupplyModal(null)} className="h-10 cursor-pointer rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-wait disabled:opacity-40">Отмена</button>
+              <button type="button" disabled={deleteSupplyModal.busy} onClick={() => void handleDeleteSupply()} className="flex h-10 min-w-28 cursor-pointer items-center justify-center gap-2 rounded-xl bg-red-500 px-4 text-sm font-semibold text-white transition hover:bg-red-600 disabled:cursor-wait disabled:opacity-50">
+                {deleteSupplyModal.busy && <svg viewBox="0 0 24 24" className="h-4 w-4 animate-spin" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" strokeDasharray="28" strokeDashoffset="8"/></svg>}
+                Удалить
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {boxSelectionOrder && (

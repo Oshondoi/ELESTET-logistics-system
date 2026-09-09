@@ -20,6 +20,7 @@ import {
 import type { StaffMember } from '../services/platformRoleService'
 import { adminGetPlanConfigs, adminUpsertPlanConfig } from '../services/planConfigService'
 import type { PlanConfig } from '../services/planConfigService'
+import { ScannerModelsAdminTab } from '../components/admin/ScannerModelsAdminTab'
 
 interface AdminUser {
   id: string
@@ -177,6 +178,7 @@ const SetPlanForm = ({ account, onDone, onCancel }: SetPlanFormProps) => {
 
 /* ─── AdminPage ─────────────────────────────────────────────────────── */
 const ADMIN_TAB_KEY = 'elestet-admin-tab'
+type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners'
 
 export const AdminPage = ({
   platformRole = 'user',
@@ -193,11 +195,11 @@ export const AdminPage = ({
 }) => {
   const canEdit = platformRole === 'admin' || platformRole === 'superadmin'
   const isSuperAdmin = platformRole === 'superadmin'
-  const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans'>(
-    () => (sessionStorage.getItem(ADMIN_TAB_KEY) as 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | null) ?? 'users'
+  const [activeTab, setActiveTab] = useState<AdminTab>(
+    () => (sessionStorage.getItem(ADMIN_TAB_KEY) as AdminTab | null) ?? 'users'
   )
 
-  const handleSetTab = (tab: 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans') => {
+  const handleSetTab = (tab: AdminTab) => {
     sessionStorage.setItem(ADMIN_TAB_KEY, tab)
     setActiveTab(tab)
   }
@@ -445,6 +447,7 @@ export const AdminPage = ({
     { key: 'access' as const, label: 'Доступ' },
     ...(canEdit ? [{ key: 'team' as const, label: 'Команда' }] : []),
     ...(canEdit ? [{ key: 'plans' as const, label: 'Тарифы' }] : []),
+    ...(canEdit ? [{ key: 'scanners' as const, label: 'Сканеры' }] : []),
     ...(isSuperAdmin ? [{ key: 'payment' as const, label: 'Интеграция оплаты' }] : []),
   ]
 
@@ -644,7 +647,7 @@ export const AdminPage = ({
       </div>
 
       {/* Табы */}
-      <div className="flex gap-1 rounded-2xl bg-slate-100 p-1 w-fit">
+      <div className="flex max-w-full gap-1 overflow-x-auto rounded-2xl bg-slate-100 p-1 w-fit">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -1591,6 +1594,9 @@ export const AdminPage = ({
           loadPlans={loadPlans}
         />
       )}
+
+      {/* ═══ TAB: Сканеры ═══════════════════════════════════════ */}
+      {activeTab === 'scanners' && canEdit && <ScannerModelsAdminTab />}
     </div>
   )
 }

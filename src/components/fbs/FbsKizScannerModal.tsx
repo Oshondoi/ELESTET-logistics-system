@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import JsBarcode from 'jsbarcode'
+import { QRCodeCanvas } from 'qrcode.react'
 import { supabase } from '../../lib/supabase'
 import { ensureAuthenticatedSession } from '../../lib/authSession'
 import { invokeFbs } from '../../services/fbsApi'
+import { fetchActiveScannerModels, readCachedActiveScannerModels } from '../../services/scannerModelService'
+import type { ScannerModelProfile } from '../../services/scannerModelService'
 import { kizValidationError, normalizeKizCode, normalizeScannerKeyboardLayout } from '../../lib/kizCode'
 import { showToast } from '../ui/Toast'
 import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url'
@@ -21,7 +25,7 @@ type ScanSession = {
   device_name?: string
   device_named: boolean
   device_identity_required: boolean
-  active_scanner_model: ScannerModel | null
+  active_scanner_model: string | null
   scanner_test_status: ScannerTestStatus
   scanner_tested_at?: string | null
 }
@@ -100,21 +104,33 @@ type Props = {
 const DEVICE_KEY = 'elestet_fbs_scanner_device_v1'
 const DEVICE_PROFILE_KEY = 'elestet_fbs_scanner_profile_v1'
 const GS = '\u001d'
-
-const SCANNER_MODELS = [
-  'АТОЛ SB5100',
-  'MERTECH 2310 P2D HR SUPERLEAD',
-  'Zebra DS2208',
-  'Honeywell Voyager XP 1470g',
-  'Datalogic QuickScan QD2590',
-] as const
-
-type ScannerModel = typeof SCANNER_MODELS[number]
 type ScannerTestStatus = 'untested' | 'passed' | 'failed'
+type SerialConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'unsupported' | 'error'
+type SerialPacketTerminator = 'cr_lf' | 'cr' | 'lf' | 'tab' | 'etx'
+
+type BrowserSerialReader = ReadableStreamDefaultReader<Uint8Array>
+
+type BrowserSerialPort = {
+  readable: ReadableStream<Uint8Array> | null
+  open(options: {
+    baudRate: number
+    dataBits?: 7 | 8
+    stopBits?: 1 | 2
+    parity?: 'none' | 'even' | 'odd'
+    flowControl?: 'none' | 'hardware'
+  }): Promise<void>
+  close(): Promise<void>
+  getInfo?(): { usbVendorId?: number; usbProductId?: number }
+}
+
+type BrowserSerialApi = {
+  requestPort(): Promise<BrowserSerialPort>
+  getPorts?(): Promise<BrowserSerialPort[]>
+}
 
 type DeviceProfile = {
   deviceName: string
-  scannerModel: ScannerModel | null
+  scannerModel: string | null
   scannerTestStatus: ScannerTestStatus
 }
 
@@ -124,16 +140,14 @@ const EMPTY_DEVICE_PROFILE: DeviceProfile = {
   scannerTestStatus: 'untested',
 }
 
-function isScannerModel(value: unknown): value is ScannerModel {
-  return typeof value === 'string' && (SCANNER_MODELS as readonly string[]).includes(value)
-}
-
 function readDeviceProfile(): DeviceProfile {
   try {
     const saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Partial<DeviceProfile>
     return {
       deviceName: typeof saved.deviceName === 'string' ? saved.deviceName.trim().slice(0, 80) : '',
-      scannerModel: isScannerModel(saved.scannerModel) ? saved.scannerModel : null,
+      scannerModel: typeof saved.scannerModel === 'string' && saved.scannerModel.trim().length <= 200
+        ? saved.scannerModel.trim()
+        : null,
       scannerTestStatus: saved.scannerTestStatus === 'passed' || saved.scannerTestStatus === 'failed'
         ? saved.scannerTestStatus
         : 'untested',
@@ -145,6 +159,14 @@ function readDeviceProfile(): DeviceProfile {
 
 function writeDeviceProfile(profile: DeviceProfile) {
   localStorage.setItem(DEVICE_PROFILE_KEY, JSON.stringify(profile))
+}
+
+function scannerSearchKey(value: string) {
+  return value.toLocaleLowerCase('ru-RU').replace(/[^a-zа-яё0-9]+/gi, '')
+}
+
+function browserSerialApi(): BrowserSerialApi | null {
+  return ((navigator as Navigator & { serial?: BrowserSerialApi }).serial ?? null)
 }
 
 function supportsUsbScannerSelection(): boolean {
@@ -168,6 +190,58 @@ function cleanScan(value: string, trimSpaces: boolean): string {
 
 function scannerBytesToString(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
+}
+
+function serialPacketTerminator(value: unknown): SerialPacketTerminator {
+  return value === 'cr' || value === 'lf' || value === 'tab' || value === 'etx' ? value : 'cr_lf'
+}
+
+function endsSerialPacket(character: string, terminator: SerialPacketTerminator) {
+  if (terminator === 'tab') return character === '\t'
+  if (terminator === 'etx') return character === '\u0003'
+  if (terminator === 'cr') return character === '\r'
+  if (terminator === 'lf') return character === '\n'
+  return character === '\r' || character === '\n'
+}
+
+function ScannerSetupBarcode({ value, label, format }: { value: string; label: string; format: 'CODE128' | 'QR' }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [renderError, setRenderError] = useState(false)
+
+  useEffect(() => {
+    if (format === 'QR') {
+      setRenderError(false)
+      return
+    }
+    if (!canvasRef.current) return
+    try {
+      JsBarcode(canvasRef.current, value, {
+        format: 'CODE128',
+        width: 2,
+        height: 54,
+        displayValue: true,
+        font: 'Arial',
+        fontSize: 13,
+        margin: 8,
+      })
+      setRenderError(false)
+    } catch {
+      setRenderError(true)
+    }
+  }, [format, value])
+
+  return (
+    <figure className="overflow-hidden rounded-xl border border-slate-200 bg-white p-2 text-center">
+      <figcaption className="mb-1 text-[11px] font-semibold text-slate-600">{label}</figcaption>
+      <div className="overflow-x-auto">
+        {format === 'QR'
+          ? <QRCodeCanvas value={value} size={180} marginSize={2} className="mx-auto block" />
+          : renderError
+            ? <div className="px-3 py-4 text-xs text-rose-600">Не удалось построить штрихкод. Проверьте значение в админке.</div>
+            : <canvas ref={canvasRef} className="mx-auto block max-w-none" />}
+      </div>
+    </figure>
+  )
 }
 
 function scanTime(value: string): string {
@@ -290,6 +364,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const stableDeviceId = useMemo(deviceId, [])
   const scannerSelectionVisible = useMemo(supportsUsbScannerSelection, [])
   const [deviceProfile, setDeviceProfile] = useState<DeviceProfile>(readDeviceProfile)
+  const [scannerModels, setScannerModels] = useState<ScannerModelProfile[]>(readCachedActiveScannerModels)
+  const [scannerCatalogLoading, setScannerCatalogLoading] = useState(false)
+  const [scannerCatalogError, setScannerCatalogError] = useState('')
   const [session, setSession] = useState<ScanSession | null>(null)
   const [pairs, setPairs] = useState<ScanPair[]>([])
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
@@ -312,11 +389,21 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [deviceNameDialogOpen, setDeviceNameDialogOpen] = useState(false)
   const [deviceNameInput, setDeviceNameInput] = useState('')
   const [scannerDialogOpen, setScannerDialogOpen] = useState(false)
+  const [scannerSearch, setScannerSearch] = useState('')
+  const [serialStatus, setSerialStatus] = useState<SerialConnectionStatus>(() => browserSerialApi() ? 'disconnected' : 'unsupported')
+  const [serialError, setSerialError] = useState('')
+  const [serialPortLabel, setSerialPortLabel] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const deviceNameInputRef = useRef<HTMLInputElement | null>(null)
   const altNumpadDigitsRef = useRef('')
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null)
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const cameraResultRef = useRef<(value: string) => void>(() => undefined)
+  const serialPortRef = useRef<BrowserSerialPort | null>(null)
+  const serialReaderRef = useRef<BrowserSerialReader | null>(null)
+  const serialReadActiveRef = useRef(false)
+  const serialConnectedProfileKeyRef = useRef('')
+  const serialScanHandlerRef = useRef<(value: string) => Promise<void>>(async () => undefined)
   const sessionRef = useRef<ScanSession | null>(null)
   const pairDetailsRequestRef = useRef(0)
   sessionRef.current = session
@@ -327,8 +414,26 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     const barcode = cleanScan(ordersById.get(item.orderId)?.productBarcode ?? '', true)
     return barcode ? [barcode] : []
   })), [catalog, ordersById])
+  const filteredScannerModels = useMemo(() => {
+    const query = scannerSearchKey(scannerSearch)
+    if (!query) return scannerModels
+    return scannerModels.filter((model) => scannerSearchKey(`${model.brand} ${model.model} ${model.displayName}`).includes(query))
+  }, [scannerModels, scannerSearch])
   const pendingOrder = session?.pending_order_id ? ordersById.get(session.pending_order_id) : null
   const deviceReady = Boolean(session?.device_identity_required && session.device_named)
+  const selectedScannerProfile = scannerModels.find((model) => model.displayName === deviceProfile.scannerModel) ?? null
+  const serialScannerSelected = selectedScannerProfile?.connectionType === 'web_serial'
+  const selectedSerialProfileKey = serialScannerSelected && selectedScannerProfile
+    ? `${selectedScannerProfile.id}:${selectedScannerProfile.profileVersion}`
+    : ''
+  const selectedScannerHasDetails = Boolean(selectedScannerProfile && (
+    selectedScannerProfile.connectionType === 'web_serial'
+    || selectedScannerProfile.setupBarcodes.length > 0
+    || selectedScannerProfile.restoreBarcodes.length > 0
+    || selectedScannerProfile.instructions
+    || selectedScannerProfile.warningText
+  ))
+  const childDialogOpen = deviceNameDialogOpen || scannerDialogOpen || Boolean(selectedPair)
 
   useEffect(() => {
     if (error) showToast(error, 'error')
@@ -337,6 +442,24 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   useEffect(() => {
     if (notice) showToast(notice, 'success')
   }, [notice])
+
+  useEffect(() => {
+    if (!scannerSelectionVisible) return
+    let cancelled = false
+    setScannerCatalogLoading(true)
+    setScannerCatalogError('')
+    void fetchActiveScannerModels()
+      .then((models) => {
+        if (!cancelled) setScannerModels(models)
+      })
+      .catch((loadError) => {
+        if (!cancelled) setScannerCatalogError(errorText(loadError))
+      })
+      .finally(() => {
+        if (!cancelled) setScannerCatalogLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [scannerSelectionVisible])
 
   const loadPairs = useCallback(async (sessionId: string) => {
     if (!supabase) return
@@ -484,8 +607,17 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
   useEffect(() => {
     const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false
-    if (deviceReady && !coarsePointer && !cameraOpen && !busy && !loading && session?.status !== 'completed') inputRef.current?.focus()
-  }, [busy, cameraOpen, deviceReady, loading, session?.pending_order_id, session?.pending_product_barcode, session?.status])
+    if (deviceReady && !coarsePointer && !cameraOpen && !childDialogOpen && !busy && !loading && session?.status !== 'completed') inputRef.current?.focus()
+  }, [busy, cameraOpen, childDialogOpen, deviceReady, loading, session?.pending_order_id, session?.pending_product_barcode, session?.status])
+
+  useEffect(() => {
+    if (!deviceNameDialogOpen) return
+    const frame = window.requestAnimationFrame(() => {
+      deviceNameInputRef.current?.focus()
+      deviceNameInputRef.current?.select()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [deviceNameDialogOpen])
 
   const openDeviceNameDialog = () => {
     setDeviceNameInput(deviceProfile.deviceName || (session?.device_named ? session.device_name ?? '' : ''))
@@ -540,12 +672,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
-  const selectScannerModel = async (model: ScannerModel | null) => {
+  const selectScannerModel = async (model: ScannerModelProfile | null) => {
     if (!supabase || !session || busy || !deviceReady || !scannerSelectionVisible) return
-    if (model === deviceProfile.scannerModel) {
-      setScannerDialogOpen(false)
-      return
-    }
+    const modelName = model?.displayName ?? null
+    if (modelName === deviceProfile.scannerModel) return
 
     setBusy(true)
     setError('')
@@ -553,7 +683,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     try {
       const nextProfile: DeviceProfile = {
         ...deviceProfile,
-        scannerModel: model,
+        scannerModel: modelName,
         scannerTestStatus: 'untested',
       }
       const { data, error: configureError } = await (supabase as any).rpc('configure_fbs_marking_device', {
@@ -561,15 +691,14 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         p_device_id: stableDeviceId,
         p_device_name: deviceProfile.deviceName,
         p_device_named: true,
-        p_scanner_model: model,
+        p_scanner_model: modelName,
         p_scanner_test_status: 'untested',
       })
       if (configureError) throw configureError
       writeDeviceProfile(nextProfile)
       setDeviceProfile(nextProfile)
       setSession(data as ScanSession)
-      setScannerDialogOpen(false)
-      setNotice(model ? `Выбран сканер: ${model}` : 'Сканер не выбран. Обычный ввод и камера доступны')
+      setNotice(modelName ? `Выбран сканер: ${modelName}` : 'Сканер не выбран. Обычный ввод и камера доступны')
     } catch (configureError) {
       setError(errorText(configureError))
       signal(false)
@@ -765,6 +894,139 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }
 
   cameraResultRef.current = (scannedValue: string) => { void handleScan(scannedValue) }
+  serialScanHandlerRef.current = async (scannedValue: string) => {
+    if (childDialogOpen) return
+    await handleScan(scannedValue)
+  }
+
+  const disconnectSerial = useCallback(async () => {
+    serialReadActiveRef.current = false
+    serialConnectedProfileKeyRef.current = ''
+    const reader = serialReaderRef.current
+    serialReaderRef.current = null
+    try {
+      await reader?.cancel()
+    } catch {
+      // Порт мог быть физически отключён раньше нажатия кнопки.
+    }
+    if (!reader) {
+      const port = serialPortRef.current
+      serialPortRef.current = null
+      try {
+        await port?.close()
+      } catch {
+        // Уже закрытый порт не требует дополнительной обработки.
+      }
+    }
+    setSerialStatus(browserSerialApi() ? 'disconnected' : 'unsupported')
+    setSerialPortLabel('')
+  }, [])
+
+  const readSerialPort = async (port: BrowserSerialPort, maxPacketLength: number, packetTerminator: SerialPacketTerminator) => {
+    if (!port.readable) throw new Error('COM-порт открыт без канала чтения')
+    const reader = port.readable.getReader()
+    serialReaderRef.current = reader
+    let buffer = ''
+    let ignoreLineFeedAfterCarriageReturn = false
+    let failed = false
+    try {
+      while (serialReadActiveRef.current) {
+        const result = await reader.read()
+        if (result.done) break
+        const chunk = result.value ? scannerBytesToString(result.value) : ''
+        for (const character of chunk) {
+          if (ignoreLineFeedAfterCarriageReturn && character === '\n') {
+            ignoreLineFeedAfterCarriageReturn = false
+            continue
+          }
+          ignoreLineFeedAfterCarriageReturn = false
+          if (endsSerialPacket(character, packetTerminator)) {
+            ignoreLineFeedAfterCarriageReturn = character === '\r'
+            if (!buffer) continue
+            const scannedValue = buffer
+            buffer = ''
+            await serialScanHandlerRef.current(scannedValue)
+          } else {
+            buffer += character
+            if (buffer.length > maxPacketLength) throw new Error('Сканер передал слишком длинный пакет. Переподключите COM-порт.')
+          }
+        }
+      }
+    } catch (readError) {
+      if (serialReadActiveRef.current) {
+        failed = true
+        setSerialStatus('error')
+        setSerialError(errorText(readError))
+      }
+    } finally {
+      serialReadActiveRef.current = false
+      serialReaderRef.current = null
+      try {
+        reader.releaseLock()
+      } catch {
+        // Блокировка уже освобождена браузером.
+      }
+      try {
+        await port.close()
+      } catch {
+        // Физически отключённый порт уже закрыт.
+      }
+      if (serialPortRef.current === port) serialPortRef.current = null
+      serialConnectedProfileKeyRef.current = ''
+      if (!failed) {
+        setSerialStatus(browserSerialApi() ? 'disconnected' : 'unsupported')
+        setSerialPortLabel('')
+      }
+    }
+  }
+
+  const connectScannerSerial = async () => {
+    if (!serialScannerSelected || !selectedScannerProfile || serialStatus === 'connecting' || serialStatus === 'connected') return
+    const serial = browserSerialApi()
+    if (!serial) {
+      setSerialStatus('unsupported')
+      setSerialError('COM-подключение доступно в Chrome или Edge на компьютере')
+      return
+    }
+
+    setSerialStatus('connecting')
+    setSerialError('')
+    try {
+      const port = await serial.requestPort()
+      await port.open(selectedScannerProfile.serialOptions)
+      const info = port.getInfo?.() ?? {}
+      const id = info.usbVendorId == null
+        ? 'COM-порт'
+        : `USB ${info.usbVendorId.toString(16).padStart(4, '0')}:${(info.usbProductId ?? 0).toString(16).padStart(4, '0')}`
+      serialPortRef.current = port
+      serialConnectedProfileKeyRef.current = selectedSerialProfileKey
+      serialReadActiveRef.current = true
+      setSerialPortLabel(id)
+      setSerialStatus('connected')
+      setNotice('COM подключён. Сканер передаёт данные напрямую в ELESTET')
+      const configuredMaxPacketLength = Number(selectedScannerProfile.scanOptions.maxPacketLength)
+      const maxPacketLength = Number.isFinite(configuredMaxPacketLength)
+        ? Math.max(256, Math.trunc(configuredMaxPacketLength))
+        : 4096
+      void readSerialPort(port, maxPacketLength, serialPacketTerminator(selectedScannerProfile.scanOptions.packetTerminator))
+    } catch (connectError) {
+      serialReadActiveRef.current = false
+      serialPortRef.current = null
+      const cancelled = connectError instanceof DOMException && connectError.name === 'NotFoundError'
+      setSerialStatus('error')
+      setSerialError(cancelled ? 'Выбор COM-порта отменён' : errorText(connectError))
+    }
+  }
+
+  useEffect(() => {
+    if (serialPortRef.current && serialConnectedProfileKeyRef.current !== selectedSerialProfileKey) void disconnectSerial()
+  }, [disconnectSerial, selectedSerialProfileKey])
+
+  useEffect(() => () => {
+    serialReadActiveRef.current = false
+    void serialReaderRef.current?.cancel().catch(() => undefined)
+    if (!serialReaderRef.current) void serialPortRef.current?.close().catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     if (!cameraOpen || !deviceReady) {
@@ -880,7 +1142,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   // кликнул по заголовку, списку или кнопке, первый символ следующего скана
   // возвращает ввод в единственное рабочее поле этой модалки.
   useEffect(() => {
-    if (!deviceReady || cameraOpen || busy || loading || session?.status === 'completed') return
+    if (!deviceReady || cameraOpen || childDialogOpen || busy || loading || session?.status === 'completed') return
 
     const focusInput = () => inputRef.current?.focus({ preventScroll: true })
     const appendScannerValue = (chunk: string) => {
@@ -944,7 +1206,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       document.removeEventListener('keyup', handleDocumentKeyUp, true)
       altNumpadDigitsRef.current = ''
     }
-  }, [busy, cameraOpen, deviceReady, loading, session?.status])
+  }, [busy, cameraOpen, childDialogOpen, deviceReady, loading, session?.status])
 
   const releasePending = async () => {
     if (!supabase || !session || busy || !deviceReady) return
@@ -1221,7 +1483,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         className="flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-white"
         onClick={(event) => event.stopPropagation()}
         onPointerDownCapture={(event) => {
-          if (!deviceReady || cameraOpen || (window.matchMedia?.('(pointer: coarse)').matches ?? false)) return
+          if (!deviceReady || cameraOpen || childDialogOpen || (window.matchMedia?.('(pointer: coarse)').matches ?? false)) return
           const target = event.target as HTMLElement
           if (target.closest('input, textarea, select, button, a, [contenteditable="true"]')) return
           window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
@@ -1323,6 +1585,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                           <span className={`inline-flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold sm:text-sm ${scannerStatusClass}`}>
                             <span className="truncate">{deviceProfile.scannerModel}</span>
                             <span className="rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-bold uppercase sm:text-[10px]">{scannerStatusLabel}</span>
+                            {serialScannerSelected && serialStatus === 'connected' && (
+                              <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-bold uppercase text-white sm:text-[10px]">COM</span>
+                            )}
                           </span>
                         ) : (
                           <span className="text-xs font-semibold text-slate-500 sm:text-sm">Сканер не выбран</span>
@@ -1492,6 +1757,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                 <button type="button" disabled={busy} onClick={() => setDeviceNameDialogOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200 disabled:opacity-40">×</button>
               </div>
               <input
+                ref={deviceNameInputRef}
                 autoFocus
                 value={deviceNameInput}
                 onChange={(event) => setDeviceNameInput(event.target.value.slice(0, 80))}
@@ -1510,13 +1776,24 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
         {scannerDialogOpen && scannerSelectionVisible && (
           <div className="fixed inset-0 z-[125] flex h-[100dvh] items-end justify-center bg-slate-950/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label="Выбор USB-сканера" onClick={() => { if (!busy) setScannerDialogOpen(false) }}>
-            <div className="flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex max-h-[92dvh] w-full max-w-xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">USB-сканер</h3>
                   <p className="mt-1 text-xs text-slate-500">На этом устройстве одновременно выбирается одна модель.</p>
                 </div>
                 <button type="button" disabled={busy} onClick={() => setScannerDialogOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200 disabled:opacity-40">×</button>
+              </div>
+              <div className="border-b border-slate-100 px-4 py-3 sm:px-5">
+                <label className="relative block">
+                  <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                  <input
+                    value={scannerSearch}
+                    onChange={(event) => setScannerSearch(event.target.value)}
+                    placeholder="Поиск по бренду или модели"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100"
+                  />
+                </label>
               </div>
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4 sm:p-5">
                 <button
@@ -1528,20 +1805,96 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   <span>Сканер не выбран</span>
                   {deviceProfile.scannerModel === null && <span className="text-violet-600">✓</span>}
                 </button>
-                {SCANNER_MODELS.map((model) => (
+                {filteredScannerModels.map((model) => (
                   <button
-                    key={model}
+                    key={model.id}
                     type="button"
                     disabled={busy}
                     onClick={() => void selectScannerModel(model)}
-                    className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition-colors disabled:opacity-40 ${deviceProfile.scannerModel === model ? 'border-violet-400 bg-violet-50 text-violet-800' : 'border-slate-200 text-slate-700 hover:border-violet-300'}`}
+                    className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition-colors disabled:opacity-40 ${deviceProfile.scannerModel === model.displayName ? 'border-violet-400 bg-violet-50 text-violet-800' : 'border-slate-200 text-slate-700 hover:border-violet-300'}`}
                   >
-                    <span>{model}</span>
-                    {deviceProfile.scannerModel === model && <span className="shrink-0 text-violet-600">✓</span>}
+                    <span className="min-w-0">
+                      <span className="block truncate">{model.displayName}</span>
+                      <span className="mt-0.5 block text-[10px] font-medium text-slate-400">{model.connectionType === 'web_serial' ? 'COM через браузер' : 'Обычный USB'}</span>
+                    </span>
+                    {deviceProfile.scannerModel === model.displayName && <span className="shrink-0 text-violet-600">✓</span>}
                   </button>
                 ))}
+                {scannerCatalogLoading && scannerModels.length === 0 && (
+                  <div className="py-4 text-center text-xs text-slate-400">Загрузка моделей…</div>
+                )}
+                {scannerCatalogError && scannerModels.length === 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-xs leading-5 text-amber-700">
+                    Каталог временно не загрузился. Оставьте «Сканер не выбран» — работа не блокируется.
+                  </div>
+                )}
+                {!scannerCatalogLoading && !scannerCatalogError && filteredScannerModels.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-slate-200 px-4 py-5 text-center text-xs leading-5 text-slate-500">
+                    Такой модели пока нет. Оставьте «Сканер не выбран» — обычный режим продолжит работать.
+                  </div>
+                )}
+
+                {selectedScannerProfile && selectedScannerHasDetails && (
+                  <section className="mt-4 space-y-3 rounded-2xl border border-violet-200 bg-violet-50/60 p-3 sm:p-4">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900">Настройка {selectedScannerProfile.displayName}</h4>
+                      {selectedScannerProfile.instructions && <p className="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">{selectedScannerProfile.instructions}</p>}
+                    </div>
+                    {selectedScannerProfile.setupBarcodes.length > 0 && (
+                      <div className="grid gap-2">
+                        {selectedScannerProfile.setupBarcodes.map((code, index) => <ScannerSetupBarcode key={`${index}-${code.value}`} value={code.value} label={code.label} format={code.format} />)}
+                      </div>
+                    )}
+                    {selectedScannerProfile.warningText && (
+                      <div className="whitespace-pre-line rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+                        {selectedScannerProfile.warningText}
+                      </div>
+                    )}
+                    {selectedScannerProfile.connectionType === 'web_serial' && (
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        {serialStatus === 'connected' ? (
+                          <button type="button" onClick={() => void disconnectSerial()} className="h-11 flex-1 rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-600 transition hover:bg-red-50">Отключить COM</button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={serialStatus === 'connecting' || serialStatus === 'unsupported'}
+                            onClick={() => void connectScannerSerial()}
+                            className="h-11 flex-1 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-45"
+                          >
+                            {serialStatus === 'connecting' ? 'Подключаем…' : 'Подключить COM к ELESTET'}
+                          </button>
+                        )}
+                        <div className={`flex min-h-11 flex-1 items-center justify-center rounded-xl border px-3 text-center text-xs font-semibold ${
+                          serialStatus === 'connected'
+                            ? 'border-emerald-200 bg-emerald-100 text-emerald-700'
+                            : serialStatus === 'error'
+                              ? 'border-red-200 bg-red-50 text-red-600'
+                              : 'border-slate-200 bg-white text-slate-500'
+                        }`}>
+                          {serialStatus === 'connected'
+                            ? `COM подключён · ${serialPortLabel}`
+                            : serialStatus === 'unsupported'
+                              ? 'Нужен Chrome или Edge на ПК'
+                              : serialStatus === 'error'
+                                ? serialError
+                                : 'COM не подключён'}
+                        </div>
+                      </div>
+                    )}
+                    {selectedScannerProfile.restoreBarcodes.length > 0 && (
+                      <details className="rounded-xl border border-slate-200 bg-white">
+                        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-600">Вернуть обычный USB-режим</summary>
+                        <div className="grid gap-2 border-t border-slate-100 p-3">
+                          {selectedScannerProfile.restoreBarcodes.map((code, index) => <ScannerSetupBarcode key={`${index}-${code.value}`} value={code.value} label={code.label} format={code.format} />)}
+                        </div>
+                      </details>
+                    )}
+                  </section>
+                )}
               </div>
-              <div className="border-t border-slate-100 px-4 py-3 text-center text-[11px] text-slate-500 sm:px-5">Выбор пока ничего не перенастраивает и не ограничивает работу.</div>
+              <div className="border-t border-slate-100 px-4 py-3 text-center text-[11px] text-slate-500 sm:px-5">
+                Нет модели в списке — оставьте «Сканер не выбран». Работа не блокируется.
+              </div>
             </div>
           </div>
         )}

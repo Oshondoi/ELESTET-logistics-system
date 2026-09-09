@@ -10,6 +10,7 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
 const WB_BASE = 'https://marketplace-api.wildberries.ru'
 const WB_READ_ATTEMPTS = 3
 const WB_REQUEST_TIMEOUT_MS = 20_000
+const SUPPLY_DELETE_TIMEOUT_MS = 10_000
 const WB_PAGE_LIMIT = 1000
 
 type WbOrderStatus = {
@@ -99,6 +100,18 @@ async function sbWrite(
   if (!r.ok) throw new Error(`DB ${r.status}: ${await r.text()}`)
   const text = await r.text()
   return text ? parseWbJson(text) : []
+}
+
+async function sbDelete(table: string, params: string): Promise<void> {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
+    method: 'DELETE',
+    headers: {
+      apikey: SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      Prefer: 'return=minimal',
+    },
+  })
+  if (!r.ok) throw new Error(`DB ${r.status}: ${await r.text()}`)
 }
 
 async function sbRpc<T>(functionName: string, body: unknown): Promise<T> {
@@ -533,12 +546,13 @@ type FbsPermission = 'fbs_view' | 'fbs_sync' | 'fbs_full_sync' | 'fbs_assembly' 
 
 function permissionForFbsAction(action: string, body: Record<string, unknown>): FbsPermission {
   if (action === 'sync_orders') return body.mode === 'full' ? 'fbs_full_sync' : 'fbs_sync'
+  if (['sync_orders_fast', 'sync_supplies_fast'].includes(action)) return 'fbs_sync'
   if (action === 'update_stocks') return 'fbs_stocks_manage'
   if (['deliver_supply', 'get_supply_boxes', 'add_supply_boxes', 'delete_supply_boxes'].includes(action)) {
     return 'fbs_dispatch'
   }
   if ([
-    'create_supply', 'add_order_to_supply', 'get_supply_box_stickers', 'get_supply_qr',
+    'create_supply', 'add_order_to_supply', 'delete_supply', 'get_supply_box_stickers', 'get_supply_qr',
     'get_scan_catalog', 'diagnose_scan_qr', 'get_kiz_order_states', 'submit_marking_session',
     'get_sticker',
   ].includes(action)) return 'fbs_assembly'
@@ -646,7 +660,10 @@ async function getAllSupplies(apiKey: string, closed: boolean, requestedLimit = 
 
 async function getOrderStatuses(apiKey: string, orderIds: string[], requireEveryOrder = true) {
   const statuses = new Map<string, WbOrderStatus>()
-  for (const batch of chunks([...new Set(orderIds)], 1000)) {
+  const batches = chunks([...new Set(orderIds)], 1000)
+  for (let index = 0; index < batches.length; index += 1) {
+    if (index > 0) await sleep(210)
+    const batch = batches[index]
     const data = await wbPostOrderIds(apiKey, '/api/v3/orders/status', batch)
     for (const rawStatus of (Array.isArray(data?.orders) ? data.orders : [])) {
       const orderId = wbId(rawStatus.id)
@@ -830,7 +847,12 @@ function normalizedStatusRows(statuses: Map<string, WbOrderStatus>) {
   }))
 }
 
-async function syncOrdersIncremental(storeId: string, accountId: string, apiKey: string) {
+async function syncOrdersIncremental(
+  storeId: string,
+  accountId: string,
+  apiKey: string,
+  observedAt = new Date().toISOString(),
+) {
   const [newResult, cachedOrders] = await Promise.all([
     wbGet(apiKey, '/api/v3/orders/new'),
     sbGetAll(
@@ -866,8 +888,9 @@ async function syncOrdersIncremental(storeId: string, accountId: string, apiKey:
     }),
   )
   const orderMap = new Map(newOrders.map((order) => [wbId(order.id), order]))
-  const nowIso = new Date().toISOString()
+  const nowIso = observedAt
   const counts = statusCounts(statuses, newOrderIds)
+  const reconciliationStatuses = normalizedStatusRows(statuses)
   await sbRpc('apply_fbs_incremental_sync', {
     p_store_id: storeId,
     p_account_id: accountId,
@@ -879,12 +902,15 @@ async function syncOrdersIncremental(storeId: string, accountId: string, apiKey:
   return {
     synced: idsToCheck.length,
     new_orders: newOrders.length,
+    new_order_ids: [...newOrderIds],
     changed_statuses: changedStatuses.size,
+    changed_order_ids: [...changedStatuses.keys()],
     missing_statuses: missingStatusIds.length,
     missing_status_ids: missingStatusIds.slice(0, 20),
     partial: missingStatusIds.length > 0,
     counts,
     last_synced_at: nowIso,
+    reconciliation_statuses: reconciliationStatuses,
   }
 }
 
@@ -922,11 +948,14 @@ async function syncOrdersFull(
   apiKey: string,
   supplies: NormalizedSupply[],
   syncId: string,
+  observedAt = new Date().toISOString(),
 ) {
+  // Время фиксируется до долгого чтения истории. Более свежий быстрый синк
+  // не должен быть перезаписан результатом полной сверки, начавшейся раньше.
   const { orderMap, newOrderIds, historyStartMs } = await getFullOrderHistory(apiKey, supplies)
   const statuses = await getOrderStatuses(apiKey, [...orderMap.keys()])
   logNewOrdersReconciliation(statuses, newOrderIds)
-  const nowIso = new Date().toISOString()
+  const nowIso = observedAt
   const counts = statusCounts(statuses, newOrderIds)
   const orderRows = normalizedOrderRows(orderMap, statuses)
   for (const orderBatch of chunks(orderRows, 250)) {
@@ -946,10 +975,15 @@ async function syncOrdersFull(
     p_orders_count: orderMap.size,
     p_status_counts: counts,
   })
-  return { synced: orderMap.size, counts, last_synced_at: nowIso }
+  return {
+    synced: orderMap.size,
+    counts,
+    last_synced_at: nowIso,
+    reconciliation_statuses: normalizedStatusRows(statuses),
+  }
 }
 
-async function fetchSupplyMemberships(apiKey: string, supplies: NormalizedSupply[]) {
+async function fetchSupplyMemberships(apiKey: string, supplies: NormalizedSupply[], workerDelayMs = 410) {
   const memberships: Array<{ wb_supply_id: string; wb_order_id: string }> = []
   const loadedSupplyIds: string[] = []
   const failedSupplyIds: string[] = []
@@ -977,7 +1011,7 @@ async function fetchSupplyMemberships(apiKey: string, supplies: NormalizedSupply
           supply_id: supply.wb_supply_id, error: message,
         }))
       }
-      await sleep(410)
+      await sleep(workerDelayMs)
     }
   }
   await Promise.all([worker(), worker()])
@@ -991,6 +1025,8 @@ async function syncSupplyTimeline(
   rawSupplies: Record<string, unknown>[],
   mode: SyncMode,
   trigger: SyncTrigger,
+  observedAt = new Date().toISOString(),
+  membershipWorkerDelayMs = 410,
 ) {
   const supplies = rawSupplies.map(normalizeSupply).filter((supply): supply is NormalizedSupply => Boolean(supply))
   const existingRows = await sbGetAll(
@@ -1035,7 +1071,7 @@ async function syncSupplyTimeline(
       || String(previous.wb_closed_at ?? '') !== String(supply.wb_closed_at ?? '')
       || String(previous.wb_scan_at ?? '') !== String(supply.wb_scan_at ?? '')
   })
-  const membershipResult = await fetchSupplyMemberships(apiKey, suppliesToLoad)
+  const membershipResult = await fetchSupplyMemberships(apiKey, suppliesToLoad, membershipWorkerDelayMs)
   const membershipsBySupply = new Map<string, Array<{ wb_supply_id: string; wb_order_id: string }>>()
   for (const membership of membershipResult.memberships) {
     const rows = membershipsBySupply.get(membership.wb_supply_id) ?? []
@@ -1043,7 +1079,7 @@ async function syncSupplyTimeline(
     membershipsBySupply.set(membership.wb_supply_id, rows)
   }
   const loadedSet = new Set(membershipResult.loadedSupplyIds)
-  const nowIso = new Date().toISOString()
+  const nowIso = observedAt
   const aggregate = { supplies: 0, memberships: 0, attempts: 0 }
 
   for (const supplyBatch of chunks(suppliesToPersist, mode === 'full' ? 5 : 50)) {
@@ -1088,6 +1124,8 @@ async function syncSupplyTimeline(
     failed_memberships: membershipResult.failedSupplyIds.length,
     failed_supply_ids: membershipResult.failedSupplyIds.slice(0, 20),
     partial: membershipResult.failedSupplyIds.length > 0 || (mode === 'full' && !fullMembershipComplete),
+    reconciliation_memberships: membershipResult.memberships,
+    reconciliation_closed_supply_ids: supplies.filter((supply) => supply.done).map((supply) => supply.wb_supply_id),
   }
 }
 
@@ -1111,6 +1149,185 @@ async function finishSyncJob(jobId: string, status: 'completed' | 'failed' | 'sk
 }
 
 const activeSyncs = new Map<string, Promise<Record<string, unknown>>>()
+const activeFastOrderSyncs = new Map<string, Promise<Record<string, unknown>>>()
+const activeFastSupplySyncs = new Map<string, Promise<Record<string, unknown>>>()
+
+async function isFastSyncV2Enabled(storeId: string) {
+  try {
+    const rows = await sbGet(
+      'fbs_sync_settings',
+      `store_id=eq.${encodeURIComponent(storeId)}&select=fast_sync_v2_enabled&limit=1`,
+      true,
+    )
+    return rows[0]?.fast_sync_v2_enabled === true
+  } catch (settingsError) {
+    // Без миграции или настройки магазин гарантированно остаётся на старом пути.
+    console.warn(JSON.stringify({ scope: 'wb-fbs', event: 'fast_sync_settings_unavailable', store_id: storeId, error: String(settingsError) }))
+    return false
+  }
+}
+
+async function acquireFastSyncLane(
+  storeId: string,
+  lane: 'orders' | 'supplies',
+  trigger: 'manual' | 'automatic',
+  requestedBy: string | null,
+) {
+  const rows = await sbRpc<Array<{ run_id: string; acquired: boolean; last_completed_at: string | null }>>(
+    'acquire_fbs_fast_sync_lane',
+    {
+      p_store_id: storeId,
+      p_lane: lane,
+      p_trigger_source: trigger,
+      p_requested_by: requestedBy,
+    },
+  )
+  return rows[0]
+}
+
+async function finishFastSyncLane(runId: string, status: 'completed' | 'failed', result: unknown, error: string | null) {
+  await sbRpc('finish_fbs_fast_sync_lane', {
+    p_run_id: runId,
+    p_status: status,
+    p_result: result ?? {},
+    p_error: error,
+  })
+}
+
+async function waitForFastSyncRun(runId: string, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const rows = await sbGet(
+      'fbs_fast_sync_runs',
+      `id=eq.${encodeURIComponent(runId)}&select=status,result,error&limit=1`,
+      true,
+    )
+    const run = rows[0]
+    if (run?.status === 'completed') {
+      return { ...((run.result ?? {}) as Record<string, unknown>), reused: true }
+    }
+    if (run?.status === 'failed') throw new Error(String(run.error ?? 'Быстрое обновление завершилось с ошибкой'))
+    await sleep(250)
+  }
+  return { mode: 'incremental', engine: 'fast-v2', reused: true, in_progress: true }
+}
+
+async function reconcilePendingTransitions(
+  storeId: string,
+  statuses: Array<{ wb_order_id: string; supplier_status: string; wb_system_status: string }>,
+  memberships: Array<{ wb_supply_id: string; wb_order_id: string }>,
+  closedSupplyIds: string[],
+) {
+  const pendingRows = await sbGetAll(
+    'fbs_pending_transitions',
+    `store_id=eq.${encodeURIComponent(storeId)}&select=wb_order_id,target_supply_id`,
+    true,
+  )
+  if (pendingRows.length === 0) return 0
+  const pendingOrderIds = new Set(pendingRows.map((row) => String(row.wb_order_id)))
+  const pendingSupplyIds = new Set(pendingRows.map((row) => String(row.target_supply_id)))
+  return await sbRpc<number>('reconcile_fbs_pending_transitions_v2', {
+    p_store_id: storeId,
+    p_statuses: statuses.filter((status) => pendingOrderIds.has(status.wb_order_id)),
+    p_memberships: memberships.filter((membership) => pendingOrderIds.has(membership.wb_order_id)),
+    p_closed_supply_ids: closedSupplyIds.filter((supplyId) => pendingSupplyIds.has(supplyId)),
+  })
+}
+
+async function runFastOrderSync(
+  storeId: string,
+  accountId: string,
+  apiKey: string,
+  trigger: 'manual' | 'automatic',
+  requestedBy: string | null,
+) {
+  const current = activeFastOrderSyncs.get(storeId)
+  if (current) return { ...(await current), reused: true }
+  const promise = (async () => {
+    const startedAt = Date.now()
+    const lane = await acquireFastSyncLane(storeId, 'orders', trigger, requestedBy)
+    if (!lane?.acquired) {
+      if (lane?.run_id) return { ...(await waitForFastSyncRun(lane.run_id)), phase: 'orders' }
+      return {
+        mode: 'incremental', engine: 'fast-v2', phase: 'orders', reused: true, throttled: true,
+        last_completed_at: lane?.last_completed_at ?? null,
+      }
+    }
+    try {
+      const result = await syncOrdersIncremental(storeId, accountId, apiKey)
+      const { reconciliation_statuses: reconciliationStatuses, ...publicResult } = result
+      await reconcilePendingTransitions(storeId, reconciliationStatuses, [], [])
+      const response = {
+        ...publicResult, mode: 'incremental', engine: 'fast-v2', phase: 'orders',
+        run_id: lane.run_id, duration_ms: Date.now() - startedAt,
+      }
+      await finishFastSyncLane(lane.run_id, 'completed', response, null)
+      console.log(JSON.stringify({ scope: 'wb-fbs', event: 'fast_sync_finished', store_id: storeId, ...response }))
+      return response
+    } catch (syncError) {
+      const message = errorMessage(syncError)
+      await finishFastSyncLane(lane.run_id, 'failed', {}, message).catch(() => undefined)
+      throw syncError
+    }
+  })()
+  activeFastOrderSyncs.set(storeId, promise)
+  try {
+    return await promise
+  } finally {
+    if (activeFastOrderSyncs.get(storeId) === promise) activeFastOrderSyncs.delete(storeId)
+  }
+}
+
+async function runFastSupplySync(
+  storeId: string,
+  accountId: string,
+  apiKey: string,
+  trigger: 'manual' | 'automatic',
+  requestedBy: string | null,
+) {
+  const current = activeFastSupplySyncs.get(storeId)
+  if (current) return { ...(await current), reused: true }
+  const promise = (async () => {
+    const startedAt = Date.now()
+    const lane = await acquireFastSyncLane(storeId, 'supplies', trigger, requestedBy)
+    if (!lane?.acquired) {
+      return {
+        mode: 'incremental', engine: 'fast-v2', phase: 'supplies', reused: true, throttled: true,
+        run_id: lane?.run_id ?? null, last_completed_at: lane?.last_completed_at ?? null,
+      }
+    }
+    try {
+      const observedAt = new Date().toISOString()
+      const rawSupplies = await getAllSupplyMetadata(apiKey, 'incremental')
+      // Two workers with a conservative delay leave room in WB's shared
+      // 300 req/min FBS quota for the independent order lane.
+      const result = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, 'incremental', trigger, observedAt, 520)
+      const {
+        reconciliation_memberships: reconciliationMemberships,
+        reconciliation_closed_supply_ids: reconciliationClosedSupplyIds,
+        ...publicResult
+      } = result
+      await reconcilePendingTransitions(storeId, [], reconciliationMemberships, reconciliationClosedSupplyIds)
+      const response = {
+        mode: 'incremental', engine: 'fast-v2', phase: 'supplies', supplies: publicResult,
+        run_id: lane.run_id, duration_ms: Date.now() - startedAt,
+      }
+      await finishFastSyncLane(lane.run_id, 'completed', response, null)
+      console.log(JSON.stringify({ scope: 'wb-fbs', event: 'fast_sync_finished', store_id: storeId, ...response }))
+      return response
+    } catch (syncError) {
+      const message = errorMessage(syncError)
+      await finishFastSyncLane(lane.run_id, 'failed', {}, message).catch(() => undefined)
+      throw syncError
+    }
+  })()
+  activeFastSupplySyncs.set(storeId, promise)
+  try {
+    return await promise
+  } finally {
+    if (activeFastSupplySyncs.get(storeId) === promise) activeFastSupplySyncs.delete(storeId)
+  }
+}
 
 async function syncStore(
   storeId: string,
@@ -1126,6 +1343,10 @@ async function syncStore(
   }
 
   try {
+    // Every WB value written by this run carries the time at which the run
+    // started observing WB. A slower, older full run therefore cannot replace
+    // a newer fast result merely because it finished later.
+    const observedAt = new Date().toISOString()
     const rawSupplies = await getAllSupplyMetadata(apiKey, mode)
     const normalizedSupplies = rawSupplies
       .map(normalizeSupply)
@@ -1139,9 +1360,20 @@ async function syncStore(
     const orderHistoryIsFresh = Number.isFinite(previousFullAt)
       && previousFullAt >= Date.now() - 20 * 3600_000
     const orderResult = mode === 'full' && !orderHistoryIsFresh
-      ? await syncOrdersFull(storeId, accountId, apiKey, normalizedSupplies, job.job_id)
-      : await syncOrdersIncremental(storeId, accountId, apiKey)
-    const supplyResult = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, mode, trigger)
+      ? await syncOrdersFull(storeId, accountId, apiKey, normalizedSupplies, job.job_id, observedAt)
+      : await syncOrdersIncremental(storeId, accountId, apiKey, observedAt)
+    const supplyResultWithReconciliation = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, mode, trigger, observedAt)
+    const {
+      reconciliation_memberships: reconciliationMemberships,
+      reconciliation_closed_supply_ids: reconciliationClosedSupplyIds,
+      ...supplyResult
+    } = supplyResultWithReconciliation
+    await reconcilePendingTransitions(
+      storeId,
+      'reconciliation_statuses' in orderResult ? orderResult.reconciliation_statuses : [],
+      reconciliationMemberships,
+      reconciliationClosedSupplyIds,
+    )
     let nightlyKizChecked = 0
     if (mode === 'full' && trigger === 'nightly') {
       const { orderIds, existingStates } = await kizOrdersToRefresh(storeId, true, true)
@@ -1254,7 +1486,8 @@ Deno.serve(async (req) => {
       return err('Нет права на это действие FBS или магазин не разрешён', 403)
     }
     if (!isServiceRole && [
-      'sync_orders', 'update_stocks', 'create_supply', 'add_order_to_supply',
+      'sync_orders', 'sync_orders_fast', 'sync_supplies_fast', 'update_stocks', 'create_supply', 'add_order_to_supply',
+      'delete_supply',
       'add_supply_boxes', 'delete_supply_boxes', 'deliver_supply', 'submit_marking_session',
     ].includes(String(action ?? ''))) {
       await auditFbsAction(accountId, String(store_id), userId, String(action), requiredPermission)
@@ -1423,6 +1656,21 @@ Deno.serve(async (req) => {
       return ok({ orders, next: '0' })
     }
 
+    if (action === 'get_fbs_sync_mode') {
+      return ok({ fast_sync_v2_enabled: await isFastSyncV2Enabled(String(store_id)) })
+    }
+
+    if (action === 'sync_orders_fast' || action === 'sync_supplies_fast') {
+      const enabled = await isFastSyncV2Enabled(String(store_id))
+      if (!enabled) return ok({ fast_sync_v2_enabled: false, fallback: true })
+      const trigger = body.trigger_source === 'automatic' ? 'automatic' : 'manual'
+      const requestedBy = isServiceRole ? null : userId
+      const result = action === 'sync_orders_fast'
+        ? await runFastOrderSync(String(store_id), accountId, apiKey, trigger, requestedBy)
+        : await runFastSupplySync(String(store_id), accountId, apiKey, trigger, requestedBy)
+      return ok({ ...result, fast_sync_v2_enabled: true })
+    }
+
     if (action === 'sync_orders' || action === 'sync_store_service') {
       if (action === 'sync_store_service' && !isServiceRole) {
         return err('Доступно только системному планировщику', 403)
@@ -1489,7 +1737,24 @@ Deno.serve(async (req) => {
       })
       if (r.status === 401 || r.status === 403) throw new Error('no_permission')
       if (!r.ok) throw new Error(`WB ${r.status}: ${await r.text()}`)
-      return ok(await r.json())
+      const created = await r.json() as Record<string, unknown>
+      let localSaved = false
+      if (await isFastSyncV2Enabled(String(store_id))) {
+        try {
+          await sbRpc('record_fbs_supply_created_v2', {
+            p_store_id: String(store_id),
+            p_supply_id: String(created.id ?? ''),
+            p_name: String(created.name ?? name ?? ''),
+            p_raw_data: created,
+          })
+          localSaved = true
+        } catch (localSaveError) {
+          // WB уже создал поставку. Ошибка локального сохранения не должна
+          // провоцировать повторный POST и создание второй поставки.
+          console.error(JSON.stringify({ scope: 'wb-fbs', event: 'created_supply_local_save_failed', store_id, supply_id: created.id, error: String(localSaveError) }))
+        }
+      }
+      return ok({ ...created, local_saved: localSaved })
     }
 
     if (action === 'add_order_to_supply') {
@@ -1508,7 +1773,98 @@ Deno.serve(async (req) => {
         return ok({ success: false, failed: details })
       }
       if (!r.ok) throw new Error(`WB ${r.status}: ${await r.text()}`)
-      return ok({ success: true })
+      let localSaved = false
+      if (await isFastSyncV2Enabled(String(store_id))) {
+        try {
+          await sbRpc('record_fbs_order_added_to_supply_v2', {
+            p_store_id: String(store_id),
+            p_order_id: String(order_id),
+            p_supply_id: String(supply_id),
+            p_requested_by: isServiceRole ? null : userId,
+          })
+          localSaved = true
+        } catch (localSaveError) {
+          // PATCH WB уже принят. Возвращаем успех и даём фоновому синку
+          // восстановить локальную проекцию вместо опасного повтора команды.
+          console.error(JSON.stringify({ scope: 'wb-fbs', event: 'assembled_order_local_save_failed', store_id, supply_id, order_id, error: String(localSaveError) }))
+        }
+      }
+      return ok({ success: true, local_saved: localSaved })
+    }
+
+    if (action === 'delete_supply') {
+      const supplyId = String(body.supply_id ?? '').trim()
+      if (!supplyId) return err('ID поставки обязателен')
+
+      let deletionConfirmed = false
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), SUPPLY_DELETE_TIMEOUT_MS)
+      try {
+        const response = await fetch(`${WB_BASE}/api/v3/supplies/${encodeURIComponent(supplyId)}`, {
+          method: 'DELETE',
+          headers: { Authorization: apiKey },
+          signal: controller.signal,
+        })
+        if (response.status === 401 || response.status === 403) throw new Error('no_permission')
+        if (response.status === 409) return err('Поставка не удалена: Wildberries сообщает, что в ней есть заказы', 409)
+        if (response.status === 404 || response.status === 204 || response.ok) {
+          deletionConfirmed = true
+        } else {
+          const responseText = await response.text()
+          const problem = wbProblem(responseText)
+          throw new Error(problem.message || `WB ${response.status}: поставка не удалена`)
+        }
+      } catch (deleteError) {
+        if (String(deleteError).includes('no_permission')) throw deleteError
+        // Ответ DELETE мог потеряться уже после обработки запроса. Только в
+        // этом редком случае проверяем одну поставку, не запускаем общий sync
+        // и не повторяем удаление.
+        const verifyController = new AbortController()
+        const verifyTimeout = setTimeout(() => verifyController.abort(), SUPPLY_DELETE_TIMEOUT_MS)
+        try {
+          const verifyResponse = await fetch(`${WB_BASE}/api/v3/supplies/${encodeURIComponent(supplyId)}`, {
+            headers: { Authorization: apiKey },
+            signal: verifyController.signal,
+          })
+          if (verifyResponse.status === 404) deletionConfirmed = true
+          else if (verifyResponse.status === 401 || verifyResponse.status === 403) throw new Error('no_permission')
+          else if (verifyResponse.ok) return err('Wildberries не подтвердил удаление поставки. Она оставлена в списке.', 502)
+          else throw deleteError
+        } finally {
+          clearTimeout(verifyTimeout)
+        }
+      } finally {
+        clearTimeout(timeout)
+      }
+
+      if (!deletionConfirmed) return err('Wildberries не подтвердил удаление поставки', 502)
+
+      // WB уже является источником истины. Локальную проекцию очищаем сразу,
+      // чтобы пользователь не ждал очередной сверки.
+      const localCleanupResults = await Promise.allSettled([
+        sbWrite(
+          'fbs_orders',
+          'PATCH',
+          { supply_id: null },
+          `store_id=eq.${encodeURIComponent(String(store_id))}&supply_id=eq.${encodeURIComponent(supplyId)}`,
+          'return=minimal',
+        ),
+        sbDelete(
+          'fbs_supplies',
+          `store_id=eq.${encodeURIComponent(String(store_id))}&wb_supply_id=eq.${encodeURIComponent(supplyId)}`,
+        ),
+      ])
+      const localCleanupErrors = localCleanupResults
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => String(result.reason))
+      if (localCleanupErrors.length > 0) {
+        console.error(JSON.stringify({
+          scope: 'wb-fbs', event: 'deleted_supply_local_cleanup_failed',
+          store_id, supply_id: supplyId, errors: localCleanupErrors,
+        }))
+      }
+
+      return ok({ success: true, supply_id: supplyId })
     }
 
     if (action === 'get_supply_boxes') {
