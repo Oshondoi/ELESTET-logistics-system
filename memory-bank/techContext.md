@@ -29,6 +29,15 @@
 ## Packages used by current FBS/export/WMS work
 - `jspdf` — PDF; `xlsx` — Excel; `jszip` — ZIP нескольких поставок; `qrcode.react` — QR физического короба; `@supabase/supabase-js` — DB/Functions.
 
+## FBS hardware scanner runtime — 10.09.2026
+
+- `src/components/fbs/FbsKizScannerModal.tsx` — выбор `бренд → модель`, отдельная модалка настроек, keyboard/HID fallback и Web Serial приём.
+- `src/lib/kizCode.ts` — канонизация и строгая локальная проверка GS1 DataMatrix КИЗ; значимый внутренний `\u001d` сохраняется.
+- `supabase/patch_fbs_scanner_catalog.sql` — data-driven каталог профилей и история; `supabase/patch_fbs_scanner_mertech_cl1300.sql` — идемпотентный профиль беспроводного `MERTECH CL-1300 P2D`.
+- Web Serial рассчитан на desktop Chrome/Edge в secure context (`HTTPS` или `localhost`) и требует явного выбора порта пользователем. Для CL-1300 профиль открывает порт как `115200 8N1`, без flow control, с окончанием пакета `CR` и лимитом 4096 байт.
+- COM-буфер преобразует каждый `Uint8Array` byte через `String.fromCharCode`; поэтому `0x1D` остаётся `\u001d`. После обнаружения настроенного terminator в обработку уходит только накопленный payload, а не завершающий CR.
+- Фактическое наличие и API Web Serial проверяются во время выполнения; неподдерживаемый браузер не должен имитировать COM-соединение.
+
 ## Validation/deploy state — 24.08.2026
 - Полный `npm run build` проходит: 658 модулей; остаются только прежние предупреждения Vite о размере чанков и `xlsx`. После последней кнопки очистки поиска отдельно проходит `npx tsc -b --pretty false`.
 - Локальные frontend-изменения WMS/FBS/Products используют только `localStorage` и существующие read-запросы; новых SQL/RPC и изменений production Supabase нет.

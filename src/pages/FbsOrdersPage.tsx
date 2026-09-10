@@ -1053,6 +1053,7 @@ export function FbsOrdersPage({ accountId }: Props) {
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [supplyQrBusyIds, setSupplyQrBusyIds] = useState<Set<string>>(new Set())
+  const [acceptanceActBusyIds, setAcceptanceActBusyIds] = useState<Set<string>>(new Set())
   const [copiedSupplyId, setCopiedSupplyId] = useState<string | null>(null)
   const [assembleModal, setAssembleModal] = useState<{ ids: string[]; mode: 'assemble' | 'move'; sourceSupplyIds: string[] } | null>(null)
   const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
@@ -2418,6 +2419,55 @@ export function FbsOrdersPage({ accountId }: Props) {
     }
   }
 
+  const handleAcceptanceActDownload = async (supplyId: string) => {
+    if (acceptanceActBusyIds.has(supplyId) || !fbsPermissions.fbs_view) return
+    setAcceptanceActBusyIds((current) => new Set(current).add(supplyId))
+    try {
+      const response = await invokeFbs(selectedStoreId, {
+        action: 'download_acceptance_act',
+        supply_id: supplyId,
+      })
+      if (response.available !== true) {
+        alert(String(response.message || 'Wildberries ещё не сформировал акт приёмки для этой поставки.'))
+        return
+      }
+
+      const base64Document = typeof response.document === 'string' ? response.document.replace(/\s/g, '') : ''
+      if (!base64Document) throw new Error('Wildberries вернул пустой файл акта приёмки')
+      const binary = atob(base64Document)
+      const byteParts: ArrayBuffer[] = []
+      for (let offset = 0; offset < binary.length; offset += 8192) {
+        const slice = binary.slice(offset, offset + 8192)
+        const buffer = new ArrayBuffer(slice.length)
+        const bytes = new Uint8Array(buffer)
+        for (let index = 0; index < slice.length; index += 1) bytes[index] = slice.charCodeAt(index)
+        byteParts.push(buffer)
+      }
+
+      const blob = new Blob(byteParts, { type: 'application/zip' })
+      const downloadUrl = URL.createObjectURL(blob)
+      const returnedName = typeof response.file_name === 'string'
+        ? response.file_name.split(/[\\/]/).pop()?.replace(/[\u0000-\u001f]/g, '').trim()
+        : ''
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = returnedName || `Акт приёмки № ${supplyId}.zip`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000)
+    } catch (downloadError) {
+      const message = downloadError instanceof Error ? downloadError.message : String(downloadError)
+      alert(`Не удалось скачать акт приёмки: ${message}`)
+    } finally {
+      setAcceptanceActBusyIds((current) => {
+        const next = new Set(current)
+        next.delete(supplyId)
+        return next
+      })
+    }
+  }
+
   const openStickerPrintModal = (ordersToPrint: FbsOrder[], supply: WbSupply | null, mode: StickerPrintModal['mode']) => {
     if (ordersToPrint.length === 0 || !fbsPermissions.fbs_assembly) return
     setPickingListMenuOpen(false)
@@ -2932,7 +2982,7 @@ export function FbsOrdersPage({ accountId }: Props) {
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden">
       <div className="relative z-20 flex items-end gap-1 border-b border-slate-200 bg-white px-5 pt-2">
         {([
           { key: 'orders' as const, label: 'Заказы' },
@@ -3293,6 +3343,8 @@ export function FbsOrdersPage({ accountId }: Props) {
         const isAssemblingTab = activeTab === 'assembling'
         const isDeliveringTab = activeTab === 'delivering'
         const isCompletedGroupedTab = activeTab === 'completed'
+        const parentActionColumnWidth = isCompletedGroupedTab ? '80px' : '128px'
+        const parentGridTemplateColumns = `18px 18px minmax(180px, 1.35fr) minmax(140px, 0.9fr) minmax(140px, 1fr) minmax(145px, 1fr) minmax(72px, 0.55fr) minmax(130px, 0.85fr) ${parentActionColumnWidth}`
         // На сборке показываем и пустые открытые поставки. В доставке — только
         // активные родительские поставки, найденные у заказов текущей вкладки.
         const supplyGroups = new Map<string, { supply: WbSupply | null; orders: FbsOrder[] }>()
@@ -3326,8 +3378,12 @@ export function FbsOrdersPage({ accountId }: Props) {
           setSelectedSupplyIds(allParentsSelected ? new Set() : new Set(selectableSupplyIds))
         }
         return (
-          <div className="flex-1 overflow-auto [scrollbar-gutter:stable]">
-            <div className="sticky top-0 z-10 grid min-w-[1360px] grid-cols-[18px_18px_minmax(220px,1.35fr)_minmax(160px,0.9fr)_minmax(170px,1fr)_minmax(180px,1fr)_minmax(100px,0.55fr)_minmax(150px,0.85fr)_176px] items-center gap-x-4 border-b border-slate-200 bg-white px-4 py-2.5 text-[11px] font-semibold text-slate-500">
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div className="h-full w-full overflow-auto overscroll-contain [scrollbar-gutter:stable]">
+            <div
+              className="sticky top-0 z-10 grid min-w-[1160px] items-center gap-x-4 border-b border-slate-200 bg-white py-2.5 pl-4 pr-0 text-[11px] font-semibold text-slate-500"
+              style={{ gridTemplateColumns: parentGridTemplateColumns }}
+            >
               <span aria-hidden="true" />
               <input
                 type="checkbox"
@@ -3383,7 +3439,11 @@ export function FbsOrdersPage({ accountId }: Props) {
               return (
                 <div key={supplyId} className="border-b border-slate-200">
                   {/* Строка поставки (родитель) */}
-                  <div className={`group grid min-h-[68px] min-w-[1360px] cursor-pointer grid-cols-[18px_18px_minmax(220px,1.35fr)_minmax(160px,0.9fr)_minmax(170px,1fr)_minmax(180px,1fr)_minmax(100px,0.55fr)_minmax(150px,0.85fr)_176px] items-center gap-x-4 px-4 py-3 transition-colors ${isParentSelected ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'}`} onClick={toggle}>
+                  <div
+                    className={`group grid min-h-[68px] min-w-[1160px] cursor-pointer items-center gap-x-4 py-3 pl-4 pr-0 transition-colors ${isParentSelected ? 'bg-violet-50' : 'bg-white hover:bg-slate-50'}`}
+                    style={{ gridTemplateColumns: parentGridTemplateColumns }}
+                    onClick={toggle}
+                  >
                     <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M9 18l6-6-6-6" />
                     </svg>
@@ -3464,6 +3524,25 @@ export function FbsOrdersPage({ accountId }: Props) {
                             )}
                           </button>
                       )}
+                      {(isDeliveringTab || isCompletedGroupedTab) && supplyId !== '__none__' && (
+                        <button
+                          type="button"
+                          title={isDeliveringTab ? 'Скачать акт приёмки WB — доступен после обработки поставки' : 'Скачать акт приёмки WB'}
+                          aria-label={`Скачать акт приёмки поставки ${supplyId}`}
+                          disabled={acceptanceActBusyIds.has(supplyId) || !fbsPermissions.fbs_view}
+                          onClick={() => void handleAcceptanceActDownload(supplyId)}
+                          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-700 transition hover:bg-violet-100 disabled:cursor-wait disabled:opacity-40"
+                        >
+                          {acceptanceActBusyIds.has(supplyId) ? (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4 animate-spin" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" strokeDasharray="28" strokeDashoffset="8" /></svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                              <path d="M14 2v6h6M12 11v7m-3-3 3 3 3-3" />
+                            </svg>
+                          )}
+                        </button>
+                      )}
                       {isAssemblingTab && supplyId !== '__none__' && supplyOrders.length > 0 && (
                           <button type="button" title="Передать в доставку" aria-label="Передать поставку в доставку"
                             disabled={busyIds.size > 0 || !fbsPermissions.fbs_dispatch}
@@ -3498,7 +3577,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                       {supplyOrders.length === 0 ? (
                         <div className="border-t border-slate-100 bg-slate-50/50 px-12 py-4 text-xs text-slate-400">В поставке пока нет заказов</div>
                       ) : <div className="border-t border-slate-100 bg-slate-50/50">
-                        <table className="w-full min-w-[1360px] text-xs">
+                        <table className="w-full min-w-[1160px] text-xs">
                           <thead className="border-b border-slate-200 bg-slate-100/70 text-slate-500">
                             <tr>
                               <th className="w-8 px-3 py-2">
@@ -3519,7 +3598,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                               <th className="px-4 py-2 text-left font-semibold">Время</th>
                               <th className="px-4 py-2 text-left font-semibold">Склад FBS</th>
                               {isDeliveringTab && <th className="px-4 py-2 text-left font-semibold">Статус WB</th>}
-                              <th className="sticky right-0 z-10 border-l border-slate-200 bg-slate-100 px-4 py-2 text-left font-semibold shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)]">{isCompletedGroupedTab ? 'Статус' : 'Действия'}</th>
+                              <th className={`sticky right-0 z-10 border-l border-slate-200 bg-slate-100 px-4 py-2 text-left font-semibold shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${isCompletedGroupedTab ? '' : 'w-px whitespace-nowrap'}`}>{isCompletedGroupedTab ? 'Статус' : 'Действия'}</th>
                             </tr>
                           </thead>
                         <tbody>
@@ -3586,8 +3665,8 @@ export function FbsOrdersPage({ accountId }: Props) {
                                     <WbOrderStatusBadge order={order} />
                                   </td>
                                 )}
-                                <td className="sticky right-0 z-[4] border-l border-slate-200 bg-slate-50 px-4 py-2 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)]">
-                                  <div className="flex items-center gap-1.5">
+                                <td className={`sticky right-0 z-[4] border-l border-slate-200 bg-slate-50 px-4 py-2 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${isCompletedGroupedTab ? '' : 'w-px whitespace-nowrap'}`}>
+                                  <div className="flex items-center justify-center gap-1.5">
                                     {isAssemblingTab && fbsPermissions.fbs_assembly && supplyId !== '__none__' && (
                                       <button
                                         type="button"
@@ -3734,13 +3813,15 @@ export function FbsOrdersPage({ accountId }: Props) {
                 </div>
               </>
             )}
+            </div>
           </div>
         )
       })()}
 
       {tabOrders.length > 0 && activeTab !== 'assembling' && activeTab !== 'delivering' && !(activeTab === 'completed' && groupCompletedBySupplies) && (
-        <div className="flex-1 overflow-auto [scrollbar-gutter:stable]">
-          <table className="w-full min-w-[1260px] text-xs">
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div className="h-full w-full overflow-auto overscroll-contain [scrollbar-gutter:stable]">
+            <table className="w-full min-w-[1100px] text-xs">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-white">
               <tr>
                 {activeTab !== 'completed' && activeTab !== 'cancelled' && (
@@ -3859,7 +3940,8 @@ export function FbsOrdersPage({ accountId }: Props) {
                 )
               })}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       )}
       {/* Клик вне меню — закрываем */}

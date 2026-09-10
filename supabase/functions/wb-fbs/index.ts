@@ -8,6 +8,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
 const WB_BASE = 'https://marketplace-api.wildberries.ru'
+const WB_DOCUMENTS_BASE = 'https://documents-api.wildberries.ru'
 const WB_READ_ATTEMPTS = 3
 const WB_REQUEST_TIMEOUT_MS = 20_000
 const SUPPLY_DELETE_TIMEOUT_MS = 10_000
@@ -441,6 +442,66 @@ async function wbReadJson(
 
 async function wbGet(apiKey: string, path: string, params?: Record<string, string>) {
   return wbReadJson(apiKey, path, {}, params)
+}
+
+async function wbDocumentsReadJson(
+  apiKey: string,
+  path: string,
+  init: RequestInit = {},
+  params?: Record<string, string>,
+) {
+  const url = new URL(`${WB_DOCUMENTS_BASE}${path}`)
+  if (params) Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value))
+  let lastError: unknown = null
+
+  for (let attempt = 1; attempt <= WB_READ_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), WB_REQUEST_TIMEOUT_MS)
+    let response: Response | undefined
+    try {
+      response = await fetch(url.toString(), {
+        ...init,
+        headers: { Authorization: apiKey, ...(init.headers ?? {}) },
+        signal: controller.signal,
+      })
+      if (response.status === 401 || response.status === 403) throw new Error('documents_no_permission')
+      if (response.ok) return parseWbJson(await response.text())
+
+      const responseText = await response.text()
+      lastError = new Error(`WB Documents ${response.status}: ${responseText}`)
+      if (!shouldRetryStatus(response.status) || attempt === WB_READ_ATTEMPTS) throw lastError
+    } catch (requestError) {
+      lastError = requestError
+      if (
+        String(requestError).includes('documents_no_permission')
+        || (response && !shouldRetryStatus(response.status))
+        || attempt === WB_READ_ATTEMPTS
+      ) throw requestError
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    const delayMs = Math.min(retryDelayMs(attempt, response), 5000)
+    console.warn(JSON.stringify({
+      scope: 'wb-fbs', event: 'wb_documents_read_retry', path, attempt,
+      delay_ms: delayMs, error: String(lastError),
+    }))
+    await sleep(delayMs)
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
+async function wbDocumentsGet(apiKey: string, path: string, params?: Record<string, string>) {
+  return wbDocumentsReadJson(apiKey, path, {}, params)
+}
+
+async function wbDocumentsPost(apiKey: string, path: string, body: unknown) {
+  return wbDocumentsReadJson(apiKey, path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
 }
 
 async function wbPostOrderIds(apiKey: string, path: string, orderIds: string[]) {
@@ -1513,6 +1574,66 @@ Deno.serve(async (req) => {
       return ok({ warehouses, offices })
     }
 
+    if (action === 'download_acceptance_act') {
+      const supplyId = String(body.supply_id ?? '').trim().toUpperCase()
+      const supplyMatch = /^WB-GI-(\d+)$/.exec(supplyId)
+      if (!supplyMatch) return err('Некорректный ID поставки WB')
+
+      const expectedServiceName = `act-income-mp-${supplyMatch[1]}`
+      const listResponse = await wbDocumentsGet(apiKey, '/api/v1/documents/list', {
+        locale: 'ru',
+        serviceName: expectedServiceName,
+        limit: '50',
+        offset: '0',
+      })
+      const documents = Array.isArray(listResponse?.data?.documents)
+        ? listResponse.data.documents as Record<string, unknown>[]
+        : []
+      const documentRow = documents.find((document) => String(document.serviceName ?? '') === expectedServiceName)
+      if (!documentRow) {
+        return ok({
+          available: false,
+          reason: 'not_ready',
+          message: 'Wildberries ещё не сформировал акт приёмки для этой поставки.',
+        })
+      }
+
+      const extensions = Array.isArray(documentRow.extensions)
+        ? documentRow.extensions.map((extension) => String(extension).toLowerCase())
+        : []
+      if (!extensions.includes('xlsx')) {
+        return ok({
+          available: false,
+          reason: 'document_format_unavailable',
+          message: 'Wildberries пока не предоставляет XLSX акта для формирования подписанного архива.',
+        })
+      }
+
+      // WB отдаёт подписанный комплект (XLSX + .sig + МЧД) архивом только через
+      // пакетную загрузку. Одиночная загрузка XLSX не содержит подписей.
+      const downloadResponse = await wbDocumentsPost(apiKey, '/api/v1/documents/download/all', {
+        params: [{
+          serviceName: expectedServiceName,
+          extension: 'xlsx',
+        }],
+      })
+      const responseData = downloadResponse?.data as Record<string, unknown> | undefined
+      const documentBase64 = String(responseData?.document ?? '')
+      if (!documentBase64) throw new Error('WB Documents вернул пустой файл акта приёмки')
+      if (String(responseData?.extension ?? '').toLowerCase() !== 'zip' || !documentBase64.startsWith('UEs')) {
+        throw new Error('WB Documents вернул акт в неожиданном формате')
+      }
+
+      return ok({
+        available: true,
+        service_name: expectedServiceName,
+        wb_file_name: String(responseData?.fileName ?? '').trim(),
+        file_name: `Акт приёмки № ${supplyId}.zip`,
+        extension: 'zip',
+        document: documentBase64,
+      })
+    }
+
     if (action === 'get_stocks') {
       const warehouseId = Number(wb_warehouse_id)
       const rawChrtIds: unknown[] = Array.isArray(body.chrt_ids) ? body.chrt_ids : []
@@ -2281,6 +2402,11 @@ Deno.serve(async (req) => {
     return err('Неизвестный action')
   } catch (e) {
     const msg = String(e)
+    if (msg.includes('documents_no_permission')) {
+      return err('API-ключ магазина не даёт доступ к документам WB. Нужен токен с категорией «Документы».', 403)
+    }
+    if (msg.includes('WB Documents 402')) return err('Wildberries ограничил доступ к API документов для этого магазина.', 402)
+    if (msg.includes('WB Documents 429')) return err('Слишком много запросов к документам WB. Повторите скачивание позже.', 429)
     if (msg.includes('no_permission')) return err('Нет прав доступа к WB API. Проверьте API ключ.', 403)
     return err(msg, 500)
   }

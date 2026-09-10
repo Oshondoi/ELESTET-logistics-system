@@ -27,6 +27,8 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - WB supply is the parent unit for transfer to delivery.
 - Product variant identity prefers WB barcode/SKU; `nmId` alone is not unique across sizes.
 - Unknown size remains visibly unknown instead of being guessed.
+- При аппаратном сканировании КИЗ сервис обязан получить исходную GS1-последовательность без потери управляющих символов. Внутренний ASCII Group Separator — байт `0x1D`/символ `\u001d` — является частью КИЗ и сохраняется на своём месте до отправки в WB.
+- Для точной модели сканера, официально поддерживающей USB-COM, основной путь маркировки — COM через Web Serial с параметрами из её профиля. Клавиатурный USB-HID остаётся fallback только при отдельно подтверждённой для этой модели передаче GS.
 
 ## Current operational rule — WMS
 - A WMS zone is a complete rack: columns are pallet positions, rows are tiers; a new rack starts with three tiers by default.

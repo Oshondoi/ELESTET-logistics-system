@@ -19,6 +19,8 @@ The product is being created to manage logistics operations for shipments going 
 - Delivery transfer belongs to the whole supply, preventing partial accidental shipment.
 - Product row must answer: what product, which seller article, which size, which barcode, and where it lies.
 - Missing variant data is an explicit warning with a synchronization action.
+- Выбор сканера организован как `бренд → точная модель`; настройки открываются отдельно у модели и не засоряют список оборудования.
+- Результатом сканирования маркировки считается не визуально похожий текст, а корректная исходная последовательность КИЗ со всеми значимыми символами GS1, включая невидимый ASCII GS (`0x1D`). Раскладка клавиатуры не должна менять эти данные.
 
 ## Products operator UX
 - Поиск по товарам очищается отдельным крестиком внутри правой части поля; кнопка появляется только при непустом запросе.

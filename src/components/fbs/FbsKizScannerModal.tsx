@@ -165,6 +165,23 @@ function scannerSearchKey(value: string) {
   return value.toLocaleLowerCase('ru-RU').replace(/[^a-zа-яё0-9]+/gi, '')
 }
 
+function scannerBrandKey(value: string) {
+  return value.trim().toLocaleLowerCase('ru-RU')
+}
+
+function scannerModelCountLabel(count: number) {
+  const lastTwo = count % 100
+  const last = count % 10
+  const word = lastTwo >= 11 && lastTwo <= 14
+    ? 'моделей'
+    : last === 1
+      ? 'модель'
+      : last >= 2 && last <= 4
+        ? 'модели'
+        : 'моделей'
+  return `${count} ${word}`
+}
+
 function browserSerialApi(): BrowserSerialApi | null {
   return ((navigator as Navigator & { serial?: BrowserSerialApi }).serial ?? null)
 }
@@ -389,6 +406,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const [deviceNameDialogOpen, setDeviceNameDialogOpen] = useState(false)
   const [deviceNameInput, setDeviceNameInput] = useState('')
   const [scannerDialogOpen, setScannerDialogOpen] = useState(false)
+  const [scannerSettingsProfileId, setScannerSettingsProfileId] = useState<string | null>(null)
+  const [expandedScannerBrands, setExpandedScannerBrands] = useState<Set<string>>(new Set())
   const [scannerSearch, setScannerSearch] = useState('')
   const [serialStatus, setSerialStatus] = useState<SerialConnectionStatus>(() => browserSerialApi() ? 'disconnected' : 'unsupported')
   const [serialError, setSerialError] = useState('')
@@ -419,6 +438,16 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     if (!query) return scannerModels
     return scannerModels.filter((model) => scannerSearchKey(`${model.brand} ${model.model} ${model.displayName}`).includes(query))
   }, [scannerModels, scannerSearch])
+  const scannerBrandGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; brand: string; models: ScannerModelProfile[] }>()
+    filteredScannerModels.forEach((model) => {
+      const key = scannerBrandKey(model.brand)
+      const current = groups.get(key)
+      if (current) current.models.push(model)
+      else groups.set(key, { key, brand: model.brand, models: [model] })
+    })
+    return [...groups.values()]
+  }, [filteredScannerModels])
   const pendingOrder = session?.pending_order_id ? ordersById.get(session.pending_order_id) : null
   const deviceReady = Boolean(session?.device_identity_required && session.device_named)
   const selectedScannerProfile = scannerModels.find((model) => model.displayName === deviceProfile.scannerModel) ?? null
@@ -426,14 +455,9 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const selectedSerialProfileKey = serialScannerSelected && selectedScannerProfile
     ? `${selectedScannerProfile.id}:${selectedScannerProfile.profileVersion}`
     : ''
-  const selectedScannerHasDetails = Boolean(selectedScannerProfile && (
-    selectedScannerProfile.connectionType === 'web_serial'
-    || selectedScannerProfile.setupBarcodes.length > 0
-    || selectedScannerProfile.restoreBarcodes.length > 0
-    || selectedScannerProfile.instructions
-    || selectedScannerProfile.warningText
-  ))
-  const childDialogOpen = deviceNameDialogOpen || scannerDialogOpen || Boolean(selectedPair)
+  const settingsScannerProfile = scannerModels.find((model) => model.id === scannerSettingsProfileId) ?? null
+  const settingsScannerIsSelected = Boolean(settingsScannerProfile && settingsScannerProfile.displayName === deviceProfile.scannerModel)
+  const childDialogOpen = deviceNameDialogOpen || scannerDialogOpen || Boolean(settingsScannerProfile) || Boolean(selectedPair)
 
   useEffect(() => {
     if (error) showToast(error, 'error')
@@ -1576,22 +1600,22 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                     </label>
                     {scannerSelectionVisible && (
                       <button
-                        type="button"
-                        disabled={!deviceReady || busy || cameraOpen}
-                        onClick={() => setScannerDialogOpen(true)}
-                        className="col-span-2 flex min-h-[58px] items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-center transition-colors hover:border-violet-300 disabled:cursor-not-allowed disabled:opacity-50 sm:rounded-2xl sm:px-4 sm:py-3"
-                      >
-                        {deviceProfile.scannerModel ? (
-                          <span className={`inline-flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold sm:text-sm ${scannerStatusClass}`}>
-                            <span className="truncate">{deviceProfile.scannerModel}</span>
-                            <span className="rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-bold uppercase sm:text-[10px]">{scannerStatusLabel}</span>
-                            {serialScannerSelected && serialStatus === 'connected' && (
-                              <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-bold uppercase text-white sm:text-[10px]">COM</span>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="text-xs font-semibold text-slate-500 sm:text-sm">Сканер не выбран</span>
-                        )}
+                          type="button"
+                          disabled={!deviceReady || busy || cameraOpen}
+                          onClick={() => setScannerDialogOpen(true)}
+                          className="col-span-2 flex min-h-[58px] min-w-0 items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-center transition-colors hover:border-violet-300 disabled:cursor-not-allowed disabled:opacity-50 sm:rounded-2xl sm:px-4 sm:py-3"
+                        >
+                          {deviceProfile.scannerModel ? (
+                            <span className={`inline-flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold sm:text-sm ${scannerStatusClass}`}>
+                              <span className="truncate">{deviceProfile.scannerModel}</span>
+                              <span className="rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-bold uppercase sm:text-[10px]">{scannerStatusLabel}</span>
+                              {serialScannerSelected && serialStatus === 'connected' && (
+                                <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-bold uppercase text-white sm:text-[10px]">COM</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-xs font-semibold text-slate-500 sm:text-sm">Сканер не выбран</span>
+                          )}
                       </button>
                     )}
                   </div>
@@ -1775,8 +1799,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         )}
 
         {scannerDialogOpen && scannerSelectionVisible && (
-          <div className="fixed inset-0 z-[125] flex h-[100dvh] items-end justify-center bg-slate-950/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label="Выбор USB-сканера" onClick={() => { if (!busy) setScannerDialogOpen(false) }}>
-            <div className="flex max-h-[92dvh] w-full max-w-xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
+          <div className="fixed inset-0 z-[125] flex h-[100dvh] items-center justify-center bg-slate-950/55 p-0 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Выбор USB-сканера" onClick={() => { if (!busy) setScannerDialogOpen(false) }}>
+            <div className="flex h-[95dvh] w-[95vw] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:w-[40vw]" onClick={(event) => event.stopPropagation()}>
               <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">USB-сканер</h3>
@@ -1805,21 +1829,79 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   <span>Сканер не выбран</span>
                   {deviceProfile.scannerModel === null && <span className="text-violet-600">✓</span>}
                 </button>
-                {filteredScannerModels.map((model) => (
-                  <button
-                    key={model.id}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void selectScannerModel(model)}
-                    className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition-colors disabled:opacity-40 ${deviceProfile.scannerModel === model.displayName ? 'border-violet-400 bg-violet-50 text-violet-800' : 'border-slate-200 text-slate-700 hover:border-violet-300'}`}
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate">{model.displayName}</span>
-                      <span className="mt-0.5 block text-[10px] font-medium text-slate-400">{model.connectionType === 'web_serial' ? 'COM через браузер' : 'Обычный USB'}</span>
-                    </span>
-                    {deviceProfile.scannerModel === model.displayName && <span className="shrink-0 text-violet-600">✓</span>}
-                  </button>
-                ))}
+                {scannerBrandGroups.map((group) => {
+                  const selectedInGroup = group.models.some((model) => model.displayName === deviceProfile.scannerModel)
+                  const expanded = Boolean(scannerSearch.trim()) || expandedScannerBrands.has(group.key)
+                  const selectedAndCollapsed = selectedInGroup && !expanded
+                  return (
+                    <section key={group.key} className={`overflow-hidden rounded-2xl border transition-colors ${selectedAndCollapsed ? 'border-violet-400 bg-violet-50' : 'border-slate-200 bg-white'}`}>
+                      <button
+                        type="button"
+                        aria-expanded={expanded}
+                        onClick={() => setExpandedScannerBrands((current) => {
+                          const next = new Set(current)
+                          next.has(group.key) ? next.delete(group.key) : next.add(group.key)
+                          return next
+                        })}
+                        className={`flex w-full items-center gap-2 px-4 py-3 text-left transition-colors ${selectedAndCollapsed ? 'bg-violet-50 hover:bg-violet-100' : 'hover:bg-slate-50'}`}
+                      >
+                        <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 shrink-0 transition-transform ${selectedAndCollapsed ? 'text-violet-600' : 'text-slate-400'} ${expanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path d="m9 18 6-6-6-6" />
+                        </svg>
+                        <span className={`min-w-0 flex-1 truncate text-sm font-bold ${selectedAndCollapsed ? 'text-violet-800' : 'text-slate-800'}`}>{group.brand}</span>
+                        <span className={`shrink-0 text-[11px] font-medium ${selectedAndCollapsed ? 'text-violet-600' : 'text-slate-400'}`}>{scannerModelCountLabel(group.models.length)}</span>
+                      </button>
+
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateRows: expanded ? '1fr' : '0fr',
+                          transition: 'grid-template-rows 220ms ease',
+                        }}
+                      >
+                        <div className="overflow-hidden">
+                          <div className="space-y-1.5 border-t border-slate-100 p-2">
+                            {group.models.map((model) => {
+                              const selectedModel = deviceProfile.scannerModel === model.displayName
+                              return (
+                                <div
+                                  key={model.id}
+                                  className={`flex items-stretch overflow-hidden rounded-xl border transition-colors ${selectedModel ? 'border-violet-400 bg-violet-50' : 'border-slate-200 bg-white hover:border-violet-300'}`}
+                                >
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => void selectScannerModel(model)}
+                                    className={`flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2.5 text-left disabled:opacity-40 ${selectedModel ? 'text-violet-800' : 'text-slate-700'}`}
+                                  >
+                                    <span className="min-w-0">
+                                      <span className="block truncate text-sm font-semibold">{model.model}</span>
+                                      <span className="mt-0.5 block text-[10px] font-medium text-slate-400">{model.connectionType === 'web_serial' ? 'COM через браузер' : 'Обычный USB'}</span>
+                                    </span>
+                                    {selectedModel && <span className="shrink-0 text-violet-600">✓</span>}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    title={`Настройка ${model.displayName}`}
+                                    aria-label={`Открыть настройку сканера ${model.displayName}`}
+                                    onClick={() => setScannerSettingsProfileId(model.id)}
+                                    className="flex w-11 shrink-0 items-center justify-center border-l border-slate-200 text-slate-400 transition-colors hover:bg-violet-100 hover:text-violet-700 disabled:opacity-40"
+                                  >
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <circle cx="12" cy="12" r="3" />
+                                      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1-1.55V3h4v.08A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9a1.7 1.7 0 0 0 1.55 1H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  )
+                })}
                 {scannerCatalogLoading && scannerModels.length === 0 && (
                   <div className="py-4 text-center text-xs text-slate-400">Загрузка моделей…</div>
                 )}
@@ -1834,66 +1916,112 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   </div>
                 )}
 
-                {selectedScannerProfile && selectedScannerHasDetails && (
-                  <section className="mt-4 space-y-3 rounded-2xl border border-violet-200 bg-violet-50/60 p-3 sm:p-4">
-                    <div>
-                      <h4 className="text-sm font-bold text-slate-900">Настройка {selectedScannerProfile.displayName}</h4>
-                      {selectedScannerProfile.instructions && <p className="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">{selectedScannerProfile.instructions}</p>}
-                    </div>
-                    {selectedScannerProfile.setupBarcodes.length > 0 && (
-                      <div className="grid gap-2">
-                        {selectedScannerProfile.setupBarcodes.map((code, index) => <ScannerSetupBarcode key={`${index}-${code.value}`} value={code.value} label={code.label} format={code.format} />)}
-                      </div>
-                    )}
-                    {selectedScannerProfile.warningText && (
-                      <div className="whitespace-pre-line rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
-                        {selectedScannerProfile.warningText}
-                      </div>
-                    )}
-                    {selectedScannerProfile.connectionType === 'web_serial' && (
-                      <div className="flex flex-col gap-2 sm:flex-row">
-                        {serialStatus === 'connected' ? (
-                          <button type="button" onClick={() => void disconnectSerial()} className="h-11 flex-1 rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-600 transition hover:bg-red-50">Отключить COM</button>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={serialStatus === 'connecting' || serialStatus === 'unsupported'}
-                            onClick={() => void connectScannerSerial()}
-                            className="h-11 flex-1 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-45"
-                          >
-                            {serialStatus === 'connecting' ? 'Подключаем…' : 'Подключить COM к ELESTET'}
-                          </button>
-                        )}
-                        <div className={`flex min-h-11 flex-1 items-center justify-center rounded-xl border px-3 text-center text-xs font-semibold ${
-                          serialStatus === 'connected'
-                            ? 'border-emerald-200 bg-emerald-100 text-emerald-700'
-                            : serialStatus === 'error'
-                              ? 'border-red-200 bg-red-50 text-red-600'
-                              : 'border-slate-200 bg-white text-slate-500'
-                        }`}>
-                          {serialStatus === 'connected'
-                            ? `COM подключён · ${serialPortLabel}`
-                            : serialStatus === 'unsupported'
-                              ? 'Нужен Chrome или Edge на ПК'
-                              : serialStatus === 'error'
-                                ? serialError
-                                : 'COM не подключён'}
-                        </div>
-                      </div>
-                    )}
-                    {selectedScannerProfile.restoreBarcodes.length > 0 && (
-                      <details className="rounded-xl border border-slate-200 bg-white">
-                        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-600">Вернуть обычный USB-режим</summary>
-                        <div className="grid gap-2 border-t border-slate-100 p-3">
-                          {selectedScannerProfile.restoreBarcodes.map((code, index) => <ScannerSetupBarcode key={`${index}-${code.value}`} value={code.value} label={code.label} format={code.format} />)}
-                        </div>
-                      </details>
-                    )}
-                  </section>
-                )}
               </div>
               <div className="border-t border-slate-100 px-4 py-3 text-center text-[11px] text-slate-500 sm:px-5">
                 Нет модели в списке — оставьте «Сканер не выбран». Работа не блокируется.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {settingsScannerProfile && (
+          <div
+            className="fixed inset-0 z-[125] flex h-[100dvh] items-center justify-center bg-slate-950/55 p-0 backdrop-blur-[2px]"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Настройка сканера ${settingsScannerProfile.displayName}`}
+            onClick={() => setScannerSettingsProfileId(null)}
+          >
+            <div className="flex h-[97dvh] w-[97vw] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:w-[70vw]" onClick={(event) => event.stopPropagation()}>
+              <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-5 py-4 sm:px-6">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-bold text-slate-900">Настройка сканера</h3>
+                  <p className="mt-1 truncate text-xs font-semibold text-violet-700">{settingsScannerProfile.displayName}</p>
+                </div>
+                <button type="button" onClick={() => setScannerSettingsProfileId(null)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500 hover:bg-slate-200">×</button>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
+                {settingsScannerProfile.instructions && (
+                  <p className="whitespace-pre-line text-sm leading-6 text-slate-600">{settingsScannerProfile.instructions}</p>
+                )}
+
+                {settingsScannerProfile.setupBarcodes.length > 0 && (
+                  <div className="grid gap-3">
+                    {settingsScannerProfile.setupBarcodes.map((code, index) => (
+                      <ScannerSetupBarcode key={`${index}-${code.value}`} value={code.value} label={code.label} format={code.format} />
+                    ))}
+                  </div>
+                )}
+
+                {settingsScannerProfile.warningText && (
+                  <div className="whitespace-pre-line rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
+                    {settingsScannerProfile.warningText}
+                  </div>
+                )}
+
+                {!settingsScannerProfile.instructions
+                  && settingsScannerProfile.setupBarcodes.length === 0
+                  && settingsScannerProfile.restoreBarcodes.length === 0
+                  && !settingsScannerProfile.warningText
+                  && settingsScannerProfile.connectionType !== 'web_serial' && (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm leading-6 text-emerald-800">
+                      Эта модель работает как обычный USB-сканер. Дополнительная настройка не требуется.
+                    </div>
+                  )}
+
+                {settingsScannerProfile.connectionType === 'web_serial' && !settingsScannerIsSelected && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-800">
+                    Чтобы подключить COM к ELESTET, сначала выберите эту модель в списке сканеров.
+                  </div>
+                )}
+
+                {settingsScannerProfile.connectionType === 'web_serial' && settingsScannerIsSelected && (
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    {serialStatus === 'connected' ? (
+                      <button type="button" onClick={() => void disconnectSerial()} className="h-11 flex-1 rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-600 transition hover:bg-red-50">Отключить COM</button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={serialStatus === 'connecting' || serialStatus === 'unsupported'}
+                        onClick={() => void connectScannerSerial()}
+                        className="h-11 flex-1 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {serialStatus === 'connecting' ? 'Подключаем…' : 'Подключить COM к ELESTET'}
+                      </button>
+                    )}
+                    <div className={`flex min-h-11 flex-1 items-center justify-center rounded-xl border px-3 text-center text-xs font-semibold ${
+                      serialStatus === 'connected'
+                        ? 'border-emerald-200 bg-emerald-100 text-emerald-700'
+                        : serialStatus === 'error'
+                          ? 'border-red-200 bg-red-50 text-red-600'
+                          : 'border-slate-200 bg-white text-slate-500'
+                    }`}>
+                      {serialStatus === 'connected'
+                        ? `COM подключён · ${serialPortLabel}`
+                        : serialStatus === 'unsupported'
+                          ? 'Нужен Chrome или Edge на ПК'
+                          : serialStatus === 'error'
+                            ? serialError
+                            : 'COM не подключён'}
+                    </div>
+                  </div>
+                )}
+
+                {settingsScannerProfile.restoreBarcodes.length > 0 && (
+                  <details className="rounded-xl border border-slate-200 bg-white">
+                    <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-slate-600">Вернуть обычный USB-режим</summary>
+                    <div className="grid gap-3 border-t border-slate-100 p-3 sm:p-4">
+                      {settingsScannerProfile.restoreBarcodes.map((code, index) => (
+                        <ScannerSetupBarcode key={`${index}-${code.value}`} value={code.value} label={code.label} format={code.format} />
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+
+              <div className="shrink-0 border-t border-slate-100 px-4 py-3 sm:px-6">
+                <button type="button" onClick={() => setScannerSettingsProfileId(null)} className="h-11 w-full rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 transition hover:bg-slate-50">Закрыть</button>
               </div>
             </div>
           </div>
