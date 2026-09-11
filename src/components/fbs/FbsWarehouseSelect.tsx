@@ -9,6 +9,7 @@ interface FbsWarehouseSelectProps {
   onChange: (value: string) => void
   ariaLabel?: string
   title?: string
+  label?: string
 }
 
 export const FbsWarehouseSelect = ({
@@ -17,9 +18,10 @@ export const FbsWarehouseSelect = ({
   onChange,
   ariaLabel,
   title,
+  label = 'На склад WB',
 }: FbsWarehouseSelectProps) => (
   <label className="space-y-1.5 text-xs font-semibold text-slate-600">
-    <span className="block">На склад WB</span>
+    <span className="block">{label}</span>
     <select
       value={value}
       onChange={(event) => onChange(event.target.value)}

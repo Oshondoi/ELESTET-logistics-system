@@ -26,7 +26,18 @@
 - `fbs_orders`: tenant/store cache of WB orders, unique `(store_id, wb_order_id)`; keeps raw data, WB statuses, supply relation and synchronized variant fields.
 - `fbs_sync_log`: last successful store synchronization metadata.
 - UI reads DB first; Edge Function `wb-fbs` refreshes from WB and upserts cache.
-- `get_fbs_product_locations(uuid, text[])`: read-only пакетный поиск точного товарного баркода по актуальным fulfillment-коробам компании с партией, поставкой, количеством и nullable WMS-адресом; patch `patch_fbs_product_locations.sql` применён 16.08.2026.
+- `get_fbs_product_locations(uuid, text[])`: пакетный read-only поиск точного товарного баркода по актуальным fulfillment-коробам. Актуальная сигнатура дополнительно возвращает `fbs_eligible`: legacy-короба без назначенного FBS-склада остаются видимыми, но недоступны для взятия/приёмки.
+
+## FBS bound stock (applied 11.09.2026)
+
+- Patch: `supabase/patch_zzzz_fbs_bound_stock.sql`.
+- `fbs_stock_allocations`: активная единица уже удалена из `fulfillment_box_items.qty`; `reserved/awaiting_wb` означают подэтапы привязки, `consumed/released` — два закрывающих результата.
+- Новые поля аудита: `stock_removed_at`, `source_wms_warehouse_id`, `returned_box_item_id`, `returned_box_id`, `returned_wms_warehouse_id`, `returned_by`, `return_note`, `requires_review`, `review_reason`.
+- `reserve_fbs_order_from_box`: атомарное взятие/смена исходного короба с немедленным изменением `qty` и проверкой `fbs_enabled`.
+- `receive_fbs_order_bound_stock`: идемпотентная ручная переприёмка активной единицы в выбранный или отсканированный целевой FBS-короб; поддерживает создание строки SKU в другом коробе.
+- `reconcile_fbs_stock_allocation`: отмена не освобождает привязку, поштучная приёмка WB закрывает её без второго изменения `qty`, позднее подтверждение после ручного возврата создаёт флаг проверки.
+- `get_fbs_stock_catalog_for_warehouse`: источник `Подставить из ELESTET` по точному внутреннему складу; возвращает количество в коробах, активные привязки и количество legacy-остатка без склада.
+- Production conversion: 172 активные старые привязки имели существующие источники и достаточное количество, все получили `stock_removed_at`; отрицательных строк после применения — 0.
 
 ## WMS tables and RPC (applied through 15.08.2026)
 - Patches: `supabase/patch_wms.sql`, `patch_wms_boxes.sql`, `patch_wms_disabled.sql`, `patch_wms_rack_layout.sql`, `patch_wms_scanning.sql`, `patch_wms_default_warehouse.sql`, `patch_wms_unassign_box.sql`, `patch_wms_operations.sql`.

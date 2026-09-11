@@ -73,6 +73,7 @@ interface ProductLocation {
   addressCode: string | null
   addressText: string | null
   isAddressed: boolean
+  fbsEligible: boolean
 }
 
 interface FbsStockAllocation {
@@ -82,6 +83,8 @@ interface FbsStockAllocation {
   productBarcode: string
   quantity: number
   status: 'reserved' | 'awaiting_wb' | 'consumed' | 'released'
+  requiresReview: boolean
+  reviewReason: string | null
 }
 
 function KizStatusBadge({ order }: { order: FbsOrder }) {
@@ -122,7 +125,7 @@ interface WbOffice {
 interface FbsInternalWarehouse {
   id: string
   name: string
-  wb_warehouse_id: string
+  wb_warehouse_id: string | null
 }
 
 const ALL_WAREHOUSES_FILTER = 'all'
@@ -283,20 +286,22 @@ function productSizeByBarcode(product: Product | undefined, barcode: string | nu
 
 function productStockTotals(locations: ProductLocation[]) {
   return locations.reduce((totals, location) => ({
-    available: totals.available + location.quantity,
+    available: totals.available + (location.fbsEligible ? location.quantity : 0),
+    unassigned: totals.unassigned + (location.fbsEligible ? 0 : location.quantity),
     reserved: totals.reserved + location.reservedQuantity,
     awaiting: totals.awaiting + location.awaitingQuantity,
-  }), { available: 0, reserved: 0, awaiting: 0 })
+  }), { available: 0, unassigned: 0, reserved: 0, awaiting: 0 })
 }
 
 function FbsStockQuantityCell({ order }: { order: FbsOrder }) {
   if (order.productLocations.length === 0) return <span className="text-slate-400">—</span>
   const totals = productStockTotals(order.productLocations)
+  const bound = totals.reserved + totals.awaiting
   return (
     <div className="whitespace-nowrap text-right">
-      <div className="font-semibold text-slate-900">{totals.available} доступно</div>
-      {totals.reserved > 0 && <div className="mt-0.5 text-[11px] font-medium text-violet-600">{totals.reserved} в сборке</div>}
-      {totals.awaiting > 0 && <div className="mt-0.5 text-[11px] font-medium text-amber-600">{totals.awaiting} ждут WB</div>}
+      <div className="font-semibold text-slate-900">{totals.available} в коробах</div>
+      {totals.unassigned > 0 && <div className="mt-0.5 text-[11px] font-medium text-amber-600">{totals.unassigned} без FBS-склада</div>}
+      {bound > 0 && <div className="mt-0.5 text-[11px] font-medium text-violet-600">{bound} привязано к заказам</div>}
     </div>
   )
 }
@@ -374,6 +379,9 @@ function ProductLocationsCell({ order }: { order: FbsOrder }) {
           <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold ${order.stockAllocation?.status === 'awaiting_wb' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
             {order.stockAllocation?.status === 'awaiting_wb' ? 'ЖДЁТ WB' : 'ВЫБРАН'}
           </span>
+        )}
+        {!location.fbsEligible && (
+          <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">БЕЗ FBS-СКЛАДА</span>
         )}
       </div>
       <div className="truncate text-[11px] text-slate-500" title={`P-${location.batchNumber} · S-${location.supplyNumber} · Короб ${location.boxNumber} · ${location.quantity} шт.`}>
@@ -1082,6 +1090,7 @@ export function FbsOrdersPage({ accountId }: Props) {
   const [productSyncNotice, setProductSyncNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const [kizScannerOpen, setKizScannerOpen] = useState(false)
   const [boxSelectionOrder, setBoxSelectionOrder] = useState<FbsOrder | null>(null)
+  const [boxSelectionMode, setBoxSelectionMode] = useState<'bind' | 'return'>('bind')
   const [boxSelectionBusy, setBoxSelectionBusy] = useState(false)
   const [boxScanValue, setBoxScanValue] = useState('')
   const [dispatchModal, setDispatchModal] = useState<SupplyDispatchModal | null>(null)
@@ -1219,7 +1228,7 @@ export function FbsOrdersPage({ accountId }: Props) {
       .eq('fbs_enabled', true)
       .then(({ data }: { data: FbsInternalWarehouse[] | null }) => {
         if (cancelled) return
-        setInternalWarehouses((data ?? []).filter((warehouse) => warehouse.wb_warehouse_id))
+        setInternalWarehouses(data ?? [])
       })
     return () => { cancelled = true }
   }, [workingAccountId])
@@ -1350,6 +1359,7 @@ export function FbsOrdersPage({ accountId }: Props) {
         addressCode: row.address_code ?? null,
         addressText: row.address_text ?? null,
         isAddressed: row.is_addressed === true,
+        fbsEligible: row.fbs_eligible === true,
       }
       locationsByBarcode.set(barcode, [...(locationsByBarcode.get(barcode) ?? []), location])
     }
@@ -1380,7 +1390,7 @@ export function FbsOrdersPage({ accountId }: Props) {
 
     const { data: allocationRows, error: allocationError } = await (supabase as any)
       .from('fbs_stock_allocations')
-      .select('id, wb_order_id, box_item_id, box_id, product_barcode, quantity, status')
+      .select('id, wb_order_id, box_item_id, box_id, product_barcode, quantity, status, requires_review, review_reason')
       .eq('store_id', storeId)
     if (allocationError && allocationError.code !== '42P01') throw allocationError
     const allocationByOrderId = new Map<string, FbsStockAllocation>((allocationRows ?? []).map((row: any) => [String(row.wb_order_id), {
@@ -1390,6 +1400,8 @@ export function FbsOrdersPage({ accountId }: Props) {
       productBarcode: String(row.product_barcode ?? ''),
       quantity: Number(row.quantity ?? 1),
       status: row.status as FbsStockAllocation['status'],
+      requiresReview: row.requires_review === true,
+      reviewReason: row.review_reason ? String(row.review_reason) : null,
     }]))
 
     const exactAcceptanceRows: any[] = []
@@ -2121,10 +2133,36 @@ export function FbsOrdersPage({ accountId }: Props) {
       setBoxScanValue('')
       await readFromDb()
     } catch (reservationError: any) {
-      alert(reservationError?.message || 'Не удалось зарезервировать товар из выбранного короба')
+      alert(reservationError?.message || 'Не удалось взять товар из выбранного короба')
     } finally {
       setBoxSelectionBusy(false)
     }
+  }
+
+  const receiveOrderIntoBox = async (order: FbsOrder, targetBoxId: string) => {
+    if (!supabase || boxSelectionBusy || !fbsPermissions.fbs_assembly) return
+    setBoxSelectionBusy(true)
+    try {
+      const { error: receiveError } = await (supabase as any).rpc('receive_fbs_order_bound_stock', {
+        p_store_id: selectedStoreId,
+        p_order_id: order.id,
+        p_target_box_id: targetBoxId,
+        p_note: 'Ручная переприёмка отменённого FBS-заказа',
+      })
+      if (receiveError) throw receiveError
+      setBoxSelectionOrder(null)
+      setBoxScanValue('')
+      await readFromDb()
+    } catch (receiveError: any) {
+      alert(receiveError?.message || 'Не удалось вернуть товар в выбранный короб')
+    } finally {
+      setBoxSelectionBusy(false)
+    }
+  }
+
+  const applySelectedBox = async (order: FbsOrder, location: ProductLocation) => {
+    if (boxSelectionMode === 'return') await receiveOrderIntoBox(order, location.boxId)
+    else await reserveOrderFromBox(order, location)
   }
 
   const reserveScannedBox = async () => {
@@ -2132,12 +2170,31 @@ export function FbsOrdersPage({ accountId }: Props) {
     const scanned = boxScanValue.trim()
     if (!scanned) return
     const location = boxSelectionOrder.productLocations.find((candidate) => candidate.boxBarcode === scanned)
+    if (boxSelectionMode === 'return' && !location) {
+      const { data: targetBox, error: targetBoxError } = await (supabase as any)
+        .from('fulfillment_boxes')
+        .select('id')
+        .eq('account_id', workingAccountId)
+        .eq('barcode', scanned)
+        .maybeSingle()
+      if (targetBoxError) {
+        alert(targetBoxError.message || 'Не удалось проверить QR целевого короба')
+        return
+      }
+      if (!targetBox?.id) {
+        alert('Короб с таким QR не найден')
+        setBoxScanValue('')
+        return
+      }
+      await receiveOrderIntoBox(boxSelectionOrder, String(targetBox.id))
+      return
+    }
     if (!location) {
       alert('Этот короб не содержит товар выбранного FBS-заказа')
       setBoxScanValue('')
       return
     }
-    await reserveOrderFromBox(boxSelectionOrder, location)
+    await applySelectedBox(boxSelectionOrder, location)
   }
 
   const releaseOrderBoxReservation = async (order: FbsOrder) => {
@@ -2153,7 +2210,7 @@ export function FbsOrdersPage({ accountId }: Props) {
       setBoxScanValue('')
       await readFromDb()
     } catch (releaseError: any) {
-      alert(releaseError?.message || 'Не удалось снять резерв с короба')
+      alert(releaseError?.message || 'Не удалось вернуть товар в исходный короб')
     } finally {
       setBoxSelectionBusy(false)
     }
@@ -3099,6 +3156,7 @@ export function FbsOrdersPage({ accountId }: Props) {
           accountId={workingAccountId}
           storeId={selectedStoreId}
           warehouses={stockWbWarehouses}
+          sourceWarehouses={internalWarehouses}
           canManage={canManageStocks}
           warehouseControlsContainerId="fbs-stocks-warehouse-controls"
         />
@@ -3646,12 +3704,13 @@ export function FbsOrdersPage({ accountId }: Props) {
                                   {isAssemblingTab && fbsPermissions.fbs_assembly && order.productLocations.length > 0 && (
                                     <button
                                       type="button"
-                                      disabled={isBusy}
-                                      onClick={() => { setBoxScanValue(''); setBoxSelectionOrder(order) }}
+                                      disabled={isBusy || !order.productLocations.some((location) => location.fbsEligible)}
+                                      title={!order.productLocations.some((location) => location.fbsEligible) ? 'Сначала назначьте коробу внутренний склад с включённым режимом FBS' : undefined}
+                                      onClick={() => { setBoxSelectionMode('bind'); setBoxScanValue(''); setBoxSelectionOrder(order) }}
                                       className={`mt-1.5 inline-flex cursor-pointer items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold transition disabled:cursor-wait disabled:opacity-40 ${order.stockAllocation?.status === 'reserved' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'}`}
                                     >
                                       <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></svg>
-                                      {order.stockAllocation?.status === 'reserved' ? 'Изменить короб' : 'Выбрать короб'}
+                                      {order.stockAllocation?.status === 'reserved' ? 'Изменить короб' : 'Взять из короба'}
                                     </button>
                                   )}
                                 </td>
@@ -3892,6 +3951,11 @@ export function FbsOrdersPage({ accountId }: Props) {
                     <td className={`px-4 py-3 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
                     <td className={`sticky right-0 z-[4] border-l border-slate-200 px-4 py-3 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${isChecked ? 'bg-violet-50' : 'bg-white'}`}>
                       <div className="flex items-center gap-1.5">
+                        {order.stockAllocation?.requiresReview && (
+                          <span title={order.stockAllocation.reviewReason ?? undefined} className="whitespace-nowrap rounded-lg bg-red-100 px-2.5 py-1 text-[11px] font-semibold text-red-700">
+                            Проверить учёт
+                          </span>
+                        )}
                         {/* Действия для Новых — 3-точечное меню */}
                         {activeTab === 'pending' && fbsPermissions.fbs_assembly && (
                           <div className="relative">
@@ -3930,9 +3994,22 @@ export function FbsOrdersPage({ accountId }: Props) {
                           </span>
                         )}
                         {activeTab === 'cancelled' && (
-                          <span className="whitespace-nowrap rounded-lg bg-orange-100 px-2.5 py-1 text-[11px] font-semibold text-orange-700">
-                            {completedOrderStatusLabel(order)}
-                          </span>
+                          <>
+                            <span className="whitespace-nowrap rounded-lg bg-orange-100 px-2.5 py-1 text-[11px] font-semibold text-orange-700">
+                              {completedOrderStatusLabel(order)}
+                            </span>
+                            {fbsPermissions.fbs_assembly && ['reserved', 'awaiting_wb'].includes(order.stockAllocation?.status ?? '') && (
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                title="Фактически принять товар обратно: выбрать короб из списка или отсканировать QR любого целевого FBS-короба"
+                                onClick={() => { setBoxSelectionMode('return'); setBoxScanValue(''); setBoxSelectionOrder(order) }}
+                                className="h-7 whitespace-nowrap rounded-lg border border-violet-200 bg-violet-50 px-2.5 text-[11px] font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                Принять обратно
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -3984,7 +4061,7 @@ export function FbsOrdersPage({ accountId }: Props) {
           <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
               <div>
-                <h2 className="text-xl font-bold text-slate-900">Выбрать короб</h2>
+                <h2 className="text-xl font-bold text-slate-900">{boxSelectionMode === 'return' ? 'Принять товар обратно' : 'Взять товар из короба'}</h2>
                 <p className="mt-1 text-sm text-slate-500">Заказ № {boxSelectionOrder.id} · {boxSelectionOrder.productName || `Товар WB ${boxSelectionOrder.nmId}`}</p>
               </div>
               <button type="button" disabled={boxSelectionBusy} title="Закрыть" onClick={() => setBoxSelectionOrder(null)} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 disabled:opacity-40">
@@ -3992,7 +4069,11 @@ export function FbsOrdersPage({ accountId }: Props) {
               </button>
             </div>
             <div className="border-b border-slate-100 px-6 py-4">
-              <p className="mb-2 text-xs font-semibold text-slate-600">Можно выбрать мышкой или отсканировать QR короба</p>
+              <p className="mb-2 text-xs font-semibold text-slate-600">
+                {boxSelectionMode === 'return'
+                  ? 'Выберите короб с этим товаром или отсканируйте QR любого фактического целевого короба'
+                  : 'Выберите исходный короб мышкой или отсканируйте его QR'}
+              </p>
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -4005,31 +4086,32 @@ export function FbsOrdersPage({ accountId }: Props) {
                   className="min-w-0 flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                 />
                 <button type="button" disabled={!boxScanValue.trim() || boxSelectionBusy} onClick={() => void reserveScannedBox()} className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40">
-                  Выбрать
+                  {boxSelectionMode === 'return' ? 'Принять' : 'Взять'}
                 </button>
               </div>
-              {boxSelectionOrder.stockAllocation?.status === 'reserved' && (
+              {boxSelectionMode === 'bind' && boxSelectionOrder.stockAllocation?.status === 'reserved' && (
                 <button
                   type="button"
                   disabled={boxSelectionBusy}
                   onClick={() => void releaseOrderBoxReservation(boxSelectionOrder)}
                   className="mt-3 inline-flex cursor-pointer items-center rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-100 disabled:cursor-wait disabled:opacity-40"
                 >
-                  Отменить выбор короба
+                  Вернуть в исходный короб
                 </button>
               )}
             </div>
             <div className="space-y-2 overflow-y-auto px-6 py-5">
               {boxSelectionOrder.productLocations.map((location) => {
-                const isCurrent = boxSelectionOrder.stockAllocation?.status === 'reserved'
-                  && boxSelectionOrder.stockAllocation.boxItemId === location.boxItemId
-                const canSelect = location.quantity > 0 || isCurrent
+                const isCurrent = ['reserved', 'awaiting_wb'].includes(boxSelectionOrder.stockAllocation?.status ?? '')
+                  && boxSelectionOrder.stockAllocation?.boxItemId === location.boxItemId
+                const canSelect = location.fbsEligible
+                  && (boxSelectionMode === 'return' || location.quantity > 0 || isCurrent)
                 return (
                   <button
                     key={location.boxItemId}
                     type="button"
                     disabled={!canSelect || boxSelectionBusy}
-                    onClick={() => void reserveOrderFromBox(boxSelectionOrder, location)}
+                    onClick={() => void applySelectedBox(boxSelectionOrder, location)}
                     className={`flex w-full items-center justify-between gap-4 rounded-2xl border p-4 text-left transition ${isCurrent ? 'border-emerald-300 bg-emerald-50' : canSelect ? 'border-slate-200 hover:border-violet-300 hover:bg-violet-50/50' : 'cursor-not-allowed border-slate-100 bg-slate-50 opacity-55'}`}
                   >
                     <span className="min-w-0">
@@ -4038,7 +4120,8 @@ export function FbsOrdersPage({ accountId }: Props) {
                       <span className="mt-0.5 block font-mono text-[11px] text-slate-400">{location.boxBarcode}</span>
                     </span>
                     <span className="shrink-0 text-right">
-                      <span className={`block text-sm font-bold ${canSelect ? 'text-slate-900' : 'text-red-500'}`}>{location.quantity} доступно</span>
+                      <span className={`block text-sm font-bold ${canSelect ? 'text-slate-900' : 'text-red-500'}`}>{location.quantity} в коробе</span>
+                      {!location.fbsEligible && <span className="mt-1 block text-[10px] font-bold text-amber-600">НАЗНАЧЬТЕ FBS-СКЛАД</span>}
                       {isCurrent && <span className="mt-1 block text-[10px] font-bold text-emerald-600">ВЫБРАН ДЛЯ ЗАКАЗА</span>}
                     </span>
                   </button>
@@ -4046,7 +4129,9 @@ export function FbsOrdersPage({ accountId }: Props) {
               })}
             </div>
             <div className="border-t border-slate-100 px-6 py-4 text-xs text-slate-500">
-              После выбора 1 шт. резервируется в этом коробе. Физический остаток спишется только после приёмки заказа Wildberries.
+              {boxSelectionMode === 'return'
+                ? 'После подтверждения 1 шт. будет добавлена в выбранный короб, а привязка к заказу закроется. Повторная приёмка этого заказа количество не увеличит.'
+                : 'После выбора 1 шт. сразу удаляется из исходного короба и привязывается к заказу. Отмена заказа сама товар в короб не возвращает.'}
             </div>
           </div>
         </div>

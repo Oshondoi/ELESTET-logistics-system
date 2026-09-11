@@ -70,7 +70,7 @@ export function FbsInfoPage() {
                 а <code className="font-semibold text-blue-700">wbStatus</code> — состояние заказа внутри Wildberries.
               </p>
             </div>
-            <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-[11px] font-medium text-violet-700">Актуально: 20.08.2026</span>
+            <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-[11px] font-medium text-violet-700">Актуально: 11.09.2026</span>
           </div>
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
             Это не 15 последовательных этапов. WB возвращает пару значений, например <strong>complete + waiting</strong>.
@@ -121,6 +121,29 @@ export function FbsInfoPage() {
               <p><strong>Передать поставку в доставку:</strong> закрывает её и переводит заказы в <code>complete</code>.</p>
               <p><strong>Отменить заказ:</strong> переводит его в <code>cancel</code> и удаляет из поставки.</p>
               <p><strong>Стикеры заказов:</strong> доступны в статусах <code>confirm</code> и <code>complete</code>.</p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-sm font-bold text-slate-800">Складской учёт товара FBS в ELESTET</h2>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <h3 className="text-sm font-bold text-slate-800">Два состояния одной единицы</h3>
+              <div className="mt-3 space-y-3 text-xs leading-5 text-slate-600">
+                <p><strong>В коробе:</strong> единица входит в количество конкретного fulfillment-короба и может быть передана в WB как доступный остаток.</p>
+                <p><strong>Привязана к заказу:</strong> сотрудник физически взял единицу из выбранного короба. В этот же момент количество короба уменьшается на одну единицу.</p>
+                <p className="rounded-lg bg-violet-50 px-3 py-2 text-violet-700">Отдельные пользовательские числа «Физически», «Резерв» и «Свободно» не рассчитываются. В интерфейсе используются только «В коробах» и «Привязано к заказам».</p>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <h3 className="text-sm font-bold text-slate-800">Отмена, WB и возврат</h3>
+              <div className="mt-3 space-y-3 text-xs leading-5 text-slate-600">
+                <p>Отмена заказа в WB сама не изменяет короб и не закрывает активную привязку.</p>
+                <p>Возврат в доступный остаток выполняется только действием <strong>«Принять обратно»</strong>: сотрудник выбирает фактический целевой короб, после чего количество этого короба увеличивается.</p>
+                <p>Если WB подтвердил приёмку товара, привязка закрывается без повторного списания: единица уже была удалена из короба при сборке.</p>
+                <p>Повторная переприёмка одного заказа не увеличивает количество; конфликт «WB принял после ручного возврата» помечается для проверки учёта.</p>
+              </div>
             </div>
           </div>
         </section>
