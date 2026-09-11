@@ -1220,7 +1220,9 @@ async function isFastSyncV2Enabled(storeId: string) {
       `store_id=eq.${encodeURIComponent(storeId)}&select=fast_sync_v2_enabled&limit=1`,
       true,
     )
-    return rows[0]?.fast_sync_v2_enabled === true
+    // Fast-v2 is the global default. An explicit row with `false` remains an
+    // emergency per-store fallback to the legacy path.
+    return rows.length === 0 ? true : rows[0]?.fast_sync_v2_enabled === true
   } catch (settingsError) {
     // Без миграции или настройки магазин гарантированно остаётся на старом пути.
     console.warn(JSON.stringify({ scope: 'wb-fbs', event: 'fast_sync_settings_unavailable', store_id: storeId, error: String(settingsError) }))
