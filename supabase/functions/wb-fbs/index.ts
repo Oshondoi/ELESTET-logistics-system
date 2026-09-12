@@ -620,6 +620,61 @@ function permissionForFbsAction(action: string, body: Record<string, unknown>): 
   return 'fbs_view'
 }
 
+function wbAddToSupplyFailure(status: number, responseText: string) {
+  const problem = wbProblem(responseText)
+  const normalizedMessage = problem.message.toLocaleLowerCase('ru-RU')
+  let kind = 'wb_rejected'
+  let message = 'Wildberries не разрешил добавить заказ в эту поставку.'
+
+  if (status === 400) {
+    kind = 'invalid_request'
+    message = 'Wildberries отклонил данные переноса. Обновите заказы и повторите попытку.'
+  } else if (status === 401 || status === 403) {
+    kind = 'no_permission'
+    message = 'API-ключ магазина не даёт права изменять FBS-поставки.'
+  } else if (status === 402) {
+    kind = 'wb_access_restricted'
+    message = 'Wildberries ограничил доступ магазина к операции с FBS-поставками.'
+  } else if (status === 404) {
+    kind = 'supply_not_found'
+    message = 'Этой поставки больше нет в Wildberries. Выберите другую поставку.'
+  } else if (status === 409) {
+    kind = 'order_incompatible'
+    if (/office|warehouse|склад/.test(normalizedMessage)) {
+      kind = 'warehouse_mismatch'
+      message = 'Склад заказа не совпадает со складом поставки.'
+    } else if (/cargo|габарит/.test(normalizedMessage)) {
+      kind = 'cargo_type_mismatch'
+      message = 'Габаритный тип заказа не совпадает с типом поставки.'
+    } else if (/cross.?border|кроссбордер/.test(normalizedMessage)) {
+      kind = 'cross_border_mismatch'
+      message = 'Кроссбордерный тип заказа не совпадает с типом поставки.'
+    } else if (/b2b/.test(normalizedMessage)) {
+      kind = 'b2b_mismatch'
+      message = 'B2B-признак заказа не совпадает с признаком поставки.'
+    } else if (/closed|done|закрыт/.test(normalizedMessage)) {
+      kind = 'supply_closed'
+      message = 'Поставка уже закрыта в Wildberries. Выберите активную поставку.'
+    } else {
+      message = 'Wildberries не разрешил перенести этот заказ в выбранную поставку. Обновите данные и выберите другую активную поставку.'
+    }
+  } else if (status === 429) {
+    kind = 'rate_limited'
+    message = 'Wildberries временно ограничил частоту запросов. Повторите попытку через минуту.'
+  } else if (status >= 500) {
+    kind = 'wb_unavailable'
+    message = 'Wildberries временно не отвечает. Заказ не перенесён; повторите попытку позже.'
+  }
+
+  return {
+    kind,
+    message,
+    http_status: status,
+    wb_code: problem.code || null,
+    wb_message: problem.message || null,
+  }
+}
+
 async function canUseFbsStore(userId: string, storeId: string, permission: FbsPermission) {
   return await sbRpc<boolean>('fbs_user_can_access_store', {
     p_user_id: userId,
@@ -694,7 +749,7 @@ async function getAllOrdersForPeriod(apiKey: string, dateFromTs: number, dateToT
   throw new Error('WB pagination exceeded the safety limit')
 }
 
-async function getAllSupplies(apiKey: string, closed: boolean, requestedLimit = WB_PAGE_LIMIT) {
+async function getAllSupplies(apiKey: string, requestedLimit = WB_PAGE_LIMIT) {
   const supplies: Record<string, unknown>[] = []
   const limit = Math.min(Math.max(requestedLimit, 1), WB_PAGE_LIMIT)
   let cursor = '0'
@@ -704,7 +759,6 @@ async function getAllSupplies(apiKey: string, closed: boolean, requestedLimit = 
     const data = await wbGet(apiKey, '/api/v3/supplies', {
       limit: String(limit),
       next: cursor,
-      isSupplyClosed: String(closed),
     })
     const pageSupplies = Array.isArray(data?.supplies) ? data.supplies as Record<string, unknown>[] : []
     supplies.push(...pageSupplies)
@@ -850,28 +904,35 @@ function mergeSupply(left: Record<string, unknown>, right: Record<string, unknow
   return merged
 }
 
-async function getAllSupplyMetadata(apiKey: string, mode: SyncMode) {
-  // Быстрый режиму достаточно всех открытых и последней страницы закрытых
-  // поставок: именно там появляются только что переданные поставки. Полная
-  // сверка ночью и по отдельной кнопке проходит всю пагинацию закрытых.
-  const recentClosedPromise = mode === 'full'
-    ? getAllSupplies(apiKey, true, WB_PAGE_LIMIT)
-    : wbGet(apiKey, '/api/v3/supplies', {
-        limit: String(WB_PAGE_LIMIT),
-        next: '0',
-        isSupplyClosed: 'true',
-      }).then((data) => Array.isArray(data?.supplies) ? data.supplies as Record<string, unknown>[] : [])
-  const [openSupplies, closedSupplies] = await Promise.all([
-    getAllSupplies(apiKey, false, WB_PAGE_LIMIT),
-    recentClosedPromise,
-  ])
+async function getAllSupplyMetadata(apiKey: string) {
+  // Актуальный WB endpoint возвращает открытые и закрытые поставки единым
+  // курсорным списком. Параметра isSupplyClosed в его контракте нет.
+  const allSupplies = await getAllSupplies(apiKey, WB_PAGE_LIMIT)
   const supplyMap = new Map<string, Record<string, unknown>>()
-  for (const supply of [...openSupplies, ...closedSupplies]) {
+  for (const supply of allSupplies) {
     const supplyId = String(supply.id ?? '').trim()
     if (!supplyId) continue
     supplyMap.set(supplyId, supplyMap.has(supplyId) ? mergeSupply(supplyMap.get(supplyId)!, supply) : supply)
   }
   return [...supplyMap.values()]
+}
+
+async function reconcileOpenSupplyCatalog(
+  storeId: string,
+  accountId: string,
+  rawSupplies: Record<string, unknown>[],
+  observedAt: string,
+) {
+  const seenOpenSupplyIds = rawSupplies
+    .filter((supply) => supply.done !== true)
+    .map((supply) => String(supply.id ?? '').trim())
+    .filter(Boolean)
+  return await sbRpc<Record<string, number>>('reconcile_fbs_open_supply_catalog', {
+    p_store_id: storeId,
+    p_account_id: accountId,
+    p_seen_open_supply_ids: seenOpenSupplyIds,
+    p_synced_at: observedAt,
+  })
 }
 
 function normalizedOrderRows(
@@ -1361,10 +1422,11 @@ async function runFastSupplySync(
     }
     try {
       const observedAt = new Date().toISOString()
-      const rawSupplies = await getAllSupplyMetadata(apiKey, 'incremental')
+      const rawSupplies = await getAllSupplyMetadata(apiKey)
       // Two workers with a conservative delay leave room in WB's shared
       // 300 req/min FBS quota for the independent order lane.
       const result = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, 'incremental', trigger, observedAt, 520)
+      const availability = await reconcileOpenSupplyCatalog(storeId, accountId, rawSupplies, observedAt)
       const {
         reconciliation_memberships: reconciliationMemberships,
         reconciliation_closed_supply_ids: reconciliationClosedSupplyIds,
@@ -1372,7 +1434,7 @@ async function runFastSupplySync(
       } = result
       await reconcilePendingTransitions(storeId, [], reconciliationMemberships, reconciliationClosedSupplyIds)
       const response = {
-        mode: 'incremental', engine: 'fast-v2', phase: 'supplies', supplies: publicResult,
+        mode: 'incremental', engine: 'fast-v2', phase: 'supplies', supplies: { ...publicResult, availability },
         run_id: lane.run_id, duration_ms: Date.now() - startedAt,
       }
       await finishFastSyncLane(lane.run_id, 'completed', response, null)
@@ -1410,7 +1472,7 @@ async function syncStore(
     // started observing WB. A slower, older full run therefore cannot replace
     // a newer fast result merely because it finished later.
     const observedAt = new Date().toISOString()
-    const rawSupplies = await getAllSupplyMetadata(apiKey, mode)
+    const rawSupplies = await getAllSupplyMetadata(apiKey)
     const normalizedSupplies = rawSupplies
       .map(normalizeSupply)
       .filter((supply): supply is NormalizedSupply => Boolean(supply))
@@ -1426,6 +1488,7 @@ async function syncStore(
       ? await syncOrdersFull(storeId, accountId, apiKey, normalizedSupplies, job.job_id, observedAt)
       : await syncOrdersIncremental(storeId, accountId, apiKey, observedAt)
     const supplyResultWithReconciliation = await syncSupplyTimeline(storeId, accountId, apiKey, rawSupplies, mode, trigger, observedAt)
+    const supplyAvailability = await reconcileOpenSupplyCatalog(storeId, accountId, rawSupplies, observedAt)
     const {
       reconciliation_memberships: reconciliationMemberships,
       reconciliation_closed_supply_ids: reconciliationClosedSupplyIds,
@@ -1450,7 +1513,7 @@ async function syncStore(
       new_orders: 'new_orders' in orderResult ? orderResult.new_orders : null,
       changed_statuses: 'changed_statuses' in orderResult ? orderResult.changed_statuses : null,
       status_counts: orderResult.counts,
-      supplies: supplyResult,
+      supplies: { ...supplyResult, availability: supplyAvailability },
       kiz_checked: nightlyKizChecked,
       partial: supplyResult.partial || ('partial' in orderResult && orderResult.partial === true),
       last_synced_at: orderResult.last_synced_at,
@@ -1889,13 +1952,28 @@ Deno.serve(async (req) => {
         headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
         body: wbOrderIdsBody([String(order_id)]),
       })
-      if (r.status === 401 || r.status === 403) throw new Error('no_permission')
-      // 409 = WB отклонил конкретный заказ (старый/несовместимый); возвращаем детали без throw
-      if (r.status === 409) {
-        const details = await r.json().catch(() => [])
-        return ok({ success: false, failed: details })
+      if (!r.ok) {
+        const responseText = await r.text()
+        const failure = wbAddToSupplyFailure(r.status, responseText)
+        if (failure.kind === 'supply_not_found') {
+          await sbRpc('mark_fbs_supply_unavailable', {
+            p_store_id: String(store_id),
+            p_account_id: accountId,
+            p_supply_id: String(supply_id),
+            p_observed_at: new Date().toISOString(),
+          }).catch((markError) => {
+            console.error(JSON.stringify({
+              scope: 'wb-fbs', event: 'missing_supply_local_mark_failed', store_id,
+              supply_id, error: errorMessage(markError),
+            }))
+          })
+        }
+        console.warn(JSON.stringify({
+          scope: 'wb-fbs', event: 'add_order_to_supply_rejected', store_id,
+          supply_id, order_id, ...failure,
+        }))
+        return ok({ success: false, failure })
       }
-      if (!r.ok) throw new Error(`WB ${r.status}: ${await r.text()}`)
       let localSaved = false
       try {
         // WB accepted the command, so persist the same transition immediately.
@@ -2062,10 +2140,9 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'get_supplies') {
-      // isSupplyClosed=false → В сборке, true → В доставке/Завершённые
       const { closed = false, limit = 50 } = body as { closed?: boolean; limit?: number }
-      const supplies = await getAllSupplies(apiKey, closed, limit)
-      return ok({ supplies, next: '0' })
+      const supplies = await getAllSupplies(apiKey, limit)
+      return ok({ supplies: supplies.filter((supply) => supply.done === closed), next: '0' })
     }
 
     if (action === 'get_supply_qr') {

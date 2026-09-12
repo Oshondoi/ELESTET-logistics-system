@@ -25,6 +25,9 @@ interface FbsOrder {
   ddate: string
   warehouseId: number
   officeId: number
+  cargoType: number | null
+  crossBorderType: number | null
+  isB2b: boolean | null
   article: string
   nmId: number
   chrtId: number
@@ -141,6 +144,11 @@ interface WbSupply {
   createdAt?: string
   closedAt?: string | null
   scanDt?: string | null
+  destinationOfficeId?: number | null
+  cargoType?: number | null
+  crossBorderType?: number | null
+  isB2b?: boolean | null
+  availableOnWb?: boolean
 }
 
 interface OptimisticOrderSupply {
@@ -164,7 +172,24 @@ function wbSupplyFromDbRow(row: any, optimisticName?: string): WbSupply {
     createdAt: row.wb_created_at,
     closedAt: row.wb_closed_at ?? null,
     scanDt: row.wb_scan_at ?? null,
+    destinationOfficeId: row.destination_office_id ?? row.raw_data?.destinationOfficeId ?? null,
+    cargoType: row.cargo_type ?? row.raw_data?.cargoType ?? null,
+    crossBorderType: row.cross_border_type ?? row.raw_data?.crossBorderType ?? null,
+    isB2b: row.is_b2b ?? row.raw_data?.isB2b ?? null,
+    availableOnWb: row.available_on_wb !== false,
   }
+}
+
+interface AssembleFailure {
+  orderId: string
+  kind: string
+  message: string
+}
+
+interface AssembleResultModal {
+  title: string
+  message: string
+  failures: AssembleFailure[]
 }
 
 interface SupplyDispatchModal {
@@ -1064,6 +1089,7 @@ export function FbsOrdersPage({ accountId }: Props) {
   const [acceptanceActBusyIds, setAcceptanceActBusyIds] = useState<Set<string>>(new Set())
   const [copiedSupplyId, setCopiedSupplyId] = useState<string | null>(null)
   const [assembleModal, setAssembleModal] = useState<{ ids: string[]; mode: 'assemble' | 'move'; sourceSupplyIds: string[] } | null>(null)
+  const [assembleResultModal, setAssembleResultModal] = useState<AssembleResultModal | null>(null)
   const [assembleTab, setAssembleTab] = useState<'new' | 'existing'>('new')
   const [newSupplyName, setNewSupplyName] = useState('')
   const [openSupplies, setOpenSupplies] = useState<WbSupply[]>([])
@@ -1478,6 +1504,11 @@ export function FbsOrdersPage({ accountId }: Props) {
         ddate: row.ddate ?? '',
         warehouseId: row.warehouse_id ?? d.warehouseId ?? 0,
         officeId: d.officeId ?? 0,
+        cargoType: d.cargoType == null ? null : Number(d.cargoType),
+        crossBorderType: d.crossBorderType == null ? null : Number(d.crossBorderType),
+        isB2b: typeof d.options?.isB2B === 'boolean'
+          ? d.options.isB2B
+          : (typeof d.isB2b === 'boolean' ? d.isB2b : null),
         article: row.article ?? d.article ?? '',
         nmId: row.nm_id ?? d.nmId ?? 0,
         chrtId: row.chrt_id ?? d.chrtId ?? 0,
@@ -1613,9 +1644,10 @@ export function FbsOrdersPage({ accountId }: Props) {
     for (let from = 0; ; from += 1000) {
       const { data: pageRows, error: suppliesError } = await (supabase as any)
         .from('fbs_supplies')
-        .select('wb_supply_id,name,done,wb_created_at,wb_closed_at,wb_scan_at,raw_data')
+        .select('wb_supply_id,name,done,wb_created_at,wb_closed_at,wb_scan_at,destination_office_id,cargo_type,cross_border_type,is_b2b,available_on_wb,raw_data')
         .eq('store_id', storeId)
         .eq('done', false)
+        .eq('available_on_wb', true)
         .order('wb_created_at', { ascending: false })
         .range(from, from + 999)
       if (suppliesError) throw suppliesError
@@ -1648,7 +1680,7 @@ export function FbsOrdersPage({ accountId }: Props) {
     for (let from = 0; ; from += 1000) {
       const { data: pageRows, error: suppliesError } = await (supabase as any)
         .from('fbs_supplies')
-        .select('wb_supply_id,name,done,wb_created_at,wb_closed_at,wb_scan_at,raw_data')
+        .select('wb_supply_id,name,done,wb_created_at,wb_closed_at,wb_scan_at,destination_office_id,cargo_type,cross_border_type,is_b2b,available_on_wb,raw_data')
         .eq('store_id', storeId)
         .eq('done', true)
         .order('wb_closed_at', { ascending: false })
@@ -1696,6 +1728,11 @@ export function FbsOrdersPage({ accountId }: Props) {
       }
       const dbName = String(row.name ?? '').trim()
       const supply = wbSupplyFromDbRow(row, optimisticSupplyNamesRef.current.get(supplyId))
+      if (supply.availableOnWb === false && !supply.done) {
+        optimisticCreatedSuppliesRef.current.delete(supplyId)
+        setOpenSupplies((previous) => previous.filter((item) => item.id !== supplyId))
+        return
+      }
       if (dbName && dbName !== supplyId) optimisticSupplyNamesRef.current.delete(supplyId)
       const upsert = (previous: WbSupply[]) => [supply, ...previous.filter((item) => item.id !== supply.id)]
       if (supply.done) {
@@ -1987,6 +2024,9 @@ export function FbsOrdersPage({ accountId }: Props) {
   const mapRawOrder = useCallback((o: any, status: FbsOrder['shipStatus']): FbsOrder => ({
     id: String(o.id), rid: o.rid ?? '', createdAt: o.createdAt ?? '', ddate: o.ddate ?? '',
     warehouseId: o.warehouseId ?? 0, officeId: o.officeId ?? 0, article: o.article ?? '', nmId: o.nmId ?? 0,
+    cargoType: o.cargoType == null ? null : Number(o.cargoType),
+    crossBorderType: o.crossBorderType == null ? null : Number(o.crossBorderType),
+    isB2b: typeof o.options?.isB2B === 'boolean' ? o.options.isB2B : (typeof o.isB2b === 'boolean' ? o.isB2b : null),
     chrtId: o.chrtId ?? 0, skus: o.skus ?? [], price: o.price ?? 0,
     convertedPrice: o.convertedPrice ?? 0, currencyCode: o.currencyCode ?? 643,
     photoUrl: null, productBarcode: null, productName: null, productBrand: null, productColor: null,
@@ -2024,6 +2064,22 @@ export function FbsOrdersPage({ accountId }: Props) {
     const storeId = selectedStoreId
     const operationMode = assembleModal?.mode ?? 'assemble'
     const originalOrders = new Map(ordersRef.current.filter((order) => ids.includes(order.id)).map((order) => [order.id, order]))
+    const selectedTargetSupply = existingSupplyId ? openSupplies.find((supply) => supply.id === existingSupplyId) : null
+    const selectedOrders = [...originalOrders.values()]
+    const incompatibleReasons: string[] = []
+    if (new Set(selectedOrders.map((order) => order.warehouseId).filter(Boolean)).size > 1) incompatibleReasons.push('разные склады продавца')
+    if (new Set(selectedOrders.map((order) => order.cargoType).filter((value) => value != null && value > 0)).size > 1) incompatibleReasons.push('разные габаритные типы')
+    if (new Set(selectedOrders.map((order) => order.crossBorderType).filter((value) => value != null)).size > 1) incompatibleReasons.push('разные кроссбордерные типы')
+    if (new Set(selectedOrders.map((order) => order.isB2b).filter((value) => value != null)).size > 1) incompatibleReasons.push('одновременно B2B- и обычные заказы')
+    if (incompatibleReasons.length > 0) {
+      setAssembleModal(null)
+      setAssembleResultModal({
+        title: 'Эти заказы нельзя объединить',
+        message: `В выборе есть ${incompatibleReasons.join(', ')}. Wildberries требует переносить такие заказы в разные поставки.`,
+        failures: ids.map((orderId) => ({ orderId, kind: 'mixed_orders', message: 'Нужна отдельная совместимая поставка.' })),
+      })
+      return
+    }
     let optimisticSupplyId: string | null = null
     setBusyIds((s) => new Set([...s, ...ids]))
     setAssembleModal(null)
@@ -2071,13 +2127,26 @@ export function FbsOrdersPage({ accountId }: Props) {
           ? { ...order, shipStatus: 'assembling' as const, supplierStatus: 'confirm', wbSystemStatus: 'waiting', supply_id: supplyId }
           : order))
       }
-      const failedIds: string[] = []
+      const failures: AssembleFailure[] = []
       for (const orderId of ids) {
         try {
           const res = await invokeFbs(storeId, { action: 'add_order_to_supply', supply_id: supplyId, order_id: orderId })
-          if (res.success === false) failedIds.push(orderId)
-        } catch { failedIds.push(orderId) }
+          if (res.success === false) {
+            failures.push({
+              orderId,
+              kind: String(res.failure?.kind ?? 'wb_rejected'),
+              message: String(res.failure?.message ?? 'Wildberries не разрешил перенести заказ в эту поставку.'),
+            })
+          }
+        } catch (requestError) {
+          failures.push({
+            orderId,
+            kind: 'request_failed',
+            message: requestError instanceof Error ? requestError.message : 'Не удалось связаться с сервисом. Заказ не перенесён.',
+          })
+        }
       }
+      const failedIds = failures.map((failure) => failure.orderId)
       const successIds = ids.filter((id) => !failedIds.includes(id))
       failedIds.forEach((orderId) => optimisticOrderSuppliesRef.current.delete(orderId))
       if (successIds.length > 0 && selectedStoreIdRef.current === storeId) {
@@ -2103,17 +2172,47 @@ export function FbsOrdersPage({ accountId }: Props) {
       // сверяет ответ WB, но не включает ручной загрузчик и не удерживает
       // пользователя в старой вкладке даже при legacy sync.
       void doSync('incremental', 'automatic')
-      if (failedIds.length > 0 && failedIds.length < ids.length) {
-        alert(`Часть заказов ${operationMode === 'move' ? 'перенесена' : 'добавлена'}. Не удалось ${operationMode === 'move' ? 'перенести' : 'добавить'}: ${failedIds.join(', ')} (возможно устарели или не соответствуют складу поставки)`)
-      } else if (failedIds.length === ids.length) {
-        alert(`Не удалось ${operationMode === 'move' ? 'перенести' : 'добавить'} заказы в поставку: ${failedIds.join(', ')}. Возможно они устарели или не соответствуют складу.`)
+      if (failures.some((failure) => failure.kind === 'supply_not_found')) {
+        setOpenSupplies((previous) => previous.filter((supply) => supply.id !== supplyId))
+        void loadOpenSupplies()
+      }
+      if (failures.length > 0) {
+        const uniqueMessages = [...new Set(failures.map((failure) => failure.message))]
+        const targetName = selectedTargetSupply?.name && selectedTargetSupply.name !== selectedTargetSupply.id
+          ? `«${selectedTargetSupply.name}»`
+          : `№ ${supplyId}`
+        const sourceSupplyIds = [...new Set(failures
+          .map((failure) => originalOrders.get(failure.orderId)?.supply_id)
+          .filter((sourceId): sourceId is string => Boolean(sourceId)))]
+        const sourceNames = sourceSupplyIds.map((sourceId) => {
+          const sourceSupply = openSupplies.find((supply) => supply.id === sourceId)
+          return sourceSupply?.name && sourceSupply.name !== sourceId ? `«${sourceSupply.name}»` : `№ ${sourceId}`
+        })
+        const unchangedLocation = sourceNames.length > 0
+          ? `Неперенесённые заказы остались в ${sourceNames.length === 1 ? `поставке ${sourceNames[0]}` : 'исходных поставках'}.`
+          : 'Неперенесённые заказы остались без поставки.'
+        const targetMissing = failures.some((failure) => failure.kind === 'supply_not_found')
+        const resultPrefix = successIds.length > 0
+          ? `${successIds.length} из ${ids.length} заказов успешно ${operationMode === 'move' ? 'перенесены' : 'добавлены'}. `
+          : ''
+        setAssembleResultModal({
+          title: successIds.length > 0 ? 'Перенос выполнен частично' : (ids.length === 1 ? 'Заказ не перенесён' : 'Заказы не перенесены'),
+          message: targetMissing
+            ? `${resultPrefix}Поставки ${targetName} больше нет в Wildberries. Она удалена из списка — выберите другую поставку. ${unchangedLocation}`
+            : `${resultPrefix}${uniqueMessages.join(' ')} ${unchangedLocation}`,
+          failures,
+        })
       }
     } catch (e) {
       ids.forEach((orderId) => optimisticOrderSuppliesRef.current.delete(orderId))
       if (optimisticSupplyId && selectedStoreIdRef.current === storeId) {
         setOrders((previous) => previous.map((order) => originalOrders.get(order.id) ?? order))
       }
-      alert(`${operationMode === 'move' ? 'Ошибка при переносе' : 'Ошибка при переводе в сборку'}: ${String(e)}`)
+      setAssembleResultModal({
+        title: operationMode === 'move' ? 'Перенос не выполнен' : 'Заказы не добавлены',
+        message: e instanceof Error ? e.message : String(e),
+        failures: [],
+      })
     } finally {
       setBusyIds((s) => { const n = new Set(s); ids.forEach(i => n.delete(i)); return n })
     }
@@ -2779,6 +2878,80 @@ export function FbsOrdersPage({ accountId }: Props) {
       sellerName: internalWarehouse?.name || warehouse.name || `Склад продавца #${warehouse.id}`,
     }
   })
+
+  const currentOrdersBySupply = new Map<string, FbsOrder[]>()
+  orders.forEach((order) => {
+    if (!order.isInLatestSnapshot || !order.supply_id) return
+    currentOrdersBySupply.set(order.supply_id, [...(currentOrdersBySupply.get(order.supply_id) ?? []), order])
+  })
+  const selectedWarehouseOption = warehouseFilterOptions.find((warehouse) => warehouse.id === selectedWarehouseFilter) ?? null
+  const ordersBeingAssembled = assembleModal
+    ? assembleModal.ids.map((orderId) => orders.find((order) => order.id === orderId)).filter((order): order is FbsOrder => Boolean(order))
+    : []
+  const assemblyWarehouseIds = new Set(ordersBeingAssembled.map((order) => String(order.warehouseId)).filter((id) => id !== '0'))
+  const assemblyOfficeIds = new Set(ordersBeingAssembled.map((order) => Number(order.officeId)).filter((id) => id > 0))
+
+  const supplyWarehouseInfo = (supply: WbSupply) => {
+    const supplyOrders = currentOrdersBySupply.get(supply.id) ?? []
+    if (supplyOrders[0]) {
+      const warehouse = wbWarehouseInfo(supplyOrders[0])
+      return { ...warehouse, sellerLine: `Ваш склад: ${warehouse.sellerName}`, unassigned: false }
+    }
+
+    const officeId = Number(supply.destinationOfficeId ?? 0)
+    const office = wbOffices.find((item) => Number(item.id) === officeId)
+    const matchingWarehouses = warehouseFilterOptions.filter((warehouse) => warehouse.officeId === officeId)
+    const preferredWarehouse = selectedWarehouseOption?.officeId === officeId
+      ? selectedWarehouseOption
+      : matchingWarehouses.length === 1 ? matchingWarehouses[0] : null
+    if (officeId > 0) {
+      return {
+        officialName: office?.name || `Склад WB #${officeId}`,
+        sellerName: preferredWarehouse?.sellerName || 'Склад продавца не определён',
+        sellerLine: preferredWarehouse ? `Ваш склад: ${preferredWarehouse.sellerName}` : 'Ваш склад не удалось определить',
+        address: office?.address || null,
+        unassigned: false,
+      }
+    }
+
+    const prospectiveWarehouse = selectedWarehouseOption
+      ?? (assemblyWarehouseIds.size === 1
+        ? warehouseFilterOptions.find((warehouse) => assemblyWarehouseIds.has(warehouse.id)) ?? null
+        : null)
+    return {
+      officialName: prospectiveWarehouse ? `Назначится: ${prospectiveWarehouse.officialName}` : 'Склад назначится первым заказом',
+      sellerName: prospectiveWarehouse?.sellerName || 'Поставка пока не привязана к складу',
+      sellerLine: prospectiveWarehouse ? `Ваш склад: ${prospectiveWarehouse.sellerName}` : 'Ваш склад тоже назначится первым заказом',
+      address: null,
+      unassigned: true,
+    }
+  }
+
+  const supplyMatchesCurrentSelection = (supply: WbSupply) => {
+    const supplyOrders = currentOrdersBySupply.get(supply.id) ?? []
+    if (selectedWarehouseFilter !== ALL_WAREHOUSES_FILTER) {
+      if (supplyOrders.length > 0) {
+        if (!supplyOrders.some((order) => String(order.warehouseId) === selectedWarehouseFilter)) return false
+      } else {
+        const officeId = Number(supply.destinationOfficeId ?? 0)
+        if (officeId > 0 && (!selectedWarehouseOption?.officeId || officeId !== selectedWarehouseOption.officeId)) return false
+      }
+    }
+
+    if (ordersBeingAssembled.length === 0 || supplyOrders.length === 0) {
+      const officeId = Number(supply.destinationOfficeId ?? 0)
+      return officeId === 0 || assemblyOfficeIds.size === 0 || (assemblyOfficeIds.size === 1 && assemblyOfficeIds.has(officeId))
+    }
+    if (assemblyWarehouseIds.size !== 1) return false
+    const targetWarehouseId = [...assemblyWarehouseIds][0]
+    return supplyOrders.every((order) => String(order.warehouseId) === targetWarehouseId)
+  }
+
+  const availableAssemblySupplies = openSupplies.filter((supply) => (
+    supply.availableOnWb !== false
+    && !assembleModal?.sourceSupplyIds.includes(supply.id)
+    && supplyMatchesCurrentSelection(supply)
+  ))
 
   const dispatchDestinationMap = new Map<number, { id: number; officialName: string; sellerNames: string[] }>()
   warehouseFilterOptions
@@ -4426,27 +4599,39 @@ export function FbsOrdersPage({ accountId }: Props) {
                 <div className="flex-1 overflow-y-auto space-y-2 px-6">
                   {loadingSupplies ? (
                     <p className="py-4 text-center text-sm text-slate-400">Загрузка поставок...</p>
-                  ) : openSupplies.filter((sup) => !assembleModal.sourceSupplyIds.includes(sup.id)).length === 0 ? (
-                    <p className="py-4 text-center text-sm text-slate-400">Нет открытых поставок на WB</p>
+                  ) : availableAssemblySupplies.length === 0 ? (
+                    <p className="py-4 text-center text-sm text-slate-400">
+                      {selectedWarehouseFilter === ALL_WAREHOUSES_FILTER
+                        ? 'Нет подходящих открытых поставок на WB'
+                        : 'Для выбранного склада нет подходящих открытых поставок'}
+                    </p>
                   ) : (
                     <>
-                      <div className="grid grid-cols-[minmax(0,1fr)_7rem] items-center px-4 pb-1 text-xs font-medium text-slate-400">
+                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(10rem,0.8fr)_6rem] items-center gap-4 px-4 pb-1 text-xs font-medium text-slate-400">
                         <span>Поставка</span>
+                        <span>Склад</span>
                         <span className="text-right">Заказов</span>
                       </div>
-                      {openSupplies.filter((sup) => !assembleModal.sourceSupplyIds.includes(sup.id)).map((sup) => (
-                        <button key={sup.id} type="button"
-                          onClick={() => void handleAssemble(assembleModal.ids, sup.id)}
-                          className="grid w-full grid-cols-[minmax(0,1fr)_7rem] items-center rounded-2xl border border-slate-200 px-4 py-3 text-left transition-colors hover:border-violet-300 hover:bg-violet-50">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-slate-800">{sup.name}</p>
-                            <p className="truncate font-mono text-xs text-slate-400">{sup.id}</p>
-                          </div>
-                          <span className="text-right text-sm font-semibold tabular-nums text-slate-700">
-                            {currentSupplyOrderCounts.get(sup.id) ?? 0}
-                          </span>
-                        </button>
-                      ))}
+                      {availableAssemblySupplies.map((sup) => {
+                        const warehouse = supplyWarehouseInfo(sup)
+                        return (
+                          <button key={sup.id} type="button"
+                            onClick={() => void handleAssemble(assembleModal.ids, sup.id)}
+                            className="grid w-full grid-cols-[minmax(0,1fr)_minmax(10rem,0.8fr)_6rem] items-center gap-4 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-violet-50">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-slate-800">{sup.name}</p>
+                              <p className="truncate font-mono text-xs text-slate-400">{sup.id}</p>
+                            </div>
+                            <div className="min-w-0">
+                              <p className={`truncate text-xs font-medium ${warehouse.unassigned ? 'text-violet-600' : 'text-slate-700'}`}>{warehouse.officialName}</p>
+                              <p className="truncate text-[11px] text-slate-400">{warehouse.sellerLine}</p>
+                            </div>
+                            <span className="text-right text-sm font-semibold tabular-nums text-slate-700">
+                              {currentSupplyOrderCounts.get(sup.id) ?? 0}
+                            </span>
+                          </button>
+                        )
+                      })}
                     </>
                   )}
                 </div>
@@ -4467,6 +4652,35 @@ export function FbsOrdersPage({ accountId }: Props) {
                 Отмена
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {assembleResultModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setAssembleResultModal(null)}>
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">{assembleResultModal.title}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{assembleResultModal.message}</p>
+              </div>
+              <button type="button" aria-label="Закрыть" onClick={() => setAssembleResultModal(null)} className="shrink-0 rounded-full bg-slate-100 p-2 text-slate-500 transition hover:bg-slate-200">
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+            {assembleResultModal.failures.length > 0 && (
+              <div className="mt-4 max-h-48 overflow-y-auto rounded-2xl bg-slate-50 px-4 py-2">
+                {assembleResultModal.failures.map((failure) => (
+                  <div key={failure.orderId} className="py-2 text-sm text-slate-700">
+                    <span className="font-semibold">Заказ № {failure.orderId}</span>
+                    {assembleResultModal.failures.length > 1 && <span className="ml-2 text-slate-500">{failure.message}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            <button type="button" onClick={() => setAssembleResultModal(null)} className="mt-5 w-full rounded-2xl bg-violet-600 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700">
+              Понятно
+            </button>
           </div>
         </div>
       )}
