@@ -11,7 +11,7 @@ import { downloadStickerPdf, previewStickerPdf } from '../lib/stickerPdf'
 import { generateEAN13 } from '../lib/ean13'
 import { fetchProducts } from '../services/productService'
 import { showToast } from '../components/ui/Toast'
-import { getStoreSelectorLabel } from '../lib/storeDisplay'
+import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 
 const BULK_PDF_WARN_THRESHOLD = 100
 
@@ -280,8 +280,6 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const [importBundleName, setImportBundleName] = useState('')
   const [importBundleQties, setImportBundleQties] = useState<Record<string, number>>({})
   const [importBundleError, setImportBundleError] = useState<string | null>(null)
-  const [importStoreDropdownOpen, setImportStoreDropdownOpen] = useState(false)
-  const importStoreDropdownRef = useRef<HTMLDivElement | null>(null)
   const [importExpandedIds, setImportExpandedIds] = useState<Set<string>>(new Set())
   const [importExpandAll, setImportExpandAll] = useState(() => localStorage.getItem('elestet-stickers-expand-all') === 'true')
   const [globalProductionDate, setGlobalProductionDate] = useState('')
@@ -346,7 +344,6 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
 
   useEffect(() => {
     const handler = (e: PointerEvent) => {
-      if (!importStoreDropdownRef.current?.contains(e.target as Node)) setImportStoreDropdownOpen(false)
       if (!iconsDropdownRef.current?.contains(e.target as Node)) setIconsDropdownOpen(false)
     }
     window.addEventListener('pointerdown', handler)
@@ -629,31 +626,11 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
               {storesWithKey.length === 0 ? (
                 <p className="text-xs text-slate-400">Нет магазинов с API ключом</p>
               ) : (
-                <div ref={importStoreDropdownRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setImportStoreDropdownOpen((o) => !o)}
-                    className="flex h-10 items-center gap-2 rounded-2xl bg-slate-100 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-                  >
-                    {importStore ? getStoreSelectorLabel(importStore) : '—'}
-                    <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 text-slate-400 transition-transform ${importStoreDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6" /></svg>
-                  </button>
-                  {importStoreDropdownOpen && (
-                    <div className="absolute left-0 top-full z-20 mt-1.5 min-w-[180px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
-                      {storesWithKey.map((s) => (
-                        <button key={s.id} type="button"
-                          onClick={() => { onStoreChange(s.id); setImportStoreDropdownOpen(false) }}
-                          className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm transition hover:bg-slate-50 ${s.id === selectedStoreId ? 'font-semibold text-blue-600' : 'text-slate-700'}`}
-                        >
-                          {s.id === selectedStoreId
-                            ? <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5" /></svg>
-                            : <span className="h-3.5 w-3.5 shrink-0" />}
-                          {getStoreSelectorLabel(s)}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <FbsStoreSelect
+                  value={selectedStoreId}
+                  stores={storesWithKey}
+                  onChange={onStoreChange}
+                />
               )}
               <Button
                 type="button"

@@ -6393,7 +6393,7 @@ const BatchDetailModal = ({
                         }}
                         className="flex-shrink-0 rounded-xl bg-blue-600 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-40 hover:bg-blue-700 transition-colors"
                       >
-                        {isCreatingSupply ? '...' : '+ Поставка'}
+                        {isCreatingSupply ? '...' : 'Создать'}
                       </button>
                     )}
                   </div>

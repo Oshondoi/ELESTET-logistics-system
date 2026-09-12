@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
-import { getStoreSelectorLabel } from '../lib/storeDisplay'
+import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import type { Store } from '../types'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
@@ -304,7 +304,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
     if (aConn !== bConn) return aConn - bConn
     return a.name.localeCompare(b.name, 'ru')
   })
-  const activeStore = sortedStores.find((s) => s.id === selectedStoreId) ?? sortedStores[0]
+  const activeStore = sortedStores.find((store) => store.id === selectedStoreId) ?? sortedStores[0]
 
   const [tab, setTab] = useState<'main' | 'products' | 'codes' | 'operations'>(() => {
     const saved = localStorage.getItem('elestet-kiz-tab')
@@ -415,10 +415,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   // Password visibility
   const [showPassword, setShowPassword] = useState(false)
 
-  // Store dropdown
-  const [storeDropOpen, setStoreDropOpen] = useState(false)
-  const storeDropRef = useRef<HTMLDivElement>(null)
-
   // Блокировка скролла фона при открытой модалке
   useEffect(() => {
     if (createProductModal) {
@@ -431,7 +427,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (!storeDropRef.current?.contains(e.target as Node)) setStoreDropOpen(false)
       if (!tnvedDropRef.current?.contains(e.target as Node)) setTnvedDropOpen(false)
     }
     document.addEventListener('mousedown', handler)
@@ -742,32 +737,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
       {/* Верхняя панель */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 bg-white shrink-0 flex-wrap">
         {/* Выбор магазина */}
-        <div ref={storeDropRef} className="relative">
-          <button
-            type="button"
-            onClick={() => setStoreDropOpen((o) => !o)}
-            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-            <span className="max-w-[140px] truncate">{activeStore ? getStoreSelectorLabel(activeStore) : 'Магазин'}</span>
-            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 text-slate-400 transition-transform ${storeDropOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6"/></svg>
-          </button>
-          {storeDropOpen && (
-            <div className="absolute left-0 top-full z-20 mt-1 w-56 rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
-              {sortedStores.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => { onStoreChange(s.id); setStoreDropOpen(false) }}
-                  className={`w-full px-3 py-2 text-left text-sm transition-colors hover:bg-slate-50 flex items-center gap-2 ${s.id === activeStore?.id ? 'font-semibold text-blue-600' : 'text-slate-700'}`}
-                >
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${s.teksher_login ? 'bg-emerald-500' : 'bg-red-400'}`} />
-                  {getStoreSelectorLabel(s)}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <FbsStoreSelect
+          value={activeStore?.id ?? ''}
+          stores={sortedStores}
+          onChange={onStoreChange}
+        />
 
         {/* Статус */}
         {statsLoading ? (
