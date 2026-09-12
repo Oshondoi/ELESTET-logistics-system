@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
+import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { fetchLastSync, fetchProducts, triggerSync, updateProductsCost } from '../services/productService'
 import { fetchMarkingDefectsByStore } from '../services/fulfillmentService'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
@@ -148,14 +149,11 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
   const [isSavingCosts, setIsSavingCosts] = useState(false)
   const [costDrafts, setCostDrafts] = useState<Record<string, string>>({})
   const [search, setSearch] = useState('')
-  const [storeDropdownOpen, setStoreDropdownOpen] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [expandAll, setExpandAll] = useState(() => localStorage.getItem('elestet-products-expand-all') === 'true')
   const [anyExpanded, setAnyExpanded] = useState(false)
   const [productExportOpen, setProductExportOpen] = useState(false)
   const [productExportSelectedOptionalColumns, setProductExportSelectedOptionalColumns] = useState<OptionalProductExportColumnKey[]>(getStoredProductExportColumns)
-  const storeDropdownRef = useRef<HTMLDivElement | null>(null)
-
   // Браки
   const [defects, setDefects] = useState<MarkingDefectRow[]>([])
   const [isLoadingDefects, setIsLoadingDefects] = useState(false)
@@ -200,14 +198,12 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
 
   useEffect(() => {
     const handlePointerDown = (e: PointerEvent) => {
-      if (!storeDropdownRef.current?.contains(e.target as Node)) setStoreDropdownOpen(false)
       if (!defectStoreDropdownRef.current?.contains(e.target as Node)) setDefectStoreDropdownOpen(false)
     }
     window.addEventListener('pointerdown', handlePointerDown)
     return () => window.removeEventListener('pointerdown', handlePointerDown)
   }, [])
 
-  const selectedStore = stores.find((s) => s.id === selectedStoreId)
   const selectedDefectStore = stores.find((s) => s.id === defectStoreId)
 
   const buildCostDrafts = useCallback((source: Product[]) => {
@@ -530,46 +526,11 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
         <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
           {/* Выбор магазина + поиск */}
           <div className="flex flex-1 items-center gap-2">
-            {/* Store selector — кастомный дропдаун */}
-            <div ref={storeDropdownRef} className="relative shrink-0">
-              <button
-                type="button"
-                onClick={() => setStoreDropdownOpen((o) => !o)}
-                className="flex h-10 items-center gap-2 rounded-2xl bg-slate-100 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
-              >
-                <span>{selectedStore ? getStoreSelectorLabel(selectedStore) : '—'}</span>
-                <svg
-                  viewBox="0 0 24 24"
-                  className={`h-3.5 w-3.5 text-slate-400 transition-transform ${storeDropdownOpen ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
-
-              {storeDropdownOpen && (
-                <div className="absolute left-0 top-full z-20 mt-1.5 min-w-[180px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
-                  {storesWithKey.map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => { onStoreChange(s.id); setStoreDropdownOpen(false) }}
-                      className={`flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition hover:bg-slate-50 ${
-                        s.id === selectedStoreId ? 'font-semibold text-blue-600' : 'text-slate-700'
-                      }`}
-                    >
-                      {s.id === selectedStoreId && (
-                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-blue-500" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5" /></svg>
-                      )}
-                      {s.id !== selectedStoreId && <span className="h-3.5 w-3.5 shrink-0" />}
-                      {getStoreSelectorLabel(s)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <FbsStoreSelect
+              value={selectedStoreId}
+              stores={storesWithKey}
+              onChange={onStoreChange}
+            />
 
             {/* Кнопка раскрыть/свернуть все */}
             <Button
