@@ -978,6 +978,8 @@ export interface FulfillmentSupply {
   next_box_number: number
   warehouse_id: string | null
   warehouse_name: string
+  destination_type: 'fbo' | 'fbs'
+  destination_wms_warehouse_id: string | null
   trip_id: string | null
   trip_line_id: string | null
   weight: number | null

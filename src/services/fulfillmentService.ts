@@ -877,6 +877,8 @@ export const createSupply = async (data: {
   account_id: string
   warehouse_id: string | null
   warehouse_name: string
+  destination_type: 'fbo' | 'fbs'
+  destination_wms_warehouse_id: string | null
   trip_id: string | null
   trip_line_id: string | null
   created_by: string | null

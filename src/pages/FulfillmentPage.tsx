@@ -214,6 +214,7 @@ const STAGE_LABELS_TO: Partial<Record<FulfillmentStage, string>> = {
 }
 type AddMode = 'barcode' | 'bulk' | 'catalog' | 'boxes'
 type ReceptionTab = 'declared' | 'actual'
+type SupplyDestinationType = 'fbo' | 'fbs'
 
 const STATUS_LABELS: Record<string, string> = {
   active: 'В работе',
@@ -973,6 +974,7 @@ const BatchDetailModal = ({
   // Формирование коробов
   const [supplies, setSupplies] = useState<FulfillmentSupplyWithBoxes[]>([])
   const [isLoadingSupplies, setIsLoadingSupplies] = useState(false)
+  const [supplyDestinationType, setSupplyDestinationType] = useState<SupplyDestinationType>('fbo')
   const [selectedWarehouseId, setSelectedWarehouseId] = useState('')
   const [isWarehouseDropdownOpen, setIsWarehouseDropdownOpen] = useState(false)
   // Логистика: слоты рейсов
@@ -1333,8 +1335,23 @@ const BatchDetailModal = ({
     ? (displayPipelineStage.partner_account_id ?? displayPipelineStage.owner_account_id)
     : batch.account_id
 
+  const supplyDestinationWarehouses = useMemo(() => (
+    supplyDestinationType === 'fbo'
+      ? warehouses
+          .filter((warehouse) => warehouse.is_system)
+          .map((warehouse) => ({ id: warehouse.id, name: warehouse.name, type: 'fbo' as const }))
+      : receptionWmsWarehouses
+          .filter((warehouse) => warehouse.fbs_enabled)
+          .map((warehouse) => ({ id: warehouse.id, name: warehouse.name, type: 'fbs' as const }))
+  ), [receptionWmsWarehouses, supplyDestinationType, warehouses])
+
+  const selectedSupplyDestination = supplyDestinationWarehouses.find(
+    (warehouse) => warehouse.id === selectedWarehouseId,
+  ) ?? null
+
   useEffect(() => {
     let cancelled = false
+    setReceptionWmsWarehouses([])
     void fetchFulfillmentWmsWarehouses(stageExecutorAccountId)
       .then((rows) => { if (!cancelled) setReceptionWmsWarehouses(rows) })
       .catch(() => { if (!cancelled) setReceptionWmsWarehouses([]) })
@@ -2749,6 +2766,8 @@ const BatchDetailModal = ({
         pipeline_stage_id: displayPipelineStage?.id ?? null,
         warehouse_id: supply.warehouse_id || null,
         warehouse_name: supply.warehouse_name,
+        destination_type: supply.destination_type ?? 'fbo',
+        destination_wms_warehouse_id: supply.destination_wms_warehouse_id ?? null,
         trip_id: supply.trip_id || null,
         trip_line_id: supply.trip_line_id || null,
         created_by: supply.created_by,
@@ -6279,7 +6298,11 @@ const BatchDetailModal = ({
                             className="w-full flex items-center justify-between rounded-xl border border-slate-200 hover:border-slate-300 px-2.5 py-1.5 text-sm outline-none transition-colors bg-white"
                           >
                             <span className={selectedWarehouseId ? 'text-slate-700 truncate' : 'text-slate-400'}>
-                              {selectedWarehouseId ? (warehouses.find((w) => w.id === selectedWarehouseId)?.name ?? '—') : '— склад назначения —'}
+                              {selectedSupplyDestination
+                                ? selectedSupplyDestination.name
+                                : supplyDestinationType === 'fbo'
+                                  ? '— склад WB (FBO) —'
+                                  : '— склад ELESTET (FBS) —'}
                             </span>
                             <svg className="ml-2 h-3.5 w-3.5 flex-shrink-0 text-slate-400" viewBox="0 0 20 20" fill="currentColor">
                               <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
@@ -6289,10 +6312,14 @@ const BatchDetailModal = ({
                         {isWarehouseDropdownOpen && (
                           <div data-warehouse-dropdown className="absolute left-0 top-full z-50 mt-1.5 w-full min-w-[220px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60">
                             <div className="max-h-52 overflow-y-auto py-1">
-                              {warehouses.filter((w) => w.name.toLowerCase().includes(warehouseSearch.toLowerCase())).length === 0 ? (
-                                <p className="px-4 py-3 text-sm text-slate-400">Ничего не найдено</p>
+                              {supplyDestinationWarehouses.filter((w) => w.name.toLowerCase().includes(warehouseSearch.toLowerCase())).length === 0 ? (
+                                <p className="px-4 py-3 text-sm text-slate-400">
+                                  {supplyDestinationType === 'fbs' && warehouseSearch.trim() === ''
+                                    ? 'Нет складов с включённым режимом FBS'
+                                    : 'Ничего не найдено'}
+                                </p>
                               ) : (
-                                warehouses
+                                supplyDestinationWarehouses
                                   .filter((w) => w.name.toLowerCase().includes(warehouseSearch.toLowerCase()))
                                   .map((w) => (
                                     <button
@@ -6310,13 +6337,37 @@ const BatchDetailModal = ({
                         )}
                       </div>
                     )}
+                    {canManageStageData && (
+                      <div className="flex flex-shrink-0 items-center rounded-xl bg-slate-100 p-1">
+                        {(['fbo', 'fbs'] as const).map((type) => (
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => {
+                              if (supplyDestinationType === type) return
+                              setSupplyDestinationType(type)
+                              setSelectedWarehouseId('')
+                              setWarehouseSearch('')
+                              setIsWarehouseDropdownOpen(false)
+                            }}
+                            className={`rounded-lg px-3 py-1 text-xs font-semibold uppercase transition-colors ${
+                              supplyDestinationType === type
+                                ? 'bg-white text-blue-700 shadow-sm'
+                                : 'text-slate-500 hover:text-slate-700'
+                            }`}
+                          >
+                            {type}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {/* Кнопка добавить */}
                     {canManageStageData && (
                       <button
-                        disabled={!selectedWarehouseId || isCreatingSupply}
+                        disabled={!selectedSupplyDestination || isCreatingSupply}
                         onClick={async () => {
-                          if (!selectedWarehouseId || isCreatingSupply) return
-                          const wh = warehouses.find((w) => w.id === selectedWarehouseId)
+                          if (!selectedSupplyDestination || isCreatingSupply) return
+                          const wh = selectedSupplyDestination
                           if (!wh) return
                           setIsCreatingSupply(true)
                           try {
@@ -6324,8 +6375,10 @@ const BatchDetailModal = ({
                               batch_id: batch.id,
                               account_id: batch.account_id,
                               pipeline_stage_id: displayPipelineStage?.id ?? null,
-                              warehouse_id: wh.id,
+                              warehouse_id: wh.type === 'fbo' ? wh.id : null,
                               warehouse_name: wh.name,
+                              destination_type: wh.type,
+                              destination_wms_warehouse_id: wh.type === 'fbs' ? wh.id : null,
                               trip_id: null,
                               trip_line_id: null,
                               created_by: userId || null,

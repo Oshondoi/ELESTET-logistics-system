@@ -66,6 +66,17 @@
 - `add_trip_line(..., p_fulfillment_supply_id)` links the supply atomically and reuses its number; ordinary logistics lines continue receiving the next free number in the shared company sequence.
 - Backfill verified in production: all 87 supplies numbered; all 1982 boxes have unique barcodes.
 
+## Fulfillment supply FBO/FBS destination (applied 12.09.2026)
+
+- Patch: `supabase/patch_fulfillment_supply_destination_types.sql`.
+- `fulfillment_supplies.destination_type` is required and accepts exactly `fbo` or `fbs`. Existing and legacy rows receive `fbo` without changing their warehouse link or historical name.
+- FBO destination uses `fulfillment_supplies.warehouse_id`, which references the WB destination directory `warehouses`; the creation UI exposes only rows with `is_system=true`.
+- FBS destination uses `fulfillment_supplies.destination_wms_warehouse_id`, which references the physical ELESTET directory `wms_warehouses`; the creation UI exposes only warehouses of the current stage executor with `fbs_enabled=true`.
+- `fulfillment_supplies.warehouse_name` remains the historical name snapshot for both models. Business logic must use the model-specific UUID when exact identity matters; equal names do not make two warehouses identical.
+- Database checks reject an FBS row without `destination_wms_warehouse_id`, an FBS row that also has `warehouse_id`, and an FBO row with `destination_wms_warehouse_id`. `validate_fulfillment_supply_destination` additionally verifies that a newly linked FBS warehouse is enabled and belongs to the owner/partner actually executing the pipeline stage.
+- A WMS warehouse referenced by an FBS supply cannot be deleted: the FK uses `ON DELETE RESTRICT`. Renaming it is safe because the UUID remains exact and `warehouse_name` preserves the name that was shown when the supply was created.
+- Production verification after migration: 143 existing rows classified as FBO, 0 FBS rows before first user-created FBS supply, 0 invalid destination types and 0 invalid FBS reference combinations.
+
 ## Fulfillment reception WMS warehouse (applied 31.08.2026)
 
 - Patch: `supabase/patch_fulfillment_wms_warehouse.sql`.
