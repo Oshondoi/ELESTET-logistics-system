@@ -6350,13 +6350,13 @@ const BatchDetailModal = ({
                               setWarehouseSearch('')
                               setIsWarehouseDropdownOpen(false)
                             }}
-                            className={`rounded-lg px-3 py-1 text-xs font-semibold uppercase transition-colors ${
+                            className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
                               supplyDestinationType === type
                                 ? 'bg-white text-blue-700 shadow-sm'
                                 : 'text-slate-500 hover:text-slate-700'
                             }`}
                           >
-                            {type}
+                            {type === 'fbo' ? 'FBO склады' : 'Свой склад'}
                           </button>
                         ))}
                       </div>
