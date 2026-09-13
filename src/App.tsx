@@ -12,6 +12,7 @@ import { Button } from './components/ui/Button'
 import { Input } from './components/ui/Input'
 import { Modal } from './components/ui/Modal'
 import { ToastContainer } from './components/ui/Toast'
+import { ScanSuccessOverlayHost } from './components/ui/ScanSuccessOverlay'
 import { useAccounts } from './hooks/useAccounts'
 import { useAppData } from './hooks/useAppData'
 import { useAuth } from './hooks/useAuth'
@@ -775,6 +776,7 @@ function App() {
   return (
     <div className="h-screen overflow-hidden bg-slate-50 text-slate-900">
       <ToastContainer />
+      <ScanSuccessOverlayHost />
       <div className="flex h-full">
         {hasSidebar && (
           <div className={`relative z-20 hidden h-full shrink-0 [contain:layout] transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] will-change-[width] motion-reduce:transition-none lg:block ${sidebarCollapsed ? 'w-[68px]' : 'w-[200px]'}`}>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
 import { buildWmsLocationQrPdf, type WmsLocationQrLabel } from '../lib/wmsLocationQrPdf'
+import { showScanSuccess } from '../components/ui/ScanSuccessOverlay'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1844,6 +1845,11 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
       }
       setScanBox(null)
       setScanSuccess(data?.message ?? `Короб №${box.boxNumber} размещён в ${location.pallet}-K${location.slotNumber}`)
+      showScanSuccess({
+        kind: 'box',
+        primary: `№${box.boxNumber}`,
+        details: [`Адрес ${location.pallet}-K${location.slotNumber}`, box.barcode],
+      })
       await refreshScanLocation(wmsPalletCode(
         Number(location.code.match(/^C(\d+)/)?.[1]), location.warehouseShortId,
         location.rackShortId, location.sideNumber, location.pallet,
@@ -1869,7 +1875,10 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
         const box = data as WmsScanBox
         setScanBox(box)
         if (scanLocation?.slotNumber) await placeScannedBox(box, scanLocation)
-        else setScanSuccess(`Короб №${box.boxNumber} ожидает выбора адреса`)
+        else {
+          setScanSuccess(`Короб №${box.boxNumber} ожидает выбора адреса`)
+          showScanSuccess({ kind: 'box', primary: `№${box.boxNumber}`, details: [box.barcode] })
+        }
         return
       }
       const location = await withScanNumberingDirection(data as WmsScanLocation)
@@ -1881,7 +1890,11 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
       await loadCells(location.rackId)
       if (location.full && !location.slotNumber) setScanError('Паллетоместо заполнено. Дальнейшее заполнение заблокировано')
       if (scanBox && location.slotNumber) await placeScannedBox(scanBox, location)
-      else setScanSuccess(location.slotNumber ? `Выбрано коробоместо ${location.pallet}-K${location.slotNumber}` : `Выбрано паллетоместо ${location.pallet}. Теперь выберите K.`)
+      else {
+        const address = location.slotNumber ? `${location.pallet}-K${location.slotNumber}` : location.pallet
+        setScanSuccess(location.slotNumber ? `Выбрано коробоместо ${address}` : `Выбрано паллетоместо ${address}. Теперь выберите K.`)
+        showScanSuccess({ kind: 'address', primary: address, details: [location.code] })
+      }
     } catch (scanFailure: any) {
       setScanError(scanFailure?.message || 'QR / ШК не распознан')
     } finally {
@@ -1999,6 +2012,13 @@ export function WmsPage({ accountId, canManage = true, canViewHistory = true, ca
       const result = data as InventoryScanResult
       signalScan(result.result === 'found')
       setInventoryResults((previous) => [result, ...previous.filter((item) => item.boxNumber !== result.boxNumber)])
+      if (result.result === 'found') {
+        showScanSuccess({
+          kind: 'box',
+          primary: `№${result.boxNumber}`,
+          details: result.expectedAddress ? [`Адрес ${result.expectedAddress}`] : undefined,
+        })
+      }
     }
     setInventoryBoxCode('')
     setOperationsLoading(false)

@@ -10,6 +10,8 @@ import type {
   FulfillmentSupplyWithBoxes,
   FulfillmentBox,
   FulfillmentBoxItem,
+  FulfillmentKizPair,
+  FulfillmentKizCommitResult,
   BatchConsumable,
   Product,
   TripLine,
@@ -200,8 +202,20 @@ export const updateBatch = async (
 }
 
 // Мягкое удаление — переносит партию в архив. Данные сохраняются.
-export const deleteBatch = async (batchId: string): Promise<void> => {
+export const deleteBatch = async (batchId: string, context?: FulfillmentKizAuditContext): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  if (context) {
+    const { error } = await (supabase as any).rpc('delete_fulfillment_batch_with_kiz_audit', {
+      p_batch_id: batchId,
+      p_actor_name: context.actor_name,
+      p_actor_email: context.actor_email,
+      p_device_id: context.device_id,
+      p_device_name: context.device_name,
+      p_scanner_model: context.scanner_model,
+    })
+    if (error) throw error
+    return
+  }
   const { error } = await (supabase as any)
     .from('fulfillment_batches')
     .update({ deleted_at: new Date().toISOString() })
@@ -908,8 +922,20 @@ export const syncReadyBoxSupply = async (
   return data as string
 }
 
-export const deleteSupply = async (supplyId: string): Promise<void> => {
+export const deleteSupply = async (supplyId: string, context?: FulfillmentKizAuditContext): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  if (context) {
+    const { error } = await (supabase as any).rpc('delete_fulfillment_supply_with_kiz_audit', {
+      p_supply_id: supplyId,
+      p_actor_name: context.actor_name,
+      p_actor_email: context.actor_email,
+      p_device_id: context.device_id,
+      p_device_name: context.device_name,
+      p_scanner_model: context.scanner_model,
+    })
+    if (error) throw error
+    return
+  }
   const { error } = await (supabase as any)
     .from('fulfillment_supplies')
     .delete()
@@ -998,8 +1024,20 @@ export const createBox = async (data: {
   return row as FulfillmentBox
 }
 
-export const deleteBox = async (boxId: string): Promise<void> => {
+export const deleteBox = async (boxId: string, context?: FulfillmentKizAuditContext): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  if (context) {
+    const { error } = await (supabase as any).rpc('delete_fulfillment_box_with_kiz_audit', {
+      p_box_id: boxId,
+      p_actor_name: context.actor_name,
+      p_actor_email: context.actor_email,
+      p_device_id: context.device_id,
+      p_device_name: context.device_name,
+      p_scanner_model: context.scanner_model,
+    })
+    if (error) throw error
+    return
+  }
   const { error } = await (supabase as any)
     .from('fulfillment_boxes')
     .delete()
@@ -1053,13 +1091,167 @@ export const updateBoxItem = async (itemId: string, updates: { qty: number }): P
   return row as FulfillmentBoxItem
 }
 
-export const deleteBoxItem = async (itemId: string): Promise<void> => {
+export const deleteBoxItem = async (itemId: string, context?: FulfillmentKizAuditContext): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  if (context) {
+    const { error } = await (supabase as any).rpc('delete_fulfillment_box_item_with_kiz_audit', {
+      p_item_id: itemId,
+      p_actor_name: context.actor_name,
+      p_actor_email: context.actor_email,
+      p_device_id: context.device_id,
+      p_device_name: context.device_name,
+      p_scanner_model: context.scanner_model,
+    })
+    if (error) throw error
+    return
+  }
   const { error } = await (supabase as any)
     .from('fulfillment_box_items')
     .delete()
     .eq('id', itemId)
   if (error) throw error
+}
+
+// ── Packing: per-unit КИЗ registry ───────────────────────────
+
+export interface FulfillmentKizAuditContext {
+  actor_name: string
+  actor_email: string
+  device_id: string
+  device_name: string
+  scanner_model: string | null
+}
+
+export const setFulfillmentSupplyKizMode = async (
+  supplyId: string,
+  enabled: boolean,
+  context: FulfillmentKizAuditContext,
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any).rpc('set_fulfillment_supply_kiz_mode', {
+    p_supply_id: supplyId,
+    p_enabled: enabled,
+    p_actor_name: context.actor_name,
+    p_actor_email: context.actor_email,
+    p_device_id: context.device_id,
+    p_device_name: context.device_name,
+    p_scanner_model: context.scanner_model,
+  })
+  if (error) throw error
+}
+
+export const fetchFulfillmentKizPairs = async (
+  supplyId: string,
+  boxId?: string,
+): Promise<FulfillmentKizPair[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  let query = (supabase as any)
+    .from('fulfillment_kiz_pairs')
+    .select('*')
+    .eq('supply_id', supplyId)
+    .in('status', ['draft', 'committed'])
+    .order('created_at', { ascending: true })
+  if (boxId) query = query.eq('box_id', boxId)
+  const { data, error } = await query
+  if (error) throw error
+  return (data ?? []) as FulfillmentKizPair[]
+}
+
+export const createFulfillmentKizDraft = async (data: {
+  box_id: string
+  barcode: string
+  item_id: string | null
+  product_name: string | null
+  kiz_raw: string
+  kiz_normalized: string
+  product_snapshot: Record<string, unknown>
+  context: FulfillmentKizAuditContext
+}): Promise<FulfillmentKizPair> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: row, error } = await (supabase as any).rpc('create_fulfillment_kiz_draft', {
+    p_box_id: data.box_id,
+    p_barcode: data.barcode,
+    p_item_id: data.item_id?.startsWith('_local_') ? null : data.item_id,
+    p_product_name: data.product_name,
+    p_kiz_raw: data.kiz_raw,
+    p_kiz_normalized: data.kiz_normalized,
+    p_product_snapshot: data.product_snapshot,
+    p_actor_name: data.context.actor_name,
+    p_actor_email: data.context.actor_email,
+    p_device_id: data.context.device_id,
+    p_device_name: data.context.device_name,
+    p_scanner_model: data.context.scanner_model,
+  })
+  if (error) throw error
+  return row as FulfillmentKizPair
+}
+
+export const commitFulfillmentKizBox = async (
+  boxId: string,
+  context: FulfillmentKizAuditContext,
+): Promise<FulfillmentKizCommitResult> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('commit_fulfillment_kiz_box', {
+    p_box_id: boxId,
+    p_actor_name: context.actor_name,
+    p_actor_email: context.actor_email,
+    p_device_id: context.device_id,
+    p_device_name: context.device_name,
+    p_scanner_model: context.scanner_model,
+  })
+  if (error) throw error
+  return data as FulfillmentKizCommitResult
+}
+
+export const deleteFulfillmentKizPair = async (
+  pairId: string,
+  reason: string,
+  context: FulfillmentKizAuditContext,
+): Promise<{ pair: FulfillmentKizPair; item: FulfillmentBoxItem | null }> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('delete_fulfillment_kiz_pair', {
+    p_pair_id: pairId,
+    p_reason: reason,
+    p_actor_name: context.actor_name,
+    p_actor_email: context.actor_email,
+    p_device_id: context.device_id,
+    p_device_name: context.device_name,
+    p_scanner_model: context.scanner_model,
+  })
+  if (error) throw error
+  return data as { pair: FulfillmentKizPair; item: FulfillmentBoxItem | null }
+}
+
+export const relinkFulfillmentKizPair = async (
+  pairId: string,
+  kizRaw: string,
+  kizNormalized: string,
+  context: FulfillmentKizAuditContext,
+): Promise<FulfillmentKizPair> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('relink_fulfillment_kiz_pair', {
+    p_pair_id: pairId,
+    p_kiz_raw: kizRaw,
+    p_kiz_normalized: kizNormalized,
+    p_actor_name: context.actor_name,
+    p_actor_email: context.actor_email,
+    p_device_id: context.device_id,
+    p_device_name: context.device_name,
+    p_scanner_model: context.scanner_model,
+  })
+  if (error) throw error
+  return data as FulfillmentKizPair
+}
+
+export const hasFulfillmentKizDrafts = async (supplyId: string): Promise<boolean> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { count, error } = await (supabase as any)
+    .from('fulfillment_kiz_pairs')
+    .select('id', { count: 'exact', head: true })
+    .eq('supply_id', supplyId)
+    .eq('status', 'draft')
+  if (error) throw error
+  return (count ?? 0) > 0
 }
 
 // ── Defects by store (from marking logs) ─────────────────────

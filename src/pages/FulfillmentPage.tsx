@@ -15,6 +15,7 @@ import type {
   FulfillmentReceptionHistory,
   FulfillmentStageWarehouseHistory,
   FulfillmentSupplyWithBoxes,
+  FulfillmentKizPair,
   FulfillmentSettings,
   FulfillmentStage,
   FulfillmentWorkTariff,
@@ -87,8 +88,13 @@ import {
   uploadPackagingPhoto,
   fetchFulfillmentWmsWarehouses,
   fetchStageWarehouseHistory,
+  fetchFulfillmentKizPairs,
+  createFulfillmentKizDraft,
+  commitFulfillmentKizBox,
+  setFulfillmentSupplyKizMode,
+  hasFulfillmentKizDrafts,
 } from '../services/fulfillmentService'
-import type { OtkPerformer, ProductInfo } from '../services/fulfillmentService'
+import type { OtkPerformer, ProductInfo, FulfillmentKizAuditContext } from '../services/fulfillmentService'
 import { fetchProducts } from '../services/productService'
 import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, createBatchWithPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags, updateBatchPipelineWarehouse } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, PipelineStageDiscrepancy } from '../types'
@@ -105,6 +111,10 @@ import { buildFulfillmentBoxQrPdf } from '../lib/fulfillmentBoxQrPdf'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import { pluralRu } from '../lib/utils'
+import { getScannerDeviceIdentity, setScannerDeviceName } from '../lib/scannerDeviceIdentity'
+import { kizValidationError, normalizeKizCode } from '../lib/kizCode'
+import { showScanSuccess } from '../components/ui/ScanSuccessOverlay'
+import { FulfillmentKizPairsModal } from '../components/fulfillment/FulfillmentKizPairsModal'
 import {
   buildFulfillmentBoxContentsPdf,
   type FulfillmentBoxContentsFormat,
@@ -1036,6 +1046,14 @@ const BatchDetailModal = ({
   const packingCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [deleteBoxItemConfirm, setDeleteBoxItemConfirm] = useState<{ supplyId: string; boxId: string; itemId: string } | null>(null)
   const [packingProductCache, setPackingProductCache] = useState<Record<string, ProductInfo | null>>({})
+  const [packingKizPairs, setPackingKizPairs] = useState<FulfillmentKizPair[]>([])
+  const [packingPendingKiz, setPackingPendingKiz] = useState<Record<string, {
+    barcode: string
+    itemId: string | null
+    productName: string | null
+  }>>({})
+  const [packingKizList, setPackingKizList] = useState<{ boxId: string; barcode: string; productName: string | null } | null>(null)
+  const [packingKizBusy, setPackingKizBusy] = useState(false)
   const [packingPhotoPreview, setPackingPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
   const [packingCameraOpen, setPackingCameraOpen] = useState(false)
   const [packingCameraError, setPackingCameraError] = useState<string | null>(null)
@@ -1049,6 +1067,17 @@ const BatchDetailModal = ({
   const [addBoxQty, setAddBoxQty] = useState('')
   const [deleteBoxConfirm, setDeleteBoxConfirm] = useState<{ supplyId: string; boxId: string } | null>(null)
   const [deleteSupplyConfirm, setDeleteSupplyConfirm] = useState<string | null>(null) // supplyId
+  const [packingScannerIdentity, setPackingScannerIdentity] = useState(getScannerDeviceIdentity)
+
+  const packingKizAuditContext = useMemo<FulfillmentKizAuditContext>(() => {
+    return {
+      actor_name: userName || userEmail,
+      actor_email: userEmail,
+      device_id: packingScannerIdentity.deviceId,
+      device_name: packingScannerIdentity.deviceName,
+      scanner_model: packingScannerIdentity.scannerModel,
+    }
+  }, [packingScannerIdentity, userEmail, userName])
 
   useEffect(() => {
     localStorage.setItem(packingAutoAddStorageKey, String(packingAutoAdd))
@@ -1446,6 +1475,7 @@ const BatchDetailModal = ({
     || boxQrDialog
     || transferSupplyId
     || packingCameraOpen
+    || packingKizList
   )
 
   // В модалке поставки аппаратный сканер всегда направлен в баркод активного
@@ -1491,6 +1521,12 @@ const BatchDetailModal = ({
     if (!activePipelineStage) return
     setIsCompletingPipelineStage(true)
     try {
+      if (viewStage === 'packing') {
+        const draftChecks = await Promise.all(supplies.map((supply) => hasFulfillmentKizDrafts(supply.id)))
+        if (draftChecks.some(Boolean) || Object.keys(packingPendingKiz).length > 0) {
+          throw new Error('Нельзя завершить этап: есть незавершённые или незаписанные пары КИЗ.')
+        }
+      }
       // Сначала сохраняем текущий этап (stageDraft + поставки/короба)
       for (const [id, val] of Object.entries(stageDraft)) {
         if (id.startsWith('_local_')) continue
@@ -1834,7 +1870,7 @@ const BatchDetailModal = ({
           markingVideoRef.current.srcObject = stream
           await markingVideoRef.current.play()
           const detector = new (window as unknown as { BarcodeDetector: new (opts: object) => { detect: (src: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> } }).BarcodeDetector({
-            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'itf'],
+            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'data_matrix', 'upc_a', 'upc_e', 'itf'],
           })
           const scan = async () => {
             if (!markingDetectRef.current || !markingVideoRef.current) return
@@ -1907,7 +1943,7 @@ const BatchDetailModal = ({
           packingVideoRef.current.srcObject = stream
           await packingVideoRef.current.play()
           const detector = new (window as unknown as { BarcodeDetector: new (opts: object) => { detect: (src: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> } }).BarcodeDetector({
-            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'itf'],
+            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'data_matrix', 'upc_a', 'upc_e', 'itf'],
           })
           const scan = async () => {
             if (!packingDetectRef.current || !packingVideoRef.current) return
@@ -2018,6 +2054,14 @@ const BatchDetailModal = ({
       } finally {
         setIsLooking(false)
       }
+    }
+    if (barcode.length >= 6) {
+      showScanSuccess({
+        kind: 'product',
+        primary: barcode.slice(-5),
+        title: 'Баркод приёмки принят',
+        details: [resolvedName].filter(Boolean),
+      })
     }
     if (singleScanMode) {
       setNewQty('1')
@@ -2148,6 +2192,7 @@ const BatchDetailModal = ({
       void handleReceptionCameraScan(barcode)
       setTimeout(() => barcodeInputRef.current?.focus(), 80)
     } else {
+      if (barcode.length >= 6) showScanSuccess({ kind: 'product', primary: barcode.slice(-5) })
       void handleBarcodeChange(barcode)
       barcodeInputRef.current?.focus()
     }
@@ -2545,7 +2590,7 @@ const BatchDetailModal = ({
               s.boxes.every((b) => b.items.length === 0)
             )
             if (matchingSupply) {
-              await deleteSupply(matchingSupply.id)
+              await deleteSupply(matchingSupply.id, packingKizAuditContext)
               const updatedSupplies = supplies.filter((s) => s.id !== matchingSupply.id)
               setSupplies(updatedSupplies)
               rebuildSlotsFromSupplies(updatedSupplies)
@@ -2586,6 +2631,62 @@ const BatchDetailModal = ({
     const info = await findProductByBarcode(accountId, batch.store_id, bc)
     setPackingProductCache((prev) => ({ ...prev, [bc]: info }))
   }, [packingProductCache, accountId, batch.store_id])
+
+  const refreshPackingKizData = useCallback(async (supplyId?: string | null) => {
+    const targetSupplyId = supplyId ?? activeSupplyId
+    if (!targetSupplyId) {
+      setPackingKizPairs([])
+      return
+    }
+    const [freshPairs, freshSupplies] = await Promise.all([
+      fetchFulfillmentKizPairs(targetSupplyId),
+      fetchSupplies(batch.id, displayPipelineStage?.id ?? null),
+    ])
+    setPackingKizPairs(freshPairs)
+    setSupplies(freshSupplies)
+  }, [activeSupplyId, batch.id, displayPipelineStage?.id])
+
+  useEffect(() => {
+    if (!activeSupplyId) {
+      setPackingKizPairs([])
+      setPackingPendingKiz({})
+      setPackingKizList(null)
+      return
+    }
+    let cancelled = false
+    const activeSupply = supplies.find((supply) => supply.id === activeSupplyId)
+    if (activeSupply?.kiz_enabled && !packingAutoAdd) setPackingAutoAdd(true)
+    void fetchFulfillmentKizPairs(activeSupplyId)
+      .then((rows) => { if (!cancelled) setPackingKizPairs(rows) })
+      .catch(() => { if (!cancelled) setPackingKizPairs([]) })
+    return () => { cancelled = true }
+  }, [activeSupplyId, packingAutoAdd, supplies])
+
+  // Черновики создаются в БД сразу. Подписка синхронизирует список, если с
+  // одной поставкой одновременно работают несколько устройств.
+  useEffect(() => {
+    if (viewStage !== 'packing' || !activeSupplyId || !supabase) return
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => {
+        void fetchFulfillmentKizPairs(activeSupplyId).then(setPackingKizPairs)
+      }, 250)
+    }
+    const channel = (supabase as any)
+      .channel(`packing-kiz-rt-${activeSupplyId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'fulfillment_kiz_pairs',
+        filter: `supply_id=eq.${activeSupplyId}`,
+      }, scheduleRefresh)
+      .subscribe()
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      void (supabase as any).removeChannel(channel)
+    }
+  }, [activeSupplyId, viewStage])
 
   const showPackingScanFeedback = useCallback((feedback: {
     kind: 'success' | 'error'
@@ -2685,6 +2786,7 @@ const BatchDetailModal = ({
           qty,
           message: `Добавлено в короб: +${qty} ед.`,
         })
+        showScanSuccess({ kind: 'product', primary: bc.slice(-5), details: [matched?.product_name ?? 'Товар'] })
         scrollPackingItemIntoView(boxId, bc)
       })
       .catch((err) => {
@@ -2701,6 +2803,175 @@ const BatchDetailModal = ({
 
     void lookupAndCacheBarcode(bc)
   }, [items, accountId, batch.id, lookupAndCacheBarcode, scrollPackingItemIntoView, showPackingScanFeedback])
+
+  const handlePackingKizScan = useCallback(async (supplyId: string, boxId: string, rawValue: string) => {
+    if (packingKizBusy) return
+    const value = rawValue.replace(/[\r\n\t]+$/g, '')
+    const pending = packingPendingKiz[boxId]
+
+    if (!pending) {
+      const barcode = value.trim()
+      if (!/^\d{13}$/.test(barcode)) {
+        showPackingScanFeedback({ kind: 'error', boxId, message: 'Сначала отсканируйте 13-значный баркод товара.' })
+        return
+      }
+      const matched = items.find((item) => item.barcode === barcode)
+      const info = packingProductCache[barcode]
+      setPackingPendingKiz((current) => ({
+        ...current,
+        [boxId]: {
+          barcode,
+          itemId: matched?.id?.startsWith('_local_') ? null : (matched?.id ?? null),
+          productName: info?.name ?? matched?.product_name ?? null,
+        },
+      }))
+      setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
+      setPackingBoxQty((current) => ({ ...current, [boxId]: '1' }))
+      void lookupAndCacheBarcode(barcode)
+      showPackingScanFeedback({ kind: 'success', boxId, barcode, message: 'Баркод принят. Теперь отсканируйте КИЗ.' })
+      showScanSuccess({
+        kind: 'product',
+        primary: barcode.slice(-5),
+        details: [info?.name ?? matched?.product_name ?? 'Товар'],
+      })
+      window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
+      return
+    }
+
+    const normalized = normalizeKizCode(value)
+    const validationError = kizValidationError(normalized)
+    if (validationError) {
+      showPackingScanFeedback({ kind: 'error', boxId, barcode: pending.barcode, message: validationError })
+      return
+    }
+
+    const info = packingProductCache[pending.barcode]
+    const matched = items.find((item) => item.barcode === pending.barcode)
+    setPackingKizBusy(true)
+    try {
+      const pair = await createFulfillmentKizDraft({
+        box_id: boxId,
+        barcode: pending.barcode,
+        item_id: pending.itemId,
+        product_name: pending.productName,
+        kiz_raw: value,
+        kiz_normalized: normalized,
+        product_snapshot: {
+          product_name: pending.productName,
+          size: info?.size ?? matched?.size ?? null,
+          color: info?.color ?? matched?.color ?? null,
+          barcode: pending.barcode,
+        },
+        context: packingKizAuditContext,
+      })
+      setPackingKizPairs((current) => [...current.filter((candidate) => candidate.id !== pair.id), pair])
+      setPackingPendingKiz((current) => {
+        const next = { ...current }
+        delete next[boxId]
+        return next
+      })
+      setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
+      showPackingScanFeedback({ kind: 'success', boxId, barcode: pending.barcode, qty: 1, message: 'Пара КИЗ сохранена. Ожидает записи в короб.' })
+      scrollPackingItemIntoView(boxId, pending.barcode)
+      showScanSuccess({
+        kind: 'kiz',
+        primary: String(pair.product_snapshot.honest_sign_article || pair.product_snapshot.size || 'КИЗ'),
+        details: [pair.product_snapshot.size, pair.product_snapshot.color, pair.product_snapshot.honest_sign_article].filter(Boolean).map(String),
+      })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : (error as { message?: string })?.message
+      showPackingScanFeedback({ kind: 'error', boxId, barcode: pending.barcode, message: reason || 'КИЗ не принят.' })
+    } finally {
+      setPackingKizBusy(false)
+      window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
+    }
+  }, [items, lookupAndCacheBarcode, packingKizAuditContext, packingKizBusy, packingPendingKiz, packingProductCache, scrollPackingItemIntoView, showPackingScanFeedback])
+
+  const resetPendingPackingKiz = useCallback((boxId: string) => {
+    setPackingPendingKiz((current) => {
+      const next = { ...current }
+      delete next[boxId]
+      return next
+    })
+    setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
+    showPackingScanFeedback({ kind: 'error', boxId, message: 'Незавершённая пара сброшена.' })
+    window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
+  }, [showPackingScanFeedback])
+
+  const togglePackingKizMode = useCallback(async (supplyId: string, enabled: boolean) => {
+    if (enabled && !packingAutoAdd) {
+      setError('Режим КИЗ можно включить только при включённом режиме «Авто».')
+      return
+    }
+    if (!enabled) {
+      const hasIncomplete = Object.keys(packingPendingKiz).some((boxId) => supplies.find((supply) => supply.id === supplyId)?.boxes.some((box) => box.id === boxId))
+      if (hasIncomplete) {
+        setError('Сначала завершите или сбросьте текущую пару баркод → КИЗ.')
+        return
+      }
+    }
+    let auditContext = packingKizAuditContext
+    if (enabled && packingScannerIdentity.deviceName === 'Устройство без имени') {
+      const enteredName = window.prompt('Назовите это устройство один раз. То же имя будет использоваться в FBS и в коробах КИЗ.')?.trim()
+      if (!enteredName) {
+        setError('Для режима КИЗ нужно указать имя устройства.')
+        return
+      }
+      const nextIdentity = setScannerDeviceName(enteredName)
+      setPackingScannerIdentity(nextIdentity)
+      auditContext = { ...packingKizAuditContext, device_name: nextIdentity.deviceName }
+    }
+    setPackingKizBusy(true)
+    try {
+      await setFulfillmentSupplyKizMode(supplyId, enabled, auditContext)
+      setSupplies((current) => current.map((supply) => supply.id === supplyId ? { ...supply, kiz_enabled: enabled } : supply))
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Не удалось изменить режим КИЗ')
+    } finally {
+      setPackingKizBusy(false)
+    }
+  }, [packingAutoAdd, packingKizAuditContext, packingPendingKiz, packingScannerIdentity.deviceName, supplies])
+
+  const disablePackingAuto = useCallback(async () => {
+    const kizSupplies = supplies.filter((supply) => supply.kiz_enabled)
+    const hasIncomplete = kizSupplies.some((supply) => supply.boxes.some((box) => Boolean(packingPendingKiz[box.id])))
+    if (hasIncomplete) {
+      setError('Сначала завершите или сбросьте текущую пару КИЗ, затем выключите «Авто».')
+      return
+    }
+    setPackingKizBusy(true)
+    try {
+      const draftChecks = await Promise.all(kizSupplies.map((supply) => hasFulfillmentKizDrafts(supply.id)))
+      if (draftChecks.some(Boolean)) {
+        setError('Сначала запишите в короба или удалите незаписанные пары КИЗ, затем выключите «Авто».')
+        return
+      }
+      await Promise.all(kizSupplies.map((supply) => setFulfillmentSupplyKizMode(supply.id, false, packingKizAuditContext)))
+      setSupplies((current) => current.map((supply) => ({ ...supply, kiz_enabled: false })))
+      setPackingAutoAdd(false)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Не удалось выключить режим «Авто»')
+    } finally {
+      setPackingKizBusy(false)
+    }
+  }, [packingKizAuditContext, packingPendingKiz, supplies])
+
+  const commitPackingKizBox = useCallback(async (supplyId: string, boxId: string) => {
+    if (packingPendingKiz[boxId]) {
+      setError('Сначала завершите или сбросьте текущую пару баркод → КИЗ.')
+      return
+    }
+    setPackingKizBusy(true)
+    try {
+      const result = await commitFulfillmentKizBox(boxId, packingKizAuditContext)
+      await refreshPackingKizData(supplyId)
+      showPackingScanFeedback({ kind: 'success', boxId, qty: result.committed_count, message: `Записано в короб: ${result.committed_count} ед.` })
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Не удалось записать КИЗы в короб')
+    } finally {
+      setPackingKizBusy(false)
+    }
+  }, [packingKizAuditContext, packingPendingKiz, refreshPackingKizData, showPackingScanFeedback])
 
   // Preload info для всех баркодов в активной поставке
   useEffect(() => {
@@ -3084,6 +3355,13 @@ const BatchDetailModal = ({
     setError(null)
     try {
       const workflowStage = activePipelineStage?.current_stage ?? batch.current_stage
+      if (workflowStage === 'packing') {
+        const draftChecks = await Promise.all(supplies.map((supply) => hasFulfillmentKizDrafts(supply.id)))
+        if (draftChecks.some(Boolean) || Object.keys(packingPendingKiz).length > 0) {
+          setError('Нельзя завершить этап: есть незавершённые или незаписанные пары КИЗ.')
+          return
+        }
+      }
       if (workflowStage === 'reception') {
         if (!receptionWarehouseId) {
           setError('Перед завершением приёмки выберите склад')
@@ -3185,7 +3463,7 @@ const BatchDetailModal = ({
                 (supply.source_item_id === itemToDelete.id || (!supply.source_item_id && supply.warehouse_name === itemToDelete.notes)) &&
                 supply.boxes.every((box) => box.items.length === 0)
               )
-              if (matchingSupply) await deleteSupply(matchingSupply.id)
+              if (matchingSupply) await deleteSupply(matchingSupply.id, packingKizAuditContext)
             }
             await deleteItem(id)
           }
@@ -6774,6 +7052,9 @@ const BatchDetailModal = ({
                                 setIsTransferringSupply(true)
                                 setTransferSupplyError(null)
                                 try {
+                                  if (await hasFulfillmentKizDrafts(supply.id)) {
+                                    throw new Error('В поставке есть незаписанные пары КИЗ. Запишите их в каждый короб или удалите перед передачей.')
+                                  }
                                   const line = await transferSupplyToLogistics(supply.id, transferTripId)
                                   setSupplies((prev) => prev.map((candidate) => candidate.id === supply.id
                                     ? { ...candidate, trip_id: transferTripId, trip_line_id: line.id }
@@ -6809,7 +7090,13 @@ const BatchDetailModal = ({
                     const nextBoxNum = supply.next_box_number
                     const readyBoxSupply = isReadyBoxSupply(supply)
                     return (
-                      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onClick={() => setActiveSupplyId(null)}>
+                      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onClick={() => {
+                        if (supply.boxes.some((box) => packingPendingKiz[box.id])) {
+                          setError('Завершите или сбросьте текущую пару КИЗ перед закрытием поставки.')
+                          return
+                        }
+                        setActiveSupplyId(null)
+                      }}>
                         <div
                           className="relative flex h-[90vh] w-[80%] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
                           onClick={(e) => e.stopPropagation()}
@@ -6840,7 +7127,13 @@ const BatchDetailModal = ({
                                   </button>
                                 ) : null
                               })()}
-                              <button onClick={() => setActiveSupplyId(null)} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
+                              <button onClick={() => {
+                                if (supply.boxes.some((box) => packingPendingKiz[box.id])) {
+                                  setError('Завершите или сбросьте текущую пару КИЗ перед закрытием поставки.')
+                                  return
+                                }
+                                setActiveSupplyId(null)
+                              }} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
                                 <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
                               </button>
                             </div>
@@ -6860,15 +7153,23 @@ const BatchDetailModal = ({
                               {supply.boxes.map((box) => {
                                 const isActive = packingOpenBoxId === box.id
                                 const boxTotal = box.items.reduce((s, i) => s + i.qty, 0)
+                                const draftTotal = packingKizPairs.filter((pair) => pair.box_id === box.id && pair.status === 'draft').length
                                 return (
                                   <button
                                     key={box.id}
                                     type="button"
-                                    onClick={() => setPackingOpenBoxId(box.id)}
+                                    onClick={() => {
+                                      const currentBox = supply.boxes.find((candidate) => candidate.id === packingOpenBoxId) ?? supply.boxes[0]
+                                      if (currentBox && currentBox.id !== box.id && packingPendingKiz[currentBox.id]) {
+                                        setError('Завершите или сбросьте текущую пару КИЗ перед переходом в другой короб.')
+                                        return
+                                      }
+                                      setPackingOpenBoxId(box.id)
+                                    }}
                                     className={`flex-shrink-0 rounded-xl px-3 py-1.5 text-xs font-medium transition-colors ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                                   >
                                     Короб #{box.box_number}
-                                    {box.items.length > 0 && <span className={`ml-1 ${isActive ? 'text-blue-200' : 'text-slate-400'}`}>· {boxTotal} ед.</span>}
+                                    {(boxTotal + draftTotal) > 0 && <span className={`ml-1 ${isActive ? 'text-blue-200' : 'text-slate-400'}`}>· {boxTotal + draftTotal} ед.{draftTotal > 0 ? ` (${draftTotal} не запис.)` : ''}</span>}
                                   </button>
                                 )
                               })}
@@ -6885,11 +7186,31 @@ const BatchDetailModal = ({
                               const box = supply.boxes.find((b) => b.id === packingOpenBoxId) ?? supply.boxes[0]
                               if (!box) return null
                               const boxTotal = box.items.reduce((s, i) => s + i.qty, 0)
+                              const boxKizPairs = packingKizPairs.filter((pair) => pair.box_id === box.id && (pair.status === 'draft' || pair.status === 'committed'))
+                              const draftPairs = boxKizPairs.filter((pair) => pair.status === 'draft')
+                              const draftBarcodes = [...new Set(draftPairs.map((pair) => pair.barcode))]
+                              const draftOnlyItems = draftBarcodes
+                                .filter((barcode) => !box.items.some((item) => item.barcode === barcode))
+                                .map((barcode) => {
+                                  const pair = draftPairs.find((candidate) => candidate.barcode === barcode)!
+                                  return {
+                                    id: `_kizdraft_${barcode}`,
+                                    box_id: box.id,
+                                    account_id: accountId,
+                                    barcode,
+                                    item_id: pair.item_id,
+                                    product_name: String(pair.product_snapshot.product_name || '') || null,
+                                    qty: 0,
+                                    created_at: pair.created_at,
+                                    _local: true as const,
+                                  }
+                                })
+                              const displayBoxItems = [...box.items, ...draftOnlyItems]
                               return (
                                 <div className="flex flex-col h-full">
                                   {/* Строка управления коробом */}
                                   <div className="flex items-center gap-3 px-5 border-b border-slate-100 bg-slate-50 min-h-[44px]">
-                                    <span className="text-xs text-slate-400">{box.items.length} позиций · {boxTotal} ед.</span>
+                                    <span className="text-xs text-slate-400">{displayBoxItems.length} позиций · {boxTotal + draftPairs.length} ед.{draftPairs.length > 0 ? ` · ${draftPairs.length} не записано` : ''}</span>
                                     <div className="flex-1" />
                                     <button
                                       type="button"
@@ -6928,7 +7249,10 @@ const BatchDetailModal = ({
                                     {canPackingAutoAdd && canManageStageData && (
                                       <button
                                         type="button"
-                                        onClick={() => setPackingAutoAdd((v) => !v)}
+                                        onClick={() => {
+                                          if (packingAutoAdd) void disablePackingAuto()
+                                          else setPackingAutoAdd(true)
+                                        }}
                                         className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
                                           packingAutoAdd
                                             ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
@@ -6938,6 +7262,22 @@ const BatchDetailModal = ({
                                       >
                                         <span className={`h-2 w-2 rounded-full transition-colors ${packingAutoAdd ? 'bg-blue-500' : 'bg-slate-300'}`} />
                                         Авто
+                                      </button>
+                                    )}
+                                    {canPackingAutoAdd && canManageStageData && (
+                                      <button
+                                        type="button"
+                                        disabled={!packingAutoAdd || packingKizBusy}
+                                        onClick={() => void togglePackingKizMode(supply.id, !supply.kiz_enabled)}
+                                        className={`flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                                          supply.kiz_enabled
+                                            ? 'bg-violet-100 text-violet-700 hover:bg-violet-200'
+                                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                                        }`}
+                                        title={!packingAutoAdd ? 'Сначала включите режим «Авто»' : 'Поштучная привязка КИЗ к товару'}
+                                      >
+                                        <span className={`h-2 w-2 rounded-full ${supply.kiz_enabled ? 'bg-violet-500' : 'bg-slate-300'}`} />
+                                        КИЗ
                                       </button>
                                     )}
                                     {canManageStageData && !readyBoxSupply && (
@@ -6952,15 +7292,18 @@ const BatchDetailModal = ({
 
                                   {/* Список позиций */}
                                   <div ref={packingItemsScrollRef} className="flex-1 overflow-y-scroll px-5 py-3 space-y-1" style={{ scrollbarGutter: 'stable' }}>
-                                    {box.items.length === 0 ? (
+                                    {displayBoxItems.length === 0 ? (
                                       <p className="text-sm text-slate-400 py-4 text-center">Позиций нет</p>
                                     ) : (
-                                      box.items.map((item) => {
+                                      displayBoxItems.map((item) => {
                                         const batchItem = items.find((it) => it.barcode === item.barcode)
                                         const info = packingProductCache[item.barcode]
                                         const displayName = info?.name ?? batchItem?.product_name ?? item.product_name
                                         const displaySize = info?.size ?? batchItem?.size
                                         const displayArticle = info?.vendor_code ?? batchItem?.article
+                                        const itemKizPairs = boxKizPairs.filter((pair) => pair.barcode === item.barcode)
+                                        const itemDraftCount = itemKizPairs.filter((pair) => pair.status === 'draft').length
+                                        const visibleQty = item.qty + itemDraftCount
                                         return (
                                           <div
                                             key={item.id}
@@ -6969,7 +7312,11 @@ const BatchDetailModal = ({
                                               if (node) packingItemRowRefs.current.set(rowKey, node)
                                               else packingItemRowRefs.current.delete(rowKey)
                                             }}
-                                            className={`rounded-xl px-3 py-2.5 text-sm transition-all duration-300 ${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? 'bg-emerald-50 ring-2 ring-emerald-400 ring-inset' : 'bg-slate-50'}`}
+                                            onClick={(event) => {
+                                              if ((event.target as HTMLElement).closest('button, input')) return
+                                              if (itemKizPairs.length > 0) setPackingKizList({ boxId: box.id, barcode: item.barcode, productName: displayName ?? null })
+                                            }}
+                                            className={`rounded-xl px-3 py-2.5 text-sm transition-all duration-300 ${itemKizPairs.length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-violet-200' : ''} ${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? 'bg-emerald-50 ring-2 ring-emerald-400 ring-inset' : 'bg-slate-50'}`}
                                           >
                                             <div className="flex items-stretch justify-between gap-3">
                                               {/* Фото товара */}
@@ -7096,7 +7443,7 @@ const BatchDetailModal = ({
                                                 </div>
                                               )}
                                               <div className="flex items-center gap-2 flex-shrink-0 pt-0.5">
-                                                {packingItemEdits[item.id] !== undefined ? (
+                                                {itemKizPairs.length === 0 && packingItemEdits[item.id] !== undefined ? (
                                                   <input
                                                     type="number"
                                                     min={1}
@@ -7110,11 +7457,12 @@ const BatchDetailModal = ({
                                                     key={`${item.id}-${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? packingScanFeedback.nonce : 'idle'}`}
                                                     className={`inline-flex min-w-[76px] items-baseline justify-center rounded-xl px-3 py-1.5 tabular-nums transition-colors ${packingScanFeedback?.kind === 'success' && packingScanFeedback.boxId === box.id && packingScanFeedback.barcode === item.barcode ? 'animate-[pulse_450ms_ease-out_1] bg-emerald-100 text-emerald-800' : 'bg-white text-slate-800 ring-1 ring-slate-200'}`}
                                                   >
-                                                    <span className="text-xl font-extrabold leading-none">{item.qty}</span>
+                                                    <span className="text-xl font-extrabold leading-none">{visibleQty}</span>
                                                     <span className="ml-1 text-xs font-semibold">ед.</span>
                                                   </span>
                                                 )}
-                                                {canManageStageData && !item.id.startsWith('_opt_') && (
+                                                {itemDraftCount > 0 && <span className="whitespace-nowrap text-[10px] font-bold text-amber-600">{item.qty} запис. · {itemDraftCount} не запис.</span>}
+                                                {canManageStageData && itemKizPairs.length === 0 && !item.id.startsWith('_') && (
                                                   <>
                                                     <button
                                                       type="button"
@@ -7176,6 +7524,16 @@ const BatchDetailModal = ({
                                                     </button>
                                                   </>
                                                 )}
+                                                {canManageStageData && itemKizPairs.length > 0 && !item.id.startsWith('_') && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={(event) => { event.stopPropagation(); setDeleteBoxItemConfirm({ supplyId: supply.id, boxId: box.id, itemId: item.id }) }}
+                                                    title="Удалить позицию и активные пары КИЗ (история сохранится)"
+                                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500"
+                                                  >
+                                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 14H6L5 6" /><path d="M10 11v5M14 11v5" /></svg>
+                                                  </button>
+                                                )}
                                               </div>
                                             </div>
                                           </div>
@@ -7200,18 +7558,29 @@ const BatchDetailModal = ({
                                           {packingScanFeedback.barcode && <span className="ml-auto font-mono text-xs opacity-70">{packingScanFeedback.barcode}</span>}
                                         </div>
                                       )}
+                                      {supply.kiz_enabled && packingPendingKiz[box.id] && (
+                                        <div className="flex items-center justify-between rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-800">
+                                          <span><b>Баркод {packingPendingKiz[box.id].barcode}</b> принят · теперь отсканируйте КИЗ</span>
+                                          <button type="button" onClick={() => resetPendingPackingKiz(box.id)} className="rounded-lg bg-white px-2.5 py-1 text-xs font-bold text-red-600 shadow-sm">Сбросить пару</button>
+                                        </div>
+                                      )}
                                       <div className="flex items-center gap-2">
                                         <div className="relative flex-1">
                                         <input
                                           ref={packingBarcodeRef}
                                           autoFocus
                                           type="text"
-                                          placeholder="Баркод"
+                                          placeholder={supply.kiz_enabled && packingPendingKiz[box.id] ? 'Отсканируйте КИЗ' : 'Баркод'}
                                           value={packingBoxBarcode[box.id] ?? ''}
                                           onChange={(e) => setPackingBoxBarcode((p) => ({ ...p, [box.id]: e.target.value }))}
                                           onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
-                                              const bc = (packingBoxBarcode[box.id] ?? '').trim()
+                                              const rawScan = packingBoxBarcode[box.id] ?? ''
+                                              if (supply.kiz_enabled) {
+                                                void handlePackingKizScan(supply.id, box.id, rawScan)
+                                                return
+                                              }
+                                              const bc = rawScan.trim()
                                               if (!bc || !/^\d{13}$/.test(bc)) {
                                                 rejectInvalidPackingBarcode(box.id)
                                                 return
@@ -7229,7 +7598,7 @@ const BatchDetailModal = ({
                                               }
                                             }
                                           }}
-                                          className={`w-full rounded-xl border pl-3 pr-9 py-2 text-sm outline-none ${(packingBoxBarcode[box.id] ?? '').length === 0 ? 'border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100' : /^\d{13}$/.test(packingBoxBarcode[box.id] ?? '') ? 'border-emerald-400 focus:ring-2 focus:ring-emerald-100' : 'border-red-300 focus:ring-2 focus:ring-red-100'}`}
+                                          className={`w-full rounded-xl border pl-3 pr-9 py-2 text-sm outline-none ${(packingBoxBarcode[box.id] ?? '').length === 0 ? 'border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100' : supply.kiz_enabled && packingPendingKiz[box.id] ? 'border-violet-400 focus:ring-2 focus:ring-violet-100' : /^\d{13}$/.test(packingBoxBarcode[box.id] ?? '') ? 'border-emerald-400 focus:ring-2 focus:ring-emerald-100' : 'border-red-300 focus:ring-2 focus:ring-red-100'}`}
                                         />
                                         <button type="button" title="Сканировать камерой"
                                           onClick={() => { setPackingCameraTargetBoxId(box.id); setPackingCameraError(null); setPackingCameraOpen(true) }}
@@ -7243,18 +7612,23 @@ const BatchDetailModal = ({
                                           </svg>
                                         </button>
                                         </div>
-                                        {(packingBoxBarcode[box.id] ?? '').length > 0 && !/^\d{13}$/.test(packingBoxBarcode[box.id] ?? '') && (
+                                        {!supply.kiz_enabled && (packingBoxBarcode[box.id] ?? '').length > 0 && !/^\d{13}$/.test(packingBoxBarcode[box.id] ?? '') && (
                                           <p className="col-span-full -mt-1 text-xs text-red-500 pl-1">{(packingBoxBarcode[box.id] ?? '').replace(/\D/g, '').length}/13 · только цифры EAN-13</p>
                                         )}
                                         <input
                                           ref={packingQtyRef}
                                           type="number"
                                           min={1}
+                                          disabled={supply.kiz_enabled}
                                           placeholder="Кол-во"
                                           value={packingBoxQty[box.id] ?? '1'}
                                           onChange={(e) => setPackingBoxQty((p) => ({ ...p, [box.id]: e.target.value }))}
                                           onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
+                                              if (supply.kiz_enabled) {
+                                                void handlePackingKizScan(supply.id, box.id, packingBoxBarcode[box.id] ?? '')
+                                                return
+                                              }
                                               const bc = (packingBoxBarcode[box.id] ?? '').trim()
                                               const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
                                               if (!bc || !/^\d{13}$/.test(bc)) {
@@ -7267,11 +7641,15 @@ const BatchDetailModal = ({
                                               setTimeout(() => packingBarcodeRef.current?.focus(), 0)
                                             }
                                           }}
-                                          className="w-20 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                          className="w-20 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                         />
                                         <button
-                                          disabled={!/^\d{13}$/.test((packingBoxBarcode[box.id] ?? '').trim())}
+                                          disabled={packingKizBusy || (supply.kiz_enabled ? !(packingBoxBarcode[box.id] ?? '') : !/^\d{13}$/.test((packingBoxBarcode[box.id] ?? '').trim()))}
                                           onClick={() => {
+                                            if (supply.kiz_enabled) {
+                                              void handlePackingKizScan(supply.id, box.id, packingBoxBarcode[box.id] ?? '')
+                                              return
+                                            }
                                             const bc = (packingBoxBarcode[box.id] ?? '').trim()
                                             const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
                                             if (!bc || !/^\d{13}$/.test(bc)) {
@@ -7285,7 +7663,16 @@ const BatchDetailModal = ({
                                           }}
                                           className="flex-shrink-0 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 hover:bg-blue-700 transition-colors"
                                         >
-                                          + Добавить
+                                          {supply.kiz_enabled && packingPendingKiz[box.id] ? 'Привязать КИЗ' : '+ Добавить'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={!supply.kiz_enabled || packingKizBusy || Boolean(packingPendingKiz[box.id]) || draftPairs.length === 0}
+                                          onClick={() => void commitPackingKizBox(supply.id, box.id)}
+                                          title={!supply.kiz_enabled ? 'Доступно только в режиме КИЗ' : packingPendingKiz[box.id] ? 'Сначала завершите или сбросьте текущую пару' : 'Записать завершённые пары в этот короб'}
+                                          className="flex-shrink-0 rounded-xl bg-violet-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-35"
+                                        >
+                                          Записать в короб{draftPairs.length > 0 ? ` (${draftPairs.length})` : ''}
                                         </button>
                                       </div>
                                     </div>
@@ -7495,8 +7882,9 @@ const BatchDetailModal = ({
                               onClick={async () => {
                                 setDeletingPackingItemId(dItem.id)
                                 try {
-                                  await deleteBoxItem(dItem.id)
+                                  await deleteBoxItem(dItem.id, packingKizAuditContext)
                                   setSupplies((prev) => prev.map((s) => s.id === dSupply!.id ? { ...s, boxes: s.boxes.map((b) => b.id === dBox!.id ? { ...b, items: b.items.filter((item) => item.id !== dItem.id) } : b) } : s))
+                                  setPackingKizPairs((current) => current.filter((pair) => pair.box_item_id !== dItem.id && pair.barcode !== dItem.barcode))
                                   setPackingItemEdits((prev) => { const next = { ...prev }; delete next[dItem.id]; return next })
                                   setDeleteBoxItemConfirm(null)
                                 } catch (err) {
@@ -7544,9 +7932,10 @@ const BatchDetailModal = ({
                             <button
                               type="button"
                               onClick={async () => {
-                                await deleteBox(dBox.id)
+                                await deleteBox(dBox.id, packingKizAuditContext)
                                 const remaining = dSup!.boxes.filter((b) => b.id !== dBox.id)
                                 setSupplies((prev) => prev.map((s) => s.id === deleteBoxConfirm.supplyId ? { ...s, boxes: remaining } : s))
+                                setPackingKizPairs((current) => current.filter((pair) => pair.box_id !== dBox.id))
                                 setPackingOpenBoxId(remaining.length > 0 ? remaining[remaining.length - 1].id : null)
                                 setDeleteBoxConfirm(null)
                               }}
@@ -7590,7 +7979,7 @@ const BatchDetailModal = ({
                             <button
                               type="button"
                               onClick={async () => {
-                                await deleteSupply(dSup.id)
+                                await deleteSupply(dSup.id, packingKizAuditContext)
                                 setSupplies((prev) => prev.filter((s) => s.id !== dSup.id))
                                 setDeleteSupplyConfirm(null)
                                 setActiveSupplyId(null)
@@ -9125,6 +9514,7 @@ const BatchDetailModal = ({
                             const tid = markingEditScanTarget.tempId
                             setMarkingBuffer((p) => p.map((x) => x.tempId === tid ? { ...x, barcode: raw } : x))
                           }
+                          if (raw) showScanSuccess({ kind: 'product', primary: raw.slice(-5), title: 'Баркод маркировки принят' })
                           setMarkingEditScanTarget(null)
                           setMarkingCameraOpen(false)
                         }
@@ -9202,6 +9592,13 @@ const BatchDetailModal = ({
                     <button type="button"
                       onClick={() => {
                         if (!boxId) return
+                        const targetSupply = supplies.find((candidate) => candidate.boxes.some((box) => box.id === boxId))
+                        if (targetSupply?.kiz_enabled) {
+                          void handlePackingKizScan(targetSupply.id, boxId, bc)
+                          setPackingCameraOpen(false)
+                          setPackingCameraTargetBoxId(null)
+                          return
+                        }
                         setPackingBoxBarcode((p) => ({ ...p, [boxId]: bc }))
                         void lookupAndCacheBarcode(bc)
                         setPackingCameraOpen(false)
@@ -9227,6 +9624,25 @@ const BatchDetailModal = ({
           </div>
         </div>
       , document.body)}
+      {packingKizList && activeSupplyId && (() => {
+        const supply = supplies.find((candidate) => candidate.id === activeSupplyId)
+        if (!supply) return null
+        const tripLine = trips.flatMap((trip) => trip.lines).find((line) => line.id === supply.trip_line_id || line.fulfillment_supply_id === supply.id)
+        const isShippedFbo = supply.destination_type === 'fbo' && tripLine?.status === 'Отгружен'
+        return (
+          <FulfillmentKizPairsModal
+            open
+            boxId={packingKizList.boxId}
+            barcode={packingKizList.barcode}
+            productName={packingKizList.productName}
+            pairs={packingKizPairs}
+            auditContext={packingKizAuditContext}
+            readOnly={!canManageStageData || isShippedFbo}
+            onClose={() => setPackingKizList(null)}
+            onChanged={() => refreshPackingKizData(supply.id)}
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -10563,7 +10979,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     }
     setIsDeleting(true)
     try {
-      await deleteBatch(batch.id)
+      const device = getScannerDeviceIdentity()
+      await deleteBatch(batch.id, { actor_name: userName || userEmail, actor_email: userEmail, device_id: device.deviceId, device_name: device.deviceName, scanner_model: device.scannerModel })
       setBatches((prev) => prev.filter((b) => b.id !== batch.id))
       setArchivedBatches((prev) => [{ ...batch, deleted_at: new Date().toISOString() }, ...prev])
       setDeleteTarget(null)
@@ -10580,7 +10997,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
       }
       for (const id of ids) {
         const batch = batches.find((b) => b.id === id)
-        await deleteBatch(id)
+        const device = getScannerDeviceIdentity()
+        await deleteBatch(id, { actor_name: userName || userEmail, actor_email: userEmail, device_id: device.deviceId, device_name: device.deviceName, scanner_model: device.scannerModel })
         if (batch) setArchivedBatches((prev) => [{ ...batch, deleted_at: new Date().toISOString() }, ...prev])
         setBatches((prev) => prev.filter((b) => b.id !== id))
       }

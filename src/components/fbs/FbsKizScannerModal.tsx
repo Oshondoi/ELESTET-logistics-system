@@ -8,6 +8,7 @@ import { fetchActiveScannerModels, readCachedActiveScannerModels } from '../../s
 import type { ScannerModelProfile } from '../../services/scannerModelService'
 import { kizValidationError, normalizeKizCode, normalizeScannerKeyboardLayout } from '../../lib/kizCode'
 import { showToast } from '../ui/Toast'
+import { showScanSuccess } from '../ui/ScanSuccessOverlay'
 import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url'
 
 type ScanSession = {
@@ -813,6 +814,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         setSelectingBox(false)
         setValue('')
         setNotice(`Активен короб №${selectedBox.boxNumber}. Теперь сканируйте ${session.barcode_scan_enabled ? 'баркод товара' : 'QR WB'}`)
+        showScanSuccess({
+          kind: 'box',
+          primary: `№${selectedBox.boxNumber}`,
+          details: [`P-${selectedBox.batchNumber} · S-${selectedBox.supplyNumber}`, selectedBox.barcode],
+        })
         signal(true)
         return
       }
@@ -846,6 +852,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         setNotice(barcodeResult.available == null
           ? 'Баркод принят. Теперь сканируйте QR WB'
           : `Баркод найден в коробе · доступно ${barcodeResult.available}. Теперь сканируйте QR WB`)
+        showScanSuccess({ kind: 'product', primary: barcodeResult.barcode.slice(-5) })
         signal(true)
         return
       }
@@ -882,6 +889,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           pending_locked_until: String(data.locked_until),
         } : current)
         setNotice(`Заказ №${item.orderId} найден. Теперь сканируйте КИЗ`)
+        showScanSuccess({
+          kind: 'fbs',
+          primary: item.partB || 'FBS',
+          details: item.partA ? [`partA ${item.partA}`] : undefined,
+        })
       } else {
         const scannedKiz = normalizeKizCode(rawValue ?? value)
         if (isKnownOrderQr || scannedKiz === session.pending_wb_qr) {
@@ -905,6 +917,32 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         ))
         await Promise.all([loadPairs(session.id), loadSession(session.id)])
         setNotice(`Пара сохранена. Сканируйте следующий ${session.barcode_scan_enabled ? 'баркод товара' : 'QR WB'}`)
+        const gtin = /^01(\d{14})21/.exec(scannedKiz)?.[1] ?? ''
+        let honestSignArticle = ''
+        let honestSignName = ''
+        if (gtin) {
+          const { data: honestSignProduct } = await (supabase as any)
+            .from('teksher_products')
+            .select('name,full_name,attributes')
+            .eq('store_id', storeId)
+            .eq('gtin', gtin)
+            .maybeSingle()
+          honestSignName = String(honestSignProduct?.name || honestSignProduct?.full_name || '')
+          const attributes = Array.isArray(honestSignProduct?.attributes) ? honestSignProduct.attributes as Array<Record<string, unknown>> : []
+          const articleAttribute = attributes.find((attribute) => {
+            const name = String(attribute.name || '').toLocaleLowerCase('ru-RU')
+            const code = String(attribute.attributeTypeCode || '').toLowerCase()
+            return name.includes('артикул') || code.includes('article')
+          })
+          const fullNameArticle = /(?:^|[\s,;])арт\.?\s*([^,;\s]+)/iu.exec(String(honestSignProduct?.full_name || ''))?.[1] ?? ''
+          honestSignArticle = String(articleAttribute?.value || fullNameArticle)
+        }
+        const currentOrder = orders.find((order) => order.id === session.pending_order_id)
+        showScanSuccess({
+          kind: 'kiz',
+          primary: honestSignArticle || currentOrder?.productSize || 'КИЗ',
+          details: [currentOrder?.productSize, currentOrder?.productColor, honestSignArticle, honestSignName].filter(Boolean).map(String),
+        })
       }
       setValue('')
       signal(true)

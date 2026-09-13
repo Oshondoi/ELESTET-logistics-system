@@ -10,6 +10,7 @@ import { FbsStocksPanel } from '../components/fbs/FbsStocksPanel'
 import { FbsDispatchReport } from '../components/fbs/FbsDispatchReport'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { FbsWarehouseSelect } from '../components/fbs/FbsWarehouseSelect'
+import { showScanSuccess } from '../components/ui/ScanSuccessOverlay'
 import { fetchFbsWorkContexts } from '../services/fbsAccessService'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import { DEFAULT_PERMISSIONS } from '../types'
@@ -2272,7 +2273,7 @@ export function FbsOrdersPage({ accountId }: Props) {
     if (boxSelectionMode === 'return' && !location) {
       const { data: targetBox, error: targetBoxError } = await (supabase as any)
         .from('fulfillment_boxes')
-        .select('id')
+        .select('id,box_number,barcode')
         .eq('account_id', workingAccountId)
         .eq('barcode', scanned)
         .maybeSingle()
@@ -2285,6 +2286,7 @@ export function FbsOrdersPage({ accountId }: Props) {
         setBoxScanValue('')
         return
       }
+      showScanSuccess({ kind: 'box', primary: `№${targetBox.box_number}`, details: [String(targetBox.barcode || scanned)] })
       await receiveOrderIntoBox(boxSelectionOrder, String(targetBox.id))
       return
     }
@@ -2293,6 +2295,11 @@ export function FbsOrdersPage({ accountId }: Props) {
       setBoxScanValue('')
       return
     }
+    showScanSuccess({
+      kind: 'box',
+      primary: `№${location.boxNumber}`,
+      details: [`P-${location.batchNumber} · S-${location.supplyNumber}`, location.boxBarcode],
+    })
     await applySelectedBox(boxSelectionOrder, location)
   }
 

@@ -988,6 +988,7 @@ export interface FulfillmentSupply {
   created_by: string | null
   created_at: string
   pipeline_stage_id?: string | null
+  kiz_enabled: boolean
   _local?: boolean
 }
 
@@ -1029,6 +1030,62 @@ export interface FulfillmentBoxWithItems extends FulfillmentBox {
 
 export interface FulfillmentSupplyWithBoxes extends FulfillmentSupply {
   boxes: FulfillmentBoxWithItems[]
+}
+
+export type FulfillmentKizPairStatus = 'draft' | 'committed' | 'deleted' | 'replaced'
+
+export interface FulfillmentKizPair {
+  id: string
+  account_id: string
+  store_id: string | null
+  batch_id: string | null
+  supply_id: string | null
+  box_id: string | null
+  box_item_id: string | null
+  item_id: string | null
+  barcode: string
+  kiz_raw: string
+  kiz_normalized: string
+  gtin: string
+  serial_number: string
+  status: FulfillmentKizPairStatus
+  product_snapshot: {
+    product_name?: string | null
+    size?: string | null
+    color?: string | null
+    barcode?: string
+    honest_sign_article?: string | null
+    honest_sign_name?: string | null
+    honest_sign_full_name?: string | null
+    [key: string]: unknown
+  }
+  hierarchy_snapshot: {
+    batch_id?: string
+    batch_short_id?: number | null
+    batch_name?: string | null
+    supply_id?: string
+    supply_number?: number | null
+    box_id?: string
+    box_number?: number | null
+    box_barcode?: string | null
+    [key: string]: unknown
+  }
+  created_by: string | null
+  actor_name: string | null
+  actor_email: string | null
+  device_id: string
+  device_name: string
+  scanner_model: string | null
+  created_at: string
+  committed_at: string | null
+  updated_at: string
+  deleted_at: string | null
+}
+
+export interface FulfillmentKizCommitResult {
+  committed_count: number
+  items: FulfillmentBoxItem[]
+  pairs: FulfillmentKizPair[]
 }
 
 // ─── Уведомления ─────────────────────────────────────────────
