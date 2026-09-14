@@ -443,10 +443,13 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       return {
         products: importProducts,
         matchingRowKeys: new Set<string>(),
+        exactBarcodeRowKeys: new Set<string>(),
       }
     }
 
     const matchingRowKeys = new Set<string>()
+    const exactBarcodeRowKeys = new Set<string>()
+    const normalizedQuery = normalizeImportSearch(importSearch)
     const products = importProducts.filter((product) => {
       const rows = getSizeRowsImp(product)
       const rawData = (() => {
@@ -475,13 +478,16 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
         return directRowMatch && matchesImportSearch(combinedCorpus, tokens)
       })
       rowMatches.forEach((row) => matchingRowKeys.add(row.rowKey))
+      rows.forEach((row) => {
+        if (normalizeImportSearch(row.barcode) === normalizedQuery) exactBarcodeRowKeys.add(row.rowKey)
+      })
       const fullCorpus = importSearchCorpus([...baseValues, ...rows.flatMap((row) => [row.techSize, row.barcode])])
       return matchesImportSearch(baseCorpus, tokens)
         || rowMatches.length > 0
         || matchesImportSearch(fullCorpus, tokens)
     })
 
-    return { products, matchingRowKeys }
+    return { products, matchingRowKeys, exactBarcodeRowKeys }
   }, [importCustomNames, importProducts, importSearch])
 
   const filteredImportProducts = importSearchResult.products
@@ -1123,8 +1129,10 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                     </tr>
                   </thead>
                   {filteredImportProducts.map((product) => {
-                    const isExpanded = Boolean(importSearch.trim()) || importExpandAll || importExpandedIds.has(product.id)
                     const sizeRows = getSizeRowsImp(product)
+                    const hasExactBarcodeMatch = sizeRows.some((row) => importSearchResult.exactBarcodeRowKeys.has(row.rowKey))
+                    const isExpanded = importExpandAll || importExpandedIds.has(product.id) || hasExactBarcodeMatch
+                    const isSearchResult = Boolean(importSearch.trim())
                     const productRowKeys = sizeRows.map((r) => r.rowKey)
                     const allProductSelected = productRowKeys.length > 0 && productRowKeys.every((k) => importSelected.has(k))
                     const photos = product.photos as Array<{ c246x328?: string; big?: string }> | null
@@ -1132,7 +1140,13 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                     return (
                       <tbody key={product.id} className="divide-y divide-slate-50">
                         <tr
-                          className="cursor-pointer align-middle transition-colors duration-150 hover:bg-slate-50"
+                          className={`cursor-pointer align-middle transition-colors duration-150 ${
+                            isSearchResult
+                              ? hasExactBarcodeMatch
+                                ? 'bg-blue-50/80 shadow-[inset_3px_0_0_#3b82f6] hover:bg-blue-50'
+                                : 'bg-blue-50/40 shadow-[inset_3px_0_0_#bfdbfe] hover:bg-blue-50/70'
+                              : 'hover:bg-slate-50'
+                          }`}
                           onClick={() => setImportExpandedIds((prev) => { const n = new Set(prev); n.has(product.id) ? n.delete(product.id) : n.add(product.id); setImportAnyExpanded(n.size > 0); return n })}
                         >
                           <td className="px-3 py-3 text-slate-400">
@@ -1210,7 +1224,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                           <td className="px-4 py-3 text-xs text-slate-500">{product.country ?? '—'}</td>
                           <td className="px-4 py-3 text-xs text-slate-400">{product.category ?? '—'}</td>
                           <td className="px-4 py-3 text-xs text-slate-400">{(product as any).category_parent ?? '—'}</td>
-                          <td className="sticky right-0 z-10 border-l border-slate-100 bg-white px-3 py-3 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]" onClick={(e) => e.stopPropagation()}>
+                          <td className={`sticky right-0 z-10 border-l border-slate-100 px-3 py-3 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)] ${isSearchResult ? 'bg-blue-50' : 'bg-white'}`} onClick={(e) => e.stopPropagation()}>
                             {(() => {
                               const productStickers: StickerTemplate[] = sizeRows
                                 .filter((r) => r.barcode !== '—')
@@ -1283,9 +1297,10 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                     <tbody className="divide-y divide-slate-100/80">
                                       {sizeRows.map((row) => {
                                         const isSearchMatch = importSearchResult.matchingRowKeys.has(row.rowKey)
+                                        const isExactBarcodeMatch = importSearchResult.exactBarcodeRowKeys.has(row.rowKey)
                                         const isSelected = importSelected.has(row.rowKey)
                                         return (
-                                        <tr key={row.rowKey} className={`align-middle transition-colors ${isSelected && isSearchMatch ? 'bg-blue-50 ring-1 ring-inset ring-amber-300' : isSelected ? 'bg-blue-50/50' : isSearchMatch ? 'bg-amber-100/70 ring-1 ring-inset ring-amber-300' : ''}`}>
+                                        <tr key={row.rowKey} className={`align-middle transition-colors ${isExactBarcodeMatch ? 'bg-blue-100/70 ring-1 ring-inset ring-blue-300' : isSelected && isSearchMatch ? 'bg-blue-50 ring-1 ring-inset ring-blue-200' : isSelected ? 'bg-blue-50/50' : isSearchMatch ? 'bg-blue-50/70 ring-1 ring-inset ring-blue-200' : ''}`}>
                                           <td className="select-none px-3 py-2"
                                             onMouseDown={(e) => { if (e.button === 0) { e.preventDefault(); startSweep('import', row.rowKey, importSelected.has(row.rowKey)) } }}
                                             onMouseEnter={() => continueSweep('import', row.rowKey)}
@@ -1304,8 +1319,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                               <span className="text-xs text-slate-300">—</span>
                                             )}
                                           </td>
-                                          <td colSpan={2} className="px-4 py-2 font-mono text-xs text-slate-500">{row.barcode}</td>
-                                          <td className="sticky right-0 z-10 border-l border-slate-100 bg-slate-50 px-3 py-2 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.35)]">
+                                          <td colSpan={2} className={`px-4 py-2 font-mono text-xs ${isExactBarcodeMatch ? 'font-semibold text-blue-700' : 'text-slate-500'}`}>{row.barcode}</td>
+                                          <td className={`sticky right-0 z-10 border-l border-slate-100 px-3 py-2 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.35)] ${isExactBarcodeMatch ? 'bg-blue-100' : isSearchMatch || isSelected ? 'bg-blue-50' : 'bg-slate-50'}`}>
                                             {row.barcode !== '—' && (() => {
                                               const tempSticker: StickerTemplate = {
                                                 id: row.rowKey,

@@ -274,16 +274,20 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
 
   const filtered = products.filter((p) => {
     if (!search.trim()) return true
-    const q = search.toLowerCase()
+    const q = search.trim().toLowerCase()
+    const sizeRows = getSizeRows(p)
     return (
       p.name?.toLowerCase().includes(q) ||
       p.vendor_code?.toLowerCase().includes(q) ||
       p.brand?.toLowerCase().includes(q) ||
       p.category?.toLowerCase().includes(q) ||
       String(p.nm_id).includes(q) ||
-      p.barcodes.some((b) => b.includes(q))
+      p.barcodes.some((b) => b.includes(q)) ||
+      sizeRows.some((row) => row.barcode.toLowerCase().includes(q))
     )
   })
+
+  const exactBarcodeQuery = search.trim()
 
   const orderedProducts = [...filtered].sort((a, b) => {
     const vendorCompare = normalizedVendorCode(a.vendor_code).localeCompare(
@@ -767,13 +771,22 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                 </tr>
               </thead>
               {orderedProducts.map((product) => {
-                const isExpanded = expandAll || expandedIds.has(product.id)
                 const sizeRows = getSizeRows(product)
+                const hasExactBarcodeMatch = Boolean(exactBarcodeQuery)
+                  && sizeRows.some((row) => row.barcode === exactBarcodeQuery)
+                const isExpanded = expandAll || expandedIds.has(product.id) || hasExactBarcodeMatch
+                const isSearchResult = Boolean(search.trim())
                 return (
                   <tbody key={product.id} className="divide-y divide-slate-50">
                     {/* Строка товара */}
                     <tr
-                      className="cursor-pointer align-middle transition-colors duration-150 hover:bg-slate-50"
+                      className={`cursor-pointer align-middle transition-colors duration-150 ${
+                        isSearchResult
+                          ? hasExactBarcodeMatch
+                            ? 'bg-blue-50/80 shadow-[inset_3px_0_0_#3b82f6] hover:bg-blue-50'
+                            : 'bg-blue-50/40 shadow-[inset_3px_0_0_#bfdbfe] hover:bg-blue-50/70'
+                          : 'hover:bg-slate-50'
+                      }`}
                       onClick={() => toggle(product.id)}
                     >
                       <td className="px-3 py-3 text-slate-400">
@@ -850,8 +863,13 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100/80">
-                                  {sizeRows.map((row) => (
-                                    <tr key={row.rowKey} className="align-middle">
+                                  {sizeRows.map((row) => {
+                                    const isExactBarcodeMatch = Boolean(exactBarcodeQuery) && row.barcode === exactBarcodeQuery
+                                    return (
+                                    <tr
+                                      key={row.rowKey}
+                                      className={`align-middle transition-colors ${isExactBarcodeMatch ? 'bg-blue-100/70 ring-1 ring-inset ring-blue-300' : ''}`}
+                                    >
                                       <td className="px-3 py-2" />
                                       <td colSpan={2} className="px-4 py-2">
                                         {row.techSize !== '—' ? (
@@ -862,9 +880,10 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                                           <span className="text-xs text-slate-300">—</span>
                                         )}
                                       </td>
-                                      <td colSpan={3} className="px-4 py-2 font-mono text-xs text-slate-500">{row.barcode}</td>
+                                      <td colSpan={3} className={`px-4 py-2 font-mono text-xs ${isExactBarcodeMatch ? 'font-semibold text-blue-700' : 'text-slate-500'}`}>{row.barcode}</td>
                                     </tr>
-                                  ))}
+                                    )
+                                  })}
                                 </tbody>
                               </table>
                             </div>
