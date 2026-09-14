@@ -19,6 +19,11 @@ type WbOrderStatus = {
   wbStatus: string
 }
 
+function isAssemblyCancelledStatus(supplierStatus: string, wbStatus: string): boolean {
+  return ['cancel', 'canceled', 'cancelled'].includes(supplierStatus.toLowerCase())
+    || ['canceled', 'cancelled', 'declined_by_client'].includes(wbStatus.toLowerCase())
+}
+
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -2345,16 +2350,30 @@ Deno.serve(async (req) => {
       }
 
       const orderIds = pairRows.map((pair) => String(pair.order_id))
-      const statusResponse = await wbPostOrderIds(apiKey, '/api/v3/orders/status', orderIds)
-      const statusList = Array.isArray(statusResponse)
-        ? statusResponse as Record<string, unknown>[]
-        : ((statusResponse as { orders?: Record<string, unknown>[] })?.orders ?? [])
-      const statusByOrder = new Map(statusList.map((status) => [String(status.id ?? status.orderId ?? ''), status]))
-      // WB rejects large metadata reads even though the status endpoint accepts
-      // the same list. Their integration guidance recommends batches of 50-100.
-      const initialMetadata: Record<string, unknown>[] = []
+      // Cancellation decisions are deliberately based only on the synchronized
+      // fbs_orders table. The global 30-second sync is the single status source;
+      // submitting KIZ must not make a separate live status request to WB.
+      const statusRows: Record<string, unknown>[] = []
       for (let index = 0; index < orderIds.length; index += 100) {
         const batchIds = orderIds.slice(index, index + 100)
+        statusRows.push(...await sbGet(
+          'fbs_orders',
+          `store_id=eq.${encodeURIComponent(store_id)}&wb_order_id=in.(${batchIds.map(encodeURIComponent).join(',')})&select=wb_order_id,supplier_status,wb_system_status,is_in_latest_snapshot`,
+          true,
+        ))
+      }
+      const statusByOrder = new Map(statusRows.map((status) => [String(status.wb_order_id ?? ''), status]))
+      const metadataOrderIds = orderIds.filter((orderId) => {
+        const status = statusByOrder.get(orderId)
+        const supplierStatus = String(status?.supplier_status ?? '')
+        const wbStatus = String(status?.wb_system_status ?? '')
+        return Boolean(status) && !isAssemblyCancelledStatus(supplierStatus, wbStatus)
+      })
+      // WB rejects large metadata reads. Their integration guidance recommends
+      // batches of 50-100, so only non-cancelled DB orders are requested.
+      const initialMetadata: Record<string, unknown>[] = []
+      for (let index = 0; index < metadataOrderIds.length; index += 100) {
+        const batchIds = metadataOrderIds.slice(index, index + 100)
         const metaResponse = await wbReadJson(apiKey, '/api/marketplace/v3/orders/meta', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2363,11 +2382,13 @@ Deno.serve(async (req) => {
         initialMetadata.push(...metadataOrders(metaResponse))
       }
       const metaByOrder = new Map(initialMetadata.map((meta) => [metadataOrderId(meta), meta]))
-      await cacheKizOrderStates(accountId, store_id, initialMetadata, orderIds)
+      await cacheKizOrderStates(accountId, store_id, initialMetadata, metadataOrderIds)
 
       let sent = 0
+      let skippedCancelled = 0
       let lastMetadataWriteAt = 0
       const sentOrderIds: string[] = []
+      const cancelledOrderIds: string[] = []
       const failures: Array<{ orderId: string; error: string }> = []
       for (const pair of pairRows) {
         const pairId = String(pair.id)
@@ -2375,9 +2396,18 @@ Deno.serve(async (req) => {
         const sgtin = String(pair.sgtin)
         try {
           const status = statusByOrder.get(orderId)
-          const supplierStatus = String(status?.supplierStatus ?? '')
-          const wbStatus = String(status?.wbStatus ?? '')
-          if (!status) throw new Error(`WB не вернул актуальный статус заказа №${orderId}.`)
+          const supplierStatus = String(status?.supplier_status ?? '')
+          const wbStatus = String(status?.wb_system_status ?? '')
+          if (!status) throw new Error(`Заказ №${orderId} отсутствует в синхронизированной базе ELESTET.`)
+          if (isAssemblyCancelledStatus(supplierStatus, wbStatus)) {
+            skippedCancelled += 1
+            cancelledOrderIds.push(orderId)
+            await sbWrite('fbs_marking_pairs', 'PATCH', {
+              error: 'Заказ отменён. Отмените сборку пары; товар требует ручной приёмки.',
+              updated_at: new Date().toISOString(),
+            }, `id=eq.${encodeURIComponent(pairId)}`)
+            continue
+          }
           if (supplierStatus === 'complete') {
             throw new Error(`Заказ №${orderId} уже передан «В доставку». WB разрешает привязать КИЗ только пока заказ находится «На сборке».`)
           }
@@ -2430,13 +2460,20 @@ Deno.serve(async (req) => {
         }
       }
       const finishedAt = new Date().toISOString()
-      await sbWrite('fbs_marking_sessions', 'PATCH', failures.length === 0 ? {
+      await sbWrite('fbs_marking_sessions', 'PATCH', failures.length === 0 && skippedCancelled === 0 ? {
         status: 'completed', completed_at: finishedAt, submit_started_at: null,
         last_seen_at: finishedAt, updated_at: finishedAt,
       } : {
         status: 'partial', submit_started_at: null, last_seen_at: finishedAt, updated_at: finishedAt,
       }, `id=eq.${encodeURIComponent(sessionId)}`)
-      return ok({ success: failures.length === 0, sent, failed: failures.length, failures })
+      return ok({
+        success: failures.length === 0,
+        sent,
+        failed: failures.length,
+        failures,
+        skipped_cancelled: skippedCancelled,
+        cancelled_order_ids: [...new Set(cancelledOrderIds)],
+      })
       } catch (submissionError) {
         const message = errorMessage(submissionError)
         const failedAt = new Date().toISOString()

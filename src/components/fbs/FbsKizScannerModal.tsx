@@ -36,7 +36,7 @@ type ScanPair = {
   order_id: string
   wb_qr: string
   sgtin: string
-  status: 'draft' | 'sending' | 'sent' | 'error'
+  status: 'draft' | 'sending' | 'sent' | 'error' | 'cancelled'
   product_snapshot: {
     nm_id?: number
     chrt_id?: number
@@ -91,6 +91,8 @@ type OrderView = {
   productBrand?: string | null
   productColor?: string | null
   productVendorCode?: string | null
+  supplierStatus?: string
+  wbSystemStatus?: string
 }
 
 type Props = {
@@ -346,6 +348,20 @@ function qrDiagnosisError(diagnosis: ScanQrDiagnosis): string {
   }
   if (!diagnosis.supportsSgtin) return `Для заказа №${orderId} Wildberries не разрешает метаданные КИЗ.`
   return `QR заказа №${orderId} найден, но отсутствует в актуальном каталоге сканера.`
+}
+
+function isFbsAssemblyCancelled(order: Pick<OrderView, 'supplierStatus' | 'wbSystemStatus'> | null | undefined): boolean {
+  const supplierStatus = String(order?.supplierStatus ?? '').toLowerCase()
+  const wbStatus = String(order?.wbSystemStatus ?? '').toLowerCase()
+  return ['cancel', 'canceled', 'cancelled'].includes(supplierStatus)
+    || ['canceled', 'cancelled', 'declined_by_client'].includes(wbStatus)
+}
+
+function isCancelledDiagnosis(diagnosis: ScanQrDiagnosis): boolean {
+  return isFbsAssemblyCancelled({
+    supplierStatus: diagnosis.supplierStatus,
+    wbSystemStatus: diagnosis.wbStatus,
+  })
 }
 
 function pairErrorText(error: string, orderId: string): string {
@@ -778,6 +794,29 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
+  const resetCancelledCycle = async (orderId?: string) => {
+    if (!supabase || !session) return
+    const { error: releaseError } = await (supabase as any).rpc('release_fbs_marking_pending', {
+      p_session_id: session.id,
+      p_device_id: stableDeviceId,
+    })
+    if (releaseError) throw releaseError
+    await loadSession(session.id)
+    const cancelledOrder = orderId ? ordersById.get(orderId) : null
+    showScanSuccess({
+      kind: 'cancelled',
+      primary: 'Отменён',
+      details: [
+        'Пара сброшена',
+        orderId ? `Заказ FBS №${orderId}` : '',
+        cancelledOrder?.productName || '',
+        cancelledOrder?.productSize ? `Размер ${cancelledOrder.productSize}` : '',
+      ].filter(Boolean),
+    })
+    setValue('')
+    signal(false)
+  }
+
   const handleScan = async (rawValue?: string) => {
     if (!supabase || !session || busy || !deviceReady || session.status === 'completed') return
     setError('')
@@ -816,8 +855,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         setNotice(`Активен короб №${selectedBox.boxNumber}. Теперь сканируйте ${session.barcode_scan_enabled ? 'баркод товара' : 'QR WB'}`)
         showScanSuccess({
           kind: 'box',
-          primary: `№${selectedBox.boxNumber}`,
-          details: [`P-${selectedBox.batchNumber} · S-${selectedBox.supplyNumber}`, selectedBox.barcode],
+          primary: selectedBox.barcode,
+          details: [`P-${selectedBox.batchNumber} · S-${selectedBox.supplyNumber} · Короб №${selectedBox.boxNumber}`],
         })
         signal(true)
         return
@@ -870,7 +909,15 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         }
         if (!item) {
           const diagnosis = await invokeFbs(storeId, { action: 'diagnose_scan_qr', scan_values: candidates }) as ScanQrDiagnosis
+          if (diagnosis.found && diagnosis.orderFound && isCancelledDiagnosis(diagnosis)) {
+            await resetCancelledCycle(diagnosis.orderId)
+            return
+          }
           throw new Error(qrDiagnosisError(diagnosis))
+        }
+        if (isFbsAssemblyCancelled(ordersById.get(item.orderId))) {
+          await resetCancelledCycle(item.orderId)
+          return
         }
         const { data, error: scanError } = await (supabase as any).rpc('scan_fbs_wb_qr', {
           p_session_id: session.id,
@@ -878,10 +925,14 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           p_order_id: item.orderId,
           p_wb_qr: item.qrValue,
         })
-        if (scanError) throw new Error(scanErrorText(
-          scanError,
-          'QR заказа WB не принят серверной проверкой.',
-        ))
+        if (scanError) {
+          const diagnosis = await invokeFbs(storeId, { action: 'diagnose_scan_qr', scan_values: candidates }) as ScanQrDiagnosis
+          if (diagnosis.found && diagnosis.orderFound && isCancelledDiagnosis(diagnosis)) {
+            await resetCancelledCycle(diagnosis.orderId || item.orderId)
+            return
+          }
+          throw new Error(scanErrorText(scanError, 'QR заказа WB не принят серверной проверкой.'))
+        }
         setSession((current) => current ? {
           ...current,
           pending_order_id: String(data.order_id),
@@ -895,6 +946,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           details: item.partA ? [`partA ${item.partA}`] : undefined,
         })
       } else {
+        if (isFbsAssemblyCancelled(ordersById.get(session.pending_order_id))) {
+          await resetCancelledCycle(session.pending_order_id)
+          return
+        }
         const scannedKiz = normalizeKizCode(rawValue ?? value)
         if (isKnownOrderQr || scannedKiz === session.pending_wb_qr) {
           throw new Error('Вы повторно отсканировали QR заказа WB. Сейчас нужен КИЗ товара.')
@@ -911,10 +966,20 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           p_device_id: stableDeviceId,
           p_sgtin: scannedKiz,
         })
-        if (scanError) throw new Error(scanErrorText(
-          scanError,
-          'КИЗ не принят. Сейчас нужен КИЗ товара для выбранного заказа WB. Проверьте код и повторите сканирование.',
-        ))
+        if (scanError) {
+          const diagnosis = await invokeFbs(storeId, {
+            action: 'diagnose_scan_qr',
+            scan_values: [session.pending_wb_qr || ''],
+          }) as ScanQrDiagnosis
+          if (diagnosis.found && diagnosis.orderFound && isCancelledDiagnosis(diagnosis)) {
+            await resetCancelledCycle(diagnosis.orderId || session.pending_order_id)
+            return
+          }
+          throw new Error(scanErrorText(
+            scanError,
+            'КИЗ не принят. Сейчас нужен КИЗ товара для выбранного заказа WB. Проверьте код и повторите сканирование.',
+          ))
+        }
         await Promise.all([loadPairs(session.id), loadSession(session.id)])
         setNotice(`Пара сохранена. Сканируйте следующий ${session.barcode_scan_enabled ? 'баркод товара' : 'QR WB'}`)
         const gtin = /^01(\d{14})21/.exec(scannedKiz)?.[1] ?? ''
@@ -1306,6 +1371,29 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
+  const cancelAssemblyPair = async (pair: ScanPair) => {
+    if (!supabase || !session || !deviceReady || !isFbsAssemblyCancelled(ordersById.get(pair.order_id))) return
+    if (!window.confirm(`Отменить сборку заказа №${pair.order_id}? Пара и резерв будут закрыты, но товар автоматически в короб не вернётся.`)) return
+    setBusy(true)
+    setError('')
+    try {
+      const { error: cancelError } = await (supabase as any).rpc('cancel_fbs_marking_assembly', {
+        p_pair_id: pair.id,
+        p_device_id: stableDeviceId,
+      })
+      if (cancelError) throw cancelError
+      setSelectedPair(null)
+      await Promise.all([loadPairs(session.id), loadSession(session.id)])
+      setNotice(`Сборка заказа №${pair.order_id} отменена. Товар ожидает ручной приёмки.`)
+      signal(true)
+    } catch (cancelError) {
+      setError(errorText(cancelError))
+      signal(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const removeAllPairs = async () => {
     if (!supabase || !session || busy || !deviceReady) return
     const removablePairs = pairs.filter((pair) => pair.status === 'draft' || pair.status === 'error')
@@ -1481,7 +1569,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
           : `Отправлено: ${result.sent}. С ошибкой: ${result.failed}. Причины указаны у заказов.`)
         signal(false)
       } else {
-        setNotice(`Готово. В Wildberries отправлено КИЗ: ${result.sent}`)
+        const cancelled = Number(result.skipped_cancelled ?? 0)
+        setNotice(cancelled > 0
+          ? `В Wildberries отправлено КИЗ: ${result.sent}. Отменённые товары не переданы: ${cancelled}.`
+          : `Готово. В Wildberries отправлено КИЗ: ${result.sent}`)
         signal(true)
       }
     } catch (submitError) {
@@ -1495,6 +1586,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const draftCount = pairs.filter((pair) => pair.status === 'draft').length
   const sentCount = pairs.filter((pair) => pair.status === 'sent').length
   const errorCount = pairs.filter((pair) => pair.status === 'error').length
+  const cancelledCount = pairs.filter((pair) => pair.status === 'cancelled').length
   const boxEnabled = session?.box_scan_enabled ?? true
   const boxScanMode = Boolean(boxEnabled && (!activeBox || selectingBox))
   const barcodeStep = Boolean(session?.barcode_scan_enabled && !session.pending_product_barcode && !session.pending_order_id && !boxScanMode)
@@ -1726,8 +1818,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                 </div>
               )}
 
-              <div className="mt-3 grid grid-cols-3 gap-2 sm:mt-5 sm:gap-3">
-                {[['Ожидают', draftCount, 'text-violet-700'], ['Отправлено', sentCount, 'text-emerald-700'], ['Ошибки', errorCount, 'text-red-600']].map(([label, count, color]) => (
+              <div className="mt-3 grid grid-cols-4 gap-2 sm:mt-5 sm:gap-3">
+                {[['Ожидают', draftCount, 'text-violet-700'], ['Отправлено', sentCount, 'text-emerald-700'], ['Ошибки', errorCount, 'text-red-600'], ['Отменено', cancelledCount, 'text-red-700']].map(([label, count, color]) => (
                   <div key={String(label)} className="rounded-xl border border-slate-200 px-2 py-3 text-center sm:rounded-2xl sm:p-4"><b className={`block text-xl sm:text-2xl ${color}`}>{count}</b><span className="mt-0.5 block text-[10px] leading-tight text-slate-500 sm:text-xs">{label}</span></div>
                 ))}
               </div>
@@ -1753,6 +1845,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   <div className="divide-y divide-slate-100">
                     {pairs.map((pair) => {
                       const order = ordersById.get(pair.order_id)
+                      const orderCancelled = isFbsAssemblyCancelled(order)
                       return (
                         <div
                           key={pair.id}
@@ -1765,7 +1858,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                               void openPairDetails(pair)
                             }
                           }}
-                          className="flex cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-emerald-50/60 focus:bg-emerald-50/60 focus:outline-none sm:gap-4"
+                          className={`flex cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors focus:outline-none sm:gap-4 ${orderCancelled ? 'bg-red-50 hover:bg-red-100 focus:bg-red-100' : 'hover:bg-emerald-50/60 focus:bg-emerald-50/60'}`}
                         >
                           <div className="min-w-0 flex-1">
                             <div className="text-sm font-semibold text-slate-800">Заказ № {pair.order_id}</div>
@@ -1773,10 +1866,14 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                             {pair.error && <div className="mt-1 text-xs font-medium text-red-600">{pairErrorText(pair.error, pair.order_id)}</div>}
                           </div>
                           <span className="hidden text-xs font-semibold text-emerald-700 sm:inline">Данные</span>
-                          <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${pair.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : pair.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-violet-100 text-violet-700'}`}>
-                            {pair.status === 'sent' ? 'В WB' : pair.status === 'error' ? 'Ошибка' : 'Готово'}
+                          <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${orderCancelled || pair.status === 'cancelled' ? 'bg-red-600 text-white' : pair.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : pair.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-violet-100 text-violet-700'}`}>
+                            {orderCancelled || pair.status === 'cancelled' ? 'Отменён' : pair.status === 'sent' ? 'В WB' : pair.status === 'error' ? 'Ошибка' : 'Готово'}
                           </span>
-                          {['draft', 'error'].includes(pair.status) && <button type="button" title="Удалить ошибочную пару" onClick={(event) => { event.stopPropagation(); void removePair(pair) }} disabled={!deviceReady || busy} className="text-lg text-slate-300 hover:text-red-500 disabled:opacity-40">×</button>}
+                          {orderCancelled && pair.status !== 'cancelled' ? (
+                            <button type="button" onClick={(event) => { event.stopPropagation(); void cancelAssemblyPair(pair) }} disabled={!deviceReady || busy || pair.status === 'sending'} className="shrink-0 rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-40">Отменить сборку</button>
+                          ) : ['draft', 'error'].includes(pair.status) ? (
+                            <button type="button" title="Удалить ошибочную пару" onClick={(event) => { event.stopPropagation(); void removePair(pair) }} disabled={!deviceReady || busy} className="text-lg text-slate-300 hover:text-red-500 disabled:opacity-40">×</button>
+                          ) : null}
                         </div>
                       )
                     })}
@@ -2084,8 +2181,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                   </div>
                   <div className="rounded-2xl bg-slate-50 px-3 py-2.5">
                     <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Состояние пары</div>
-                    <div className={`mt-1 text-sm font-semibold ${selectedPair.status === 'sent' ? 'text-emerald-700' : selectedPair.status === 'error' ? 'text-red-600' : 'text-violet-700'}`}>
-                      {selectedPair.status === 'sent' ? 'Передана в WB' : selectedPair.status === 'error' ? 'Ошибка отправки' : selectedPair.status === 'sending' ? 'Отправляется' : 'Ожидает отправки'}
+                    <div className={`mt-1 text-sm font-semibold ${selectedPair.status === 'cancelled' || isFbsAssemblyCancelled(selectedPairOrder) ? 'text-red-700' : selectedPair.status === 'sent' ? 'text-emerald-700' : selectedPair.status === 'error' ? 'text-red-600' : 'text-violet-700'}`}>
+                      {selectedPair.status === 'cancelled' ? 'Сборка отменена' : isFbsAssemblyCancelled(selectedPairOrder) ? 'Заказ отменён — отмените сборку' : selectedPair.status === 'sent' ? 'Передана в WB' : selectedPair.status === 'error' ? 'Ошибка отправки' : selectedPair.status === 'sending' ? 'Отправляется' : 'Ожидает отправки'}
                     </div>
                   </div>
                 </div>
@@ -2164,8 +2261,11 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                 {selectedPair.error && <div className="rounded-2xl bg-red-50 px-4 py-3 text-xs font-medium text-red-700">{pairErrorText(selectedPair.error, selectedPair.order_id)}</div>}
               </div>
 
-              <footer className="shrink-0 border-t border-slate-100 p-3 sm:px-5 sm:py-4">
-                <button type="button" onClick={() => setSelectedPair(null)} className="h-11 w-full rounded-xl bg-slate-900 text-sm font-semibold text-white hover:bg-slate-800">Закрыть</button>
+              <footer className="flex shrink-0 gap-2 border-t border-slate-100 p-3 sm:px-5 sm:py-4">
+                {isFbsAssemblyCancelled(selectedPairOrder) && selectedPair.status !== 'cancelled' && (
+                  <button type="button" onClick={() => void cancelAssemblyPair(selectedPair)} disabled={!deviceReady || busy || selectedPair.status === 'sending'} className="h-11 flex-1 rounded-xl bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-40">Отменить сборку</button>
+                )}
+                <button type="button" onClick={() => setSelectedPair(null)} className="h-11 flex-1 rounded-xl bg-slate-900 text-sm font-semibold text-white hover:bg-slate-800">Закрыть</button>
               </footer>
             </div>
           </div>

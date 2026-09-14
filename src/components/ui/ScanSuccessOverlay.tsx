@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export type ScanSuccessKind = 'product' | 'fbs' | 'kiz' | 'box' | 'address'
+export type ScanSuccessKind = 'product' | 'fbs' | 'kiz' | 'box' | 'address' | 'cancelled'
 
 export interface ScanSuccessPayload {
   kind: ScanSuccessKind
@@ -20,6 +20,7 @@ function defaultTitle(kind: ScanSuccessKind) {
   if (kind === 'fbs') return 'Заказ FBS найден'
   if (kind === 'kiz') return 'КИЗ принят'
   if (kind === 'box') return 'Короб найден'
+  if (kind === 'cancelled') return 'Заказ FBS отменён'
   return 'Адрес найден'
 }
 
@@ -60,15 +61,15 @@ export function ScanSuccessOverlayHost() {
       aria-live="polite"
       className={`pointer-events-none fixed inset-x-0 top-[18%] z-[300] flex justify-center px-4 transition-opacity duration-1000 ease-linear ${fading ? 'opacity-0' : 'opacity-100'}`}
     >
-      <div className="min-w-[260px] max-w-[min(92vw,680px)] rounded-3xl border border-white/60 bg-slate-950/92 px-7 py-5 text-center text-white shadow-2xl backdrop-blur-md">
-        <div className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">
+      <div className={`min-w-[260px] max-w-[min(92vw,680px)] rounded-3xl border px-7 py-5 text-center text-white shadow-2xl backdrop-blur-md ${entry.kind === 'cancelled' ? 'border-red-300/70 bg-red-700/95' : 'border-white/60 bg-[#191919]/95'}`}>
+        <div className={`text-xs font-bold uppercase tracking-[0.18em] ${entry.kind === 'cancelled' ? 'text-red-100' : 'text-emerald-300'}`}>
           {entry.title || defaultTitle(entry.kind)}
         </div>
         <div className="mt-1 break-all font-mono text-5xl font-black leading-none tracking-wider sm:text-7xl">
           {entry.primary}
         </div>
         {entry.details?.filter(Boolean).map((detail, index) => (
-          <div key={`${detail}-${index}`} className="mt-2 text-sm font-semibold text-slate-200">
+          <div key={`${detail}-${index}`} className={`mt-2 text-sm font-semibold ${entry.kind === 'cancelled' ? 'text-white' : 'text-slate-200'}`}>
             {detail}
           </div>
         ))}

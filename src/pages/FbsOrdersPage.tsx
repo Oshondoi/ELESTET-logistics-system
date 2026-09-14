@@ -11,6 +11,7 @@ import { FbsDispatchReport } from '../components/fbs/FbsDispatchReport'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { FbsWarehouseSelect } from '../components/fbs/FbsWarehouseSelect'
 import { showScanSuccess } from '../components/ui/ScanSuccessOverlay'
+import { showToast } from '../components/ui/Toast'
 import { fetchFbsWorkContexts } from '../services/fbsAccessService'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import { DEFAULT_PERMISSIONS } from '../types'
@@ -86,7 +87,7 @@ interface FbsStockAllocation {
   boxId: string | null
   productBarcode: string
   quantity: number
-  status: 'reserved' | 'awaiting_wb' | 'consumed' | 'released'
+  status: 'reserved' | 'awaiting_wb' | 'consumed' | 'released' | 'cancelled_manual_receipt'
   requiresReview: boolean
   reviewReason: string | null
 }
@@ -991,6 +992,11 @@ function tabForOfficialWbStatus(
   if (wbSystemStatus === 'sold') return 'completed'
   if (isInLatestSnapshot && supplierStatus === 'complete') return 'delivering'
   return 'archive'
+}
+
+function isAssemblyCancelledOrder(order: Pick<FbsOrder, 'supplierStatus' | 'wbSystemStatus'>): boolean {
+  return ['cancel', 'canceled', 'cancelled'].includes(order.supplierStatus)
+    || ['canceled', 'cancelled', 'declined_by_client'].includes(order.wbSystemStatus)
 }
 
 function reconcileOptimisticOrderSupply(
@@ -2286,7 +2292,7 @@ export function FbsOrdersPage({ accountId }: Props) {
         setBoxScanValue('')
         return
       }
-      showScanSuccess({ kind: 'box', primary: `№${targetBox.box_number}`, details: [String(targetBox.barcode || scanned)] })
+      showScanSuccess({ kind: 'box', primary: String(targetBox.barcode || scanned), details: [`Короб №${targetBox.box_number}`] })
       await receiveOrderIntoBox(boxSelectionOrder, String(targetBox.id))
       return
     }
@@ -2297,8 +2303,8 @@ export function FbsOrdersPage({ accountId }: Props) {
     }
     showScanSuccess({
       kind: 'box',
-      primary: `№${location.boxNumber}`,
-      details: [`P-${location.batchNumber} · S-${location.supplyNumber}`, location.boxBarcode],
+      primary: location.boxBarcode,
+      details: [`P-${location.batchNumber} · S-${location.supplyNumber} · Короб №${location.boxNumber}`],
     })
     await applySelectedBox(boxSelectionOrder, location)
   }
@@ -2475,7 +2481,7 @@ export function FbsOrdersPage({ accountId }: Props) {
     }
   }
 
-  const handleShip = async (supplyId: string, orders2ship: FbsOrder[]): Promise<boolean> => {
+  const handleShip = async (supplyId: string, orders2ship: FbsOrder[], skippedCancelled = 0): Promise<boolean> => {
     if (!supabase || !fbsPermissions.fbs_dispatch) return false
     const storeId = selectedStoreId
     const ids = orders2ship.map((o) => o.id)
@@ -2509,6 +2515,7 @@ export function FbsOrdersPage({ accountId }: Props) {
       setSelected(new Set())
       setSelectedSupplyIds(new Set())
       setDispatchModal(null)
+      if (skippedCancelled > 0) showToast(`Отменённые товары не передаются: ${skippedCancelled}`, 'info')
       if (fastSyncV2Enabled) {
         void doSync('incremental', 'automatic')
         return true
@@ -2532,7 +2539,16 @@ export function FbsOrdersPage({ accountId }: Props) {
       const confirmed = window.confirm('В поставке уже есть грузоместа для ПВЗ. Передать её на склад или в СЦ всё равно?')
       if (!confirmed) return
     }
-    await handleShip(dispatchModal.supply.id, dispatchModal.orders)
+    const latestOrders = new Map(ordersRef.current.map((order) => [order.id, order]))
+    const currentSupplyOrders = dispatchModal.orders.map((order) => latestOrders.get(order.id) ?? order)
+    const activeOrders = currentSupplyOrders.filter((order) => !isAssemblyCancelledOrder(order))
+    const cancelledCount = currentSupplyOrders.length - activeOrders.length
+    if (activeOrders.length === 0) {
+      setDispatchModal(null)
+      showToast(`Отменённые товары не передаются: ${cancelledCount}`, 'info')
+      return
+    }
+    await handleShip(dispatchModal.supply.id, activeOrders, cancelledCount)
   }
 
   const getWbStickerFiles = async (ordersToPrint: FbsOrder[]): Promise<Map<string, string>> => {
@@ -2633,10 +2649,14 @@ export function FbsOrdersPage({ accountId }: Props) {
 
   const openStickerPrintModal = (ordersToPrint: FbsOrder[], supply: WbSupply | null, mode: StickerPrintModal['mode']) => {
     if (ordersToPrint.length === 0 || !fbsPermissions.fbs_assembly) return
+    const printableOrders = ordersToPrint.filter((order) => !isAssemblyCancelledOrder(order))
+    const cancelledCount = ordersToPrint.length - printableOrders.length
+    if (cancelledCount > 0) showToast(`Отменённые стикеры не печатаются: ${cancelledCount}`, 'info')
+    if (printableOrders.length === 0) return
     setPickingListMenuOpen(false)
     const savedOptions = loadStickerPrintOptions(workingAccountId)
     setStickerPrintModal({
-      orders: ordersToPrint,
+      orders: printableOrders,
       supply,
       mode,
       options: { ...savedOptions, supply: mode === 'supply' ? savedOptions.supply : false },
@@ -2645,7 +2665,16 @@ export function FbsOrdersPage({ accountId }: Props) {
 
   const handleCombinedStickerPrint = async () => {
     if (!stickerPrintModal) return
-    const { orders: ordersToPrint, supply, mode, options } = stickerPrintModal
+    const { orders: selectedOrdersToPrint, supply, mode, options } = stickerPrintModal
+    const latestOrders = new Map(ordersRef.current.map((order) => [order.id, order]))
+    const refreshedSelection = selectedOrdersToPrint.map((order) => latestOrders.get(order.id) ?? order)
+    const ordersToPrint = refreshedSelection.filter((order) => !isAssemblyCancelledOrder(order))
+    const cancelledCount = refreshedSelection.length - ordersToPrint.length
+    if (cancelledCount > 0) showToast(`Отменённые стикеры не печатаются: ${cancelledCount}`, 'info')
+    if (ordersToPrint.length === 0) {
+      setStickerPrintModal(null)
+      return
+    }
     if (!options.supply && !options.picking && !options.locations && !options.productBarcode && !options.wb) return
     const previewWindow = window.open('', '_blank')
     if (previewWindow) previewWindow.document.body.innerHTML = '<div style="font:14px Arial;padding:24px;color:#475569">Формируем стикеры…</div>'
@@ -3141,6 +3170,9 @@ export function FbsOrdersPage({ accountId }: Props) {
   const warehouseOrders = orders.filter(orderMatchesWarehouseFilter)
   const completedOrders = warehouseOrders.filter(isOfficialCompletedOrder)
   const cancelledOrders = warehouseOrders.filter(isOfficialCancelledOrder)
+  const openSupplyIds = new Set(openSupplies.map((supply) => supply.id))
+  const assemblingOrders = warehouseOrders.filter((order) => order.shipStatus === 'assembling'
+    || (isAssemblyCancelledOrder(order) && Boolean(order.supply_id && openSupplyIds.has(order.supply_id))))
   const archiveEligibleOrders = orders.filter((order) => orderMatchesWarehouseFilter(order) && isArchiveEligibleOrder(order))
   const tabOrders = activeTab === 'completed'
     ? completedOrders
@@ -3148,11 +3180,14 @@ export function FbsOrdersPage({ accountId }: Props) {
       ? cancelledOrders
       : activeTab === 'archive'
         ? []
-        : orders.filter((o) => o.shipStatus === activeTab && orderMatchesWarehouseFilter(o))
+        : activeTab === 'assembling'
+          ? assemblingOrders
+          : orders.filter((o) => o.shipStatus === activeTab && orderMatchesWarehouseFilter(o))
   const showEmptyOpenSupplies = selectedWarehouseFilter === ALL_WAREHOUSES_FILTER
   const ordersWithoutSize = tabOrders.filter((order) => !order.productSize)
-  const selectedTab = tabOrders.filter((o) => selected.has(o.id))
-  const allTabSelected = tabOrders.length > 0 && tabOrders.every((o) => selected.has(o.id))
+  const selectableTabOrders = tabOrders.filter((order) => !isAssemblyCancelledOrder(order))
+  const selectedTab = selectableTabOrders.filter((o) => selected.has(o.id))
+  const allTabSelected = selectableTabOrders.length > 0 && selectableTabOrders.every((o) => selected.has(o.id))
 
   const toggleSelect = (id: string) => {
     setSelectedSupplyIds(new Set())
@@ -3162,17 +3197,19 @@ export function FbsOrdersPage({ accountId }: Props) {
   }
   const toggleAll = () => {
     setSelectedSupplyIds(new Set())
-    setSelected(allTabSelected ? new Set() : new Set(tabOrders.map((o) => o.id)))
+    setSelected(allTabSelected ? new Set() : new Set(selectableTabOrders.map((o) => o.id)))
   }
   const toggleSupplySelection = (supplyOrders: FbsOrder[]) => {
     setSelectedSupplyIds(new Set())
     setSelected((previous) => {
-      const ids = supplyOrders.map((order) => order.id)
+      const ids = supplyOrders.filter((order) => !isAssemblyCancelledOrder(order)).map((order) => order.id)
       const allSelected = ids.length > 0 && ids.every((id) => previous.has(id))
       return allSelected ? new Set() : new Set(ids)
     })
   }
   const toggleSupplyOrderSelection = (orderId: string, supplyOrders: FbsOrder[]) => {
+    const targetOrder = supplyOrders.find((order) => order.id === orderId)
+    if (!targetOrder || isAssemblyCancelledOrder(targetOrder)) return
     setSelectedSupplyIds(new Set())
     setSelected((previous) => {
       const supplyIds = new Set(supplyOrders.map((order) => order.id))
@@ -3644,8 +3681,9 @@ export function FbsOrdersPage({ accountId }: Props) {
               const { supply, orders: supplyOrders } = group
               const isExpanded = expandedSupplyIds.has(supplyId)
               const isParentSelected = selectedSupplyIds.has(supplyId)
-              const selectedSupplyOrders = supplyOrders.filter((order) => selected.has(order.id))
-              const allSupplySelected = supplyOrders.length > 0 && selectedSupplyOrders.length === supplyOrders.length
+              const selectableSupplyOrders = supplyOrders.filter((order) => !isAssemblyCancelledOrder(order))
+              const selectedSupplyOrders = selectableSupplyOrders.filter((order) => selected.has(order.id))
+              const allSupplySelected = selectableSupplyOrders.length > 0 && selectedSupplyOrders.length === selectableSupplyOrders.length
               const someSupplySelected = selectedSupplyOrders.length > 0 && !allSupplySelected
               const toggle = () => {
                 if (isExpanded) {
@@ -3848,10 +3886,11 @@ export function FbsOrdersPage({ accountId }: Props) {
                               WB_ACCEPTED_ORDER_STATUSES.has(order.wbSystemStatus),
                             )
                             const isBusy = busyIds.has(order.id)
+                            const orderCancelled = isAssemblyCancelledOrder(order)
                             return (
-                              <tr key={order.id} className="border-b border-slate-100 hover:bg-white transition-colors">
+                              <tr key={order.id} className={`border-b border-slate-100 transition-colors ${orderCancelled ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-white'}`}>
                                 <td className="px-3 py-2 w-8">
-                                  <input type="checkbox" checked={selected.has(order.id)} onChange={() => toggleSupplyOrderSelection(order.id, supplyOrders)} className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer" />
+                                  <input type="checkbox" checked={selected.has(order.id)} disabled={orderCancelled} onChange={() => toggleSupplyOrderSelection(order.id, supplyOrders)} className="h-3.5 w-3.5 rounded accent-violet-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-30" />
                                 </td>
                                 <td className="px-4 py-2">
                                   <OrderIdentityCell order={order} />
@@ -3876,12 +3915,13 @@ export function FbsOrdersPage({ accountId }: Props) {
                                           : <span className="font-semibold text-red-500">Размер не определён</span>}
                                       </div>
                                       <KizStatusBadge order={order} />
+                                      {orderCancelled && <span className="mt-1 inline-flex rounded-lg bg-red-600 px-2 py-1 text-[10px] font-bold text-white">Отменён</span>}
                                     </div>
                                   </div>
                                 </td>
                                 <td className="px-4 py-2">
                                   <ProductLocationsCell order={order} />
-                                  {isAssemblingTab && fbsPermissions.fbs_assembly && order.productLocations.length > 0 && (
+                                  {isAssemblingTab && !orderCancelled && fbsPermissions.fbs_assembly && order.productLocations.length > 0 && (
                                     <button
                                       type="button"
                                       disabled={isBusy || !order.productLocations.some((location) => location.fbsEligible)}
@@ -3904,9 +3944,9 @@ export function FbsOrdersPage({ accountId }: Props) {
                                     <WbOrderStatusBadge order={order} />
                                   </td>
                                 )}
-                                <td className={`sticky right-0 z-[4] border-l border-slate-200 bg-slate-50 px-4 py-2 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${isCompletedGroupedTab ? '' : 'w-px whitespace-nowrap'}`}>
+                                <td className={`sticky right-0 z-[4] border-l border-slate-200 px-4 py-2 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${orderCancelled ? 'bg-red-50' : 'bg-slate-50'} ${isCompletedGroupedTab ? '' : 'w-px whitespace-nowrap'}`}>
                                   <div className="flex items-center justify-center gap-1.5">
-                                    {isAssemblingTab && fbsPermissions.fbs_assembly && supplyId !== '__none__' && (
+                                    {isAssemblingTab && !orderCancelled && fbsPermissions.fbs_assembly && supplyId !== '__none__' && (
                                       <button
                                         type="button"
                                         title="Перенести в другую поставку"
@@ -3919,12 +3959,13 @@ export function FbsOrdersPage({ accountId }: Props) {
                                         </svg>
                                       </button>
                                     )}
-                                    {!isCompletedGroupedTab && fbsPermissions.fbs_assembly && (
+                                    {!isCompletedGroupedTab && !orderCancelled && fbsPermissions.fbs_assembly && (
                                       <button type="button" title="Выбрать стикеры для печати" disabled={isBusy} onClick={() => openStickerPrintModal([order], null, 'selected')}
                                         className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 disabled:opacity-40 transition">
                                         <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                                       </button>
                                     )}
+                                    {orderCancelled && <span className="whitespace-nowrap rounded-lg bg-red-600 px-2.5 py-1 text-[11px] font-semibold text-white">Отменён</span>}
                                     {isCompletedGroupedTab && (
                                       <span className={`whitespace-nowrap rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
                                         order.wbSystemStatus === 'sold'
@@ -4088,9 +4129,10 @@ export function FbsOrdersPage({ accountId }: Props) {
                 )
                 const isBusy = busyIds.has(order.id)
                 const isChecked = selected.has(order.id)
+                const orderCancelled = isOfficialCancelledOrder(order)
                 return (
                   <tr key={order.id}
-                    className={`border-b border-slate-100 transition ${isChecked ? 'bg-violet-50' : 'hover:bg-slate-50'}`}>
+                    className={`border-b border-slate-100 transition ${orderCancelled ? 'bg-red-50 hover:bg-red-100' : isChecked ? 'bg-violet-50' : 'hover:bg-slate-50'}`}>
                     {activeTab !== 'completed' && activeTab !== 'cancelled' && (
                       <td className="px-3 py-2">
                         <input type="checkbox" checked={isChecked} onChange={() => toggleSelect(order.id)}
@@ -4129,7 +4171,7 @@ export function FbsOrdersPage({ accountId }: Props) {
                     <td className="px-4 py-3"><FbsStockQuantityCell order={order} /></td>
                     <td className="max-w-48 px-4 py-3">{renderWbWarehouseCell(order)}</td>
                     <td className={`px-4 py-3 whitespace-nowrap ${sla.cls}`}>{sla.text}</td>
-                    <td className={`sticky right-0 z-[4] border-l border-slate-200 px-4 py-3 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${isChecked ? 'bg-violet-50' : 'bg-white'}`}>
+                    <td className={`sticky right-0 z-[4] border-l border-slate-200 px-4 py-3 shadow-[-10px_0_18px_-16px_rgba(15,23,42,0.7)] ${orderCancelled ? 'bg-red-50' : isChecked ? 'bg-violet-50' : 'bg-white'}`}>
                       <div className="flex items-center gap-1.5">
                         {order.stockAllocation?.requiresReview && (
                           <span title={order.stockAllocation.reviewReason ?? undefined} className="whitespace-nowrap rounded-lg bg-red-100 px-2.5 py-1 text-[11px] font-semibold text-red-700">
@@ -4174,22 +4216,9 @@ export function FbsOrdersPage({ accountId }: Props) {
                           </span>
                         )}
                         {activeTab === 'cancelled' && (
-                          <>
-                            <span className="whitespace-nowrap rounded-lg bg-orange-100 px-2.5 py-1 text-[11px] font-semibold text-orange-700">
-                              {completedOrderStatusLabel(order)}
-                            </span>
-                            {fbsPermissions.fbs_assembly && ['reserved', 'awaiting_wb'].includes(order.stockAllocation?.status ?? '') && (
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                title="Фактически принять товар обратно: выбрать короб из списка или отсканировать QR любого целевого FBS-короба"
-                                onClick={() => { setBoxSelectionMode('return'); setBoxScanValue(''); setBoxSelectionOrder(order) }}
-                                className="h-7 whitespace-nowrap rounded-lg border border-violet-200 bg-violet-50 px-2.5 text-[11px] font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                Принять обратно
-                              </button>
-                            )}
-                          </>
+                          <span className="whitespace-nowrap rounded-lg bg-red-600 px-2.5 py-1 text-[11px] font-semibold text-white">
+                            {completedOrderStatusLabel(order)}
+                          </span>
                         )}
                       </div>
                     </td>
