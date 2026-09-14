@@ -287,7 +287,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
     )
   })
 
-  const exactBarcodeQuery = search.trim()
+  const barcodeSearchQuery = search.trim().toLowerCase()
 
   const orderedProducts = [...filtered].sort((a, b) => {
     const vendorCompare = normalizedVendorCode(a.vendor_code).localeCompare(
@@ -772,9 +772,9 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
               </thead>
               {orderedProducts.map((product) => {
                 const sizeRows = getSizeRows(product)
-                const hasExactBarcodeMatch = Boolean(exactBarcodeQuery)
-                  && sizeRows.some((row) => row.barcode === exactBarcodeQuery)
-                const isExpanded = expandAll || expandedIds.has(product.id) || hasExactBarcodeMatch
+                const hasBarcodeMatch = barcodeSearchQuery.length >= 4
+                  && sizeRows.some((row) => row.barcode.toLowerCase().includes(barcodeSearchQuery))
+                const isExpanded = expandAll || expandedIds.has(product.id) || hasBarcodeMatch
                 const isSearchResult = Boolean(search.trim())
                 return (
                   <tbody key={product.id} className="divide-y divide-slate-50">
@@ -782,7 +782,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                     <tr
                       className={`cursor-pointer align-middle transition-colors duration-150 ${
                         isSearchResult
-                          ? hasExactBarcodeMatch
+                          ? hasBarcodeMatch
                             ? 'bg-blue-50/80 shadow-[inset_3px_0_0_#3b82f6] hover:bg-blue-50'
                             : 'bg-blue-50/40 shadow-[inset_3px_0_0_#bfdbfe] hover:bg-blue-50/70'
                           : 'hover:bg-slate-50'
@@ -864,11 +864,12 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                                 </thead>
                                 <tbody className="divide-y divide-slate-100/80">
                                   {sizeRows.map((row) => {
-                                    const isExactBarcodeMatch = Boolean(exactBarcodeQuery) && row.barcode === exactBarcodeQuery
+                                    const isBarcodeMatch = barcodeSearchQuery.length >= 4
+                                      && row.barcode.toLowerCase().includes(barcodeSearchQuery)
                                     return (
                                     <tr
                                       key={row.rowKey}
-                                      className={`align-middle transition-colors ${isExactBarcodeMatch ? 'bg-blue-100/70 ring-1 ring-inset ring-blue-300' : ''}`}
+                                      className={`align-middle transition-colors ${isBarcodeMatch ? 'bg-blue-100/70 ring-1 ring-inset ring-blue-300' : ''}`}
                                     >
                                       <td className="px-3 py-2" />
                                       <td colSpan={2} className="px-4 py-2">
@@ -880,7 +881,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                                           <span className="text-xs text-slate-300">—</span>
                                         )}
                                       </td>
-                                      <td colSpan={3} className={`px-4 py-2 font-mono text-xs ${isExactBarcodeMatch ? 'font-semibold text-blue-700' : 'text-slate-500'}`}>{row.barcode}</td>
+                                      <td colSpan={3} className={`px-4 py-2 font-mono text-xs ${isBarcodeMatch ? 'font-semibold text-blue-700' : 'text-slate-500'}`}>{row.barcode}</td>
                                     </tr>
                                     )
                                   })}
