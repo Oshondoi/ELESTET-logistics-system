@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { StickerFormValues, StickerTemplate, StickerBundle, StickerBundleItem, Store, Product } from '../types'
+import type { StickerFormValues, StickerTemplate, StickerBundle, StickerBundleItem, Store, Product, StoreSyncLog } from '../types'
 import { KizPage } from './KizPage'
 import { KizGuidePage } from './KizGuidePage'
 import { StickerFormModal } from '../components/stickers/StickerFormModal'
@@ -9,11 +9,46 @@ import { Card } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { downloadStickerPdf, previewStickerPdf } from '../lib/stickerPdf'
 import { generateEAN13 } from '../lib/ean13'
-import { fetchProducts } from '../services/productService'
+import { fetchLastSync, fetchProducts, triggerSync } from '../services/productService'
 import { showToast } from '../components/ui/Toast'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 
 const BULK_PDF_WARN_THRESHOLD = 100
+
+function formatImportSyncTime(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (diff < 60) return 'только что'
+  if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`
+  return `${Math.floor(diff / 86400)} дн назад`
+}
+
+function normalizeImportSearch(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function compactImportSearch(value: string): string {
+  return value.replace(/[\s\-_.\/\\]+/g, '')
+}
+
+type ImportSearchCorpus = { normalized: string; compact: string }
+
+function importSearchCorpus(values: unknown[]): ImportSearchCorpus {
+  const normalized = normalizeImportSearch(values.filter((value) => value != null).join(' '))
+  return { normalized, compact: compactImportSearch(normalized) }
+}
+
+function matchesImportSearch(corpus: ImportSearchCorpus, tokens: string[]): boolean {
+  return tokens.every((token) => {
+    const compactToken = compactImportSearch(token)
+    return corpus.normalized.includes(token) || Boolean(compactToken && corpus.compact.includes(compactToken))
+  })
+}
 
 // ── Хелперы для размеров (Import WB) ─────────────────────
 interface SizeRowImp { techSize: string; barcode: string; rowKey: string }
@@ -269,8 +304,12 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   }, [])
 
   const [importProducts, setImportProducts] = useState<Product[]>([])
+  const [importSearch, setImportSearch] = useState('')
   const [importCustomNames, setImportCustomNames] = useState<Map<string, string>>(new Map())
   const [isLoadingImport, setIsLoadingImport] = useState(false)
+  const [isSyncingImport, setIsSyncingImport] = useState(false)
+  const [importLastSync, setImportLastSync] = useState<StoreSyncLog | null>(null)
+  const [importSyncError, setImportSyncError] = useState<string | null>(null)
   const [importSelected, setImportSelected] = useState<Set<string>>(new Set())
   const [isImporting, setIsImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
@@ -353,23 +392,102 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const loadImportProducts = useCallback(async (storeId: string) => {
     if (!storeId) return
     setIsLoadingImport(true)
-    setImportSelected(new Set())
     try {
-      setImportProducts(await fetchProducts(storeId))
-    } catch { /* silent */ } finally {
+      const [nextProducts, nextLastSync] = await Promise.all([
+        fetchProducts(storeId),
+        fetchLastSync(storeId),
+      ])
+      const validRowKeys = new Set(nextProducts.flatMap((product) => getSizeRowsImp(product).map((row) => row.rowKey)))
+      setImportProducts(nextProducts)
+      setImportLastSync(nextLastSync)
+      setImportSelected((previous) => new Set([...previous].filter((rowKey) => validRowKeys.has(rowKey))))
+    } finally {
       setIsLoadingImport(false)
     }
   }, [])
 
   useEffect(() => {
-    if (activeTab === 'import') void loadImportProducts(selectedStoreId)
+    if (activeTab === 'import') void loadImportProducts(selectedStoreId).catch(() => undefined)
   }, [activeTab, selectedStoreId, loadImportProducts])
+
+  useEffect(() => {
+    setImportSearch('')
+    setImportSyncError(null)
+  }, [selectedStoreId])
+
+  const handleImportSync = async () => {
+    if (!selectedStoreId || isSyncingImport) return
+    setIsSyncingImport(true)
+    setImportSyncError(null)
+    try {
+      const result = await triggerSync(selectedStoreId)
+      await loadImportProducts(selectedStoreId)
+      showToast(`Синхронизация завершена. Товаров: ${result.count}`, 'success')
+    } catch (syncError) {
+      setImportSyncError(syncError instanceof Error ? syncError.message : 'Ошибка синхронизации товаров')
+    } finally {
+      setIsSyncingImport(false)
+    }
+  }
 
   const importStore = stores.find((s) => s.id === selectedStoreId)
 
   const allImportSizeRows = useMemo(
     () => importProducts.flatMap((p) => getSizeRowsImp(p)),
     [importProducts]
+  )
+
+  const importSearchResult = useMemo(() => {
+    const tokens = normalizeImportSearch(importSearch).split(' ').filter(Boolean)
+    if (tokens.length === 0) {
+      return {
+        products: importProducts,
+        matchingRowKeys: new Set<string>(),
+      }
+    }
+
+    const matchingRowKeys = new Set<string>()
+    const products = importProducts.filter((product) => {
+      const rows = getSizeRowsImp(product)
+      const rawData = (() => {
+        try { return JSON.stringify(product.raw_data ?? '') }
+        catch { return '' }
+      })()
+      const baseValues = [
+        product.nm_id,
+        product.vendor_code,
+        product.name,
+        importCustomNames.get(product.id),
+        product.brand,
+        product.category,
+        (product as Product & { category_parent?: string | null }).category_parent,
+        product.color,
+        product.composition,
+        product.country,
+        ...product.barcodes,
+        rawData,
+      ]
+      const baseCorpus = importSearchCorpus(baseValues)
+      const rowMatches = rows.filter((row) => {
+        const rowCorpus = importSearchCorpus([row.techSize, row.barcode])
+        const combinedCorpus = importSearchCorpus([...baseValues, row.techSize, row.barcode])
+        const directRowMatch = tokens.some((token) => matchesImportSearch(rowCorpus, [token]))
+        return directRowMatch && matchesImportSearch(combinedCorpus, tokens)
+      })
+      rowMatches.forEach((row) => matchingRowKeys.add(row.rowKey))
+      const fullCorpus = importSearchCorpus([...baseValues, ...rows.flatMap((row) => [row.techSize, row.barcode])])
+      return matchesImportSearch(baseCorpus, tokens)
+        || rowMatches.length > 0
+        || matchesImportSearch(fullCorpus, tokens)
+    })
+
+    return { products, matchingRowKeys }
+  }, [importCustomNames, importProducts, importSearch])
+
+  const filteredImportProducts = importSearchResult.products
+  const visibleImportSizeRows = useMemo(
+    () => filteredImportProducts.flatMap((product) => getSizeRowsImp(product)),
+    [filteredImportProducts],
   )
 
   const buildSelectedStickers = (): StickerTemplate[] => {
@@ -619,7 +737,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       )}
       {/* ── Верхняя панель ─────────────────────────────────── */}
       <Card className="rounded-3xl p-2.5">
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           {/* Левая часть: поиск или дропдаун магазина */}
           {activeTab === 'import' ? (
             <div className="flex flex-1 items-center gap-3">
@@ -668,6 +786,38 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                   )}
                 </svg>
               </Button>
+              <div className="relative min-w-[240px] flex-1">
+                <svg
+                  viewBox="0 0 24 24"
+                  className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                >
+                  <circle cx="11" cy="11" r="8" />
+                  <path d="m21 21-4.35-4.35" />
+                </svg>
+                <input
+                  type="text"
+                  placeholder="Поиск по названию, артикулу, бренду, размеру, баркоду..."
+                  value={importSearch}
+                  onChange={(event) => setImportSearch(event.target.value)}
+                  className="h-10 w-full rounded-2xl border border-transparent bg-slate-100 pl-9 pr-10 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-200 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+                {importSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setImportSearch('')}
+                    title="Очистить поиск"
+                    aria-label="Очистить поиск"
+                    className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                      <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                  </button>
+                )}
+              </div>
               {importDone !== null && <span className="text-xs text-emerald-600">✓ Создано стикеров: {importDone}</span>}
               {importError && <span className="text-xs text-rose-500">{importError}</span>}
             </div>
@@ -713,6 +863,44 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
               </Button>
             </>
           ) : null}
+
+          {activeTab === 'import' && (
+            <div className="flex shrink-0 items-center gap-2.5">
+              {importLastSync && (
+                <span className="whitespace-nowrap text-xs text-slate-400">
+                  {importLastSync.status === 'error'
+                    ? <span className="text-rose-500">Ошибка синхронизации</span>
+                    : <>Синхронизировано: {formatImportSyncTime(importLastSync.synced_at)}</>}
+                </span>
+              )}
+              <Button
+                type="button"
+                variant="secondary"
+                className="shrink-0 rounded-2xl px-4 py-2.5"
+                disabled={!selectedStoreId || isSyncingImport}
+                onClick={() => void handleImportSync()}
+              >
+                {isSyncingImport ? (
+                  <>
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                    Синхронизация...
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                      <path d="M21 8v-4" />
+                      <path d="M3 16v4" />
+                    </svg>
+                    Синхронизировать
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
 
           {/* Дата производства — глобальная для всех вкладок */}
           <div className="relative shrink-0">
@@ -817,6 +1005,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
             </Button>
           )}
         </div>
+        {activeTab === 'import' && importSyncError && (
+          <p className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-600">{importSyncError}</p>
+        )}
       </Card>
 
       {/* ── Основной блок ──────────────────────────────────── */}
@@ -848,7 +1039,12 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
             ) : importProducts.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-14 text-center">
                 <p className="text-sm text-slate-500">Товаров нет</p>
-                <p className="text-xs text-slate-400">Перейдите на страницу Товары и нажмите «Синхронизировать»</p>
+                <p className="text-xs text-slate-400">Нажмите «Синхронизировать» выше, чтобы загрузить товары из WB</p>
+              </div>
+            ) : filteredImportProducts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-14 text-center">
+                <p className="text-sm text-slate-500">Ничего не найдено</p>
+                <p className="text-xs text-slate-400">Измените запрос или очистите поле поиска</p>
               </div>
             ) : (
               <>
@@ -858,11 +1054,15 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                     <tr className="border-b border-slate-100 bg-slate-50">
                       <th className="w-8 px-3 py-2.5" />
                       <th className="w-9 px-3 py-2.5">
-                        {allImportSizeRows.length > 0 && (
+                        {visibleImportSizeRows.length > 0 && (
                           <input
                             type="checkbox"
-                            checked={allImportSizeRows.every((r) => importSelected.has(r.rowKey))}
-                            onChange={(e) => setImportSelected(e.target.checked ? new Set(allImportSizeRows.map((r) => r.rowKey)) : new Set())}
+                            checked={visibleImportSizeRows.every((r) => importSelected.has(r.rowKey))}
+                            onChange={(event) => setImportSelected((previous) => {
+                              const next = new Set(previous)
+                              visibleImportSizeRows.forEach((row) => event.target.checked ? next.add(row.rowKey) : next.delete(row.rowKey))
+                              return next
+                            })}
                             className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-0"
                           />
                         )}
@@ -922,8 +1122,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                       </th>
                     </tr>
                   </thead>
-                  {importProducts.map((product) => {
-                    const isExpanded = importExpandAll || importExpandedIds.has(product.id)
+                  {filteredImportProducts.map((product) => {
+                    const isExpanded = Boolean(importSearch.trim()) || importExpandAll || importExpandedIds.has(product.id)
                     const sizeRows = getSizeRowsImp(product)
                     const productRowKeys = sizeRows.map((r) => r.rowKey)
                     const allProductSelected = productRowKeys.length > 0 && productRowKeys.every((k) => importSelected.has(k))
@@ -1081,8 +1281,11 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100/80">
-                                      {sizeRows.map((row) => (
-                                        <tr key={row.rowKey} className={`align-middle transition-colors ${importSelected.has(row.rowKey) ? 'bg-blue-50/50' : ''}`}>
+                                      {sizeRows.map((row) => {
+                                        const isSearchMatch = importSearchResult.matchingRowKeys.has(row.rowKey)
+                                        const isSelected = importSelected.has(row.rowKey)
+                                        return (
+                                        <tr key={row.rowKey} className={`align-middle transition-colors ${isSelected && isSearchMatch ? 'bg-blue-50 ring-1 ring-inset ring-amber-300' : isSelected ? 'bg-blue-50/50' : isSearchMatch ? 'bg-amber-100/70 ring-1 ring-inset ring-amber-300' : ''}`}>
                                           <td className="select-none px-3 py-2"
                                             onMouseDown={(e) => { if (e.button === 0) { e.preventDefault(); startSweep('import', row.rowKey, importSelected.has(row.rowKey)) } }}
                                             onMouseEnter={() => continueSweep('import', row.rowKey)}
@@ -1155,7 +1358,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                             })()}
                                           </td>
                                         </tr>
-                                      ))}
+                                        )
+                                      })}
                                     </tbody>
                                   </table>
                                 </div>
