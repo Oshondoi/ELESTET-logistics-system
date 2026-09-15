@@ -12,8 +12,22 @@ import { generateEAN13 } from '../lib/ean13'
 import { fetchLastSync, fetchProducts, triggerSync } from '../services/productService'
 import { showToast } from '../components/ui/Toast'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
+import { StickerPrintSettingsModal, type StickerPrintGroupDraft, groupsToStickers } from '../components/stickers/StickerPrintSettingsModal'
+import {
+  defaultStickerPrintPreferences,
+  fetchStickerPrintPreferences,
+  fetchStickerProductOverrides,
+  saveStickerPrintPreferences,
+  saveStickerProductOverride,
+  type StickerPrintPreferences,
+  type StickerProductPrintOverride,
+} from '../services/stickerPrintSettingsService'
 
 const BULK_PDF_WARN_THRESHOLD = 100
+const localToday = () => {
+  const now = new Date()
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+}
 
 function formatImportSyncTime(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
@@ -77,11 +91,22 @@ function getSizeRowsImp(product: import('../types').Product): SizeRowImp[] {
   return rows.sort((a, b) => sizeWeightImp(a.techSize) - sizeWeightImp(b.techSize))
 }
 
+function getWbColors(value: string | null | undefined): string[] {
+  const seen = new Set<string>()
+  return String(value ?? '').split(',').map((color) => color.trim()).filter((color) => {
+    const key = color.toLocaleLowerCase('ru-RU')
+    if (!color || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 interface StickersPageProps {
   stickers: StickerTemplate[]
   bundles: StickerBundle[]
   stores: Store[]
   selectedStoreId: string
+  activeAccountId: string
   onStoreChange: (id: string) => void
   onAdd: (values: StickerFormValues) => Promise<unknown>
   onEdit: (id: string, values: StickerFormValues) => Promise<void>
@@ -95,7 +120,7 @@ interface StickersPageProps {
   isAdmin?: boolean
 }
 
-export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true, isAdmin }: StickersPageProps) => {
+export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activeAccountId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true, isAdmin }: StickersPageProps) => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingSticker, setEditingSticker] = useState<StickerTemplate | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<StickerTemplate | null>(null)
@@ -138,12 +163,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       ? stickers.filter((s) => selected.has(s.id))
       : stickers).map((s) => ({ ...s, production_date: globalProductionDate || s.production_date }))
     if (toPrint.length === 0) return
-    setIsPrinting(true)
-    try {
-      downloadStickerPdf(toPrint)
-    } finally {
-      setIsPrinting(false)
-    }
+    openPrintSettings(toPrint, { onPrint: (configured) => previewWithCheck(configured, downloadStickerPdf) })
   }
 
   const handlePreview = () => {
@@ -151,12 +171,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       ? stickers.filter((s) => selected.has(s.id))
       : stickers).map((s) => ({ ...s, production_date: globalProductionDate || s.production_date }))
     if (toPrint.length === 0) return
-    setIsPreviewing(true)
-    try {
-      previewStickerPdf(toPrint)
-    } finally {
-      setIsPreviewing(false)
-    }
+    openPrintSettings(toPrint, { onPrint: (configured) => previewWithCheck(configured, previewStickerPdf) })
   }
 
   const handleConfirmDeleteMass = async () => {
@@ -238,7 +253,11 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       const s = stickers.find((st) => st.id === item.sticker_id)
       if (s) toPrint.push({ ...s, copies: item.copies, production_date: globalProductionDate || s.production_date })
     }
-    if (toPrint.length > 0) downloadStickerPdf(toPrint)
+    openPrintSettings(toPrint, {
+      title: `Печать набора «${bundle.name}»`,
+      showColorTabs: true,
+      onPrint: (configured) => previewWithCheck(configured, downloadStickerPdf),
+    })
   }
 
   const handlePreviewBundle = (bundle: StickerBundle) => {
@@ -247,7 +266,11 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       const s = stickers.find((st) => st.id === item.sticker_id)
       if (s) toPrint.push({ ...s, copies: item.copies, production_date: globalProductionDate || s.production_date })
     }
-    if (toPrint.length > 0) previewStickerPdf(toPrint)
+    openPrintSettings(toPrint, {
+      title: `Печать набора «${bundle.name}»`,
+      showColorTabs: true,
+      onPrint: (configured) => previewWithCheck(configured, previewStickerPdf),
+    })
   }
 
   const [mainTab, setMainTab] = useState<'stickers' | 'stickers2' | 'stickers3'>(() => {
@@ -318,10 +341,11 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const [importBundleModalOpen, setImportBundleModalOpen] = useState(false)
   const [importBundleName, setImportBundleName] = useState('')
   const [importBundleQties, setImportBundleQties] = useState<Record<string, number>>({})
+  const [importBundlePrintDrafts, setImportBundlePrintDrafts] = useState<Map<string, StickerTemplate>>(new Map())
   const [importBundleError, setImportBundleError] = useState<string | null>(null)
   const [importExpandedIds, setImportExpandedIds] = useState<Set<string>>(new Set())
   const [importExpandAll, setImportExpandAll] = useState(() => localStorage.getItem('elestet-stickers-expand-all') === 'true')
-  const [globalProductionDate, setGlobalProductionDate] = useState('')
+  const [globalProductionDate, setGlobalProductionDate] = useState(localToday)
   const [globalIcons, setGlobalIcons] = useState<{ wash: boolean; iron: boolean; no_bleach: boolean; no_tumble_dry: boolean; eac: boolean }>(() => {
     try {
       const stored = localStorage.getItem('elestet-sticker-icons')
@@ -337,11 +361,22 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   const [iconsDropdownOpen, setIconsDropdownOpen] = useState(false)
   const iconsDropdownRef = useRef<HTMLDivElement | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
+  const [printPreferences, setPrintPreferences] = useState<StickerPrintPreferences>(defaultStickerPrintPreferences)
+  const [productPrintOverrides, setProductPrintOverrides] = useState<Map<string, StickerProductPrintOverride>>(new Map())
+  type PrintSetupState = {
+    title: string
+    groups: StickerPrintGroupDraft[]
+    showColorTabs: boolean
+    allowCreateBundle: boolean
+    onPrint: (stickers: StickerTemplate[]) => void
+  } | null
+  const [printSetup, setPrintSetup] = useState<PrintSetupState>(null)
 
   // Pre-print проверка пустых полей
   type PrePrintState = { stickers: StickerTemplate[]; onPrint: (s: StickerTemplate[]) => void } | null
   const [prePrintModal, setPrePrintModal] = useState<PrePrintState>(null)
   const [prePrintEdits, setPrePrintEdits] = useState<Partial<StickerTemplate>>({})
+  const [isRememberingMissing, setIsRememberingMissing] = useState(false)
 
   const CHECKED_FIELDS: { key: keyof StickerTemplate; label: string }[] = [
     { key: 'production_date',  label: 'Дата производства' },
@@ -407,8 +442,28 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
   }, [])
 
   useEffect(() => {
-    if (activeTab === 'import') void loadImportProducts(selectedStoreId).catch(() => undefined)
-  }, [activeTab, selectedStoreId, loadImportProducts])
+    if (selectedStoreId) void loadImportProducts(selectedStoreId).catch(() => undefined)
+  }, [selectedStoreId, loadImportProducts])
+
+  useEffect(() => {
+    if (!activeAccountId || !selectedStoreId) return
+    void Promise.all([
+      fetchStickerPrintPreferences(activeAccountId, selectedStoreId),
+      fetchStickerProductOverrides(activeAccountId, selectedStoreId),
+    ]).then(([preferences, overrides]) => {
+      setPrintPreferences(preferences)
+      setProductPrintOverrides(overrides)
+      setGlobalProductionDate(preferences.production_date || localToday())
+      setGlobalIcons({
+        wash: preferences.icon_wash,
+        iron: preferences.icon_iron,
+        no_bleach: preferences.icon_no_bleach,
+        no_tumble_dry: preferences.icon_no_tumble_dry,
+        eac: preferences.icon_eac,
+      })
+      setImportCustomNames(new Map([...overrides.entries()].flatMap(([productId, value]) => value.name ? [[productId, value.name] as const] : [])))
+    }).catch(() => undefined)
+  }, [activeAccountId, selectedStoreId])
 
   useEffect(() => {
     setImportSearch('')
@@ -498,6 +553,183 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
     [filteredImportProducts],
   )
 
+  const findProductForSticker = (sticker: StickerTemplate): Product | undefined => {
+    if (sticker.product_id) {
+      const linked = importProducts.find((product) => product.id === sticker.product_id)
+      if (linked) return linked
+    }
+    const nmId = sticker.nm_id ?? Number(sticker.article)
+    if (Number.isFinite(nmId)) {
+      const byArticle = importProducts.find((product) => product.nm_id === nmId)
+      if (byArticle) return byArticle
+    }
+    return importProducts.find((product) => getSizeRowsImp(product).some((row) => row.barcode === sticker.barcode))
+  }
+
+  const buildPrintGroups = (templates: StickerTemplate[], startUnchecked = false): StickerPrintGroupDraft[] => {
+    const groups = new Map<string, StickerPrintGroupDraft>()
+    for (const template of templates) {
+      const product = findProductForSticker(template)
+      const productId = product?.id ?? template.product_id ?? undefined
+      const override = productId ? productPrintOverrides.get(productId) : undefined
+      const colors = getWbColors(product?.color)
+      const rememberedColor = override?.color ?? template.color ?? ''
+      const selectedColor = colors.length === 0
+        ? rememberedColor
+        : colors.some((color) => color.toLocaleLowerCase('ru-RU') === rememberedColor.toLocaleLowerCase('ru-RU'))
+          ? colors.find((color) => color.toLocaleLowerCase('ru-RU') === rememberedColor.toLocaleLowerCase('ru-RU')) ?? ''
+          : colors.length === 1 ? colors[0] : ''
+      const key = productId ?? `custom:${template.article ?? template.name}:${template.color ?? ''}`
+      let group = groups.get(key)
+      if (!group) {
+        group = {
+          key,
+          label: product?.vendor_code ?? template.name,
+          productId,
+          wbProductMissing: !product && Boolean(template.product_id || template.nm_id),
+          availableColors: colors,
+          name: (productId ? importCustomNames.get(productId) : undefined) ?? override?.name ?? product?.name ?? template.name,
+          article: String(product?.nm_id ?? template.nm_id ?? template.article ?? ''),
+          sellerArticle: override?.seller_article ?? product?.vendor_code ?? template.seller_article ?? '',
+          showWbArticle: printPreferences.show_wb_article,
+          showSellerArticle: printPreferences.show_seller_article,
+          brand: override?.brand ?? product?.brand ?? template.brand ?? '',
+          composition: override?.composition ?? product?.composition ?? template.composition ?? '',
+          color: selectedColor,
+          supplier: printPreferences.supplier || importStore?.supplier_full || importStore?.supplier || template.supplier || '',
+          supplierAddress: printPreferences.supplier_address || importStore?.address || template.supplier_address || '',
+          productionDate: globalProductionDate || printPreferences.production_date || localToday(),
+          country: override?.country ?? product?.country ?? importStore?.country ?? (product ? '' : template.country ?? ''),
+          iconWash: globalIcons.wash,
+          iconIron: globalIcons.iron,
+          iconNoBleach: globalIcons.no_bleach,
+          iconNoTumbleDry: globalIcons.no_tumble_dry,
+          iconEac: globalIcons.eac,
+          sizes: [],
+        }
+        groups.set(key, group)
+      }
+      const rememberedSize = override?.sizes?.[template.barcode]
+      group.sizes.push({
+        key: `${key}:${template.barcode}`,
+        barcode: template.barcode,
+        size: rememberedSize ?? template.size ?? '',
+        checked: !startUnchecked,
+        copies: Math.max(1, template.copies || 1),
+        source: {
+          ...template,
+          product_id: productId,
+          store_id: selectedStoreId || template.store_id,
+          nm_id: product?.nm_id ?? template.nm_id,
+          available_colors: colors,
+        },
+      })
+    }
+    return [...groups.values()]
+  }
+
+  const openPrintSettings = (
+    templates: StickerTemplate[],
+    options: {
+      title?: string
+      showColorTabs?: boolean
+      startUnchecked?: boolean
+      allowCreateBundle?: boolean
+      onPrint: (stickers: StickerTemplate[]) => void
+    },
+  ) => {
+    if (templates.length === 0) return
+    setPrintSetup({
+      title: options.title ?? 'Настройка печати',
+      groups: buildPrintGroups(templates, options.startUnchecked),
+      showColorTabs: Boolean(options.showColorTabs),
+      allowCreateBundle: Boolean(options.allowCreateBundle),
+      onPrint: options.onPrint,
+    })
+  }
+
+  const rememberPrintGroups = async (groups: StickerPrintGroupDraft[]) => {
+    const first = groups[0]
+    if (!first || !activeAccountId || !selectedStoreId) return
+    const nextPreferences: StickerPrintPreferences = {
+      show_wb_article: first.showWbArticle,
+      show_seller_article: first.showSellerArticle,
+      supplier: first.supplier,
+      supplier_address: first.supplierAddress,
+      production_date: first.productionDate,
+      country: first.country,
+      icon_wash: first.iconWash,
+      icon_iron: first.iconIron,
+      icon_no_bleach: first.iconNoBleach,
+      icon_no_tumble_dry: first.iconNoTumbleDry,
+      icon_eac: first.iconEac,
+    }
+    await saveStickerPrintPreferences(activeAccountId, selectedStoreId, nextPreferences)
+    setPrintPreferences(nextPreferences)
+    setGlobalProductionDate(nextPreferences.production_date)
+    setGlobalIcons({ wash: first.iconWash, iron: first.iconIron, no_bleach: first.iconNoBleach, no_tumble_dry: first.iconNoTumbleDry, eac: first.iconEac })
+
+    const nextOverrides = new Map(productPrintOverrides)
+    for (const group of groups) {
+      if (!group.productId) continue
+      const product = importProducts.find((item) => item.id === group.productId)
+      const automaticSizes = new Map(product ? getSizeRowsImp(product).map((size) => [size.barcode, size.techSize]) : [])
+      const customSizes = Object.fromEntries(group.sizes
+        .filter((size) => size.size !== (automaticSizes.get(size.barcode) ?? size.source.size ?? ''))
+        .map((size) => [size.barcode, size.size]))
+      const automaticCountry = product?.country ?? importStore?.country ?? ''
+      const override: StickerProductPrintOverride = {
+        ...(group.name !== (product?.name ?? '') ? { name: group.name } : {}),
+        ...(group.composition !== (product?.composition ?? '') ? { composition: group.composition } : {}),
+        ...(group.sellerArticle !== (product?.vendor_code ?? '') ? { seller_article: group.sellerArticle } : {}),
+        ...(group.brand !== (product?.brand ?? '') ? { brand: group.brand } : {}),
+        color: group.color,
+        ...(group.country !== automaticCountry ? { country: group.country } : {}),
+        ...(Object.keys(customSizes).length > 0 ? { sizes: customSizes } : {}),
+      }
+      await saveStickerProductOverride(activeAccountId, selectedStoreId, group.productId, override)
+      nextOverrides.set(group.productId, override)
+    }
+    const existingIds = new Set(stickers.map((sticker) => sticker.id))
+    for (const configured of groupsToStickers(groups)) {
+      if (configured.product_id || !existingIds.has(configured.id)) continue
+      await onEdit(configured.id, {
+        barcode: configured.barcode,
+        name: configured.name,
+        composition: configured.composition ?? '',
+        article: configured.article ?? '',
+        seller_article: configured.seller_article ?? '',
+        brand: configured.brand ?? '',
+        size: configured.size ?? '',
+        color: configured.color ?? '',
+        supplier: configured.supplier ?? '',
+        supplier_address: configured.supplier_address ?? '',
+        production_date: configured.production_date ?? '',
+        country: configured.country,
+        copies: configured.copies,
+        icon_wash: configured.icon_wash,
+        icon_iron: configured.icon_iron,
+        icon_no_bleach: configured.icon_no_bleach,
+        icon_no_tumble_dry: configured.icon_no_tumble_dry,
+        icon_eac: configured.icon_eac,
+      })
+    }
+    setProductPrintOverrides(nextOverrides)
+    setImportCustomNames(new Map([...nextOverrides.entries()].flatMap(([productId, value]) => value.name ? [[productId, value.name] as const] : [])))
+    showToast('Настройки печати сохранены', 'success')
+  }
+
+  const openBundleCreatorFromPrint = (templates: StickerTemplate[]) => {
+    const selectedKeys = new Set(templates.map((template) => template.id))
+    setImportSelected(selectedKeys)
+    setImportBundleQties(Object.fromEntries(templates.map((template) => [template.id, template.copies])))
+    setImportBundlePrintDrafts(new Map(templates.map((template) => [template.id, template])))
+    setImportBundleName(`Набор ${new Date().toLocaleDateString('ru-RU')}`)
+    setImportBundleError(null)
+    setPrintSetup(null)
+    setImportBundleModalOpen(true)
+  }
+
   const buildSelectedStickers = (): StickerTemplate[] => {
     const stickers: StickerTemplate[] = []
     for (const product of importProducts) {
@@ -511,13 +743,14 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
           name: importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? row.barcode,
           composition: product.composition ?? null,
           article: String(product.nm_id),
+          seller_article: product.vendor_code,
           brand: product.brand ?? null,
           size: row.techSize !== '—' ? row.techSize : null,
           color: product.color ?? null,
           supplier: importStore?.supplier_full ?? importStore?.supplier ?? null,
           supplier_address: importStore?.address ?? null,
           production_date: globalProductionDate || null,
-          country: product.country ?? '',
+          country: product.country ?? importStore?.country ?? '',
           copies: 1,
           icon_wash: globalIcons.wash,
           icon_iron: globalIcons.iron,
@@ -525,6 +758,10 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
           icon_no_tumble_dry: globalIcons.no_tumble_dry,
           icon_eac: globalIcons.eac,
           created_at: '',
+          store_id: selectedStoreId,
+          product_id: product.id,
+          nm_id: product.nm_id,
+          available_colors: getWbColors(product.color),
         })
       }
     }
@@ -538,6 +775,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       .forEach((r) => { init[r.rowKey] = 1 })
     if (Object.keys(init).length === 0) return
     setImportBundleQties(init)
+    setImportBundlePrintDrafts(new Map())
     const today = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
     setImportBundleName(`Партия ${today}`)
     setImportBundleError(null)
@@ -555,25 +793,30 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
         for (const row of rows) {
           if (!importSelected.has(row.rowKey) || row.barcode === '—') continue
           const copies = importBundleQties[row.rowKey] ?? 1
+          const printDraft = importBundlePrintDrafts.get(row.rowKey)
           try {
             const result = await onAdd({
               barcode: row.barcode,
-              name: importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? row.barcode,
-              article: String(product.nm_id),
-              brand: product.brand ?? '',
-              size: row.techSize !== '—' ? row.techSize : '',
-              color: product.color ?? '',
-              composition: product.composition ?? '',
-              supplier: importStore?.supplier_full ?? importStore?.supplier ?? '',
-              supplier_address: importStore?.address ?? '',
-              production_date: globalProductionDate || '',
-              country: '',
+              name: printDraft?.name ?? importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? row.barcode,
+              article: printDraft?.article ?? String(product.nm_id),
+              seller_article: printDraft?.seller_article ?? product.vendor_code ?? '',
+              brand: printDraft?.brand ?? product.brand ?? '',
+              size: printDraft?.size ?? (row.techSize !== '—' ? row.techSize : ''),
+              color: printDraft?.color ?? product.color ?? '',
+              composition: printDraft?.composition ?? product.composition ?? '',
+              supplier: printDraft?.supplier ?? importStore?.supplier_full ?? importStore?.supplier ?? '',
+              supplier_address: printDraft?.supplier_address ?? importStore?.address ?? '',
+              production_date: printDraft?.production_date ?? (globalProductionDate || ''),
+              country: printDraft?.country ?? product.country ?? importStore?.country ?? '',
               copies: 1,
-              icon_wash: globalIcons.wash,
-              icon_iron: globalIcons.iron,
-              icon_no_bleach: globalIcons.no_bleach,
-              icon_no_tumble_dry: globalIcons.no_tumble_dry,
-              icon_eac: globalIcons.eac,
+              icon_wash: printDraft?.icon_wash ?? globalIcons.wash,
+              icon_iron: printDraft?.icon_iron ?? globalIcons.iron,
+              icon_no_bleach: printDraft?.icon_no_bleach ?? globalIcons.no_bleach,
+              icon_no_tumble_dry: printDraft?.icon_no_tumble_dry ?? globalIcons.no_tumble_dry,
+              icon_eac: printDraft?.icon_eac ?? globalIcons.eac,
+              store_id: selectedStoreId,
+              product_id: product.id,
+              nm_id: product.nm_id,
             }) as { id: string } | undefined
             if (result?.id) bundleItems.push({ sticker_id: result.id, copies })
           } catch {
@@ -588,6 +831,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       await onAddBundle(importBundleName.trim(), bundleItems)
       setImportBundleModalOpen(false)
       setImportSelected(new Set())
+      setImportBundlePrintDrafts(new Map())
     } catch (err) {
       setImportBundleError(err instanceof Error ? err.message : 'Ошибка создания')
     } finally {
@@ -654,6 +898,23 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       {isAdmin && mainTab === 'stickers3' && <KizGuidePage />}
 
       {mainTab === 'stickers' && <div className="space-y-4">
+      {printSetup && (
+        <StickerPrintSettingsModal
+          open
+          title={printSetup.title}
+          groups={printSetup.groups}
+          showColorTabs={printSetup.showColorTabs}
+          allowCreateBundle={printSetup.allowCreateBundle}
+          onClose={() => setPrintSetup(null)}
+          onRemember={rememberPrintGroups}
+          onCreateBundle={openBundleCreatorFromPrint}
+          onPrint={(configured) => {
+            const action = printSetup.onPrint
+            setPrintSetup(null)
+            action(configured)
+          }}
+        />
+      )}
       {/* ── Pre-print модал: проверка незаполненных полей ── */}
       {prePrintModal && (() => {
         const missing = getMissingFields(prePrintModal.stickers)
@@ -714,6 +975,32 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                 </button>
                 <button
                   type="button"
+                  disabled={isRememberingMissing}
+                  onClick={() => {
+                    const edited = prePrintModal.stickers.map((sticker) => ({ ...sticker, ...prePrintEdits }))
+                    const first = edited[0]
+                    const groups = buildPrintGroups(edited).map((group) => ({
+                      ...group,
+                      name: (prePrintEdits.name as string | undefined) ?? group.name,
+                      composition: (prePrintEdits.composition as string | undefined) ?? group.composition,
+                      brand: (prePrintEdits.brand as string | undefined) ?? group.brand,
+                      color: (prePrintEdits.color as string | undefined) ?? group.color,
+                      supplier: first?.supplier ?? group.supplier,
+                      supplierAddress: first?.supplier_address ?? group.supplierAddress,
+                      productionDate: first?.production_date ?? group.productionDate,
+                      country: first?.country ?? group.country,
+                    }))
+                    setIsRememberingMissing(true)
+                    void rememberPrintGroups(groups)
+                      .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось сохранить настройки', 'error'))
+                      .finally(() => setIsRememberingMissing(false))
+                  }}
+                  className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100 disabled:opacity-50"
+                >
+                  {isRememberingMissing ? 'Сохранение…' : 'Запомнить настройки'}
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     const stickers = prePrintModal.stickers.map((s) => ({ ...s, ...prePrintEdits }))
                     setPrePrintModal(null)
@@ -721,7 +1008,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                   }}
                   className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
                 >
-                  {!isMultiple && Object.keys(prePrintEdits).length > 0 ? 'Сохранить и открыть' : 'Открыть'}
+                    Печать
                 </button>
               </div>
             </div>
@@ -1098,7 +1385,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                               if (s.length > BULK_PDF_WARN_THRESHOLD) {
                                 showToast(`Выбрано ${s.length} стикеров — генерация может занять некоторое время`, 'info')
                               }
-                              previewWithCheck(s, previewStickerPdf)
+                              openPrintSettings(s, { showColorTabs: true, onPrint: (configured) => previewWithCheck(configured, previewStickerPdf) })
                             }}
                               className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                             >
@@ -1115,7 +1402,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                               if (s.length > BULK_PDF_WARN_THRESHOLD) {
                                 showToast(`Выбрано ${s.length} стикеров — генерация может занять некоторое время`, 'info')
                               }
-                              downloadStickerPdf(s)
+                              openPrintSettings(s, { showColorTabs: true, onPrint: (configured) => previewWithCheck(configured, downloadStickerPdf) })
                             }}
                               className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                             >
@@ -1237,13 +1524,14 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                   name: importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? r.barcode,
                                   composition: product.composition ?? null,
                                   article: String(product.nm_id),
+                                  seller_article: product.vendor_code,
                                   brand: product.brand ?? null,
                                   size: r.techSize !== '—' ? r.techSize : null,
                                   color: product.color ?? null,
                                   supplier: importStore?.supplier_full ?? importStore?.supplier ?? null,
                                   supplier_address: importStore?.address ?? null,
                                   production_date: globalProductionDate || null,
-                                  country: product.country ?? '',
+                                  country: product.country ?? importStore?.country ?? '',
                                   copies: 1,
                                   icon_wash: globalIcons.wash,
                                   icon_iron: globalIcons.iron,
@@ -1251,6 +1539,10 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                   icon_no_tumble_dry: globalIcons.no_tumble_dry,
                                   icon_eac: globalIcons.eac,
                                   created_at: '',
+                                  store_id: selectedStoreId,
+                                  product_id: product.id,
+                                  nm_id: product.nm_id,
+                                  available_colors: getWbColors(product.color),
                                 }))
                               if (productStickers.length === 0) return null
                               return (
@@ -1258,7 +1550,12 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                   <button
                                     type="button"
                                     title={`Открыть для печати (${productStickers.length} стикеров)`}
-                                    onClick={() => previewWithCheck(productStickers, previewStickerPdf)}
+                                    onClick={() => openPrintSettings(productStickers, {
+                                      title: `Печать товара ${product.nm_id}`,
+                                      startUnchecked: true,
+                                      allowCreateBundle: true,
+                                      onPrint: (configured) => previewWithCheck(configured, previewStickerPdf),
+                                    })}
                                     className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                   >
                                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -1268,7 +1565,12 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                   <button
                                     type="button"
                                     title={`Скачать PDF (${productStickers.length} стикеров)`}
-                                    onClick={() => downloadStickerPdf(productStickers)}
+                                    onClick={() => openPrintSettings(productStickers, {
+                                      title: `Печать товара ${product.nm_id}`,
+                                      startUnchecked: true,
+                                      allowCreateBundle: true,
+                                      onPrint: (configured) => previewWithCheck(configured, downloadStickerPdf),
+                                    })}
                                     className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                   >
                                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
@@ -1331,13 +1633,14 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                                 name: importCustomNames.get(product.id) ?? product.name ?? product.vendor_code ?? row.barcode,
                                                 composition: product.composition ?? null,
                                                 article: String(product.nm_id),
+                                                seller_article: product.vendor_code,
                                                 brand: product.brand ?? null,
                                                 size: row.techSize !== '—' ? row.techSize : null,
                                                 color: product.color ?? null,
                                                 supplier: importStore?.supplier_full ?? importStore?.supplier ?? null,
                                                 supplier_address: importStore?.address ?? null,
                                                 production_date: globalProductionDate || null,
-                                                country: product.country ?? '',
+                                                country: product.country ?? importStore?.country ?? '',
                                                 copies: 1,
                                                 icon_wash: globalIcons.wash,
                                                 icon_iron: globalIcons.iron,
@@ -1345,13 +1648,17 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                                 icon_no_tumble_dry: globalIcons.no_tumble_dry,
                                                 icon_eac: globalIcons.eac,
                                                 created_at: '',
+                                                store_id: selectedStoreId,
+                                                product_id: product.id,
+                                                nm_id: product.nm_id,
+                                                available_colors: getWbColors(product.color),
                                               }
                                               return (
                                                 <div className="flex items-center gap-0.5">
                                                   <button
                                                     type="button"
                                                     title="Открыть стикер для печати"
-                                                    onClick={(e) => { e.stopPropagation(); previewWithCheck([tempSticker], previewStickerPdf) }}
+                                                    onClick={(e) => { e.stopPropagation(); openPrintSettings([tempSticker], { onPrint: (configured) => previewWithCheck(configured, previewStickerPdf) }) }}
                                                     className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                                   >
                                                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -1361,7 +1668,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                                                   <button
                                                     type="button"
                                                     title="Скачать PDF"
-                                                    onClick={(e) => { e.stopPropagation(); downloadStickerPdf([tempSticker]) }}
+                                                    onClick={(e) => { e.stopPropagation(); openPrintSettings([tempSticker], { onPrint: (configured) => previewWithCheck(configured, downloadStickerPdf) }) }}
                                                     className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                                                   >
                                                     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9">
@@ -1464,7 +1771,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                         <button
                           type="button"
                           title="Открыть для печати"
-                          onClick={() => previewStickerPdf([{ ...s, production_date: globalProductionDate || s.production_date }])}
+                          onClick={() => openPrintSettings([{ ...s, production_date: globalProductionDate || s.production_date }], { onPrint: (configured) => previewWithCheck(configured, previewStickerPdf) })}
                           className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                         >
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -1474,7 +1781,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
                         <button
                           type="button"
                           title="Скачать PDF"
-                          onClick={() => downloadStickerPdf([{ ...s, production_date: globalProductionDate || s.production_date }])}
+                          onClick={() => openPrintSettings([{ ...s, production_date: globalProductionDate || s.production_date }], { onPrint: (configured) => previewWithCheck(configured, downloadStickerPdf) })}
                           className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                         >
                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9">
@@ -1649,7 +1956,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
       />
 
       {/* Модалка создания набора из Импорт WB (сначала настройка, потом создание) */}
-      <Modal open={importBundleModalOpen} onClose={() => { if (!isImporting) setImportBundleModalOpen(false) }} title="Создать набор">
+      <Modal open={importBundleModalOpen} onClose={() => { if (!isImporting) { setImportBundleModalOpen(false); setImportBundlePrintDrafts(new Map()) } }} title="Создать набор">
         <div className="flex flex-col gap-4">
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-600">Название набора</label>
@@ -1707,7 +2014,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, onSto
 
           {importBundleError && <p className="text-xs text-rose-500">{importBundleError}</p>}
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="secondary" onClick={() => setImportBundleModalOpen(false)} disabled={isImporting}>
+            <Button type="button" variant="secondary" onClick={() => { setImportBundleModalOpen(false); setImportBundlePrintDrafts(new Map()) }} disabled={isImporting}>
               Отмена
             </Button>
             <Button type="button" disabled={!importBundleName.trim() || isImporting} onClick={() => void handleSaveImportBundle()}>

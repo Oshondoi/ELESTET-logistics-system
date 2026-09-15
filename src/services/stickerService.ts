@@ -18,8 +18,11 @@ export const createSticker = async (
   values: StickerFormValues,
 ): Promise<StickerTemplate> => {
   if (!supabase) throw new Error('Supabase is not configured')
+  // New sticker-link columns are applied by a SQL patch before generated DB types are refreshed.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any
   const barcode = values.barcode.trim() || generateEAN13()
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('sticker_templates')
     .insert({
       account_id: accountId,
@@ -27,19 +30,23 @@ export const createSticker = async (
       name: values.name.trim(),
       composition: values.composition.trim() || null,
       article: values.article.trim() || null,
+      seller_article: values.seller_article?.trim() || null,
       brand: values.brand.trim() || null,
       size: values.size.trim() || null,
       color: values.color.trim() || null,
       supplier: values.supplier.trim() || null,
       supplier_address: values.supplier_address.trim() || null,
       production_date: values.production_date.trim() || null,
-      country: values.country.trim() || 'Кыргызстан',
+      country: values.country.trim(),
       copies: values.copies,
       icon_wash: values.icon_wash,
       icon_iron: values.icon_iron,
       icon_no_bleach: values.icon_no_bleach,
       icon_no_tumble_dry: values.icon_no_tumble_dry,
       icon_eac: values.icon_eac,
+      store_id: values.store_id || null,
+      product_id: values.product_id || null,
+      nm_id: values.nm_id ?? null,
     })
     .select()
     .single()
@@ -53,26 +60,32 @@ export const updateSticker = async (
   values: StickerFormValues,
 ): Promise<StickerTemplate> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any
+  const { data, error } = await db
     .from('sticker_templates')
     .update({
       barcode: values.barcode.trim(),
       name: values.name.trim(),
       composition: values.composition.trim() || null,
       article: values.article.trim() || null,
+      seller_article: values.seller_article?.trim() || null,
       brand: values.brand.trim() || null,
       size: values.size.trim() || null,
       color: values.color.trim() || null,
       supplier: values.supplier.trim() || null,
       supplier_address: values.supplier_address.trim() || null,
       production_date: values.production_date.trim() || null,
-      country: values.country.trim() || 'Кыргызстан',
+      country: values.country.trim(),
       copies: values.copies,
       icon_wash: values.icon_wash,
       icon_iron: values.icon_iron,
       icon_no_bleach: values.icon_no_bleach,
       icon_no_tumble_dry: values.icon_no_tumble_dry,
       icon_eac: values.icon_eac,
+      store_id: values.store_id || null,
+      product_id: values.product_id || null,
+      nm_id: values.nm_id ?? null,
     })
     .eq('id', stickerId)
     .eq('account_id', accountId)

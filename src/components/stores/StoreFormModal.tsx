@@ -22,6 +22,7 @@ const DEFAULT_VALUES: StoreFormValues = {
   supplier: '',
   supplier_full: '',
   address: '',
+  country: '',
   inn: '',
   phone: '',
 }
@@ -175,6 +176,13 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
             placeholder="Юридический или фактический адрес"
             value={values.address ?? ''}
             onChange={(e) => setValues((c) => ({ ...c, address: e.target.value }))}
+          />
+          <Input
+            label="Страна производства"
+            placeholder="Например, Кыргызстан"
+            value={values.country ?? ''}
+            onChange={(e) => setValues((c) => ({ ...c, country: e.target.value }))}
+            hint="Подставляется на стикер, если страна отсутствует в карточке WB."
           />
           <Input
             label="Телефон"

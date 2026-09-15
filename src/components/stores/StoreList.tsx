@@ -146,6 +146,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
                 <th className="px-3 py-2.5">Поставщик</th>
                 <th className="px-3 py-2.5">Наим. для стикера</th>
                 <th className="px-3 py-2.5">Адрес</th>
+                <th className="px-3 py-2.5">Страна производства</th>
                 <th className="px-3 py-2.5">Телефон</th>
                 <th className="px-3 py-2.5">Создан</th>
                 <th className="w-28 px-3 py-2.5">
@@ -220,6 +221,9 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
                     </td>
                     <td className="max-w-[200px] truncate px-3 py-3.5 text-slate-500">
                       {store.address || <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-3 py-3.5 text-slate-600">
+                      {store.country || <span className="text-slate-300">—</span>}
                     </td>
                     <td className="px-3 py-3.5">
                       {store.phone ? (

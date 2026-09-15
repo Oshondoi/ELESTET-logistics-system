@@ -11,6 +11,7 @@ const defaultValues = (): StickerFormValues => ({
   name: '',
   composition: '',
   article: '',
+  seller_article: '',
   brand: '',
   size: '',
   color: '',
@@ -48,6 +49,7 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
           name: initialValues.name,
           composition: initialValues.composition ?? '',
           article: initialValues.article ?? '',
+          seller_article: initialValues.seller_article ?? '',
           brand: initialValues.brand ?? '',
           size: initialValues.size ?? '',
           color: initialValues.color ?? '',
@@ -123,18 +125,25 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
 
         <div className="grid grid-cols-2 gap-3">
           <Input
-            label="Артикул"
+            label="Артикул WB"
             placeholder="123456789"
             value={values.article}
             onChange={(e) => set('article', e.target.value)}
           />
           <Input
-            label="Бренд"
-            placeholder="IIStyle"
-            value={values.brand}
-            onChange={(e) => set('brand', e.target.value)}
+            label="Артикул продавца"
+            placeholder="ART-001"
+            value={values.seller_article ?? ''}
+            onChange={(e) => set('seller_article', e.target.value)}
           />
         </div>
+
+        <Input
+          label="Бренд"
+          placeholder="IIStyle"
+          value={values.brand}
+          onChange={(e) => set('brand', e.target.value)}
+        />
 
         <div className="grid grid-cols-2 gap-3">
           <Input
@@ -187,14 +196,15 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
           <label className="mb-2 block text-xs font-medium text-slate-600">Иконки</label>
           <div className="flex flex-wrap gap-3">
             {([
-              { key: 'icon_wash',          src: '/icons/wash-30.svg' },
-              { key: 'icon_iron',          src: '/icons/iron.svg' },
-              { key: 'icon_no_bleach',     src: '/icons/no-bleach.svg' },
-              { key: 'icon_no_tumble_dry', src: '/icons/no-tumble-dry.svg' },
-              { key: 'icon_eac',           src: '/eac.svg' },
-            ] as { key: keyof StickerFormValues; src: string }[]).map(({ key, src }) => (
+              { key: 'icon_wash',          src: '/icons/wash-30.svg', label: 'Стирка при 30 °C' },
+              { key: 'icon_iron',          src: '/icons/iron.svg', label: 'Разрешено гладить' },
+              { key: 'icon_no_bleach',     src: '/icons/no-bleach.svg', label: 'Не отбеливать' },
+              { key: 'icon_no_tumble_dry', src: '/icons/no-tumble-dry.svg', label: 'Не сушить в барабане' },
+              { key: 'icon_eac',           src: '/eac.svg', label: 'Знак соответствия ЕАЭС' },
+            ] as { key: keyof StickerFormValues; src: string; label: string }[]).map(({ key, src, label }) => (
               <label
                 key={key}
+                title={label}
                 className={`flex cursor-pointer flex-col items-center gap-1 rounded-xl border-2 p-2 transition-colors ${
                   (values[key] as boolean)
                     ? 'border-blue-500 bg-blue-50'

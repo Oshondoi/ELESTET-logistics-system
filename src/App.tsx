@@ -768,6 +768,7 @@ function App() {
       supplier: shortLegalName || store.supplier || '',
       supplier_full: store.supplier_full ?? undefined,
       address: store.address ?? '',
+      country: store.country ?? '',
       inn: (data.tin ?? store.inn ?? '').trim(),
       phone: store.phone ?? '',
     })
@@ -1039,6 +1040,7 @@ function App() {
                   stickers={stickers}
                   bundles={bundles}
                   stores={stores}
+                  activeAccountId={activeAccount?.id ?? ''}
                   selectedStoreId={activeStoreId}
                   onStoreChange={setActiveStoreId}
                   onAdd={addSticker}
@@ -1177,7 +1179,7 @@ function App() {
 
       <StoreFormModal
         open={storeModalOpen}
-        initialValues={editingStore ? { name: editingStore.name, marketplace: editingStore.marketplace, store_code: editingStore.store_code, supplier: editingStore.supplier ?? '', supplier_full: editingStore.supplier_full ?? '', address: editingStore.address ?? '', inn: editingStore.inn ?? '' } : undefined}
+        initialValues={editingStore ? { name: editingStore.name, marketplace: editingStore.marketplace, store_code: editingStore.store_code, supplier: editingStore.supplier ?? '', supplier_full: editingStore.supplier_full ?? '', address: editingStore.address ?? '', country: editingStore.country ?? '', inn: editingStore.inn ?? '' } : undefined}
         hasApiKey={Boolean(editingStore?.api_key)}
         onClose={() => { setStoreModalOpen(false); setEditingStore(null) }}
         onSubmit={(values) => editingStore ? updateStore(editingStore.id, values) : addStore(values)}

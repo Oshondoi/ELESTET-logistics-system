@@ -58,6 +58,7 @@ export const createStoreInSupabase = async (values: StoreFormValues, accountId: 
     supplier: values.supplier?.trim() || null,
     supplier_full: values.supplier_full?.trim() || null,
     address: values.address?.trim() || null,
+    ...(values.country !== undefined ? { country: values.country.trim() || null } : {}),
     inn: values.inn?.trim() || null,
     phone: values.phone?.trim() || null,
   }
@@ -82,6 +83,7 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
     supplier: values.supplier?.trim() || null,
     ...(values.supplier_full !== undefined ? { supplier_full: values.supplier_full.trim() || null } : {}),
     address: values.address?.trim() || null,
+    ...(values.country !== undefined ? { country: values.country.trim() || null } : {}),
     inn: values.inn?.trim() || null,
     phone: values.phone?.trim() || null,
   }

@@ -343,6 +343,7 @@ export interface Store {
   supplier?: string | null
   supplier_full?: string | null
   address?: string | null
+  country?: string | null
   deleted_at?: string | null
   inn?: string | null
   phone?: string | null
@@ -408,6 +409,7 @@ export interface StoreFormValues {
   supplier?: string
   supplier_full?: string
   address?: string
+  country?: string
   inn?: string
   phone?: string
 }
@@ -632,6 +634,7 @@ export interface StickerTemplate {
   name: string
   composition: string | null
   article: string | null
+  seller_article?: string | null
   brand: string | null
   size: string | null
   color: string | null
@@ -646,6 +649,12 @@ export interface StickerTemplate {
   icon_no_tumble_dry: boolean
   icon_eac: boolean
   created_at: string
+  store_id?: string | null
+  product_id?: string | null
+  nm_id?: number | null
+  available_colors?: string[]
+  show_wb_article?: boolean
+  show_seller_article?: boolean
 }
 
 export interface StickerBundleItem {
@@ -666,6 +675,7 @@ export interface StickerFormValues {
   name: string
   composition: string
   article: string
+  seller_article?: string
   brand: string
   size: string
   color: string
@@ -679,6 +689,9 @@ export interface StickerFormValues {
   icon_no_bleach: boolean
   icon_no_tumble_dry: boolean
   icon_eac: boolean
+  store_id?: string
+  product_id?: string
+  nm_id?: number
 }
 
 // ─── Отзывы WB ────────────────────────────────────────────────
