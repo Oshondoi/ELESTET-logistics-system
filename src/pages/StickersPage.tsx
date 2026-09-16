@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { StickerFormValues, StickerTemplate, StickerBundle, StickerBundleItem, Store, Product, StoreSyncLog } from '../types'
+import type { StickerFormValues, StickerTemplate, StickerBundle, StickerBundleItem, Store, Product } from '../types'
 import { KizPage } from './KizPage'
 import { KizGuidePage } from './KizGuidePage'
 import { StickerFormModal } from '../components/stickers/StickerFormModal'
@@ -9,7 +9,7 @@ import { Card } from '../components/ui/Card'
 import { Modal } from '../components/ui/Modal'
 import { downloadStickerPdf, previewStickerPdf } from '../lib/stickerPdf'
 import { generateEAN13 } from '../lib/ean13'
-import { fetchLastSync, fetchProducts, triggerSync } from '../services/productService'
+import { fetchProducts, triggerSync } from '../services/productService'
 import { showToast } from '../components/ui/Toast'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { StickerPrintSettingsModal, type StickerPrintGroupDraft, groupsToStickers } from '../components/stickers/StickerPrintSettingsModal'
@@ -27,14 +27,6 @@ const BULK_PDF_WARN_THRESHOLD = 100
 const localToday = () => {
   const now = new Date()
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
-}
-
-function formatImportSyncTime(iso: string): string {
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
-  if (diff < 60) return 'только что'
-  if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`
-  if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`
-  return `${Math.floor(diff / 86400)} дн назад`
 }
 
 function normalizeImportSearch(value: unknown): string {
@@ -331,7 +323,6 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
   const [importCustomNames, setImportCustomNames] = useState<Map<string, string>>(new Map())
   const [isLoadingImport, setIsLoadingImport] = useState(false)
   const [isSyncingImport, setIsSyncingImport] = useState(false)
-  const [importLastSync, setImportLastSync] = useState<StoreSyncLog | null>(null)
   const [importSyncError, setImportSyncError] = useState<string | null>(null)
   const [importSelected, setImportSelected] = useState<Set<string>>(new Set())
   const [isImporting, setIsImporting] = useState(false)
@@ -428,13 +419,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
     if (!storeId) return
     setIsLoadingImport(true)
     try {
-      const [nextProducts, nextLastSync] = await Promise.all([
-        fetchProducts(storeId),
-        fetchLastSync(storeId),
-      ])
+      const nextProducts = await fetchProducts(storeId)
       const validRowKeys = new Set(nextProducts.flatMap((product) => getSizeRowsImp(product).map((row) => row.rowKey)))
       setImportProducts(nextProducts)
-      setImportLastSync(nextLastSync)
       setImportSelected((previous) => new Set([...previous].filter((rowKey) => validRowKeys.has(rowKey))))
     } finally {
       setIsLoadingImport(false)
@@ -1161,13 +1148,6 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
 
           {activeTab === 'import' && (
             <div className="flex shrink-0 items-center gap-2.5">
-              {importLastSync && (
-                <span className="whitespace-nowrap text-xs text-slate-400">
-                  {importLastSync.status === 'error'
-                    ? <span className="text-rose-500">Ошибка синхронизации</span>
-                    : <>Синхронизировано: {formatImportSyncTime(importLastSync.synced_at)}</>}
-                </span>
-              )}
               <Button
                 type="button"
                 variant="secondary"
