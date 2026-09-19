@@ -1006,6 +1006,15 @@ const BatchDetailModal = ({
   const [warehouseSearch, setWarehouseSearch] = useState('')
   const [isCreatingSupply, setIsCreatingSupply] = useState(false)
   const [supplyCreateError, setSupplyCreateError] = useState<string | null>(null)
+  const [supplyDestinationEdit, setSupplyDestinationEdit] = useState<{
+    supplyId: string
+    type: SupplyDestinationType
+    warehouseId: string
+    search: string
+    dropdownOpen: boolean
+  } | null>(null)
+  const [isSavingSupplyDestination, setIsSavingSupplyDestination] = useState(false)
+  const [supplyDestinationEditError, setSupplyDestinationEditError] = useState<string | null>(null)
   const [transferSupplyId, setTransferSupplyId] = useState<string | null>(null)
   const [transferTripId, setTransferTripId] = useState('')
   const [isTransferringSupply, setIsTransferringSupply] = useState(false)
@@ -1364,19 +1373,136 @@ const BatchDetailModal = ({
     ? (displayPipelineStage.partner_account_id ?? displayPipelineStage.owner_account_id)
     : batch.account_id
 
-  const supplyDestinationWarehouses = useMemo(() => (
-    supplyDestinationType === 'fbo'
-      ? warehouses
-          .filter((warehouse) => warehouse.is_system)
-          .map((warehouse) => ({ id: warehouse.id, name: warehouse.name, type: 'fbo' as const }))
-      : receptionWmsWarehouses
-          .filter((warehouse) => warehouse.fbs_enabled)
-          .map((warehouse) => ({ id: warehouse.id, name: warehouse.name, type: 'fbs' as const }))
-  ), [receptionWmsWarehouses, supplyDestinationType, warehouses])
+  const fboSupplyDestinationWarehouses = useMemo(() => (
+    warehouses
+      .filter((warehouse) => warehouse.is_system)
+      .map((warehouse) => ({ id: warehouse.id, name: warehouse.name, type: 'fbo' as const }))
+  ), [warehouses])
+
+  const ownSupplyDestinationWarehouses = useMemo(() => (
+    receptionWmsWarehouses
+      .filter((warehouse) => warehouse.fbs_enabled)
+      .map((warehouse) => ({ id: warehouse.id, name: warehouse.name, type: 'fbs' as const }))
+  ), [receptionWmsWarehouses])
+
+  const supplyDestinationWarehouses = supplyDestinationType === 'fbo'
+    ? fboSupplyDestinationWarehouses
+    : ownSupplyDestinationWarehouses
 
   const selectedSupplyDestination = supplyDestinationWarehouses.find(
     (warehouse) => warehouse.id === selectedWarehouseId,
   ) ?? null
+
+  const editedSupplyDestinationWarehouses = supplyDestinationEdit?.type === 'fbs'
+    ? ownSupplyDestinationWarehouses
+    : fboSupplyDestinationWarehouses
+
+  const selectedEditedSupplyDestination = editedSupplyDestinationWarehouses.find(
+    (warehouse) => warehouse.id === supplyDestinationEdit?.warehouseId,
+  ) ?? null
+
+  const openSupplyDestinationEditor = (supply: FulfillmentSupplyWithBoxes) => {
+    const type: SupplyDestinationType = supply.destination_type === 'fbs' ? 'fbs' : 'fbo'
+    const availableWarehouses = type === 'fbs'
+      ? ownSupplyDestinationWarehouses
+      : fboSupplyDestinationWarehouses
+    const storedWarehouseId = type === 'fbs'
+      ? supply.destination_wms_warehouse_id
+      : supply.warehouse_id
+    const currentWarehouse = availableWarehouses.find((warehouse) => warehouse.id === storedWarehouseId)
+      ?? availableWarehouses.find((warehouse) => warehouse.name === supply.warehouse_name)
+
+    setSupplyDestinationEdit({
+      supplyId: supply.id,
+      type,
+      warehouseId: currentWarehouse?.id ?? storedWarehouseId ?? '',
+      search: '',
+      dropdownOpen: false,
+    })
+    setSupplyDestinationEditError(null)
+  }
+
+  const saveSupplyDestination = async () => {
+    if (!supplyDestinationEdit || !selectedEditedSupplyDestination || isSavingSupplyDestination) return
+    const supply = supplies.find((candidate) => candidate.id === supplyDestinationEdit.supplyId)
+    if (!supply) {
+      setSupplyDestinationEditError('Поставка не найдена. Обновите страницу и повторите попытку.')
+      return
+    }
+
+    const nextDestination = selectedEditedSupplyDestination
+    const nextValues = {
+      warehouse_id: nextDestination.type === 'fbo' ? nextDestination.id : null,
+      warehouse_name: nextDestination.name,
+      destination_type: nextDestination.type,
+      destination_wms_warehouse_id: nextDestination.type === 'fbs' ? nextDestination.id : null,
+    }
+    const previousValues = {
+      warehouse_id: supply.warehouse_id,
+      warehouse_name: supply.warehouse_name,
+      destination_type: supply.destination_type,
+      destination_wms_warehouse_id: supply.destination_wms_warehouse_id,
+    }
+    const linkedTrip = trips.find((trip) => trip.lines.some((line) => (
+      line.id === supply.trip_line_id || line.fulfillment_supply_id === supply.id
+    )))
+    const linkedLine = linkedTrip?.lines.find((line) => (
+      line.id === supply.trip_line_id || line.fulfillment_supply_id === supply.id
+    ))
+    let persistedSupplyUpdated = false
+
+    setIsSavingSupplyDestination(true)
+    setSupplyDestinationEditError(null)
+    try {
+      if (!supply._local) {
+        await updateSupply(supply.id, nextValues)
+        persistedSupplyUpdated = true
+      }
+
+      if (linkedTrip && linkedLine) {
+        await onEditTripLine(linkedTrip.id, linkedLine.id, {
+          store_id: linkedLine.store_id,
+          destination_warehouse: nextDestination.name,
+          transfer_to_account_id: linkedLine.transfer_to_account_id,
+          box_qty: linkedLine.box_qty,
+          units_qty: linkedLine.units_qty,
+          units_total: linkedLine.units_total,
+          arrived_box_qty: linkedLine.arrived_box_qty,
+          weight: linkedLine.weight ?? 0,
+          planned_marketplace_delivery_date: linkedLine.planned_marketplace_delivery_date ?? '',
+          arrival_date: linkedLine.arrival_date ?? '',
+          reception_date: linkedLine.reception_date ?? '',
+          shipped_date: linkedLine.shipped_date ?? '',
+          status: linkedLine.status,
+          payment_status: linkedLine.payment_status,
+          comment: linkedLine.comment,
+        })
+      }
+
+      setSupplies((current) => current.map((candidate) => (
+        candidate.id === supply.id ? { ...candidate, ...nextValues } : candidate
+      )))
+      setSupplyDestinationEdit(null)
+      void onRefreshTrips?.().catch(() => {})
+    } catch (reason) {
+      let rollbackFailed = false
+      if (persistedSupplyUpdated) {
+        try {
+          await updateSupply(supply.id, previousValues)
+        } catch {
+          rollbackFailed = true
+        }
+      }
+      const message = reason instanceof Error ? reason.message : 'Не удалось изменить склад назначения'
+      setSupplyDestinationEditError(
+        rollbackFailed
+          ? `${message}. Не удалось автоматически восстановить прежнее назначение — обновите страницу.`
+          : message,
+      )
+    } finally {
+      setIsSavingSupplyDestination(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -6691,6 +6817,7 @@ const BatchDetailModal = ({
                         const isActiveStage = batch.current_stage === 'packing'
                         const readyBoxSupply = isReadyBoxSupply(supply)
                         const canDeleteCard = canManageStageData && (isActiveStage || canSupplyDeleteLocked) && !readyBoxSupply
+                        const canEditDestination = canManageStageData && !readyBoxSupply
                         const canTransferLateSupply = canManageStageData && batch.status === 'done' && batch.stage_logistics && !supply.trip_line_id
                         const linkedLine = supply.trip_line_id
                           ? trips.flatMap((t) => t.lines).find((l) => l.id === supply.trip_line_id)
@@ -6769,11 +6896,219 @@ const BatchDetailModal = ({
                                 <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clipRule="evenodd" /></svg>
                               </button>
                             )}
+                            {canEditDestination && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openSupplyDestinationEditor(supply)
+                                }}
+                                className={`absolute right-1.5 flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition-colors hover:bg-blue-50 hover:text-blue-500 ${canDeleteCard ? 'top-10' : 'top-1.5'}`}
+                                title="Изменить склад назначения"
+                                aria-label="Изменить склад назначения"
+                              >
+                                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 20h9" />
+                                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                </svg>
+                              </button>
+                            )}
                           </div>
                         )
                       })}
                     </div>
                   )}
+
+                  {supplyDestinationEdit && (() => {
+                    const editedSupply = supplies.find((candidate) => candidate.id === supplyDestinationEdit.supplyId)
+                    if (!editedSupply) return null
+                    const filteredWarehouses = editedSupplyDestinationWarehouses.filter((warehouse) => (
+                      warehouse.name.toLowerCase().includes(supplyDestinationEdit.search.trim().toLowerCase())
+                    ))
+                    const closeEditor = () => {
+                      if (isSavingSupplyDestination) return
+                      setSupplyDestinationEdit(null)
+                      setSupplyDestinationEditError(null)
+                    }
+
+                    return createPortal(
+                      <div
+                        className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4"
+                        onClick={closeEditor}
+                      >
+                        <div
+                          className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <div className="mb-5 flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <h3 className="text-lg font-semibold text-slate-800">Изменить склад назначения</h3>
+                              <p className="mt-1 truncate text-sm text-slate-400">
+                                Поставка П-{editedSupply.supply_number} · {editedSupply.warehouse_name}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={isSavingSupplyDestination}
+                              onClick={closeEditor}
+                              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:opacity-40"
+                              aria-label="Закрыть"
+                            >
+                              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+                              </svg>
+                            </button>
+                          </div>
+
+                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Тип склада</p>
+                          <div className="mb-4 flex w-fit items-center rounded-xl bg-slate-100 p-1">
+                            {(['fbo', 'fbs'] as const).map((type) => (
+                              <button
+                                key={type}
+                                type="button"
+                                disabled={isSavingSupplyDestination}
+                                onClick={() => {
+                                  if (supplyDestinationEdit.type === type) return
+                                  setSupplyDestinationEdit((current) => current ? {
+                                    ...current,
+                                    type,
+                                    warehouseId: '',
+                                    search: '',
+                                    dropdownOpen: false,
+                                  } : current)
+                                  setSupplyDestinationEditError(null)
+                                }}
+                                className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-40 ${
+                                  supplyDestinationEdit.type === type
+                                    ? 'bg-white text-blue-700 shadow-sm'
+                                    : 'text-slate-500 hover:text-slate-700'
+                                }`}
+                              >
+                                {type === 'fbo' ? 'FBO склады' : 'Свой склад'}
+                              </button>
+                            ))}
+                          </div>
+
+                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Склад назначения</p>
+                          <div className="relative">
+                            {supplyDestinationEdit.dropdownOpen ? (
+                              <div className="flex items-center gap-2 rounded-xl border border-blue-400 bg-white px-3 py-2.5 ring-2 ring-blue-100">
+                                <svg className="h-4 w-4 flex-shrink-0 text-slate-400" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.452 4.391l3.328 3.329a.75.75 0 1 1-1.06 1.06l-3.329-3.328A7 7 0 0 1 2 9Z" clipRule="evenodd" />
+                                </svg>
+                                <input
+                                  autoFocus
+                                  type="text"
+                                  value={supplyDestinationEdit.search}
+                                  onChange={(event) => setSupplyDestinationEdit((current) => current ? {
+                                    ...current,
+                                    search: event.target.value,
+                                  } : current)}
+                                  placeholder="Поиск склада…"
+                                  className="min-w-0 flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setSupplyDestinationEdit((current) => current ? {
+                                    ...current,
+                                    search: '',
+                                    dropdownOpen: false,
+                                  } : current)}
+                                  className="text-slate-400 hover:text-slate-600"
+                                  aria-label="Закрыть список"
+                                >
+                                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={isSavingSupplyDestination}
+                                onClick={() => setSupplyDestinationEdit((current) => current ? {
+                                  ...current,
+                                  search: '',
+                                  dropdownOpen: true,
+                                } : current)}
+                                className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left text-sm transition-colors hover:border-slate-300 disabled:bg-slate-50"
+                              >
+                                <span className={selectedEditedSupplyDestination ? 'truncate text-slate-700' : 'text-slate-400'}>
+                                  {selectedEditedSupplyDestination?.name ?? (
+                                    supplyDestinationEdit.type === 'fbo'
+                                      ? '— склад WB (FBO) —'
+                                      : '— свой склад —'
+                                  )}
+                                </span>
+                                <svg className="ml-2 h-4 w-4 flex-shrink-0 text-slate-400" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                                </svg>
+                              </button>
+                            )}
+
+                            {supplyDestinationEdit.dropdownOpen && (
+                              <div className="absolute left-0 top-full z-10 mt-1.5 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60">
+                                <div className="max-h-56 overflow-y-auto py-1">
+                                  {filteredWarehouses.length === 0 ? (
+                                    <p className="px-4 py-3 text-sm text-slate-400">
+                                      {supplyDestinationEdit.type === 'fbs' && supplyDestinationEdit.search.trim() === ''
+                                        ? 'Нет своих складов с включённым режимом FBS'
+                                        : 'Ничего не найдено'}
+                                    </p>
+                                  ) : filteredWarehouses.map((warehouse) => (
+                                    <button
+                                      key={warehouse.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setSupplyDestinationEdit((current) => current ? {
+                                          ...current,
+                                          warehouseId: warehouse.id,
+                                          search: '',
+                                          dropdownOpen: false,
+                                        } : current)
+                                        setSupplyDestinationEditError(null)
+                                      }}
+                                      className={`w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-blue-50 hover:text-blue-700 ${
+                                        supplyDestinationEdit.warehouseId === warehouse.id
+                                          ? 'bg-blue-50 font-medium text-blue-700'
+                                          : 'text-slate-700'
+                                      }`}
+                                    >
+                                      {warehouse.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {supplyDestinationEditError && (
+                            <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">
+                              {supplyDestinationEditError}
+                            </p>
+                          )}
+
+                          <div className="mt-6 flex gap-2">
+                            <button
+                              type="button"
+                              disabled={isSavingSupplyDestination}
+                              onClick={closeEditor}
+                              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40"
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!selectedEditedSupplyDestination || isSavingSupplyDestination}
+                              onClick={() => { void saveSupplyDestination() }}
+                              className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {isSavingSupplyDestination ? 'Сохранение…' : 'Сохранить'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>,
+                      document.body,
+                    )
+                  })()}
 
                   {/* QR-код системного ШК короба */}
                   {boxContentsDialog && (

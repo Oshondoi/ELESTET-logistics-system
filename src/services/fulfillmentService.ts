@@ -945,7 +945,17 @@ export const deleteSupply = async (supplyId: string, context?: FulfillmentKizAud
 
 export const updateSupply = async (
   supplyId: string,
-  updates: Partial<Pick<FulfillmentSupply, 'trip_id' | 'trip_line_id' | 'weight' | 'logistics_tariff_type'>>,
+  updates: Partial<Pick<
+    FulfillmentSupply,
+    | 'trip_id'
+    | 'trip_line_id'
+    | 'weight'
+    | 'logistics_tariff_type'
+    | 'warehouse_id'
+    | 'warehouse_name'
+    | 'destination_type'
+    | 'destination_wms_warehouse_id'
+  >>,
 ): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const { error } = await (supabase as any)
