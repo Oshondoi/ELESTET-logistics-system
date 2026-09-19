@@ -18,7 +18,7 @@ const HEADER_H = 120
 const BODY_H   = H_PX - HEADER_H  // 280
 const BODY_Y   = HEADER_H         // 120
 
-/* ── Вспомогательная: спокойная метка + заметное значение ─── */
+/* ── Вспомогательная: обычная чёрная метка + жирное значение ─ */
 const boldLabel = (
   ctx: CanvasRenderingContext2D,
   label: string,
@@ -30,7 +30,9 @@ const boldLabel = (
   emphasized = false,
 ): number => {
   if (!value) return py
-  ctx.fillStyle = '#64748b'
+  // На термопринтере серый тон растрируется и тонкие подписи пропадают.
+  // Подпись остаётся обычного начертания, но печатается чистым чёрным.
+  ctx.fillStyle = '#000000'
   ctx.font = `400 ${fontSize}px Arial, sans-serif`
   const lw = ctx.measureText(label).width
   ctx.fillText(label, px, py)
@@ -192,7 +194,7 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
     const columnWidth = (maxX - PAD) / articleParts.length
     articleParts.forEach((part, index) => {
       let cx = PAD + columnWidth * index
-      ctx.fillStyle = '#64748b'
+      ctx.fillStyle = '#000000'
       ctx.font = `400 ${articleFontSize}px Arial, sans-serif`
       ctx.fillText(part.label, cx, y)
       cx += ctx.measureText(part.label).width
@@ -210,7 +212,7 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   if (tpl.size || tpl.color) {
     let cx = PAD
     const pair = (lbl: string, val: string) => {
-      ctx.fillStyle = '#64748b'
+      ctx.fillStyle = '#000000'
       ctx.font = `400 22px Arial, sans-serif`
       ctx.fillText(lbl, cx, y); cx += ctx.measureText(lbl).width
       ctx.fillStyle = '#020617'
@@ -234,7 +236,7 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   }
 
   /* Страна + иконки по уходу на одной строке */
-  ctx.fillStyle = '#64748b'
+  ctx.fillStyle = '#000000'
   ctx.font = '400 21px Arial, sans-serif'
   const countryLabel = 'Страна: '
   ctx.fillText(countryLabel, PAD, y)
