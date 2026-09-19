@@ -9,6 +9,12 @@ import {
   scannerBytesToString,
   serialPacketTerminator,
 } from '../../lib/scannerInput'
+import {
+  findRememberedScannerSerialPort,
+  getScannerDeviceIdentity,
+  rememberScannerSerialPort,
+} from '../../lib/scannerDeviceIdentity'
+import { kizValidationError, normalizeKizCode } from '../../lib/kizCode'
 
 const DEVICE_PROFILE_KEY = 'elestet_fbs_scanner_profile_v1'
 
@@ -53,7 +59,25 @@ function readSelectedScannerModel(): string {
   }
 }
 
-function saveSelectedScannerModel(scannerModel: string) {
+function readScannerTestStatus(): 'untested' | 'passed' | 'failed' {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
+    return saved.scannerTestStatus === 'passed' || saved.scannerTestStatus === 'failed' ? saved.scannerTestStatus : 'untested'
+  } catch {
+    return 'untested'
+  }
+}
+
+function readScannerProfileKey(): string {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
+    return typeof saved.scannerProfileKey === 'string' ? saved.scannerProfileKey : ''
+  } catch {
+    return ''
+  }
+}
+
+function saveSelectedScannerModel(scannerModel: string, scannerProfileKey: string) {
   let saved: Record<string, unknown> = {}
   try {
     saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
@@ -63,8 +87,19 @@ function saveSelectedScannerModel(scannerModel: string) {
   localStorage.setItem(DEVICE_PROFILE_KEY, JSON.stringify({
     ...saved,
     scannerModel: scannerModel || null,
+    scannerProfileKey: scannerProfileKey || null,
     scannerTestStatus: 'untested',
   }))
+}
+
+function saveScannerTestStatus(status: 'untested' | 'passed' | 'failed', scannerProfileKey: string) {
+  let saved: Record<string, unknown> = {}
+  try {
+    saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
+  } catch {
+    saved = {}
+  }
+  localStorage.setItem(DEVICE_PROFILE_KEY, JSON.stringify({ ...saved, scannerProfileKey, scannerTestStatus: status }))
 }
 
 function errorText(error: unknown): string {
@@ -76,12 +111,18 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
   const [selectedName, setSelectedName] = useState(readSelectedScannerModel)
   const [status, setStatus] = useState<SerialConnectionStatus>(() => browserSerialApi() ? 'disconnected' : 'unsupported')
   const [message, setMessage] = useState('')
+  const [testStatus, setTestStatus] = useState<'untested' | 'passed' | 'failed'>(readScannerTestStatus)
+  const [testedProfileKey, setTestedProfileKey] = useState(readScannerProfileKey)
+  const [testArmed, setTestArmed] = useState(false)
+  const [testMessage, setTestMessage] = useState('')
   const portRef = useRef<BrowserSerialPort | null>(null)
   const readerRef = useRef<BrowserSerialReader | null>(null)
   const readingRef = useRef(false)
   const connectedProfileKeyRef = useRef('')
   const autoConnectProfileKeyRef = useRef('')
   const connectionAttemptRef = useRef(false)
+  const deviceIdRef = useRef(getScannerDeviceIdentity().deviceId)
+  const testArmedRef = useRef(false)
   const scanHandlerRef = useRef(onScan)
   scanHandlerRef.current = onScan
 
@@ -100,10 +141,13 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
   const selectedProfileKey = selected?.connectionType === 'web_serial'
     ? `${selected.id}:${selected.profileVersion}`
     : ''
+  const effectiveTestStatus = selectedProfileKey && testedProfileKey === selectedProfileKey ? testStatus : 'untested'
 
   const disconnect = useCallback(async () => {
     readingRef.current = false
     connectedProfileKeyRef.current = ''
+    testArmedRef.current = false
+    setTestArmed(false)
     try { await readerRef.current?.cancel() } catch { /* порт уже отключён */ }
     readerRef.current = null
     if (!readerRef.current) {
@@ -150,7 +194,25 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
             if (!buffer) continue
             const value = buffer
             buffer = ''
-            await scanHandlerRef.current(value)
+            if (testArmedRef.current) {
+              testArmedRef.current = false
+              setTestArmed(false)
+              const rawKiz = value.replace(/[\r\n\t]+$/g, '')
+              const normalized = normalizeKizCode(rawKiz)
+              const validationError = kizValidationError(normalized)
+              const unsupportedCharacter = /[^\x21-\x7E\x1D]/.test(normalized)
+              const gsCount = Math.max(0, normalized.split('\u001d').length - 1)
+              const nextStatus = validationError || unsupportedCharacter ? 'failed' : 'passed'
+              const profileKey = `${profile.id}:${profile.profileVersion}`
+              saveScannerTestStatus(nextStatus, profileKey)
+              setTestStatus(nextStatus)
+              setTestedProfileKey(profileKey)
+              setTestMessage(nextStatus === 'passed'
+                ? `Проверка пройдена: ${normalized.length} симв.; GS/FNC1: ${gsCount}.`
+                : `${validationError || 'Сканер передал недопустимые символы.'} Получено: ${normalized.length} симв.; GS/FNC1: ${gsCount}.`)
+            } else {
+              await scanHandlerRef.current(value)
+            }
           } else {
             buffer += character
             if (buffer.length > maxPacketLength) throw new Error('Сканер передал слишком длинный пакет')
@@ -188,19 +250,31 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
     setMessage(automatically
       ? 'Сканер подключён автоматически и читает исходные данные КИЗ'
       : 'Сканер подключён и читает исходные данные КИЗ')
-    void readPort(port, profile)
+    setTestMessage(effectiveTestStatus === 'passed'
+      ? 'Этот сканер уже проверен на данном устройстве.'
+      : 'Порт открыт. Запустите проверку и отсканируйте один настоящий КИЗ.')
+    rememberScannerSerialPort(deviceIdRef.current, profileKey, port)
+    void readPort(port, profile).catch((error) => {
+      if (portRef.current === port) {
+        readingRef.current = false
+        portRef.current = null
+        connectedProfileKeyRef.current = ''
+        setStatus('error')
+        setMessage(errorText(error))
+      }
+    })
   }
 
   const connect = async () => {
-    if (!selected || selected.connectionType !== 'web_serial' || !selectedProfileKey || disabled || connectionAttemptRef.current) return
+    if (!selected || selected.connectionType !== 'web_serial' || !selectedProfileKey || disabled || status === 'connecting' || status === 'connected') return
     const serial = browserSerialApi()
-    if (!serial) {
+    if (!serial || typeof serial.requestPort !== 'function') {
       setStatus('unsupported')
       setMessage('Режим ELESTET доступен в Chrome или Edge на компьютере')
       return
     }
     setStatus('connecting')
-    setMessage('')
+    setMessage('Открываем системное окно выбора сканера…')
     connectionAttemptRef.current = true
     let port: BrowserSerialPort | null = null
     try {
@@ -220,15 +294,23 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
   }
 
   useEffect(() => {
-    if (disabled || !selected || selected.connectionType !== 'web_serial' || !selectedProfileKey || portRef.current) return
+    if (disabled || effectiveTestStatus !== 'passed' || !selected || selected.connectionType !== 'web_serial' || !selectedProfileKey || portRef.current) return
     const serial = browserSerialApi()
     if (!serial?.getPorts) return
     let cancelled = false
 
     void serial.getPorts().then(async (ports) => {
       if (cancelled || portRef.current || connectionAttemptRef.current || autoConnectProfileKeyRef.current === selectedProfileKey) return
-      const port = ports[0]
-      if (!port) return
+      const remembered = findRememberedScannerSerialPort(ports, deviceIdRef.current, selectedProfileKey)
+      const port = remembered.port
+      if (!port) {
+        if (remembered.ambiguous) {
+          autoConnectProfileKeyRef.current = selectedProfileKey
+          setStatus('error')
+          setMessage('Найдено несколько разрешённых устройств. Нажмите «Подключить» и выберите сканер этого компьютера.')
+        }
+        return
+      }
       autoConnectProfileKeyRef.current = selectedProfileKey
       connectionAttemptRef.current = true
       setStatus('connecting')
@@ -255,7 +337,7 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
     })
 
     return () => { cancelled = true }
-  }, [disabled, selected, selectedProfileKey])
+  }, [disabled, effectiveTestStatus, selected, selectedProfileKey])
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-100 bg-violet-50/70 px-3 py-2">
@@ -265,8 +347,13 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
         disabled={disabled || status === 'connected' || status === 'connecting'}
         onChange={(event) => {
           const next = event.target.value
+          const nextProfile = models.find((model) => model.displayName === next) ?? null
+          const nextProfileKey = nextProfile?.connectionType === 'web_serial' ? `${nextProfile.id}:${nextProfile.profileVersion}` : ''
           setSelectedName(next)
-          saveSelectedScannerModel(next)
+          saveSelectedScannerModel(next, nextProfileKey)
+          setTestStatus('untested')
+          setTestedProfileKey(nextProfileKey)
+          setTestMessage('')
           onScannerModelChanged?.()
         }}
         className="max-w-[250px] rounded-lg border border-violet-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-violet-400 disabled:opacity-60"
@@ -284,6 +371,26 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
         )
       ) : selected ? <span className="text-[11px] text-violet-700">Обычный USB: защищённое чтение по физическим клавишам</span> : null}
       {message && <span className={`text-[11px] ${status === 'error' ? 'text-red-600' : 'text-emerald-700'}`}>{message}</span>}
+      {selected?.connectionType === 'web_serial' && (
+        <div className="flex w-full flex-wrap items-center gap-2 border-t border-violet-100 pt-2">
+          <button
+            type="button"
+            disabled={disabled || status !== 'connected' || testArmed}
+            onClick={() => {
+              testArmedRef.current = true
+              setTestArmed(true)
+              setTestMessage('Отсканируйте один настоящий КИЗ. Он используется только для проверки и не попадёт в короб.')
+            }}
+            className="rounded-lg bg-slate-900 px-3 py-1 text-xs font-bold text-white disabled:opacity-40"
+          >
+            {testArmed ? 'Ожидаем КИЗ…' : effectiveTestStatus === 'passed' ? 'Проверить повторно' : 'Проверить чтение КИЗ'}
+          </button>
+          <span className={`text-[11px] font-semibold ${effectiveTestStatus === 'passed' ? 'text-emerald-700' : effectiveTestStatus === 'failed' ? 'text-red-600' : 'text-slate-500'}`}>
+            {effectiveTestStatus === 'passed' ? 'Настройки применены на этом устройстве' : effectiveTestStatus === 'failed' ? 'Проверка не пройдена' : 'Профиль выбран, проверка не выполнена'}
+          </span>
+          {testMessage && <span className="w-full text-[11px] text-slate-600">{testMessage}</span>}
+        </div>
+      )}
     </div>
   )
 }

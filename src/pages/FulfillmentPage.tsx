@@ -90,14 +90,11 @@ import {
   fetchStageWarehouseHistory,
   fetchFulfillmentKizPairs,
   createFulfillmentKizDraft,
-  prepareFulfillmentKizLink,
-  confirmFulfillmentKizLink,
-  validateFulfillmentKizWithTeksher,
   commitFulfillmentKizBox,
   setFulfillmentSupplyKizMode,
   hasFulfillmentKizDrafts,
 } from '../services/fulfillmentService'
-import type { OtkPerformer, ProductInfo, FulfillmentKizAuditContext, FulfillmentKizLinkPreparation } from '../services/fulfillmentService'
+import type { OtkPerformer, ProductInfo, FulfillmentKizAuditContext } from '../services/fulfillmentService'
 import { fetchProducts } from '../services/productService'
 import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, createBatchWithPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags, updateBatchPipelineWarehouse } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, PipelineStageDiscrepancy } from '../types'
@@ -1027,17 +1024,6 @@ const BatchDetailModal = ({
   }>>({})
   const [packingKizList, setPackingKizList] = useState<{ boxId: string; barcode: string; productName: string | null } | null>(null)
   const [packingKizBusy, setPackingKizBusy] = useState(false)
-  const [packingKizLinkConfirmation, setPackingKizLinkConfirmation] = useState<{
-    supplyId: string
-    boxId: string
-    barcode: string
-    itemId: string | null
-    productName: string | null
-    rawKiz: string
-    normalizedKiz: string
-    productSnapshot: Record<string, unknown>
-    preparation: FulfillmentKizLinkPreparation
-  } | null>(null)
   const [packingPhotoPreview, setPackingPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
   const [packingCameraOpen, setPackingCameraOpen] = useState(false)
   const [packingCameraError, setPackingCameraError] = useState<string | null>(null)
@@ -1540,7 +1526,6 @@ const BatchDetailModal = ({
     || transferSupplyId
     || packingCameraOpen
     || packingKizList
-    || packingKizLinkConfirmation
   )
 
   // В модалке поставки аппаратный сканер всегда направлен в баркод активного
@@ -2947,7 +2932,7 @@ const BatchDetailModal = ({
     })
   }, [packingKizAuditContext, scrollPackingItemIntoView, showPackingScanFeedback])
 
-  const handlePackingKizScan = useCallback(async (supplyId: string, boxId: string, rawValue: string) => {
+  const handlePackingKizScan = useCallback(async (_supplyId: string, boxId: string, rawValue: string) => {
     if (packingKizBusy) return
     const value = rawValue.replace(/[\r\n\t]+$/g, '')
     const pending = packingPendingKiz[boxId]
@@ -3015,40 +3000,14 @@ const BatchDetailModal = ({
     }
     setPackingKizBusy(true)
     try {
-      if (!batch.store_id) throw new Error('У партии не выбран магазин WB')
-      const teksherValidation = await validateFulfillmentKizWithTeksher(batch.store_id, normalized)
-      const preparation = await prepareFulfillmentKizLink(boxId, pending.barcode, gtin)
-      const resolvedSnapshot = {
-        ...preparation.wb_product,
-        ...productSnapshot,
-        product_name: pending.productName || preparation.wb_product.name || null,
-        teksher_code_id: teksherValidation.code_id ?? null,
-        teksher_status: teksherValidation.status ?? null,
-      }
-      if (!preparation.linked) {
-        packingScannerBufferRef.current[boxId] = ''
-        setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
-        setPackingKizLinkConfirmation({
-          supplyId,
-          boxId,
-          barcode: pending.barcode,
-          itemId: pending.itemId,
-          productName: pending.productName || preparation.wb_product.name || null,
-          rawKiz: value,
-          normalizedKiz: normalized,
-          productSnapshot: resolvedSnapshot,
-          preparation,
-        })
-        return
-      }
       await savePackingKizDraft({
         boxId,
         barcode: pending.barcode,
         itemId: pending.itemId,
-        productName: pending.productName || preparation.wb_product.name || null,
+        productName: pending.productName,
         rawKiz: value,
         normalizedKiz: normalized,
-        productSnapshot: resolvedSnapshot,
+        productSnapshot,
       })
     } catch (error) {
       const reason = error instanceof Error ? error.message : (error as { message?: string })?.message
@@ -3059,37 +3018,7 @@ const BatchDetailModal = ({
       setPackingKizBusy(false)
       window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
     }
-  }, [batch.store_id, items, lookupAndCacheBarcode, packingKizBusy, packingPendingKiz, packingProductCache, savePackingKizDraft, showPackingScanFeedback])
-
-  const confirmPackingKizLink = useCallback(async () => {
-    const confirmation = packingKizLinkConfirmation
-    if (!confirmation || packingKizBusy) return
-    setPackingKizBusy(true)
-    try {
-      await confirmFulfillmentKizLink({
-        box_id: confirmation.boxId,
-        barcode: confirmation.barcode,
-        gtin: confirmation.preparation.gtin,
-        context: packingKizAuditContext,
-      })
-      await savePackingKizDraft({
-        boxId: confirmation.boxId,
-        barcode: confirmation.barcode,
-        itemId: confirmation.itemId,
-        productName: confirmation.productName,
-        rawKiz: confirmation.rawKiz,
-        normalizedKiz: confirmation.normalizedKiz,
-        productSnapshot: confirmation.productSnapshot,
-      })
-      setPackingKizLinkConfirmation(null)
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : (error as { message?: string })?.message
-      setError(reason || 'Не удалось подтвердить связь товара WB с GTIN TekSher')
-    } finally {
-      setPackingKizBusy(false)
-      window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
-    }
-  }, [packingKizAuditContext, packingKizBusy, packingKizLinkConfirmation, savePackingKizDraft])
+  }, [items, lookupAndCacheBarcode, packingKizBusy, packingPendingKiz, packingProductCache, savePackingKizDraft, showPackingScanFeedback])
 
   packingScanSubmitRef.current = (boxId, rawValue) => {
     const supply = supplies.find((candidate) => candidate.boxes.some((box) => box.id === boxId))
@@ -7501,7 +7430,7 @@ const BatchDetailModal = ({
                               )}
                               {supply.kiz_enabled && supply.boxes.length > 0 && (
                                 <FulfillmentElestetScanner
-                                  disabled={packingKizBusy || Boolean(packingKizLinkConfirmation)}
+                                  disabled={packingKizBusy}
                                   onScannerModelChanged={() => setPackingScannerIdentity(getScannerDeviceIdentity())}
                                   onScan={(value) => {
                                     const targetBox = supply.boxes.find((candidate) => candidate.id === packingOpenBoxId) ?? supply.boxes[0]
@@ -10075,56 +10004,6 @@ const BatchDetailModal = ({
           </div>
         </div>
       , document.body)}
-      {packingKizLinkConfirmation && createPortal((() => {
-        const confirmation = packingKizLinkConfirmation
-        const wb = confirmation.preparation.wb_product
-        const teksher = confirmation.preparation.teksher_product
-        const photoUrl = typeof confirmation.productSnapshot.photo_url === 'string' ? confirmation.productSnapshot.photo_url : ''
-        return (
-          <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-slate-950/55 p-4" onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !packingKizBusy) setPackingKizLinkConfirmation(null)
-          }}>
-            <div className="w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl">
-              <div className="border-b border-slate-100 px-6 py-5">
-                <h3 className="text-lg font-bold text-slate-900">Первичная связь товара WB с GTIN TekSher</h3>
-                <p className="mt-1 text-sm text-slate-500">Система больше не сравнивает разные коды напрямую. Один раз проверьте, что слева и справа указан один физический товар и размер.</p>
-              </div>
-              <div className="grid gap-4 p-6 md:grid-cols-2">
-                <section className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
-                  <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Wildberries</p>
-                  <div className="mt-3 flex gap-3">
-                    {photoUrl && <img src={photoUrl} alt="" className="h-24 w-20 rounded-xl object-cover" />}
-                    <div className="min-w-0 space-y-1 text-sm text-slate-700">
-                      <p className="font-bold text-slate-900">{wb.name || confirmation.productName || 'Без названия'}</p>
-                      <p>Артикул продавца: <b>{wb.vendor_code || '—'}</b></p>
-                      <p>Артикул WB: <b>{wb.nm_id || '—'}</b></p>
-                      <p>Размер: <b>{wb.size || '—'}</b></p>
-                      <p>Цвет: <b>{wb.color || '—'}</b></p>
-                    </div>
-                  </div>
-                  <p className="mt-3 break-all rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">SKU {confirmation.barcode}</p>
-                </section>
-                <section className="rounded-2xl border border-violet-200 bg-violet-50/60 p-4">
-                  <p className="text-xs font-bold uppercase tracking-wide text-violet-600">TekSher</p>
-                  <div className="mt-3 space-y-1 text-sm text-slate-700">
-                    <p className="font-bold text-slate-900">{teksher.full_name || teksher.name || 'Без названия'}</p>
-                    <p>Краткое название: <b>{teksher.name || '—'}</b></p>
-                    <p>Товарная группа: <b>{teksher.product_group_code || '—'}</b></p>
-                    <p>Торговая марка: <b>{teksher.trademark || '—'}</b></p>
-                  </div>
-                  <p className="mt-3 break-all rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">GTIN {teksher.gtin}</p>
-                </section>
-              </div>
-              <div className="flex flex-col-reverse gap-2 border-t border-slate-100 px-6 py-4 sm:flex-row sm:justify-end">
-                <button type="button" disabled={packingKizBusy} onClick={() => setPackingKizLinkConfirmation(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Не связывать</button>
-                <button type="button" disabled={packingKizBusy} onClick={() => void confirmPackingKizLink()} className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">
-                  {packingKizBusy ? 'Сохраняю…' : 'Это один товар — связать и продолжить'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )
-      })(), document.body)}
       {packingKizList && activeSupplyId && (() => {
         const supply = supplies.find((candidate) => candidate.id === activeSupplyId)
         if (!supply) return null
