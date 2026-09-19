@@ -1,5 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+import { decryptTeksherSecret, encryptTeksherSecret, isEncryptedTeksherSecret } from '../_shared/teksherCrypto.ts'
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
@@ -44,21 +46,38 @@ Deno.serve(async (req: Request) => {
   try {
     const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-    // Найти любой магазин с подключённым Teksher
+    // Получить подключения Teksher. Заодно без участия пользователя мигрировать
+    // все старые открытые пароли/токены в AES-256-GCM.
     const { data: stores, error: storesErr } = await svc
       .from('stores')
-      .select('id, teksher_login, teksher_password')
+      .select('id, teksher_login, teksher_password, teksher_token')
       .not('teksher_login', 'is', null)
       .not('teksher_password', 'is', null)
-      .limit(1)
 
     if (storesErr) return resp({ error: `Ошибка БД при поиске магазинов: ${storesErr.message}` })
 
-    const store = (stores as Array<{ id: string; teksher_login: string; teksher_password: string }> | null)?.[0]
+    const connectedStores = (stores as Array<{
+      id: string
+      teksher_login: string
+      teksher_password: string
+      teksher_token: string | null
+    }> | null) ?? []
+    for (const connectedStore of connectedStores) {
+      const updates: Record<string, string> = {}
+      if (!isEncryptedTeksherSecret(connectedStore.teksher_password)) {
+        updates.teksher_password = await encryptTeksherSecret(connectedStore.teksher_password)
+      }
+      if (connectedStore.teksher_token && !isEncryptedTeksherSecret(connectedStore.teksher_token)) {
+        updates.teksher_token = await encryptTeksherSecret(connectedStore.teksher_token)
+      }
+      if (Object.keys(updates).length > 0) await svc.from('stores').update(updates).eq('id', connectedStore.id)
+    }
+
+    const store = connectedStores[0]
     if (!store) return resp({ error: 'Нет магазинов с подключённым Teksher' })
 
     let token: string
-    try { token = await tkLogin(store.teksher_login, store.teksher_password) }
+    try { token = await tkLogin(store.teksher_login, await decryptTeksherSecret(store.teksher_password)) }
     catch (e) { return resp({ error: `Ошибка входа в Teksher: ${(e as Error).message}` }) }
 
     // Постранично скачать все коды ТН ВЭД

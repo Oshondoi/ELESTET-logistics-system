@@ -38,6 +38,7 @@ interface WbPackage {
 }
 
 async function fetchPackages(apiKey: string, supplyId: string): Promise<WbPackage[]> {
+  if (!/^\d+$/.test(supplyId)) throw new Error('Для FBO нужен числовой ID поставки WB, а не ID FBS вида WB-GI-…')
   const resp = await fetch(`${WB_BASE}/api/v1/supplies/${supplyId}/package`, {
     headers: { Authorization: apiKey },
   })
@@ -147,17 +148,50 @@ async function uploadPdf(
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
-  let account_id: string, line_id: string, wb_supply_id: string | undefined, action: string
+  let account_id: string, line_id: string, fulfillment_supply_id: string, wb_supply_id: string | undefined, action: string
   try {
-    const body = await req.json() as { account_id?: string; line_id?: string; wb_supply_id?: string; action?: string }
+    const body = await req.json() as { account_id?: string; line_id?: string; fulfillment_supply_id?: string; wb_supply_id?: string; action?: string }
     account_id = body.account_id ?? ''
     line_id = body.line_id ?? ''
+    fulfillment_supply_id = body.fulfillment_supply_id ?? ''
     wb_supply_id = body.wb_supply_id?.trim() || undefined
     action = body.action ?? 'stickers'
-    if (!account_id || !line_id) throw new Error('account_id и line_id обязательны')
+    if (!account_id || (!line_id && !fulfillment_supply_id)) throw new Error('account_id и ID поставки обязательны')
   } catch (e) { return jsonError(String(e)) }
 
   const db = getDb()
+  // Fulfillment boxes can be assigned before the supply is transferred to Logistics.
+  // Resolve the WB token from the batch's store, never from a client-supplied ID.
+  if (fulfillment_supply_id) {
+    if (action !== 'package_info' || line_id) return jsonError('Недопустимое действие для поставки Фулфилмента')
+    const jwt = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
+    if (!jwt) return jsonError('Требуется вход в ELESTET')
+    const { data: authData, error: authError } = await db.auth.getUser(jwt)
+    if (authError || !authData.user) return jsonError('Сессия ELESTET недействительна')
+    const { data: membership } = await db.from('account_members').select('account_id')
+      .eq('account_id', account_id).eq('user_id', authData.user.id).maybeSingle()
+    if (!membership) return jsonError('Нет доступа к этой компании')
+    const { data: supply } = await db.from('fulfillment_supplies')
+      .select('id, account_id, batch_id, wb_supply_id, destination_type')
+      .eq('id', fulfillment_supply_id).eq('account_id', account_id).maybeSingle()
+    if (!supply || supply.destination_type !== 'fbo') return jsonError('FBO-поставка не найдена')
+    if (!supply.wb_supply_id) return jsonError('Сначала привяжите ID поставки WB')
+    const { data: batch } = await db.from('fulfillment_batches')
+      .select('store_id').eq('id', supply.batch_id).eq('account_id', account_id).maybeSingle()
+    if (!batch?.store_id) return jsonError('У партии не выбран магазин WB')
+    const { data: batchStore } = await db.from('stores').select('api_key')
+      .eq('id', batch.store_id).eq('account_id', account_id).maybeSingle()
+    if (!batchStore?.api_key) return jsonError('У магазина не задан API-ключ WB')
+    try {
+      const cargoType = await fetchSupplyCargoType(batchStore.api_key, supply.wb_supply_id)
+      if (cargoType === 2) return jsonError('WB-поставка оформлена как паллеты. Поштучная привязка ШК коробов для неё недоступна.')
+      const packages = await fetchPackages(batchStore.api_key, supply.wb_supply_id)
+      return jsonOk({ package_codes: packages.map((pkg) => pkg.packageCode) })
+    } catch (e) {
+      return jsonError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const { data: line, error: lineErr } = await db
     .from('trip_lines')
     .select('id, account_id, wb_supply_id, stores(api_key)')
@@ -190,11 +224,6 @@ Deno.serve(async (req) => {
   if (action === 'package_info') {
     try {
       const packages = await fetchPackages(apiKey, supplyId)
-      packages.sort((a, b) => {
-        const numA = parseInt(a.packageCode.replace(/\D/g, ''), 10) || 0
-        const numB = parseInt(b.packageCode.replace(/\D/g, ''), 10) || 0
-        return numA - numB
-      })
       return jsonOk({ package_codes: packages.map((p) => p.packageCode) })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
@@ -222,11 +251,6 @@ Deno.serve(async (req) => {
     if (cargoType !== null) {
       await db.from('trip_lines').update({ wb_cargo_type: cargoType }).eq('wb_supply_id', supplyId).eq('account_id', account_id)
     }
-    packages.sort((a, b) => {
-      const numA = parseInt(a.packageCode.replace(/\D/g, ''), 10) || 0
-      const numB = parseInt(b.packageCode.replace(/\D/g, ''), 10) || 0
-      return numA - numB
-    })
     if (packages.length === 0) {
       return jsonError('В поставке нет упакованных товаров. Упакуйте товары в ЛК WB.')
     }

@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
-import { QRCodeSVG } from 'qrcode.react'
+import { BoxBarcodePrintDialog } from '../components/ui/BoxBarcodePrintDialog'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import type {
   FulfillmentBatch,
@@ -107,7 +107,6 @@ import { InvoicePhotoCell } from '../components/ui/InvoicePhotoCell'
 import { createStoreInSupabase } from '../services/storeService'
 import { supabase } from '../lib/supabase'
 import { buildFulfillmentBoxBarcode } from '../lib/fulfillmentBoxBarcode'
-import { buildFulfillmentBoxQrPdf } from '../lib/fulfillmentBoxQrPdf'
 import { applyExcelWorksheetStandards } from '../lib/excelStandards'
 import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import { pluralRu } from '../lib/utils'
@@ -468,50 +467,6 @@ const getBatchExcelExportFilename = ({
   const date = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
   const type = exportMode === 'boxes' ? 'BOXES' : exportMode === 'barcodes' ? 'BARCODES' : 'BARCODES_BOXES'
   return `C${accountShortId ?? 'unknown'}_P${batchShortId ?? 'unknown'}_${safeBoxExportFilenamePart(storeName ?? 'unknown')}_${selectionMode}_${type}_${date}.xlsx`
-}
-
-const createBoxQrLabels = ({
-  accountShortId,
-  batchShortId,
-  storeName,
-  supplies,
-}: {
-  accountShortId: number | null
-  batchShortId: number | null
-  storeName?: string | null
-  supplies: FulfillmentSupplyWithBoxes[]
-}) => {
-  if (accountShortId == null || batchShortId == null) {
-    throw new Error('Не удалось подготовить QR: отсутствует ID компании или партии')
-  }
-
-  return supplies.flatMap((supply) => [...supply.boxes]
-    .sort((left, right) => left.box_number - right.box_number)
-    .map((box) => ({
-      barcode: box.barcode || buildFulfillmentBoxBarcode({
-        accountShortId,
-        batchShortId,
-        supplyNumber: supply.supply_number,
-        boxNumber: box.box_number,
-      }),
-      accountShortId,
-      batchShortId,
-      supplyNumber: supply.supply_number,
-      boxNumber: box.box_number,
-      storeName: storeName ?? '',
-      warehouseName: supply.warehouse_name,
-    })))
-}
-
-const openBoxQrPdf = (labels: ReturnType<typeof createBoxQrLabels>) => {
-  const blob = buildFulfillmentBoxQrPdf(labels)
-  const url = URL.createObjectURL(blob)
-  const preview = window.open(url, '_blank')
-  if (!preview) {
-    URL.revokeObjectURL(url)
-    throw new Error('Браузер заблокировал PDF. Разрешите всплывающие окна для сайта.')
-  }
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 const buildBoxContentsSources = async ({
@@ -1036,6 +991,7 @@ const BatchDetailModal = ({
   const [boxExportDialog, setBoxExportDialog] = useState<{ supplyId: string; boxId?: string } | null>(null)
   const [boxExportMode, setBoxExportMode] = useState<FulfillmentExcelMode>('boxes')
   const [boxQrDialog, setBoxQrDialog] = useState<{ supplyId: string; boxId: string } | null>(null)
+  const [boxPrintSupplyIds, setBoxPrintSupplyIds] = useState<string[] | null>(null)
   const [boxContentsDialog, setBoxContentsDialog] = useState<{ supplies: FulfillmentSupplyWithBoxes[]; description: string } | null>(null)
   const [isExportingBoxesExcel, setIsExportingBoxesExcel] = useState(false)
   const [boxExportError, setBoxExportError] = useState<string | null>(null)
@@ -1222,45 +1178,8 @@ const BatchDetailModal = ({
     setBoxExportDialog(request)
   }
 
-  const getBoxBarcode = (supply: FulfillmentSupplyWithBoxes, box: FulfillmentSupplyWithBoxes['boxes'][number]) => {
-    if (box.barcode) return box.barcode
-    if (accountShortId == null || batch.short_id == null || supply.supply_number == null) return ''
-    return buildFulfillmentBoxBarcode({
-      accountShortId,
-      batchShortId: batch.short_id,
-      supplyNumber: supply.supply_number,
-      boxNumber: box.box_number,
-    })
-  }
-
-  const printBoxQr = () => {
-    if (!boxQrDialog) return
-    const supply = supplies.find((candidate) => candidate.id === boxQrDialog.supplyId)
-    const box = supply?.boxes.find((candidate) => candidate.id === boxQrDialog.boxId)
-    if (!supply || !box) return
-    try {
-      openBoxQrPdf(createBoxQrLabels({
-        accountShortId,
-        batchShortId: batch.short_id,
-        storeName: stores.find((store) => store.id === batch.store_id)?.name,
-        supplies: [{ ...supply, boxes: [box] }],
-      }))
-    } catch (printError) {
-      setError(printError instanceof Error ? printError.message : 'Не удалось подготовить PDF')
-    }
-  }
-
   const printSupplyBoxQrs = (supply: FulfillmentSupplyWithBoxes) => {
-    try {
-      openBoxQrPdf(createBoxQrLabels({
-        accountShortId,
-        batchShortId: batch.short_id,
-        storeName: stores.find((store) => store.id === batch.store_id)?.name,
-        supplies: [supply],
-      }))
-    } catch (printError) {
-      setError(printError instanceof Error ? printError.message : 'Не удалось подготовить PDF')
-    }
+    setBoxPrintSupplyIds([supply.id])
   }
 
   const openSupplyBoxContents = (supply: FulfillmentSupplyWithBoxes) => {
@@ -7119,51 +7038,18 @@ const BatchDetailModal = ({
                     />
                   )}
 
-                  {/* QR-код системного ШК короба */}
-                  {boxQrDialog && (() => {
-                    const supply = supplies.find((candidate) => candidate.id === boxQrDialog.supplyId)
-                    const box = supply?.boxes.find((candidate) => candidate.id === boxQrDialog.boxId)
-                    if (!supply || !box) return null
-                    const barcode = getBoxBarcode(supply, box)
-                    return createPortal(
-                      <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 p-4" onClick={() => setBoxQrDialog(null)}>
-                        <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
-                              <p className="text-base font-semibold text-slate-800">QR-код короба</p>
-                              <p className="mt-1 text-sm text-slate-400">{supply.warehouse_name} · Короб #{box.box_number}</p>
-                            </div>
-                            <button type="button" onClick={() => setBoxQrDialog(null)} className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100" aria-label="Закрыть">
-                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                            </button>
-                          </div>
-
-                          {barcode ? (
-                            <div className="mt-5">
-                              <div className="label flex flex-col items-center rounded-2xl border border-slate-200 bg-white p-5 text-center">
-                                <QRCodeSVG value={barcode} size={224} level="M" marginSize={1} />
-                                <p className="code mt-4 break-all text-sm font-semibold tracking-wide text-slate-800">{barcode}</p>
-                                <p className="meta mt-1 text-xs font-semibold text-slate-700">{supply.warehouse_name} · Короб #{box.box_number}</p>
-                                <p className="mt-1 text-[11px] text-slate-400">Партия P{batch.short_id} · Поставка S{supply.supply_number}</p>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="mt-5 rounded-xl bg-red-50 px-3 py-3 text-sm text-red-600">
-                              ШК ещё не сформирован. Сохраните поставку и обновите данные.
-                            </div>
-                          )}
-
-                          <div className="mt-5 flex gap-2">
-                            <button type="button" onClick={() => setBoxQrDialog(null)} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Закрыть</button>
-                            <button type="button" disabled={!barcode} onClick={printBoxQr} className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40">
-                              Открыть PDF
-                            </button>
-                          </div>
-                        </div>
-                      </div>,
-                      document.body,
-                    )
-                  })()}
+                  {boxQrDialog && <BoxBarcodePrintDialog
+                    supplyIds={[boxQrDialog.supplyId]}
+                    boxId={boxQrDialog.boxId}
+                    onClose={() => setBoxQrDialog(null)}
+                    onSaved={() => { void fetchSupplies(batch.id).then(setSupplies).catch(() => {}); void onRefreshTrips?.() }}
+                  />}
+                  {boxPrintSupplyIds && <BoxBarcodePrintDialog
+                    supplyIds={boxPrintSupplyIds}
+                    allowSupplyMapping
+                    onClose={() => setBoxPrintSupplyIds(null)}
+                    onSaved={() => { void fetchSupplies(batch.id).then(setSupplies).catch(() => {}); void onRefreshTrips?.() }}
+                  />}
 
                   {/* Модалка выбора колонок Excel */}
                   {boxExportDialog && (() => {
@@ -11015,6 +10901,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     description: string
   } | null>(null)
   const [batchExportSelectedSupplyIds, setBatchExportSelectedSupplyIds] = useState<string[]>([])
+  const [batchPrintSupplyIds, setBatchPrintSupplyIds] = useState<string[] | null>(null)
   const [batchExportTarget, setBatchExportTarget] = useState<{ batch: FulfillmentBatchWithItems; supplies: FulfillmentSupplyWithBoxes[]; archiveMode: 'ALL' | 'CUSTOM' | null } | null>(null)
   const [batchExportSelectedColumns, setBatchExportSelectedColumns] = useState<OptionalBoxExportColumnKey[]>(getStoredBoxExportColumns)
   const [batchExportMode, setBatchExportMode] = useState<FulfillmentExcelMode>('boxes')
@@ -11167,18 +11054,9 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     }
     const sortedSelected = [...selected].sort((left, right) => left.supply_number - right.supply_number)
     if (batchExportSource.action === 'qr') {
-      try {
-        openBoxQrPdf(createBoxQrLabels({
-          accountShortId,
-          batchShortId: batchExportSource.batch.short_id,
-          storeName: stores.find((store) => store.id === batchExportSource.batch.store_id)?.name,
-          supplies: sortedSelected,
-        }))
-        setBatchExportSource(null)
-        setBatchExportSelectedSupplyIds([])
-      } catch (printError) {
-        setBatchExportError(printError instanceof Error ? printError.message : 'Не удалось подготовить PDF')
-      }
+      setBatchPrintSupplyIds(sortedSelected.map((supply) => supply.id))
+      setBatchExportSource(null)
+      setBatchExportSelectedSupplyIds([])
       return
     }
     if (batchExportSource.action === 'contents') {
@@ -11448,6 +11326,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
           onPrint={(format) => openBoxContentsPdf(accountId, batchContentsDialog.batch, batchContentsDialog.supplies, format)}
         />
       )}
+      {batchPrintSupplyIds && <BoxBarcodePrintDialog supplyIds={batchPrintSupplyIds} onClose={() => setBatchPrintSupplyIds(null)} onSaved={() => { void onRefreshTrips?.() }} />}
       {batchExportSource && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onClick={() => setBatchExportSource(null)}>
           <div className="w-full max-w-xl space-y-4 rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>

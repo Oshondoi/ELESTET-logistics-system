@@ -1390,6 +1390,8 @@ export const TripTable = ({
                                     <TripLineStickerCell
                                       fileUrls={line.sticker_file_urls ?? []}
                                       wbSupplyId={line.wb_supply_id}
+                                      fulfillmentSupplyId={line.fulfillment_supply_id}
+                                      onSaveWbSupplyId={(id) => onSaveWbSupplyId(trip.id, line.id, id)}
                                       passUrls={line.wb_pass_urls ?? []}
                                       combinedUrls={line.combined_sticker_urls ?? []}
                                       onAdd={canManage ? (file) => onAddStickerFile(trip.id, line.id, file) : undefined}

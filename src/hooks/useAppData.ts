@@ -925,7 +925,12 @@ export const useAppData = (accountId: string | null) => {
     if (type === 'boxes' || type === 'all') {
       // Берём уже сохранённые ШК коробов (из синка синей кнопкой)
       const line = trips.find((t) => t.id === tripId)?.lines.find((l) => l.id === lineId)
-      const codes = line?.wb_package_codes ?? []
+      const mappedCodes = [...supply.boxes]
+        .sort((left, right) => left.box_number - right.box_number)
+        .map((box) => box.wb_barcode?.trim() ?? '')
+      const codes = mappedCodes.length > 0 && mappedCodes.every(Boolean)
+        ? mappedCodes
+        : (line?.wb_package_codes ?? [])
       if (codes.length === 0) throw new Error('ШК коробов не синхронизированы. Нажмите синюю кнопку QR-стикеров рядом со стикерами поставки.')
       if (type === 'all') downloadAllTemplates(supply, codes)
       else downloadBoxesTemplate(supply, codes)

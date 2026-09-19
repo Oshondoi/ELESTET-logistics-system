@@ -647,3 +647,19 @@ export const getWbSupplyPackageCodes = async (
   if (data.error) throw new Error(data.error)
   return data.package_codes ?? []
 }
+
+/** WB package codes for a fulfillment supply not yet transferred to Logistics. */
+export const getWbFulfillmentSupplyPackageCodes = async (
+  accountId: string,
+  supplyId: string,
+): Promise<string[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.functions.invoke<{
+    package_codes?: string[]
+    error?: string
+  }>('wb-supply', { body: { account_id: accountId, fulfillment_supply_id: supplyId, action: 'package_info' } })
+  if (error) throw new Error(error.message || 'Не удалось получить ШК коробов WB')
+  if (!data) throw new Error('Пустой ответ от сервера')
+  if (data.error) throw new Error(data.error)
+  return data.package_codes ?? []
+}

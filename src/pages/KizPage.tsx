@@ -4,6 +4,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
+import { TransgranPanel } from '../components/kiz/TransgranPanel'
 import type { Store } from '../types'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
@@ -306,12 +307,12 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   })
   const activeStore = sortedStores.find((store) => store.id === selectedStoreId) ?? sortedStores[0]
 
-  const [tab, setTab] = useState<'main' | 'products' | 'codes' | 'operations'>(() => {
+  const [tab, setTab] = useState<'main' | 'products' | 'codes' | 'operations' | 'transgran'>(() => {
     const saved = localStorage.getItem('elestet-kiz-tab')
-    return (saved as 'main' | 'products' | 'codes' | 'operations' | null) ?? 'main'
+    return (saved as 'main' | 'products' | 'codes' | 'operations' | 'transgran' | null) ?? 'main'
   })
 
-  const handleSetTab = (t: 'main' | 'products' | 'codes' | 'operations') => {
+  const handleSetTab = (t: 'main' | 'products' | 'codes' | 'operations' | 'transgran') => {
     setTab(t)
     localStorage.setItem('elestet-kiz-tab', t)
   }
@@ -791,6 +792,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
           { key: 'products' as const, label: 'Товары (GTIN)' },
           { key: 'codes' as const, label: 'КИЗ-коды' },
           { key: 'operations' as const, label: 'Операции' },
+          { key: 'transgran' as const, label: 'Трансгран' },
         ]).map(({ key, label }) => (
           <button
             key={key}
@@ -1127,6 +1129,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
               </>
             )}
           </div>
+        )}
+
+        {/* ══════ ТРАНСГРАН ══════ */}
+        {tab === 'transgran' && activeStore && (
+          <TransgranPanel store={activeStore} connected={isConnected} />
         )}
 
         {/* ══════ КИЗ-КОДЫ ══════ */}

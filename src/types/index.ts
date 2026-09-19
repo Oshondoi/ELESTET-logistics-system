@@ -995,6 +995,7 @@ export interface FulfillmentSupply {
   destination_wms_warehouse_id: string | null
   trip_id: string | null
   trip_line_id: string | null
+  wb_supply_id?: string | null
   weight: number | null
   logistics_tariff_type: 'per_box' | 'per_kg' | null
   source_item_id: string | null
@@ -1011,6 +1012,7 @@ export interface FulfillmentBox {
   account_id: string
   box_number: number
   barcode: string
+  wb_barcode?: string | null
   status: 'open' | 'closed'
   created_at: string
   _local?: boolean

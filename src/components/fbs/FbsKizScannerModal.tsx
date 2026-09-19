@@ -1050,7 +1050,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   }, [])
 
   const readSerialPort = async (port: BrowserSerialPort, maxPacketLength: number, packetTerminator: SerialPacketTerminator) => {
-    if (!port.readable) throw new Error('COM-порт открыт без канала чтения')
+    if (!port.readable) throw new Error('Режим ELESTET подключён без канала чтения')
     const reader = port.readable.getReader()
     serialReaderRef.current = reader
     let buffer = ''
@@ -1075,7 +1075,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
             await serialScanHandlerRef.current(scannedValue)
           } else {
             buffer += character
-            if (buffer.length > maxPacketLength) throw new Error('Сканер передал слишком длинный пакет. Переподключите COM-порт.')
+            if (buffer.length > maxPacketLength) throw new Error('Сканер передал слишком длинный пакет. Переподключите режим ELESTET.')
           }
         }
       }
@@ -1112,7 +1112,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     const serial = browserSerialApi()
     if (!serial) {
       setSerialStatus('unsupported')
-      setSerialError('COM-подключение доступно в Chrome или Edge на компьютере')
+      setSerialError('Режим ELESTET доступен в Chrome или Edge на компьютере')
       return
     }
 
@@ -1123,14 +1123,14 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       await port.open(selectedScannerProfile.serialOptions)
       const info = port.getInfo?.() ?? {}
       const id = info.usbVendorId == null
-        ? 'COM-порт'
-        : `USB ${info.usbVendorId.toString(16).padStart(4, '0')}:${(info.usbProductId ?? 0).toString(16).padStart(4, '0')}`
+        ? 'Сканер'
+        : `Устройство ${info.usbVendorId.toString(16).padStart(4, '0')}:${(info.usbProductId ?? 0).toString(16).padStart(4, '0')}`
       serialPortRef.current = port
       serialConnectedProfileKeyRef.current = selectedSerialProfileKey
       serialReadActiveRef.current = true
       setSerialPortLabel(id)
       setSerialStatus('connected')
-      setNotice('COM подключён. Сканер передаёт данные напрямую в ELESTET')
+      setNotice('Режим ELESTET подключён. Сканер готов к работе')
       const configuredMaxPacketLength = Number(selectedScannerProfile.scanOptions.maxPacketLength)
       const maxPacketLength = Number.isFinite(configuredMaxPacketLength)
         ? Math.max(256, Math.trunc(configuredMaxPacketLength))
@@ -1141,7 +1141,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       serialPortRef.current = null
       const cancelled = connectError instanceof DOMException && connectError.name === 'NotFoundError'
       setSerialStatus('error')
-      setSerialError(cancelled ? 'Выбор COM-порта отменён' : errorText(connectError))
+      setSerialError(cancelled ? 'Выбор устройства отменён' : errorText(connectError))
     }
   }
 
@@ -1740,7 +1740,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                               <span className="truncate">{deviceProfile.scannerModel}</span>
                               <span className="rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-bold uppercase sm:text-[10px]">{scannerStatusLabel}</span>
                               {serialScannerSelected && serialStatus === 'connected' && (
-                                <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-bold uppercase text-white sm:text-[10px]">COM</span>
+                                <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-bold text-white sm:text-[10px]">ELESTET</span>
                               )}
                             </span>
                           ) : (
@@ -2011,7 +2011,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                                   >
                                     <span className="min-w-0">
                                       <span className="block truncate text-sm font-semibold">{model.model}</span>
-                                      <span className="mt-0.5 block text-[10px] font-medium text-slate-400">{model.connectionType === 'web_serial' ? 'COM через браузер' : 'Обычный USB'}</span>
+                                      <span className="mt-0.5 block text-[10px] font-medium text-slate-400">{model.connectionType === 'web_serial' ? 'Режим ELESTET' : 'Обычный USB'}</span>
                                     </span>
                                     {selectedModel && <span className="shrink-0 text-violet-600">✓</span>}
                                   </button>
@@ -2107,14 +2107,14 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
                 {settingsScannerProfile.connectionType === 'web_serial' && !settingsScannerIsSelected && (
                   <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-800">
-                    Чтобы подключить COM к ELESTET, сначала выберите эту модель в списке сканеров.
+                    Чтобы включить режим ELESTET, сначала выберите эту модель в списке сканеров.
                   </div>
                 )}
 
                 {settingsScannerProfile.connectionType === 'web_serial' && settingsScannerIsSelected && (
                   <div className="flex flex-col gap-2 sm:flex-row">
                     {serialStatus === 'connected' ? (
-                      <button type="button" onClick={() => void disconnectSerial()} className="h-11 flex-1 rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-600 transition hover:bg-red-50">Отключить COM</button>
+                      <button type="button" onClick={() => void disconnectSerial()} className="h-11 flex-1 rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-600 transition hover:bg-red-50">Отключить режим ELESTET</button>
                     ) : (
                       <button
                         type="button"
@@ -2122,7 +2122,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                         onClick={() => void connectScannerSerial()}
                         className="h-11 flex-1 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-45"
                       >
-                        {serialStatus === 'connecting' ? 'Подключаем…' : 'Подключить COM к ELESTET'}
+                        {serialStatus === 'connecting' ? 'Подключаем…' : 'Подключить режим ELESTET'}
                       </button>
                     )}
                     <div className={`flex min-h-11 flex-1 items-center justify-center rounded-xl border px-3 text-center text-xs font-semibold ${
@@ -2133,12 +2133,12 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
                           : 'border-slate-200 bg-white text-slate-500'
                     }`}>
                       {serialStatus === 'connected'
-                        ? `COM подключён · ${serialPortLabel}`
+                        ? `Режим ELESTET подключён · ${serialPortLabel}`
                         : serialStatus === 'unsupported'
                           ? 'Нужен Chrome или Edge на ПК'
                           : serialStatus === 'error'
                             ? serialError
-                            : 'COM не подключён'}
+                            : 'Режим ELESTET не подключён'}
                     </div>
                   </div>
                 )}

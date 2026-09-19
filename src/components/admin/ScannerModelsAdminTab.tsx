@@ -105,7 +105,7 @@ function formatDateTime(value: string | null) {
 }
 
 function connectionLabel(value: ScannerConnectionType) {
-  return value === 'web_serial' ? 'COM через браузер' : 'Обычный USB (клавиатура)'
+  return value === 'web_serial' ? 'Режим ELESTET' : 'Обычный USB (клавиатура)'
 }
 
 export function ScannerModelsAdminTab() {
@@ -298,7 +298,7 @@ export function ScannerModelsAdminTab() {
                   <label className="text-xs text-slate-500">Режим
                     <select value={form.connectionType} onChange={(event) => setForm({ ...form, connectionType: event.target.value as ScannerConnectionType })} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-violet-400">
                       <option value="keyboard">Обычный USB (как клавиатура)</option>
-                      <option value="web_serial">COM через Chrome/Edge</option>
+                      <option value="web_serial">Режим ELESTET</option>
                     </select>
                   </label>
                   <label className="text-xs text-slate-500">Порядок в списке

@@ -77,6 +77,18 @@ function finiteNumber(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+/** Public-facing name; legacy profile text in the database may still mention its transport. */
+function scannerDisplayText(value: string): string {
+  return value
+    .replace(/Подключить COM к ELESTET/gi, 'Подключить режим ELESTET')
+    .replace(/Порты \(COM и LPT\)/gi, 'подключённые устройства')
+    .replace(/Если COM-порт не появился в Windows, может потребоваться USB VCP-драйвер производителя\./gi, 'Если сканер не обнаружен Windows, может потребоваться драйвер производителя.')
+    .replace(/USB[- ](?:COM|VCP)/gi, 'режим ELESTET')
+    .replace(/USB[- ]HID/gi, 'обычный USB-режим')
+    .replace(/COM-порт(?:а|е|ы|ов)?/gi, 'порт сканера')
+    .replace(/\bCOM\b/gi, 'режим ELESTET')
+}
+
 function normalizeSerialOptions(value: unknown): ScannerSerialOptions {
   const source = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -102,7 +114,7 @@ function normalizeSetupCodes(value: unknown): ScannerSetupCode[] {
     const label = typeof source.label === 'string' ? source.label.trim() : ''
     const codeValue = typeof source.value === 'string' ? source.value : ''
     if (!label || !codeValue) return []
-    return [{ label, value: codeValue, format: source.format === 'QR' ? 'QR' as const : 'CODE128' as const }]
+    return [{ label: scannerDisplayText(label), value: codeValue, format: source.format === 'QR' ? 'QR' as const : 'CODE128' as const }]
   })
 }
 
@@ -127,8 +139,8 @@ function normalizeScannerModel(row: ScannerModelRow, defaultStatus: ScannerModel
       : {},
     setupBarcodes: normalizeSetupCodes(row.setup_barcodes),
     restoreBarcodes: normalizeSetupCodes(row.restore_barcodes),
-    instructions: typeof row.instructions === 'string' ? row.instructions : '',
-    warningText: typeof row.warning_text === 'string' ? row.warning_text : '',
+    instructions: typeof row.instructions === 'string' ? scannerDisplayText(row.instructions) : '',
+    warningText: typeof row.warning_text === 'string' ? scannerDisplayText(row.warning_text) : '',
     profileVersion: Math.max(1, Math.trunc(finiteNumber(row.profile_version, 1))),
     sortOrder: Math.trunc(finiteNumber(row.sort_order, 100)),
     usageCount: Math.max(0, Math.trunc(finiteNumber(row.usage_count, 0))),

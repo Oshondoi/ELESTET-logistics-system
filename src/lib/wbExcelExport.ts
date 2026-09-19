@@ -13,18 +13,13 @@ const buildGoodsRows = (supply: FulfillmentSupplyWithBoxes): (string | number)[]
   ]
 }
 
-const sortedWbBoxCodes = (wbBoxCodes: string[]) => [...wbBoxCodes].sort((left, right) => {
-  const leftNumber = parseInt(left.replace(/\D/g, ''), 10) || 0
-  const rightNumber = parseInt(right.replace(/\D/g, ''), 10) || 0
-  return leftNumber - rightNumber
-})
-
 const buildBoxesRows = (supply: FulfillmentSupplyWithBoxes, wbBoxCodes: string[]): (string | number)[][] => {
-  const codes = sortedWbBoxCodes(wbBoxCodes)
+  const codes = [...wbBoxCodes]
   const boxes = [...supply.boxes].sort((left, right) => left.box_number - right.box_number)
+  if (codes.length < boxes.length) throw new Error(`В WB получено ${codes.length} ШК коробов, а в поставке ELESTET ${boxes.length} коробов. Завершите упаковку в WB и обновите коды.`)
   const rows: (string | number)[][] = [['Баркод товара', 'Кол-во товаров', 'ШК короба', 'Срок годности']]
   boxes.forEach((box, index) => {
-    const wbCode = codes[index] ?? ''
+    const wbCode = codes[index]
     box.items.forEach((item) => rows.push([item.barcode, item.qty, wbCode, '']))
   })
   return rows
@@ -47,8 +42,8 @@ export function downloadGoodsTemplate(supply: FulfillmentSupplyWithBoxes, filena
 /**
  * Шаблон 2 — Распределение товаров по коробам
  * Колонки: Баркод товара | Кол-во товара | ШК короба | Срок годности
- * wbBoxCodes — список штрихкодов коробов WB (WB_XXXXXXXXX) отсортированных по возрастанию.
- * Они сопоставляются с нашими коробами по box_number (1→WB_min, 2→WB_next и т.д.)
+ * wbBoxCodes — список ШК WB, сопоставляемый с коробами по номеру:
+ * первый код в ответе WB → первый короб, второй → второй и т.д.
  */
 export function downloadBoxesTemplate(
   supply: FulfillmentSupplyWithBoxes,

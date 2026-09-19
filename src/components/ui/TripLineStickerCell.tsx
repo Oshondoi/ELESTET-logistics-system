@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { showToast } from './Toast'
+import { BoxBarcodePrintDialog } from './BoxBarcodePrintDialog'
 
 interface TripLineStickerCellProps {
   fileUrls: string[]
   combinedUrls?: string[]
   wbSupplyId?: string | null
+  fulfillmentSupplyId?: string | null
   passUrls?: string[]
   onAdd?: (file: File) => Promise<void>
   onRemove?: (index: number) => Promise<void>
@@ -15,12 +17,14 @@ interface TripLineStickerCellProps {
   onUploadPass?: (file: File) => Promise<void>
   onRemovePass?: (index: number) => Promise<void>
   onDownloadWbExcel?: (type: 'goods' | 'boxes' | 'all') => Promise<void>
+  onSaveWbSupplyId?: (id: string) => Promise<void>
 }
 
-export const TripLineStickerCell = ({ fileUrls, combinedUrls = [], wbSupplyId, passUrls = [], onAdd, onRemove, onAddCombined, onRemoveCombined, onFetchWbBarcodes, onUploadPass, onRemovePass, onDownloadWbExcel }: TripLineStickerCellProps) => {
+export const TripLineStickerCell = ({ fileUrls, combinedUrls = [], wbSupplyId, fulfillmentSupplyId, passUrls = [], onAdd, onRemove, onAddCombined, onRemoveCombined, onFetchWbBarcodes, onUploadPass, onRemovePass, onDownloadWbExcel, onSaveWbSupplyId }: TripLineStickerCellProps) => {
   const [isLoading, setIsLoading] = useState(false)
   const [isCombinedLoading, setIsCombinedLoading] = useState(false)
   const [isWbLoading, setIsWbLoading] = useState(false)
+  const [boxPrintOpen, setBoxPrintOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 })
   const [combinedMenuOpen, setCombinedMenuOpen] = useState(false)
@@ -325,6 +329,13 @@ export const TripLineStickerCell = ({ fileUrls, combinedUrls = [], wbSupplyId, p
 
   return (
     <div className="flex items-center gap-1">
+      {boxPrintOpen && fulfillmentSupplyId && <BoxBarcodePrintDialog
+        supplyIds={[fulfillmentSupplyId]}
+        allowSupplyMapping
+        onIdSaved={onSaveWbSupplyId}
+        onClose={() => setBoxPrintOpen(false)}
+      />}
+      {fulfillmentSupplyId && <button type="button" title="Печать ШК коробов: системный или WB" onClick={() => setBoxPrintOpen(true)} className="flex h-7 items-center rounded-lg bg-blue-50 px-2 text-xs font-medium text-blue-600 hover:bg-blue-100">Печать ШК</button>}
       {/* Hidden file input */}
       <input
         ref={inputRef}

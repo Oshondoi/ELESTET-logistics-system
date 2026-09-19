@@ -1005,6 +1005,26 @@ export const fetchSupplyByTripLineId = async (tripLineId: string): Promise<Fulfi
   return { ...supply, boxes: boxesWithItems }
 }
 
+/** One WB supply ID is shared by fulfillment and its linked logistics line. */
+export const saveFulfillmentWbSupplyId = async (supplyId: string, wbSupplyId: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any).rpc('set_fulfillment_wb_supply_id', {
+    p_supply_id: supplyId,
+    p_wb_supply_id: wbSupplyId.trim() || null,
+  })
+  if (error) throw error
+}
+
+/** Assign the ordered WB package codes to every box in a supply atomically. */
+export const assignFulfillmentWbBoxCodes = async (supplyId: string, codes: string[]): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any).rpc('assign_fulfillment_wb_box_codes', {
+    p_supply_id: supplyId,
+    p_codes: codes,
+  })
+  if (error) throw error
+}
+
 // ── Packing: Boxes ────────────────────────────────────────────
 
 export const createBox = async (data: {
