@@ -1,6 +1,6 @@
 ﻿import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-import { decryptTeksherSecret, encryptTeksherSecret, isEncryptedTeksherSecret } from '../_shared/teksherCrypto.ts'
+import { decryptTeksherSecret, encryptTeksherSecret, isEncryptedTeksherSecret } from './teksherCrypto.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -331,6 +331,55 @@ Deno.serve(async (req: Request) => {
     return ok({
       items: d.content ?? d.items ?? [],
       total: (d.page as Record<string, unknown>)?.totalElements ?? d.totalElements ?? 0,
+    })
+  }
+
+  // ── action: validate_fulfillment_kiz ───────────────────────────────────────
+  // Validate the exact physical code against Teksher and cache only its product.
+  // This avoids depending on a complete /products cache during warehouse work.
+  if (action === 'validate_fulfillment_kiz') {
+    const kiz = String(body.kiz ?? '').replace(/[\r\n\t]+$/g, '')
+    const gtin = extractGtin(kiz)
+    if (!gtin || !isValidGtin14(gtin)) return err('В КИЗ не найден корректный GTIN-14')
+    if (!hasStructuredCryptoTail(kiz)) return err('КИЗ не содержит полного криптографического хвоста 91/92')
+
+    const lookup = await findTeksherCode(token, kiz)
+    if (lookup.error) return err(lookup.error)
+    if (!lookup.match) return ok({ found: false, gtin })
+
+    const code = lookup.match
+    const nestedProduct = asObject(code.product)
+    const product = Object.keys(nestedProduct).length > 0 ? nestedProduct : code
+    const productGtin = String(product.gtin ?? code.gtin ?? gtin)
+    if (productGtin !== gtin) return err('TekSher вернул другой GTIN для отсканированного КИЗа')
+
+    const attributes = Array.isArray(product.attributes) ? product.attributes : []
+    const cachedProduct = {
+      store_id,
+      teksher_id: product.id == null ? null : String(product.id),
+      gtin,
+      name: String(product.name ?? code.productName ?? code.name ?? '') || null,
+      full_name: String(product.fullName ?? product.full_name ?? code.productFullName ?? '') || null,
+      product_group_code: String(product.productGroupCode ?? product.product_group_code ?? code.productGroupCode ?? '') || null,
+      status: String(product.status ?? code.status ?? code.state ?? '') || null,
+      codes_count: null,
+      trademark: String(product.trademark ?? product.brand ?? '') || null,
+      manufacturer_full_name: String(product.manufacturerFullName ?? product.manufacturer_full_name ?? '') || null,
+      manufactured_country_id: product.manufacturedCountryId == null ? null : Number(product.manufacturedCountryId),
+      manufactured_country_code: String(product.manufacturedCountryCode ?? '') || null,
+      manufactured_country_name: String(product.manufacturedCountryName ?? '') || null,
+      attributes,
+      synced_at: new Date().toISOString(),
+    }
+    const { error: cacheError } = await svc.from('teksher_products').upsert(cachedProduct, { onConflict: 'store_id,gtin' })
+    if (cacheError) return err(`Не удалось сохранить товар TekSher: ${cacheError.message}`)
+
+    return ok({
+      found: true,
+      gtin,
+      code_id: code.id ?? code.markingCodeId ?? null,
+      status: code.status ?? code.state ?? null,
+      product: cachedProduct,
     })
   }
 

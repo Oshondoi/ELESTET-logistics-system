@@ -413,6 +413,7 @@ export interface CatalogProduct {
 
 export interface ProductInfo {
   nm_id: number | null
+  chrt_id: number | null
   name: string | null
   vendor_code: string | null
   category: string | null
@@ -438,15 +439,21 @@ export const findProductByBarcode = async (
     .maybeSingle()
   if (!data) return null
   let size: string | null = null
+  let chrtId: number | null = null
   if (Array.isArray(data.sizes)) {
-    for (const s of data.sizes as Array<{ techSize?: string; skus?: string[] }>) {
-      if (s.skus?.includes(barcode)) { size = s.techSize ?? null; break }
+    for (const s of data.sizes as Array<{ techSize?: string; skus?: string[]; chrtID?: number; chrtId?: number }>) {
+      if (s.skus?.includes(barcode)) {
+        size = s.techSize ?? null
+        chrtId = s.chrtID ?? s.chrtId ?? null
+        break
+      }
     }
   }
   const photos = data.photos as Array<{ c246x328?: string; big?: string }> | null
   const photo_url = photos?.[0]?.c246x328 ?? photos?.[0]?.big ?? null
   return {
     nm_id: data.nm_id ?? null,
+    chrt_id: chrtId,
     name: data.name ?? null,
     vendor_code: data.vendor_code ?? null,
     category: data.category ?? null,
@@ -510,13 +517,14 @@ export const fetchProductInfoByBarcodes = async (
 
   for (const product of data ?? []) {
     const productBarcodes = Array.isArray(product.barcodes) ? product.barcodes as string[] : []
-    const sizes = Array.isArray(product.sizes) ? product.sizes as Array<{ techSize?: string; skus?: string[] }> : []
+    const sizes = Array.isArray(product.sizes) ? product.sizes as Array<{ techSize?: string; skus?: string[]; chrtID?: number; chrtId?: number }> : []
     const photos = product.photos as Array<{ c246x328?: string; big?: string }> | null
     for (const barcode of uniqueBarcodes) {
       const matchedSize = sizes.find((size) => size.skus?.includes(barcode))
       if (!productBarcodes.includes(barcode) && !matchedSize) continue
       result[barcode] = {
         nm_id: product.nm_id ?? null,
+        chrt_id: matchedSize?.chrtID ?? matchedSize?.chrtId ?? null,
         name: product.name ?? null,
         vendor_code: product.vendor_code ?? null,
         category: product.category ?? null,
@@ -1214,6 +1222,94 @@ export const createFulfillmentKizDraft = async (data: {
   })
   if (error) throw error
   return row as FulfillmentKizPair
+}
+
+export interface FulfillmentKizLinkPreparation {
+  linked: boolean
+  barcode: string
+  gtin: string
+  wb_product: {
+    nm_id?: number | null
+    chrt_id?: string | number | null
+    name?: string | null
+    vendor_code?: string | null
+    brand?: string | null
+    color?: string | null
+    size?: string | null
+  }
+  teksher_product: {
+    id: number
+    teksher_id?: string | null
+    gtin: string
+    name?: string | null
+    full_name?: string | null
+    trademark?: string | null
+    product_group_code?: string | null
+    attributes?: Array<Record<string, unknown>>
+  }
+}
+
+export interface FulfillmentTeksherKizValidation {
+  found: boolean
+  gtin: string
+  code_id?: string | number | null
+  status?: string | null
+  product?: Record<string, unknown>
+}
+
+export const validateFulfillmentKizWithTeksher = async (
+  storeId: string,
+  kizNormalized: string,
+): Promise<FulfillmentTeksherKizValidation> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.functions.invoke('teksher-auth', {
+    body: {
+      store_id: storeId,
+      action: 'validate_fulfillment_kiz',
+      kiz: kizNormalized,
+    },
+  })
+  if (error) throw error
+  const result = (data ?? {}) as FulfillmentTeksherKizValidation & { error?: string; connected?: boolean }
+  if (result.connected === false) throw new Error('Магазин не подключён к TekSher')
+  if (result.error) throw new Error(result.error)
+  if (!result.found) throw new Error('КИЗ не найден в TekSher этого магазина. Проверьте товар, магазин и повторите сканирование.')
+  return result
+}
+
+export const prepareFulfillmentKizLink = async (
+  boxId: string,
+  barcode: string,
+  gtin: string,
+): Promise<FulfillmentKizLinkPreparation> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('prepare_fulfillment_kiz_link', {
+    p_box_id: boxId,
+    p_barcode: barcode,
+    p_gtin: gtin,
+  })
+  if (error) throw error
+  return data as FulfillmentKizLinkPreparation
+}
+
+export const confirmFulfillmentKizLink = async (data: {
+  box_id: string
+  barcode: string
+  gtin: string
+  context: FulfillmentKizAuditContext
+}): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any).rpc('confirm_fulfillment_kiz_link', {
+    p_box_id: data.box_id,
+    p_barcode: data.barcode,
+    p_gtin: data.gtin,
+    p_actor_name: data.context.actor_name,
+    p_actor_email: data.context.actor_email,
+    p_device_id: data.context.device_id,
+    p_device_name: data.context.device_name,
+    p_scanner_model: data.context.scanner_model,
+  })
+  if (error) throw error
 }
 
 export const commitFulfillmentKizBox = async (

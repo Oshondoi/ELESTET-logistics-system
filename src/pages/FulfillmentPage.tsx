@@ -90,11 +90,14 @@ import {
   fetchStageWarehouseHistory,
   fetchFulfillmentKizPairs,
   createFulfillmentKizDraft,
+  prepareFulfillmentKizLink,
+  confirmFulfillmentKizLink,
+  validateFulfillmentKizWithTeksher,
   commitFulfillmentKizBox,
   setFulfillmentSupplyKizMode,
   hasFulfillmentKizDrafts,
 } from '../services/fulfillmentService'
-import type { OtkPerformer, ProductInfo, FulfillmentKizAuditContext } from '../services/fulfillmentService'
+import type { OtkPerformer, ProductInfo, FulfillmentKizAuditContext, FulfillmentKizLinkPreparation } from '../services/fulfillmentService'
 import { fetchProducts } from '../services/productService'
 import { fetchAccountPipeline, saveAccountPipeline, fetchBatchPipeline, createBatchWithPipeline, completeBatchPipelineStage, advanceBatchPipelineStep, fetchPipelineStageDiscrepancies, updateBatchPipelineOtkDiscrepancy, fetchPartnerBatches, fetchAllBatchPipelineStages, updateBatchPipelineStageFlags, updateBatchPipelineWarehouse } from '../services/pipelineService'
 import type { AccountPipelineStage, BatchPipelineStage, PartnerBatchInfo, PipelineStageDiscrepancy } from '../types'
@@ -112,8 +115,10 @@ import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import { pluralRu } from '../lib/utils'
 import { getScannerDeviceIdentity, setScannerDeviceName } from '../lib/scannerDeviceIdentity'
 import { kizValidationError, normalizeKizCode } from '../lib/kizCode'
+import { GS_SEPARATOR, scannerCharacterFromKeyboardCode } from '../lib/scannerInput'
 import { showScanSuccess } from '../components/ui/ScanSuccessOverlay'
 import { FulfillmentKizPairsModal } from '../components/fulfillment/FulfillmentKizPairsModal'
+import { FulfillmentElestetScanner } from '../components/fulfillment/FulfillmentElestetScanner'
 import {
   buildFulfillmentBoxContentsPdf,
   type FulfillmentBoxContentsFormat,
@@ -982,6 +987,9 @@ const BatchDetailModal = ({
   const [activeSupplyId, setActiveSupplyId] = useState<string | null>(null)
   const [isSavingBox, setIsSavingBox] = useState<string | null>(null)
   const packingBarcodeRef = useRef<HTMLInputElement>(null)
+  const packingScannerBufferRef = useRef<Record<string, string>>({})
+  const packingAltNumpadDigitsRef = useRef('')
+  const packingScanSubmitRef = useRef<(boxId: string, rawValue: string) => void>(() => undefined)
   const packingQtyRef = useRef<HTMLInputElement>(null)
   const packingItemsScrollRef = useRef<HTMLDivElement>(null)
   const packingItemRowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -1019,6 +1027,17 @@ const BatchDetailModal = ({
   }>>({})
   const [packingKizList, setPackingKizList] = useState<{ boxId: string; barcode: string; productName: string | null } | null>(null)
   const [packingKizBusy, setPackingKizBusy] = useState(false)
+  const [packingKizLinkConfirmation, setPackingKizLinkConfirmation] = useState<{
+    supplyId: string
+    boxId: string
+    barcode: string
+    itemId: string | null
+    productName: string | null
+    rawKiz: string
+    normalizedKiz: string
+    productSnapshot: Record<string, unknown>
+    preparation: FulfillmentKizLinkPreparation
+  } | null>(null)
   const [packingPhotoPreview, setPackingPhotoPreview] = useState<{ url: string; x: number; y: number } | null>(null)
   const [packingCameraOpen, setPackingCameraOpen] = useState(false)
   const [packingCameraError, setPackingCameraError] = useState<string | null>(null)
@@ -1521,6 +1540,7 @@ const BatchDetailModal = ({
     || transferSupplyId
     || packingCameraOpen
     || packingKizList
+    || packingKizLinkConfirmation
   )
 
   // В модалке поставки аппаратный сканер всегда направлен в баркод активного
@@ -1534,31 +1554,73 @@ const BatchDetailModal = ({
     const handleDocumentKeyDown = (event: KeyboardEvent) => {
       const input = packingBarcodeRef.current
       if (!input || input.disabled || document.activeElement === input) return
-      if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return
+      if (event.isComposing) return
 
       const target = event.target as HTMLElement | null
       const userIsEditingAnotherField = Boolean(target?.closest('input, textarea, select, [contenteditable="true"]'))
       if (userIsEditingAnotherField) return
 
-      if (event.key.length === 1) {
+      if (event.key === 'F8') {
         event.preventDefault()
         input.focus({ preventScroll: true })
+        const next = (packingScannerBufferRef.current[activePackingBoxId] ?? input.value) + GS_SEPARATOR
+        packingScannerBufferRef.current[activePackingBoxId] = next
+        setPackingBoxBarcode((current) => ({ ...current, [activePackingBoxId]: next }))
+        return
+      }
+      if (event.ctrlKey && event.code === 'BracketRight') {
+        event.preventDefault()
+        const next = (packingScannerBufferRef.current[activePackingBoxId] ?? input.value) + GS_SEPARATOR
+        packingScannerBufferRef.current[activePackingBoxId] = next
+        setPackingBoxBarcode((current) => ({ ...current, [activePackingBoxId]: next }))
+        return
+      }
+      if (event.altKey && /^Numpad\d$/.test(event.code)) {
+        packingAltNumpadDigitsRef.current += event.code.slice(-1)
+        event.preventDefault()
+        return
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+
+      const scannerCharacter = scannerCharacterFromKeyboardCode(event.code, event.shiftKey)
+      if (scannerCharacter !== null) {
+        event.preventDefault()
+        input.focus({ preventScroll: true })
+        const next = (packingScannerBufferRef.current[activePackingBoxId] ?? input.value) + scannerCharacter
+        packingScannerBufferRef.current[activePackingBoxId] = next
         setPackingBoxBarcode((current) => ({
           ...current,
-          [activePackingBoxId]: (current[activePackingBoxId] ?? '') + event.key,
+          [activePackingBoxId]: next,
         }))
-      } else if (event.key === 'Enter') {
+      } else if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault()
         input.focus({ preventScroll: true })
+        const rawValue = packingScannerBufferRef.current[activePackingBoxId] ?? input.value
+        packingScanSubmitRef.current(activePackingBoxId, rawValue)
       }
+    }
+    const handleDocumentKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== 'Alt' || packingAltNumpadDigitsRef.current.length === 0) return
+      const digits = packingAltNumpadDigitsRef.current
+      packingAltNumpadDigitsRef.current = ''
+      if (digits.replace(/^0+/, '') !== '29') return
+      const input = packingBarcodeRef.current
+      if (!input) return
+      const next = (packingScannerBufferRef.current[activePackingBoxId] ?? input.value) + GS_SEPARATOR
+      packingScannerBufferRef.current[activePackingBoxId] = next
+      setPackingBoxBarcode((current) => ({ ...current, [activePackingBoxId]: next }))
+      event.preventDefault()
+      event.stopPropagation()
     }
 
     window.addEventListener('focus', handleWindowFocus)
     document.addEventListener('keydown', handleDocumentKeyDown, true)
+    document.addEventListener('keyup', handleDocumentKeyUp, true)
     return () => {
       window.cancelAnimationFrame(frame)
       window.removeEventListener('focus', handleWindowFocus)
       document.removeEventListener('keydown', handleDocumentKeyDown, true)
+      document.removeEventListener('keyup', handleDocumentKeyUp, true)
     }
   }, [activePackingBoxId, canManageStageData, packingScannerBlocked, supplies])
 
@@ -2849,6 +2911,42 @@ const BatchDetailModal = ({
     void lookupAndCacheBarcode(bc)
   }, [items, accountId, batch.id, lookupAndCacheBarcode, scrollPackingItemIntoView, showPackingScanFeedback])
 
+  const savePackingKizDraft = useCallback(async (data: {
+    boxId: string
+    barcode: string
+    itemId: string | null
+    productName: string | null
+    rawKiz: string
+    normalizedKiz: string
+    productSnapshot: Record<string, unknown>
+  }) => {
+    const pair = await createFulfillmentKizDraft({
+      box_id: data.boxId,
+      barcode: data.barcode,
+      item_id: data.itemId,
+      product_name: data.productName,
+      kiz_raw: data.rawKiz,
+      kiz_normalized: data.normalizedKiz,
+      product_snapshot: data.productSnapshot,
+      context: packingKizAuditContext,
+    })
+    setPackingKizPairs((current) => [...current.filter((candidate) => candidate.id !== pair.id), pair])
+    setPackingPendingKiz((current) => {
+      const next = { ...current }
+      delete next[data.boxId]
+      return next
+    })
+    packingScannerBufferRef.current[data.boxId] = ''
+    setPackingBoxBarcode((current) => ({ ...current, [data.boxId]: '' }))
+    showPackingScanFeedback({ kind: 'success', boxId: data.boxId, barcode: data.barcode, qty: 1, message: 'Пара КИЗ сохранена. Ожидает записи в короб.' })
+    scrollPackingItemIntoView(data.boxId, data.barcode)
+    showScanSuccess({
+      kind: 'kiz',
+      primary: String(pair.product_snapshot.honest_sign_article || pair.product_snapshot.size || 'КИЗ'),
+      details: [pair.product_snapshot.size, pair.product_snapshot.color, pair.product_snapshot.honest_sign_article].filter(Boolean).map(String),
+    })
+  }, [packingKizAuditContext, scrollPackingItemIntoView, showPackingScanFeedback])
+
   const handlePackingKizScan = useCallback(async (supplyId: string, boxId: string, rawValue: string) => {
     if (packingKizBusy) return
     const value = rawValue.replace(/[\r\n\t]+$/g, '')
@@ -2870,6 +2968,7 @@ const BatchDetailModal = ({
           productName: info?.name ?? matched?.product_name ?? null,
         },
       }))
+      packingScannerBufferRef.current[boxId] = ''
       setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
       setPackingBoxQty((current) => ({ ...current, [boxId]: '1' }))
       void lookupAndCacheBarcode(barcode)
@@ -2886,51 +2985,116 @@ const BatchDetailModal = ({
     const normalized = normalizeKizCode(value)
     const validationError = kizValidationError(normalized)
     if (validationError) {
-      showPackingScanFeedback({ kind: 'error', boxId, barcode: pending.barcode, message: validationError })
+      const hasGs = normalized.includes(GS_SEPARATOR)
+      const detailedMessage = validationError.startsWith('Это не КИЗ')
+        ? `${validationError} Сканер передал ${normalized.length} симв.; GS/FNC1: ${hasGs ? 'есть' : 'не найден'}.`
+        : validationError
+      showPackingScanFeedback({ kind: 'error', boxId, barcode: pending.barcode, message: detailedMessage })
+      packingScannerBufferRef.current[boxId] = ''
+      setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
       return
     }
 
     const info = packingProductCache[pending.barcode]
     const matched = items.find((item) => item.barcode === pending.barcode)
+    const gtin = /^01(\d{14})21/.exec(normalized)?.[1]
+    if (!gtin) {
+      showPackingScanFeedback({ kind: 'error', boxId, barcode: pending.barcode, message: 'В КИЗ не найден GTIN-14 после идентификатора 01.' })
+      return
+    }
+    const productSnapshot = {
+      nm_id: info?.nm_id ?? null,
+      chrt_id: info?.chrt_id ?? null,
+      vendor_code: info?.vendor_code ?? null,
+      brand: info?.brand ?? null,
+      product_name: pending.productName,
+      size: info?.size ?? matched?.size ?? null,
+      color: info?.color ?? matched?.color ?? null,
+      barcode: pending.barcode,
+      photo_url: info?.photo_url ?? null,
+    }
     setPackingKizBusy(true)
     try {
-      const pair = await createFulfillmentKizDraft({
-        box_id: boxId,
-        barcode: pending.barcode,
-        item_id: pending.itemId,
-        product_name: pending.productName,
-        kiz_raw: value,
-        kiz_normalized: normalized,
-        product_snapshot: {
-          product_name: pending.productName,
-          size: info?.size ?? matched?.size ?? null,
-          color: info?.color ?? matched?.color ?? null,
+      if (!batch.store_id) throw new Error('У партии не выбран магазин WB')
+      const teksherValidation = await validateFulfillmentKizWithTeksher(batch.store_id, normalized)
+      const preparation = await prepareFulfillmentKizLink(boxId, pending.barcode, gtin)
+      const resolvedSnapshot = {
+        ...preparation.wb_product,
+        ...productSnapshot,
+        product_name: pending.productName || preparation.wb_product.name || null,
+        teksher_code_id: teksherValidation.code_id ?? null,
+        teksher_status: teksherValidation.status ?? null,
+      }
+      if (!preparation.linked) {
+        packingScannerBufferRef.current[boxId] = ''
+        setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
+        setPackingKizLinkConfirmation({
+          supplyId,
+          boxId,
           barcode: pending.barcode,
-        },
-        context: packingKizAuditContext,
-      })
-      setPackingKizPairs((current) => [...current.filter((candidate) => candidate.id !== pair.id), pair])
-      setPackingPendingKiz((current) => {
-        const next = { ...current }
-        delete next[boxId]
-        return next
-      })
-      setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
-      showPackingScanFeedback({ kind: 'success', boxId, barcode: pending.barcode, qty: 1, message: 'Пара КИЗ сохранена. Ожидает записи в короб.' })
-      scrollPackingItemIntoView(boxId, pending.barcode)
-      showScanSuccess({
-        kind: 'kiz',
-        primary: String(pair.product_snapshot.honest_sign_article || pair.product_snapshot.size || 'КИЗ'),
-        details: [pair.product_snapshot.size, pair.product_snapshot.color, pair.product_snapshot.honest_sign_article].filter(Boolean).map(String),
+          itemId: pending.itemId,
+          productName: pending.productName || preparation.wb_product.name || null,
+          rawKiz: value,
+          normalizedKiz: normalized,
+          productSnapshot: resolvedSnapshot,
+          preparation,
+        })
+        return
+      }
+      await savePackingKizDraft({
+        boxId,
+        barcode: pending.barcode,
+        itemId: pending.itemId,
+        productName: pending.productName || preparation.wb_product.name || null,
+        rawKiz: value,
+        normalizedKiz: normalized,
+        productSnapshot: resolvedSnapshot,
       })
     } catch (error) {
       const reason = error instanceof Error ? error.message : (error as { message?: string })?.message
       showPackingScanFeedback({ kind: 'error', boxId, barcode: pending.barcode, message: reason || 'КИЗ не принят.' })
+      packingScannerBufferRef.current[boxId] = ''
+      setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
     } finally {
       setPackingKizBusy(false)
       window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
     }
-  }, [items, lookupAndCacheBarcode, packingKizAuditContext, packingKizBusy, packingPendingKiz, packingProductCache, scrollPackingItemIntoView, showPackingScanFeedback])
+  }, [batch.store_id, items, lookupAndCacheBarcode, packingKizBusy, packingPendingKiz, packingProductCache, savePackingKizDraft, showPackingScanFeedback])
+
+  const confirmPackingKizLink = useCallback(async () => {
+    const confirmation = packingKizLinkConfirmation
+    if (!confirmation || packingKizBusy) return
+    setPackingKizBusy(true)
+    try {
+      await confirmFulfillmentKizLink({
+        box_id: confirmation.boxId,
+        barcode: confirmation.barcode,
+        gtin: confirmation.preparation.gtin,
+        context: packingKizAuditContext,
+      })
+      await savePackingKizDraft({
+        boxId: confirmation.boxId,
+        barcode: confirmation.barcode,
+        itemId: confirmation.itemId,
+        productName: confirmation.productName,
+        rawKiz: confirmation.rawKiz,
+        normalizedKiz: confirmation.normalizedKiz,
+        productSnapshot: confirmation.productSnapshot,
+      })
+      setPackingKizLinkConfirmation(null)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : (error as { message?: string })?.message
+      setError(reason || 'Не удалось подтвердить связь товара WB с GTIN TekSher')
+    } finally {
+      setPackingKizBusy(false)
+      window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
+    }
+  }, [packingKizAuditContext, packingKizBusy, packingKizLinkConfirmation, savePackingKizDraft])
+
+  packingScanSubmitRef.current = (boxId, rawValue) => {
+    const supply = supplies.find((candidate) => candidate.boxes.some((box) => box.id === boxId))
+    if (supply?.kiz_enabled) void handlePackingKizScan(supply.id, boxId, rawValue)
+  }
 
   const resetPendingPackingKiz = useCallback((boxId: string) => {
     setPackingPendingKiz((current) => {
@@ -2938,6 +3102,7 @@ const BatchDetailModal = ({
       delete next[boxId]
       return next
     })
+    packingScannerBufferRef.current[boxId] = ''
     setPackingBoxBarcode((current) => ({ ...current, [boxId]: '' }))
     showPackingScanFeedback({ kind: 'error', boxId, message: 'Незавершённая пара сброшена.' })
     window.setTimeout(() => packingBarcodeRef.current?.focus({ preventScroll: true }), 0)
@@ -7329,10 +7494,20 @@ const BatchDetailModal = ({
                         >
                           {/* Шапка модалки поставки */}
                           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-                            <div className="flex items-center gap-3">
+                            <div className="flex min-w-0 flex-wrap items-center gap-3">
                               <p className="font-semibold text-slate-800">{supply.warehouse_name}</p>
                               {supply._local && (
                                 <span className="text-xs font-medium text-amber-600 bg-amber-50 rounded-full px-2 py-0.5">сохранение...</span>
+                              )}
+                              {supply.kiz_enabled && supply.boxes.length > 0 && (
+                                <FulfillmentElestetScanner
+                                  disabled={packingKizBusy || Boolean(packingKizLinkConfirmation)}
+                                  onScannerModelChanged={() => setPackingScannerIdentity(getScannerDeviceIdentity())}
+                                  onScan={(value) => {
+                                    const targetBox = supply.boxes.find((candidate) => candidate.id === packingOpenBoxId) ?? supply.boxes[0]
+                                    if (targetBox) void handlePackingKizScan(supply.id, targetBox.id, value)
+                                  }}
+                                />
                               )}
                             </div>
                             <div className="flex items-center gap-3">
@@ -7793,10 +7968,34 @@ const BatchDetailModal = ({
                                           type="text"
                                           placeholder={supply.kiz_enabled && packingPendingKiz[box.id] ? 'Отсканируйте КИЗ' : 'Баркод'}
                                           value={packingBoxBarcode[box.id] ?? ''}
-                                          onChange={(e) => setPackingBoxBarcode((p) => ({ ...p, [box.id]: e.target.value }))}
+                                          onChange={(e) => {
+                                            packingScannerBufferRef.current[box.id] = e.target.value
+                                            setPackingBoxBarcode((p) => ({ ...p, [box.id]: e.target.value }))
+                                          }}
                                           onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              const rawScan = packingBoxBarcode[box.id] ?? ''
+                                            if (e.nativeEvent.isComposing) return
+                                            if (e.key === 'F8') {
+                                              e.preventDefault()
+                                              const next = (packingScannerBufferRef.current[box.id] ?? packingBoxBarcode[box.id] ?? '') + GS_SEPARATOR
+                                              packingScannerBufferRef.current[box.id] = next
+                                              setPackingBoxBarcode((p) => ({ ...p, [box.id]: next }))
+                                              return
+                                            }
+                                            if (e.ctrlKey && e.code === 'BracketRight') {
+                                              e.preventDefault()
+                                              const next = (packingScannerBufferRef.current[box.id] ?? packingBoxBarcode[box.id] ?? '') + GS_SEPARATOR
+                                              packingScannerBufferRef.current[box.id] = next
+                                              setPackingBoxBarcode((p) => ({ ...p, [box.id]: next }))
+                                              return
+                                            }
+                                            if (e.altKey && /^Numpad\d$/.test(e.code)) {
+                                              packingAltNumpadDigitsRef.current += e.code.slice(-1)
+                                              e.preventDefault()
+                                              return
+                                            }
+                                            if (e.key === 'Enter' || e.key === 'Tab') {
+                                              e.preventDefault()
+                                              const rawScan = packingScannerBufferRef.current[box.id] ?? packingBoxBarcode[box.id] ?? ''
                                               if (supply.kiz_enabled) {
                                                 void handlePackingKizScan(supply.id, box.id, rawScan)
                                                 return
@@ -7810,6 +8009,7 @@ const BatchDetailModal = ({
                                                 // Авто-режим: добавляем сразу в DB
                                                 const qty = parseInt(packingBoxQty[box.id] ?? '1') || 1
                                                 addItemToBoxDirect(supply.id, box.id, bc, qty)
+                                                packingScannerBufferRef.current[box.id] = ''
                                                 setPackingBoxBarcode((p) => ({ ...p, [box.id]: '' }))
                                                 setPackingBoxQty((p) => ({ ...p, [box.id]: '1' }))
                                                 setTimeout(() => packingBarcodeRef.current?.focus(), 0)
@@ -7817,7 +8017,34 @@ const BatchDetailModal = ({
                                                 // Ручной режим: переводим фокус на кол-во
                                                 setTimeout(() => { packingQtyRef.current?.focus(); packingQtyRef.current?.select() }, 0)
                                               }
+                                              return
                                             }
+                                            if (e.key === 'Backspace') {
+                                              e.preventDefault()
+                                              const current = packingScannerBufferRef.current[box.id] ?? packingBoxBarcode[box.id] ?? ''
+                                              const next = current.slice(0, -1)
+                                              packingScannerBufferRef.current[box.id] = next
+                                              setPackingBoxBarcode((p) => ({ ...p, [box.id]: next }))
+                                              return
+                                            }
+                                            if (e.ctrlKey || e.metaKey || e.altKey) return
+                                            const scannerCharacter = scannerCharacterFromKeyboardCode(e.code, e.shiftKey)
+                                            if (scannerCharacter !== null) {
+                                              e.preventDefault()
+                                              const next = (packingScannerBufferRef.current[box.id] ?? packingBoxBarcode[box.id] ?? '') + scannerCharacter
+                                              packingScannerBufferRef.current[box.id] = next
+                                              setPackingBoxBarcode((p) => ({ ...p, [box.id]: next }))
+                                            }
+                                          }}
+                                          onKeyUp={(e) => {
+                                            if (e.key !== 'Alt' || packingAltNumpadDigitsRef.current.length === 0) return
+                                            const digits = packingAltNumpadDigitsRef.current
+                                            packingAltNumpadDigitsRef.current = ''
+                                            if (digits.replace(/^0+/, '') !== '29') return
+                                            e.preventDefault()
+                                            const next = (packingScannerBufferRef.current[box.id] ?? packingBoxBarcode[box.id] ?? '') + GS_SEPARATOR
+                                            packingScannerBufferRef.current[box.id] = next
+                                            setPackingBoxBarcode((p) => ({ ...p, [box.id]: next }))
                                           }}
                                           className={`w-full rounded-xl border pl-3 pr-9 py-2 text-sm outline-none ${(packingBoxBarcode[box.id] ?? '').length === 0 ? 'border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100' : supply.kiz_enabled && packingPendingKiz[box.id] ? 'border-violet-400 focus:ring-2 focus:ring-violet-100' : /^\d{13}$/.test(packingBoxBarcode[box.id] ?? '') ? 'border-emerald-400 focus:ring-2 focus:ring-emerald-100' : 'border-red-300 focus:ring-2 focus:ring-red-100'}`}
                                         />
@@ -7857,6 +8084,7 @@ const BatchDetailModal = ({
                                                 return
                                               }
                                               addItemToBoxDirect(supply.id, box.id, bc, qty)
+                                              packingScannerBufferRef.current[box.id] = ''
                                               setPackingBoxBarcode((p) => ({ ...p, [box.id]: '' }))
                                               setPackingBoxQty((p) => ({ ...p, [box.id]: '1' }))
                                               setTimeout(() => packingBarcodeRef.current?.focus(), 0)
@@ -7878,6 +8106,7 @@ const BatchDetailModal = ({
                                               return
                                             }
                                             addItemToBoxDirect(supply.id, box.id, bc, qty)
+                                            packingScannerBufferRef.current[box.id] = ''
                                             setPackingBoxBarcode((p) => ({ ...p, [box.id]: '' }))
                                             setPackingBoxQty((p) => ({ ...p, [box.id]: '1' }))
                                             setTimeout(() => packingBarcodeRef.current?.focus(), 0)
@@ -9820,6 +10049,7 @@ const BatchDetailModal = ({
                           setPackingCameraTargetBoxId(null)
                           return
                         }
+                        packingScannerBufferRef.current[boxId] = bc
                         setPackingBoxBarcode((p) => ({ ...p, [boxId]: bc }))
                         void lookupAndCacheBarcode(bc)
                         setPackingCameraOpen(false)
@@ -9845,6 +10075,56 @@ const BatchDetailModal = ({
           </div>
         </div>
       , document.body)}
+      {packingKizLinkConfirmation && createPortal((() => {
+        const confirmation = packingKizLinkConfirmation
+        const wb = confirmation.preparation.wb_product
+        const teksher = confirmation.preparation.teksher_product
+        const photoUrl = typeof confirmation.productSnapshot.photo_url === 'string' ? confirmation.productSnapshot.photo_url : ''
+        return (
+          <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-slate-950/55 p-4" onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !packingKizBusy) setPackingKizLinkConfirmation(null)
+          }}>
+            <div className="w-full max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+              <div className="border-b border-slate-100 px-6 py-5">
+                <h3 className="text-lg font-bold text-slate-900">Первичная связь товара WB с GTIN TekSher</h3>
+                <p className="mt-1 text-sm text-slate-500">Система больше не сравнивает разные коды напрямую. Один раз проверьте, что слева и справа указан один физический товар и размер.</p>
+              </div>
+              <div className="grid gap-4 p-6 md:grid-cols-2">
+                <section className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Wildberries</p>
+                  <div className="mt-3 flex gap-3">
+                    {photoUrl && <img src={photoUrl} alt="" className="h-24 w-20 rounded-xl object-cover" />}
+                    <div className="min-w-0 space-y-1 text-sm text-slate-700">
+                      <p className="font-bold text-slate-900">{wb.name || confirmation.productName || 'Без названия'}</p>
+                      <p>Артикул продавца: <b>{wb.vendor_code || '—'}</b></p>
+                      <p>Артикул WB: <b>{wb.nm_id || '—'}</b></p>
+                      <p>Размер: <b>{wb.size || '—'}</b></p>
+                      <p>Цвет: <b>{wb.color || '—'}</b></p>
+                    </div>
+                  </div>
+                  <p className="mt-3 break-all rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">SKU {confirmation.barcode}</p>
+                </section>
+                <section className="rounded-2xl border border-violet-200 bg-violet-50/60 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wide text-violet-600">TekSher</p>
+                  <div className="mt-3 space-y-1 text-sm text-slate-700">
+                    <p className="font-bold text-slate-900">{teksher.full_name || teksher.name || 'Без названия'}</p>
+                    <p>Краткое название: <b>{teksher.name || '—'}</b></p>
+                    <p>Товарная группа: <b>{teksher.product_group_code || '—'}</b></p>
+                    <p>Торговая марка: <b>{teksher.trademark || '—'}</b></p>
+                  </div>
+                  <p className="mt-3 break-all rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">GTIN {teksher.gtin}</p>
+                </section>
+              </div>
+              <div className="flex flex-col-reverse gap-2 border-t border-slate-100 px-6 py-4 sm:flex-row sm:justify-end">
+                <button type="button" disabled={packingKizBusy} onClick={() => setPackingKizLinkConfirmation(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Не связывать</button>
+                <button type="button" disabled={packingKizBusy} onClick={() => void confirmPackingKizLink()} className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50">
+                  {packingKizBusy ? 'Сохраняю…' : 'Это один товар — связать и продолжить'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })(), document.body)}
       {packingKizList && activeSupplyId && (() => {
         const supply = supplies.find((candidate) => candidate.id === activeSupplyId)
         if (!supply) return null
