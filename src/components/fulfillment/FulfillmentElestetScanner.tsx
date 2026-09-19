@@ -31,6 +31,7 @@ type BrowserSerialPort = {
 
 type BrowserSerialApi = {
   requestPort(): Promise<BrowserSerialPort>
+  getPorts?(): Promise<BrowserSerialPort[]>
 }
 
 type Props = {
@@ -78,6 +79,9 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
   const portRef = useRef<BrowserSerialPort | null>(null)
   const readerRef = useRef<BrowserSerialReader | null>(null)
   const readingRef = useRef(false)
+  const connectedProfileKeyRef = useRef('')
+  const autoConnectProfileKeyRef = useRef('')
+  const connectionAttemptRef = useRef(false)
   const scanHandlerRef = useRef(onScan)
   scanHandlerRef.current = onScan
 
@@ -93,9 +97,13 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
     () => models.find((model) => model.displayName === selectedName) ?? null,
     [models, selectedName],
   )
+  const selectedProfileKey = selected?.connectionType === 'web_serial'
+    ? `${selected.id}:${selected.profileVersion}`
+    : ''
 
   const disconnect = useCallback(async () => {
     readingRef.current = false
+    connectedProfileKeyRef.current = ''
     try { await readerRef.current?.cancel() } catch { /* порт уже отключён */ }
     readerRef.current = null
     if (!readerRef.current) {
@@ -114,10 +122,8 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
   }, [])
 
   useEffect(() => {
-    if (status === 'connected') void disconnect()
-  // Переподключение обязательно: у разных профилей различаются параметры порта.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedName])
+    if (portRef.current && connectedProfileKeyRef.current !== selectedProfileKey) void disconnect()
+  }, [disconnect, selectedProfileKey])
 
   const readPort = async (port: BrowserSerialPort, profile: ScannerModelProfile) => {
     if (!port.readable) throw new Error('Режим ELESTET подключён без канала чтения')
@@ -162,12 +168,31 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
       try { reader.releaseLock() } catch { /* блокировка уже освобождена */ }
       try { await port.close() } catch { /* порт уже закрыт */ }
       if (portRef.current === port) portRef.current = null
+      connectedProfileKeyRef.current = ''
       setStatus((current) => current === 'error' ? current : (browserSerialApi() ? 'disconnected' : 'unsupported'))
     }
   }
 
+  const activatePort = async (
+    port: BrowserSerialPort,
+    profile: ScannerModelProfile,
+    profileKey: string,
+    automatically: boolean,
+  ) => {
+    await port.open(profile.serialOptions)
+    if (!port.readable) throw new Error('Режим ELESTET подключён без канала чтения')
+    portRef.current = port
+    connectedProfileKeyRef.current = profileKey
+    readingRef.current = true
+    setStatus('connected')
+    setMessage(automatically
+      ? 'Сканер подключён автоматически и читает исходные данные КИЗ'
+      : 'Сканер подключён и читает исходные данные КИЗ')
+    void readPort(port, profile)
+  }
+
   const connect = async () => {
-    if (!selected || selected.connectionType !== 'web_serial' || disabled) return
+    if (!selected || selected.connectionType !== 'web_serial' || !selectedProfileKey || disabled || connectionAttemptRef.current) return
     const serial = browserSerialApi()
     if (!serial) {
       setStatus('unsupported')
@@ -176,22 +201,61 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
     }
     setStatus('connecting')
     setMessage('')
+    connectionAttemptRef.current = true
+    let port: BrowserSerialPort | null = null
     try {
-      const port = await serial.requestPort()
-      await port.open(selected.serialOptions)
-      portRef.current = port
-      readingRef.current = true
-      setStatus('connected')
-      setMessage('Сканер подключён и читает исходные данные КИЗ')
-      void readPort(port, selected)
+      port = await serial.requestPort()
+      await activatePort(port, selected, selectedProfileKey, false)
     } catch (error) {
       readingRef.current = false
       portRef.current = null
+      connectedProfileKeyRef.current = ''
+      try { await port?.close() } catch { /* Порт мог не успеть открыться. */ }
       const cancelled = error instanceof DOMException && error.name === 'NotFoundError'
       setStatus('error')
       setMessage(cancelled ? 'Выбор устройства отменён' : errorText(error))
+    } finally {
+      connectionAttemptRef.current = false
     }
   }
+
+  useEffect(() => {
+    if (disabled || !selected || selected.connectionType !== 'web_serial' || !selectedProfileKey || portRef.current) return
+    const serial = browserSerialApi()
+    if (!serial?.getPorts) return
+    let cancelled = false
+
+    void serial.getPorts().then(async (ports) => {
+      if (cancelled || portRef.current || connectionAttemptRef.current || autoConnectProfileKeyRef.current === selectedProfileKey) return
+      const port = ports[0]
+      if (!port) return
+      autoConnectProfileKeyRef.current = selectedProfileKey
+      connectionAttemptRef.current = true
+      setStatus('connecting')
+      setMessage('Подключаем ранее разрешённый сканер…')
+      try {
+        await activatePort(port, selected, selectedProfileKey, true)
+      } catch (error) {
+        readingRef.current = false
+        portRef.current = null
+        connectedProfileKeyRef.current = ''
+        try { await port.close() } catch { /* Порт мог уже закрыться. */ }
+        if (!cancelled) {
+          setStatus('error')
+          setMessage(`Автоподключение не удалось: ${errorText(error)}. Нажмите «Подключить».`)
+        }
+      } finally {
+        connectionAttemptRef.current = false
+      }
+    }).catch((error) => {
+      if (!cancelled) {
+        setStatus('error')
+        setMessage(`Не удалось получить ранее разрешённый сканер: ${errorText(error)}`)
+      }
+    })
+
+    return () => { cancelled = true }
+  }, [disabled, selected, selectedProfileKey])
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-100 bg-violet-50/70 px-3 py-2">

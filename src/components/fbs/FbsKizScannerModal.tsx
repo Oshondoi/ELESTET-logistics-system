@@ -7,6 +7,7 @@ import { invokeFbs } from '../../services/fbsApi'
 import { fetchActiveScannerModels, readCachedActiveScannerModels } from '../../services/scannerModelService'
 import type { ScannerModelProfile } from '../../services/scannerModelService'
 import { kizValidationError, normalizeKizCode, normalizeScannerKeyboardLayout } from '../../lib/kizCode'
+import { scannerCharacterFromKeyboardCode } from '../../lib/scannerInput'
 import { showToast } from '../ui/Toast'
 import { showScanSuccess } from '../ui/ScanSuccessOverlay'
 import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url'
@@ -285,27 +286,6 @@ function scanCandidates(value: string): string[] {
   return [...new Set(values.filter(Boolean))]
 }
 
-const US_PRINTABLE_BY_CODE: Record<string, readonly [string, string]> = {
-  Backquote: ['`', '~'], Digit1: ['1', '!'], Digit2: ['2', '@'], Digit3: ['3', '#'],
-  Digit4: ['4', '$'], Digit5: ['5', '%'], Digit6: ['6', '^'], Digit7: ['7', '&'],
-  Digit8: ['8', '*'], Digit9: ['9', '('], Digit0: ['0', ')'], Minus: ['-', '_'], Equal: ['=', '+'],
-  BracketLeft: ['[', '{'], BracketRight: [']', '}'], Backslash: ['\\', '|'],
-  Semicolon: [';', ':'], Quote: ["'", '"'], Comma: [',', '<'], Period: ['.', '>'], Slash: ['/', '?'],
-  Numpad0: ['0', '0'], Numpad1: ['1', '1'], Numpad2: ['2', '2'], Numpad3: ['3', '3'],
-  Numpad4: ['4', '4'], Numpad5: ['5', '5'], Numpad6: ['6', '6'], Numpad7: ['7', '7'],
-  Numpad8: ['8', '8'], Numpad9: ['9', '9'], NumpadDecimal: ['.', '.'], NumpadDivide: ['/', '/'],
-  NumpadMultiply: ['*', '*'], NumpadSubtract: ['-', '-'], NumpadAdd: ['+', '+'],
-}
-
-function usAsciiFromKeyboardEvent(event: KeyboardEvent): string | null {
-  if (/^Key[A-Z]$/.test(event.code)) {
-    const letter = event.code.slice(3).toLowerCase()
-    return event.shiftKey ? letter.toUpperCase() : letter
-  }
-  const pair = US_PRINTABLE_BY_CODE[event.code]
-  return pair ? pair[event.shiftKey ? 1 : 0] : null
-}
-
 function buildCatalogMap(items: CatalogItem[]): Map<string, CatalogItem> {
   const map = new Map<string, CatalogItem>()
   for (const item of items) {
@@ -439,6 +419,8 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
   const serialReaderRef = useRef<BrowserSerialReader | null>(null)
   const serialReadActiveRef = useRef(false)
   const serialConnectedProfileKeyRef = useRef('')
+  const serialAutoConnectProfileKeyRef = useRef('')
+  const serialConnectionAttemptRef = useRef(false)
   const serialScanHandlerRef = useRef<(value: string) => Promise<void>>(async () => undefined)
   const sessionRef = useRef<ScanSession | null>(null)
   const pairDetailsRequestRef = useRef(0)
@@ -1107,8 +1089,35 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
+  const activateScannerSerialPort = async (
+    port: BrowserSerialPort,
+    profile: ScannerModelProfile,
+    profileKey: string,
+    automatically: boolean,
+  ) => {
+    await port.open(profile.serialOptions)
+    if (!port.readable) throw new Error('Режим ELESTET подключён без канала чтения')
+    const info = port.getInfo?.() ?? {}
+    const id = info.usbVendorId == null
+      ? 'Сканер'
+      : `Устройство ${info.usbVendorId.toString(16).padStart(4, '0')}:${(info.usbProductId ?? 0).toString(16).padStart(4, '0')}`
+    serialPortRef.current = port
+    serialConnectedProfileKeyRef.current = profileKey
+    serialReadActiveRef.current = true
+    setSerialPortLabel(id)
+    setSerialStatus('connected')
+    setNotice(automatically
+      ? 'Режим ELESTET подключён автоматически. Сканер готов к работе'
+      : 'Режим ELESTET подключён. Сканер готов к работе')
+    const configuredMaxPacketLength = Number(profile.scanOptions.maxPacketLength)
+    const maxPacketLength = Number.isFinite(configuredMaxPacketLength)
+      ? Math.max(256, Math.trunc(configuredMaxPacketLength))
+      : 4096
+    void readSerialPort(port, maxPacketLength, serialPacketTerminator(profile.scanOptions.packetTerminator))
+  }
+
   const connectScannerSerial = async () => {
-    if (!serialScannerSelected || !selectedScannerProfile || serialStatus === 'connecting' || serialStatus === 'connected') return
+    if (!serialScannerSelected || !selectedScannerProfile || !selectedSerialProfileKey || serialStatus === 'connecting' || serialStatus === 'connected' || serialConnectionAttemptRef.current) return
     const serial = browserSerialApi()
     if (!serial) {
       setSerialStatus('unsupported')
@@ -1118,32 +1127,59 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
     setSerialStatus('connecting')
     setSerialError('')
+    serialConnectionAttemptRef.current = true
+    let port: BrowserSerialPort | null = null
     try {
-      const port = await serial.requestPort()
-      await port.open(selectedScannerProfile.serialOptions)
-      const info = port.getInfo?.() ?? {}
-      const id = info.usbVendorId == null
-        ? 'Сканер'
-        : `Устройство ${info.usbVendorId.toString(16).padStart(4, '0')}:${(info.usbProductId ?? 0).toString(16).padStart(4, '0')}`
-      serialPortRef.current = port
-      serialConnectedProfileKeyRef.current = selectedSerialProfileKey
-      serialReadActiveRef.current = true
-      setSerialPortLabel(id)
-      setSerialStatus('connected')
-      setNotice('Режим ELESTET подключён. Сканер готов к работе')
-      const configuredMaxPacketLength = Number(selectedScannerProfile.scanOptions.maxPacketLength)
-      const maxPacketLength = Number.isFinite(configuredMaxPacketLength)
-        ? Math.max(256, Math.trunc(configuredMaxPacketLength))
-        : 4096
-      void readSerialPort(port, maxPacketLength, serialPacketTerminator(selectedScannerProfile.scanOptions.packetTerminator))
+      port = await serial.requestPort()
+      await activateScannerSerialPort(port, selectedScannerProfile, selectedSerialProfileKey, false)
     } catch (connectError) {
       serialReadActiveRef.current = false
       serialPortRef.current = null
+      try { await port?.close() } catch { /* Порт мог не успеть открыться. */ }
       const cancelled = connectError instanceof DOMException && connectError.name === 'NotFoundError'
       setSerialStatus('error')
       setSerialError(cancelled ? 'Выбор устройства отменён' : errorText(connectError))
+    } finally {
+      serialConnectionAttemptRef.current = false
     }
   }
+
+  useEffect(() => {
+    if (!deviceReady || !serialScannerSelected || !selectedScannerProfile || !selectedSerialProfileKey || serialPortRef.current) return
+    const serial = browserSerialApi()
+    if (!serial?.getPorts) return
+    let cancelled = false
+
+    void serial.getPorts().then(async (ports) => {
+      if (cancelled || serialPortRef.current || serialConnectionAttemptRef.current || serialAutoConnectProfileKeyRef.current === selectedSerialProfileKey) return
+      const port = ports[0]
+      if (!port) return
+      serialAutoConnectProfileKeyRef.current = selectedSerialProfileKey
+      serialConnectionAttemptRef.current = true
+      setSerialStatus('connecting')
+      setSerialError('')
+      try {
+        await activateScannerSerialPort(port, selectedScannerProfile, selectedSerialProfileKey, true)
+      } catch (connectError) {
+        serialReadActiveRef.current = false
+        serialPortRef.current = null
+        try { await port.close() } catch { /* Порт мог уже закрыться. */ }
+        if (!cancelled) {
+          setSerialStatus('error')
+          setSerialError(`Автоподключение не удалось: ${errorText(connectError)}. Нажмите «Подключить режим ELESTET».`)
+        }
+      } finally {
+        serialConnectionAttemptRef.current = false
+      }
+    }).catch((connectError) => {
+      if (!cancelled) {
+        setSerialStatus('error')
+        setSerialError(`Не удалось получить ранее разрешённый сканер: ${errorText(connectError)}`)
+      }
+    })
+
+    return () => { cancelled = true }
+  }, [deviceReady, selectedScannerProfile, selectedSerialProfileKey, serialScannerSelected])
 
   useEffect(() => {
     if (serialPortRef.current && serialConnectedProfileKeyRef.current !== selectedSerialProfileKey) void disconnectSerial()
@@ -1289,6 +1325,12 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
         appendScannerValue('\u001d')
         return
       }
+      if (event.ctrlKey && event.code === 'BracketRight') {
+        event.preventDefault()
+        event.stopPropagation()
+        appendScannerValue(GS)
+        return
+      }
       if (event.altKey && /^Numpad\d$/.test(event.code)) {
         event.preventDefault()
         event.stopPropagation()
@@ -1298,7 +1340,7 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
 
       if (event.ctrlKey || event.metaKey || event.altKey) return
 
-      const ascii = usAsciiFromKeyboardEvent(event)
+      const ascii = scannerCharacterFromKeyboardCode(event.code, event.shiftKey)
       if (ascii !== null) {
         event.preventDefault()
         event.stopPropagation()
