@@ -535,6 +535,27 @@ export interface Trip {
   updated_at: string
 }
 
+export interface WbSupplyGoodSnapshot {
+  barcode?: string
+  vendorCode?: string
+  nmID?: number
+  needKiz?: boolean
+  tnved?: string
+  techSize?: string
+  color?: string
+  supplierBoxAmount?: number
+  quantity?: number
+  readyForSaleQuantity?: number
+  unloadingQuantity?: number
+  acceptedQuantity?: number
+}
+
+export interface WbSupplyPackageSnapshot {
+  packageCode: string
+  quantity: number
+  barcodes: Array<{ barcode: string; quantity: number }>
+}
+
 export interface TripLine {
   id: string
   trip_id: string
@@ -562,8 +583,28 @@ export interface TripLine {
   combined_sticker_urls: string[]
   wb_supply_id: string | null
   wb_cargo_type: number | null
+  wb_status_id: number | null
+  wb_created_at: string | null
+  wb_updated_at: string | null
+  wb_acceptance_coefficient: number | null
+  wb_acceptance_cost: number | null
+  wb_reject_reason: string | null
+  wb_quantity: number | null
+  wb_ready_for_sale_quantity: number | null
+  wb_accepted_quantity: number | null
+  wb_unloading_quantity: number | null
+  wb_depersonalized_quantity: number | null
+  wb_warehouse_id: number | null
+  wb_warehouse_name: string | null
+  wb_actual_warehouse_id: number | null
+  wb_actual_warehouse_name: string | null
+  wb_transit_warehouse_id: number | null
+  wb_transit_warehouse_name: string | null
   wb_acceptance_date: string | null
   wb_package_codes: string[]
+  wb_goods_snapshot: WbSupplyGoodSnapshot[]
+  wb_packages_snapshot: WbSupplyPackageSnapshot[]
+  wb_synced_at: string | null
   wb_pass_url: string | null
   wb_pass_urls: string[]
   comment: string

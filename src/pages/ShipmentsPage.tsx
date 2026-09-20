@@ -57,10 +57,9 @@ interface ShipmentsPageProps {
   onRemoveCombinedStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
-  onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onDownloadWbExcel?: (tripId: string, lineId: string, type: 'goods' | 'boxes' | 'all') => Promise<void>
-  onSaveMarketplaceDate?: (tripId: string, lineId: string, date: string | null) => Promise<void>
-  onRefreshMarketplaceDate?: (tripId: string, lineId: string) => Promise<void>
+  onRefreshWbSupply?: (tripId: string, lineId: string) => Promise<unknown>
+  onRefreshTripWbSupplies?: (tripId: string) => Promise<{ updated: number; failed: number; errors: string[] }>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveWbPass: (tripId: string, lineId: string, index: number) => Promise<void>
   onUpdateTripCustomFields?: (tripId: string, fields: Record<string, unknown>) => Promise<void>
@@ -99,10 +98,9 @@ export const ShipmentsPage = ({
   onRemoveCombinedStickerFile,
   onFetchWbBarcodes,
   onSaveWbSupplyId,
-  onRefreshCargoType,
   onDownloadWbExcel,
-  onSaveMarketplaceDate,
-  onRefreshMarketplaceDate,
+  onRefreshWbSupply,
+  onRefreshTripWbSupplies,
   onUploadWbPass,
   onRemoveWbPass,
   onUpdateTripCustomFields,
@@ -736,10 +734,9 @@ export const ShipmentsPage = ({
           onRemoveCombinedStickerFile={onRemoveCombinedStickerFile}
           onFetchWbBarcodes={onFetchWbBarcodes}
           onSaveWbSupplyId={onSaveWbSupplyId}
-          onRefreshCargoType={onRefreshCargoType}
           onDownloadWbExcel={onDownloadWbExcel}
-          onSaveMarketplaceDate={onSaveMarketplaceDate}
-          onRefreshMarketplaceDate={onRefreshMarketplaceDate}
+          onRefreshWbSupply={onRefreshWbSupply}
+          onRefreshTripWbSupplies={onRefreshTripWbSupplies}
           onUploadWbPass={onUploadWbPass}
           onRemoveWbPass={onRemoveWbPass}
           canManage={canManage}

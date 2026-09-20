@@ -484,9 +484,8 @@ function App() {
     removeWbPass,
     saveWbSupplyId,
     fetchWbBarcodes,
-    refreshCargoType,
-    saveMarketplaceDate,
-    refreshMarketplaceDate,
+    refreshWbSupply,
+    refreshTripWbSupplies,
     downloadWbExcel,
     removeTrip,
     removeTripLine,
@@ -978,10 +977,9 @@ function App() {
                   onRemoveCombinedStickerFile={removeCombinedStickerFile}
                   onFetchWbBarcodes={fetchWbBarcodes}
                   onSaveWbSupplyId={saveWbSupplyId}
-                  onRefreshCargoType={refreshCargoType}
                   onDownloadWbExcel={downloadWbExcel}
-                  onSaveMarketplaceDate={saveMarketplaceDate}
-                  onRefreshMarketplaceDate={refreshMarketplaceDate}
+                  onRefreshWbSupply={refreshWbSupply}
+                  onRefreshTripWbSupplies={refreshTripWbSupplies}
                   onUploadWbPass={uploadWbPass}
                   onRemoveWbPass={removeWbPass}
                   canManage={permissions.shipments_manage && !isReadOnly}

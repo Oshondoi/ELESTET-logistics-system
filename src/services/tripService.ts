@@ -573,34 +573,52 @@ export const getWbSupplyCargoType = async (
   return data.cargo_type ?? null
 }
 
-/** Сохранить Дату МП вручную */
-export const saveMarketplaceDate = async (
-  accountId: string,
-  lineId: string,
-  date: string | null,
-): Promise<void> => {
-  if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await supabase
-    .from('trip_lines')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .update({ planned_marketplace_delivery_date: date } as any)
-    .eq('id', lineId)
-    .eq('account_id', accountId)
-  if (error) throw error
+export type WbSupplySummary = Pick<TripLine,
+  | 'wb_status_id'
+  | 'wb_cargo_type'
+  | 'wb_created_at'
+  | 'planned_marketplace_delivery_date'
+  | 'wb_acceptance_date'
+  | 'wb_updated_at'
+  | 'wb_acceptance_coefficient'
+  | 'wb_acceptance_cost'
+  | 'wb_reject_reason'
+  | 'wb_quantity'
+  | 'wb_ready_for_sale_quantity'
+  | 'wb_accepted_quantity'
+  | 'wb_unloading_quantity'
+  | 'wb_depersonalized_quantity'
+  | 'wb_warehouse_id'
+  | 'wb_warehouse_name'
+  | 'wb_actual_warehouse_id'
+  | 'wb_actual_warehouse_name'
+  | 'wb_transit_warehouse_id'
+  | 'wb_transit_warehouse_name'
+  | 'wb_synced_at'
+>
+
+const wbInvokeError = (error: unknown) => {
+  const message = (error as { message?: string } | null)?.message ?? String(error)
+  return message.includes('non-2xx') || message.includes('Failed to send')
+    ? new Error('Не удалось связаться с сервером. Проверьте интернет-соединение.')
+    : new Error(message)
 }
 
-/** Получить даты поставки из WB API (supplyDate → Дата МП, factDate → Прибыл) */
-export const getWbSupplyMarketplaceDate = async (
+/** Refresh status, automatic dates, acceptance terms, quantities and warehouses from WB. */
+export const syncWbSupplySummary = async (
   accountId: string,
   lineId: string,
-): Promise<{ mpDate: string | null; factDate: string | null }> => {
-  if (!supabase) return { mpDate: null, factDate: null }
-  const { data, error } = await supabase.functions.invoke<{ mp_date?: string | null; fact_date?: string | null; error?: string }>(
+): Promise<WbSupplySummary> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.functions.invoke<{ summary?: WbSupplySummary; error?: string }>(
     'wb-supply',
-    { body: { account_id: accountId, line_id: lineId, action: 'mp_date' } },
+    { body: { account_id: accountId, line_id: lineId, action: 'sync_summary' } },
   )
-  if (error || !data || data.error) return { mpDate: null, factDate: null }
-  return { mpDate: data.mp_date ?? null, factDate: data.fact_date ?? null }
+  if (error) throw wbInvokeError(error)
+  if (!data) throw new Error('Пустой ответ от сервера. Попробуйте ещё раз.')
+  if (data.error) throw new Error(data.error)
+  if (!data.summary) throw new Error('WB не вернул данные поставки.')
+  return data.summary
 }
 
 /** Получить штрихкоды поставки FBW через WB API (Edge Function) */
@@ -608,7 +626,13 @@ export const getWbSupplyStickers = async (
   accountId: string,
   lineId: string,
   wbSupplyId?: string,
-): Promise<{ wb_supply_id: string; sticker_urls: string[]; cargo_type: number | null }> => {
+): Promise<{
+  wb_supply_id: string
+  sticker_urls: string[]
+  cargo_type: number | null
+  package_codes: string[]
+  summary?: WbSupplySummary
+}> => {
   if (!supabase) throw new Error('Supabase is not configured')
   const body: Record<string, string> = { account_id: accountId, line_id: lineId }
   if (wbSupplyId) body.wb_supply_id = wbSupplyId
@@ -616,6 +640,8 @@ export const getWbSupplyStickers = async (
     wb_supply_id?: string
     sticker_urls?: string[]
     cargo_type?: number | null
+    package_codes?: string[]
+    summary?: WbSupplySummary
     error?: string
   }>('wb-supply', { body })
   if (error) {
@@ -625,7 +651,13 @@ export const getWbSupplyStickers = async (
   }
   if (!data) throw new Error('Пустой ответ от сервера. Попробуйте ещё раз.')
   if (data.error) throw new Error(data.error)
-  return { wb_supply_id: data.wb_supply_id!, sticker_urls: data.sticker_urls ?? [], cargo_type: data.cargo_type ?? null }
+  return {
+    wb_supply_id: data.wb_supply_id!,
+    sticker_urls: data.sticker_urls ?? [],
+    cargo_type: data.cargo_type ?? null,
+    package_codes: data.package_codes ?? [],
+    summary: data.summary,
+  }
 }
 
 /** Получить список штрихкодов коробов поставки WB (для Excel-шаблона распределения) */

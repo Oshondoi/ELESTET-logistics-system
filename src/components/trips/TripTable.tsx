@@ -23,6 +23,15 @@ const WB_CARGO_LABELS: Record<number, { label: string; className: string }> = {
   2: { label: 'Паллеты', className: 'bg-violet-50 text-violet-600' },
 }
 
+const WB_SUPPLY_STATUSES: Record<number, { label: string; className: string }> = {
+  1: { label: 'Не запланировано', className: 'bg-slate-100 text-slate-500' },
+  2: { label: 'Запланировано', className: 'bg-blue-50 text-blue-600' },
+  3: { label: 'Отгрузка разрешена', className: 'bg-cyan-50 text-cyan-700' },
+  4: { label: 'Идёт приёмка', className: 'bg-amber-50 text-amber-700' },
+  5: { label: 'Принято', className: 'bg-emerald-50 text-emerald-700' },
+  6: { label: 'На воротах', className: 'bg-violet-50 text-violet-700' },
+}
+
 const CommentCell = ({ text, className }: { text: string | null | undefined; className?: string }) => {
   const [visible, setVisible] = useState(false)
   const iconRef = useRef<HTMLDivElement>(null)
@@ -80,6 +89,7 @@ const WbSupplyIdButton = ({
   const [inputValue, setInputValue] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [isClearing, setIsClearing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [popPos, setPopPos] = useState({ top: 0, left: 0 })
   const btnRef = useRef<HTMLButtonElement>(null)
 
@@ -102,6 +112,7 @@ const WbSupplyIdButton = ({
     const left = Math.min(rect.left, window.innerWidth - 248)
     setPopPos({ top: rect.bottom + 4, left: Math.max(8, left) })
     setInputValue(wbSupplyId ?? '')
+    setError(null)
     setShowInput(true)
   }
 
@@ -109,19 +120,25 @@ const WbSupplyIdButton = ({
     const id = inputValue.trim()
     if (!id) return
     setIsSaving(true)
+    setError(null)
     try {
       await onSave(id)
       setShowInput(false)
-    } catch {}
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError))
+    }
     finally { setIsSaving(false) }
   }
 
   const handleClear = async () => {
     setIsClearing(true)
+    setError(null)
     try {
       await onClear()
       setShowInput(false)
-    } catch {}
+    } catch (clearError) {
+      setError(clearError instanceof Error ? clearError.message : String(clearError))
+    }
     finally { setIsClearing(false) }
   }
 
@@ -169,6 +186,7 @@ const WbSupplyIdButton = ({
           >
             {isSaving ? 'Сохранение...' : 'Сохранить'}
           </button>
+          {error && <div className="rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] leading-snug text-rose-600">{error}</div>}
           <div className="flex gap-1.5">
             {wbSupplyId && (
               <button
@@ -210,131 +228,6 @@ type DeleteTarget =
       description: string
     }
 
-const MpDateButton = ({
-  date,
-  hasWbSupplyId,
-  onSave,
-  onRefresh,
-}: {
-  date?: string | null
-  hasWbSupplyId?: boolean
-  onSave: (date: string | null) => Promise<void>
-  onRefresh?: () => Promise<void>
-}) => {
-  const [showInput, setShowInput] = useState(false)
-  const [inputValue, setInputValue] = useState('')
-  const [isSaving, setIsSaving] = useState(false)
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const [popPos, setPopPos] = useState({ top: 0, left: 0 })
-  const btnRef = useRef<HTMLButtonElement>(null)
-
-  useEffect(() => {
-    if (!showInput) return
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (btnRef.current?.contains(target)) return
-      if ((target as Element)?.closest?.('[data-mpdate-popup]')) return
-      setShowInput(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showInput])
-
-  const open = () => {
-    if (showInput) { setShowInput(false); return }
-    if (!btnRef.current) return
-    const rect = btnRef.current.getBoundingClientRect()
-    const left = Math.min(rect.left, window.innerWidth - 220)
-    setPopPos({ top: rect.bottom + 4, left: Math.max(8, left) })
-    setInputValue(date ?? '')
-    setShowInput(true)
-  }
-
-  const handleSave = async () => {
-    setIsSaving(true)
-    try {
-      await onSave(inputValue || null)
-      setShowInput(false)
-    } catch {}
-    finally { setIsSaving(false) }
-  }
-
-  const handleRefresh = async () => {
-    if (!onRefresh) return
-    setIsRefreshing(true)
-    try { await onRefresh() } catch {}
-    finally { setIsRefreshing(false) }
-  }
-
-  return (
-    <>
-      <button
-        ref={btnRef}
-        type="button"
-        title={date ? `Запланирован: ${date}` : 'Указать плановую дату поставки'}
-        onClick={open}
-        className="text-slate-500 hover:text-slate-700"
-      >
-        <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-        </svg>
-      </button>
-      {hasWbSupplyId && onRefresh && (
-        <button
-          type="button"
-          title="Получить даты из WB"
-          disabled={isRefreshing}
-          onClick={() => void handleRefresh()}
-          className="text-slate-300 hover:text-slate-500 disabled:opacity-40"
-        >
-          <svg viewBox="0 0 24 24" className={cn('h-3 w-3', isRefreshing && 'animate-spin')} fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-      )}
-      {showInput && createPortal(
-        <div
-          data-mpdate-popup
-          style={{ position: 'fixed', top: popPos.top, left: popPos.left, zIndex: 9999 }}
-          onMouseDown={(e) => e.stopPropagation()}
-          className="flex w-52 flex-col gap-2 rounded-xl border border-slate-100 bg-white p-3 shadow-xl"
-        >
-          <div className="text-xs font-medium text-slate-600">Плановая дата поставки</div>
-          <input
-            autoFocus
-            type="date"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleSave(); if (e.key === 'Escape') setShowInput(false) }}
-            className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs outline-none focus:border-blue-400"
-          />
-          <div className="flex gap-1.5">
-            <button
-              type="button"
-              disabled={isSaving}
-              onClick={() => void handleSave()}
-              className="flex-1 rounded-lg bg-blue-500 px-2 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-600 disabled:opacity-40"
-            >
-              {isSaving ? '...' : 'Сохранить'}
-            </button>
-            {date && (
-              <button
-                type="button"
-                onClick={() => { setInputValue(''); void handleSave() }}
-                className="rounded-lg border border-rose-200 px-2 py-1.5 text-xs text-rose-500 transition hover:bg-rose-50"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-        </div>,
-        document.body,
-      )}
-    </>
-  )
-}
-
 interface TripTableProps {
   trips: TripWithLines[]
   stores: Store[]
@@ -370,11 +263,10 @@ interface TripTableProps {
   onRemoveCombinedStickerFile: (tripId: string, lineId: string, index: number) => Promise<void>
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
-  onRefreshCargoType?: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onDownloadWbExcel?: (tripId: string, lineId: string, type: 'goods' | 'boxes' | 'all') => Promise<void>
   isOwnerOrAdmin?: boolean
-  onSaveMarketplaceDate?: (tripId: string, lineId: string, date: string | null) => Promise<void>
-  onRefreshMarketplaceDate?: (tripId: string, lineId: string) => Promise<void>
+  onRefreshWbSupply?: (tripId: string, lineId: string) => Promise<unknown>
+  onRefreshTripWbSupplies?: (tripId: string) => Promise<{ updated: number; failed: number; errors: string[] }>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveWbPass: (tripId: string, lineId: string, index: number) => Promise<void>
   canManage?: boolean
@@ -589,10 +481,9 @@ export const TripTable = ({
   onRemoveCombinedStickerFile,
   onFetchWbBarcodes,
   onSaveWbSupplyId,
-  onRefreshCargoType,
   onDownloadWbExcel,
-  onSaveMarketplaceDate,
-  onRefreshMarketplaceDate,
+  onRefreshWbSupply,
+  onRefreshTripWbSupplies,
   onUploadWbPass,
   onRemoveWbPass,
   canManage = true,
@@ -615,10 +506,18 @@ export const TripTable = ({
   )
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [refreshingCargoIds, setRefreshingCargoIds] = useState<Set<string>>(new Set())
+  const [refreshingTripIds, setRefreshingTripIds] = useState<Set<string>>(new Set())
+  const [syncNotice, setSyncNotice] = useState<{ tone: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
     onExpandedCountChange?.(expandedIds.size)
   }, [expandedIds, onExpandedCountChange])
+
+  useEffect(() => {
+    if (!syncNotice) return
+    const timeoutId = window.setTimeout(() => setSyncNotice(null), 6500)
+    return () => window.clearTimeout(timeoutId)
+  }, [syncNotice])
 
   // Принудительное схлопывание — срабатывает даже когда expandAll уже false
   const prevCollapseSignalRef = useRef(collapseAllSignal)
@@ -640,6 +539,8 @@ export const TripTable = ({
 
   const tripHidden = new Set(tripConfig.hiddenBuiltin)
   const lineHidden = new Set(lineConfig.hiddenBuiltin)
+  const hasVisibleDates = (['reception_date', 'transit_at', 'arrival_date', 'wb_created_at', 'marketplace_delivery_date', 'wb_acceptance_date'] as const)
+    .some((key) => !lineHidden.has(key))
   const outerColCount =
     4 +
     (tripHidden.has('carrier') ? 0 : 1) +
@@ -650,14 +551,12 @@ export const TripTable = ({
     (tripHidden.has('comment') ? 0 : 1) +
     tripConfig.customCols.length
   const innerColCount =
-    3 +
+    4 +
     (lineHidden.has('shipment') ? 0 : 1) +
     (lineHidden.has('volume') ? 0 : 1) +
-    (lineHidden.has('reception_date') ? 0 : 1) +
     (lineHidden.has('status') ? 0 : 1) +
-    (lineHidden.has('arrival_date') ? 0 : 1) +
-    (lineHidden.has('shipped_date') ? 0 : 1) +
-    (lineHidden.has('marketplace_delivery_date') ? 0 : 1) +
+    (hasVisibleDates ? 1 : 0) +
+    (lineHidden.has('wb_acceptance_coefficient') ? 0 : 1) +
     (lineHidden.has('payment') ? 0 : 1) +
     (lineHidden.has('comment') ? 0 : 1) +
     lineConfig.customCols.length
@@ -751,6 +650,37 @@ export const TripTable = ({
       next.has(id) ? next.delete(id) : next.add(id)
       return next
     })
+  }
+
+  const refreshOneWbSupply = async (tripId: string, lineId: string) => {
+    if (!onRefreshWbSupply) return
+    setRefreshingCargoIds((current) => new Set(current).add(lineId))
+    try {
+      await onRefreshWbSupply(tripId, lineId)
+      setSyncNotice({ tone: 'success', text: 'Данные поставки WB обновлены.' })
+    } catch (error) {
+      setSyncNotice({ tone: 'error', text: error instanceof Error ? error.message : String(error) })
+      throw error
+    } finally {
+      setRefreshingCargoIds((current) => { const next = new Set(current); next.delete(lineId); return next })
+    }
+  }
+
+  const refreshTripWbSupplies = async (tripId: string) => {
+    if (!onRefreshTripWbSupplies) return
+    setRefreshingTripIds((current) => new Set(current).add(tripId))
+    try {
+      const result = await onRefreshTripWbSupplies(tripId)
+      const suffix = result.failed > 0 ? ` Не обновлено: ${result.failed}. ${result.errors.join(' ')}` : ''
+      setSyncNotice({
+        tone: result.failed > 0 ? 'error' : 'success',
+        text: `Обновлено поставок WB: ${result.updated}.${suffix}`,
+      })
+    } catch (error) {
+      setSyncNotice({ tone: 'error', text: error instanceof Error ? error.message : String(error) })
+    } finally {
+      setRefreshingTripIds((current) => { const next = new Set(current); next.delete(tripId); return next })
+    }
   }
 
   const handleDeleteTripClick = (trip: TripWithLines, event: React.MouseEvent<HTMLButtonElement>) => {
@@ -849,6 +779,17 @@ export const TripTable = ({
 
   return (
     <>
+      {syncNotice && createPortal(
+        <div className={cn(
+          'fixed right-5 top-5 z-[10000] max-w-md rounded-2xl px-4 py-3 text-sm shadow-xl ring-1',
+          syncNotice.tone === 'success'
+            ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
+            : 'bg-rose-50 text-rose-700 ring-rose-200',
+        )}>
+          {syncNotice.text}
+        </div>,
+        document.body,
+      )}
       {/* Оверлей — размывает всё снаружи таблицы (топбар, сайдбар, карточки) при хавере рейса */}
       {focusMode && hoveredTripId !== null && createPortal(
         <div className="pointer-events-none fixed inset-0 z-10 bg-slate-900/60 transition-all duration-200" />,
@@ -1043,6 +984,25 @@ export const TripTable = ({
                     <td className="px-3 py-3.5" onClick={(event) => event.stopPropagation()}>
                       {canManage ? (
                         <div className="flex items-center justify-end gap-0.5">
+                          {onRefreshTripWbSupplies && (
+                            <button
+                              type="button"
+                              aria-label="Синхронизировать поставки WB в рейсе"
+                              title="Синхронизировать все поставки WB в этом рейсе"
+                              disabled={refreshingTripIds.has(trip.id) || !trip.lines.some((line) => /^\d+$/.test(line.wb_supply_id?.trim() ?? ''))}
+                              className="flex h-8 w-8 items-center justify-center rounded-xl text-blue-400 transition hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:text-slate-200"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void refreshTripWbSupplies(trip.id)
+                              }}
+                            >
+                              <svg viewBox="0 0 24 24" className={cn('h-4 w-4', refreshingTripIds.has(trip.id) && 'animate-spin')} fill="none" stroke="currentColor" strokeWidth="1.9">
+                                <path d="M20 7h-5V2" strokeLinecap="round" strokeLinejoin="round" />
+                                <path d="M4 17h5v5" strokeLinecap="round" strokeLinejoin="round" />
+                                <path d="M5.1 9A8 8 0 0 1 18.7 5.3L20 7M4 17l1.3 1.7A8 8 0 0 0 18.9 15" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            </button>
+                          )}
                           <button
                             type="button"
                             aria-label={trip.trip_number ? `Редактировать рейс ${trip.trip_number}` : `Редактировать черновик-${trip.draft_number}`}
@@ -1143,7 +1103,13 @@ export const TripTable = ({
                                 {!lineHidden.has('shipment') && <th className="px-3 py-2 font-semibold">Поставка</th>}
                                 {!lineHidden.has('volume') && <th className="px-3 py-2 font-semibold">Объём</th>}
                                 {!lineHidden.has('status') && <th className="px-3 py-2 font-semibold">Статус</th>}
-                                {(['reception_date', 'transit_at', 'arrival_date', 'shipped_date', 'marketplace_delivery_date', 'wb_acceptance_date'] as const).some(k => !lineHidden.has(k)) && <th className="px-3 py-2 font-semibold">Даты</th>}
+                                {hasVisibleDates && <th className="px-3 py-2 font-semibold">Даты</th>}
+                                {!lineHidden.has('wb_acceptance_coefficient') && (
+                                  <th className="px-3 py-2 text-center font-semibold">
+                                    <span className="block">Коэффициент</span>
+                                    <span className="block">приёмки</span>
+                                  </th>
+                                )}
                                 <th className="px-3 py-2 font-semibold">Стикеры</th>
                                 {!lineHidden.has('payment') && <th className="px-3 py-2 font-semibold">Оплата</th>}
                                 {!lineHidden.has('comment') && <th className="w-10 px-3 py-2 font-semibold" title="Комментарий">Коммент.</th>}
@@ -1199,14 +1165,7 @@ export const TripTable = ({
                                               wbSupplyId={line.wb_supply_id}
                                               onSave={async (id) => {
                                                 await onSaveWbSupplyId(trip.id, line.id, id)
-                                                if (onRefreshCargoType) {
-                                                  setRefreshingCargoIds((s) => new Set(s).add(line.id))
-                                                  try {
-                                                    await onRefreshCargoType(trip.id, line.id, id)
-                                                  } finally {
-                                                    setRefreshingCargoIds((s) => { const n = new Set(s); n.delete(line.id); return n })
-                                                  }
-                                                }
+                                                if (onRefreshWbSupply) await refreshOneWbSupply(trip.id, line.id)
                                               }}
                                               onClear={() => onSaveWbSupplyId(trip.id, line.id, '')}
                                             />
@@ -1233,20 +1192,15 @@ export const TripTable = ({
                                               </svg>
                                             )
                                             : <svg viewBox="0 0 24 24" className="invisible h-3.5 w-3.5 shrink-0" />}
-                                          {onRefreshCargoType && (
+                                          {canManage && onRefreshWbSupply && (
                                             <button
                                               type="button"
-                                              title="Обновить тип отгрузки"
+                                              title="Синхронизировать статус, даты и условия приёмки с WB"
                                               disabled={!line.wb_supply_id || refreshingCargoIds.has(line.id)}
                                               className={cn('text-slate-300 hover:text-slate-500 disabled:opacity-40', !line.wb_supply_id && 'invisible')}
                                               onClick={async () => {
                                                 if (!line.wb_supply_id) return
-                                                setRefreshingCargoIds((s) => new Set(s).add(line.id))
-                                                try {
-                                                  await onRefreshCargoType(trip.id, line.id, line.wb_supply_id!)
-                                                } finally {
-                                                  setRefreshingCargoIds((s) => { const n = new Set(s); n.delete(line.id); return n })
-                                                }
+                                                try { await refreshOneWbSupply(trip.id, line.id) } catch { /* notice already shown */ }
                                               }}
                                             >
                                               <svg
@@ -1274,6 +1228,14 @@ export const TripTable = ({
                                           {line.units_qty} {pluralRu(line.units_qty, 'единица', 'единицы', 'единиц')}
                                           {line.weight ? ` · ${line.weight} кг` : ''}
                                         </span>
+                                        {(line.wb_quantity != null || line.wb_unloading_quantity != null || line.wb_accepted_quantity != null) && (
+                                          <span
+                                            className="mt-1 whitespace-nowrap text-[10px] text-slate-400"
+                                            title="Количество по данным WB: запланировано / разгружается / принято"
+                                          >
+                                            WB: {line.wb_quantity ?? '—'} / {line.wb_unloading_quantity ?? '—'} / {line.wb_accepted_quantity ?? '—'}
+                                          </span>
+                                        )}
                                       </div>
                                     </td>
                                   )}
@@ -1314,6 +1276,27 @@ export const TripTable = ({
                                           <div className="mt-0.5 pl-2.5 text-[10px] text-slate-400">{prefix}{formatDate(date)}</div>
                                         ) : null
                                       })()}
+                                      {line.wb_status_id != null && (
+                                        <div className="mt-1 flex items-center gap-1 pl-0.5">
+                                          <span
+                                            className={cn(
+                                              'whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium',
+                                              WB_SUPPLY_STATUSES[line.wb_status_id]?.className ?? 'bg-slate-100 text-slate-500',
+                                            )}
+                                            title={line.wb_synced_at ? `WB обновлено: ${new Date(line.wb_synced_at).toLocaleString('ru-RU')}` : undefined}
+                                          >
+                                            WB: {WB_SUPPLY_STATUSES[line.wb_status_id]?.label ?? `статус ${line.wb_status_id}`}
+                                          </span>
+                                          {line.wb_reject_reason && (
+                                            <span
+                                              className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-rose-100 text-[10px] font-bold text-rose-600"
+                                              title={`Причина WB: ${line.wb_reject_reason}`}
+                                            >
+                                              !
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
                                     </td>
                                   )}
                                   {(() => {
@@ -1335,28 +1318,14 @@ export const TripTable = ({
                                         content: <span className="text-slate-500">{line.arrival_date ? formatDate(line.arrival_date) : '—'}</span>,
                                       },
                                       {
-                                        key: 'shipped_date',
-                                        label: 'Отгружен',
-                                        content: <span className="text-slate-500">{line.shipped_date ? formatDate(line.shipped_date) : '—'}</span>,
+                                        key: 'wb_created_at',
+                                        label: 'Поставка создана',
+                                        content: <span className="text-slate-500">{line.wb_created_at ? formatDate(line.wb_created_at) : '—'}</span>,
                                       },
                                       {
                                         key: 'marketplace_delivery_date',
                                         label: 'Запланирован',
-                                        content: (
-                                          <>
-                                            <span className="text-slate-500">{line.planned_marketplace_delivery_date ? formatDate(line.planned_marketplace_delivery_date) : '—'}</span>
-                                            {canManage && onSaveMarketplaceDate && (
-                                              <div className="ml-0.5 flex items-center gap-0.5">
-                                                <MpDateButton
-                                                  date={line.planned_marketplace_delivery_date}
-                                                  hasWbSupplyId={!!line.wb_supply_id}
-                                                  onSave={(date) => onSaveMarketplaceDate(trip.id, line.id, date)}
-                                                  onRefresh={onRefreshMarketplaceDate ? () => onRefreshMarketplaceDate(trip.id, line.id) : undefined}
-                                                />
-                                              </div>
-                                            )}
-                                          </>
-                                        ),
+                                        content: <span className="text-slate-500">{line.planned_marketplace_delivery_date ? formatDate(line.planned_marketplace_delivery_date) : '—'}</span>,
                                       },
                                       {
                                         key: 'wb_acceptance_date',
@@ -1385,6 +1354,24 @@ export const TripTable = ({
                                       </td>
                                     );
                                   })()}
+
+                                  {!lineHidden.has('wb_acceptance_coefficient') && (
+                                    <td className="px-3 py-2.5 text-center">
+                                      {line.wb_acceptance_coefficient != null ? (
+                                        <span
+                                          className={cn(
+                                            'inline-flex min-w-[46px] justify-center rounded-full px-2 py-1 text-xs font-semibold',
+                                            line.wb_acceptance_coefficient > 1
+                                              ? 'bg-amber-50 text-amber-700'
+                                              : 'bg-emerald-50 text-emerald-700',
+                                          )}
+                                          title={line.wb_acceptance_cost != null ? `Стоимость приёмки WB: ${line.wb_acceptance_cost}` : undefined}
+                                        >
+                                          ×{line.wb_acceptance_coefficient}
+                                        </span>
+                                      ) : <span className="text-slate-300">—</span>}
+                                    </td>
+                                  )}
 
                                   <td className="px-3 py-2.5">
                                     <TripLineStickerCell

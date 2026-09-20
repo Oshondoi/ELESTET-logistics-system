@@ -36,9 +36,10 @@ export const BUILTIN_LINE_COLS = [
   { key: 'transit_at', label: 'Отправлен (В пути)' },
   { key: 'status', label: 'Статус' },
   { key: 'arrival_date', label: 'Прибыл' },
-  { key: 'shipped_date', label: 'Отгружено' },
+  { key: 'wb_created_at', label: 'Поставка создана' },
   { key: 'marketplace_delivery_date', label: 'Запланирован' },
   { key: 'wb_acceptance_date', label: 'Приём ВБ' },
+  { key: 'wb_acceptance_coefficient', label: 'Коэффициент приёмки' },
   { key: 'payment', label: 'Оплата' },
   { key: 'comment', label: 'Комментарий' },
 ] as const

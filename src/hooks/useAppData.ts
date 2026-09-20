@@ -32,7 +32,6 @@ import {
   uploadCombinedStickerFile as uploadCombinedStickerFileInSupabase,
   updateTripLineCombinedStickerFiles as updateTripLineCombinedStickerFilesInSupabase,
   getWbSupplyStickers as getWbSupplyStickersInSupabase,
-  getWbSupplyCargoType as getWbSupplyCargoTypeInSupabase,
   uploadWbPassFile as uploadWbPassFileInSupabase,
   updateTripLineWbPassUrl as updateTripLineWbPassUrlInSupabase,
   updateTripLineWbPassUrls as updateTripLineWbPassUrlsInSupabase,
@@ -42,8 +41,8 @@ import {
   archiveTripLine as archiveTripLineInSupabase,
   restoreTripLine as restoreTripLineInSupabase,
   fetchArchivedTripLines as fetchArchivedTripLinesInSupabase,
-  saveMarketplaceDate as saveMarketplaceDateInSupabase,
-  getWbSupplyMarketplaceDate as getWbSupplyMarketplaceDateInSupabase,
+  syncWbSupplySummary as syncWbSupplySummaryInSupabase,
+  type WbSupplySummary,
   getWbSupplyPackageCodes as getWbSupplyPackageCodesInSupabase,
   updateTripLineTripId as updateTripLineTripIdInSupabase,
 } from '../services/tripService'
@@ -163,33 +162,6 @@ export const useAppData = (accountId: string | null) => {
       fetchArchivedTripLinesInSupabase(accountId, supabaseStores)
         .then(setArchivedTripLines)
         .catch(() => { /* RPC ещё не применена */ })
-
-      // Фоновая загрузка типа отгрузки: фетчим все уникальные supply ID при каждой загрузке,
-      // чтобы данные всегда были актуальны (если пользователь поменял тип на ВБ)
-      const allLinesWithSupply = supabaseTrips.flatMap((t) =>
-        t.lines.filter((l) => l.wb_supply_id),
-      )
-      const uniqueSupplyIds = [...new Set(allLinesWithSupply.map((l) => l.wb_supply_id as string))]
-      if (uniqueSupplyIds.length > 0 && accountId) {
-        // Берём по одной строке на каждый уникальный supply ID для фетча
-        const representativeLines = uniqueSupplyIds.map(
-          (sid) => allLinesWithSupply.find((l) => l.wb_supply_id === sid)!,
-        )
-        Promise.all(
-          representativeLines.map(async (l) => {
-            const cargoType = await getWbSupplyCargoTypeInSupabase(accountId, l.id)
-            if (cargoType !== null) {
-              // Обновляем все строки с тем же wb_supply_id
-              setTrips((prev) => prev.map((t) => ({
-                ...t,
-                lines: t.lines.map((ln) =>
-                  ln.wb_supply_id === l.wb_supply_id ? { ...ln, wb_cargo_type: cargoType } : ln,
-                ),
-              })))
-            }
-          }),
-        ).catch(() => {})
-      }
 
       // stickers и bundles уже загружены в Promise.all выше
       setStickers(supabaseStickers)
@@ -802,25 +774,6 @@ export const useAppData = (accountId: string | null) => {
     applyPassUrls(tripId, lineId, newUrls)
   }
 
-  const refreshCargoType = async (tripId: string, lineId: string, wbSupplyId: string) => {
-    if (!isSupabaseConfigured || !accountId) return
-    const cargoType = await getWbSupplyCargoTypeInSupabase(accountId, lineId)
-    if (cargoType !== null) {
-      setTrips((current) =>
-        current.map((t) =>
-          t.id === tripId
-            ? {
-                ...t,
-                lines: t.lines.map((l) =>
-                  l.id === lineId ? { ...l, wb_cargo_type: cargoType } : l,
-                ),
-              }
-            : t,
-        ),
-      )
-    }
-  }
-
   const saveWbSupplyId = async (tripId: string, lineId: string, wbSupplyId: string) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     await updateTripLineWbSupplyIdInSupabase(accountId, lineId, wbSupplyId || null)
@@ -844,7 +797,7 @@ export const useAppData = (accountId: string | null) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const result = await getWbSupplyStickersInSupabase(accountId, lineId, wbSupplyId)
     // Обновляем wb_supply_id, wb_cargo_type и wb_package_codes в локальном state
-    const packageCodes: string[] = (result as { package_codes?: string[] }).package_codes ?? []
+    const packageCodes = result.package_codes
     setTrips((current) =>
       current.map((t) =>
         t.id === tripId
@@ -856,6 +809,7 @@ export const useAppData = (accountId: string | null) => {
                   wb_supply_id: result.wb_supply_id,
                   ...(result.cargo_type !== null ? { wb_cargo_type: result.cargo_type } : {}),
                   ...(packageCodes.length > 0 ? { wb_package_codes: packageCodes } : {}),
+                  ...(result.summary ?? {}),
                 } : l,
               ),
             }
@@ -872,41 +826,44 @@ export const useAppData = (accountId: string | null) => {
     applyStickerUrls(tripId, lineId, newUrls)
   }
 
-  const saveMarketplaceDate = async (tripId: string, lineId: string, date: string | null) => {
-    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
-    await saveMarketplaceDateInSupabase(accountId, lineId, date)
+  const applyWbSupplySummary = (tripId: string, lineId: string, summary: WbSupplySummary) => {
     setTrips((current) =>
-      current.map((t) =>
-        t.id === tripId
-          ? { ...t, lines: t.lines.map((l) => l.id === lineId ? { ...l, planned_marketplace_delivery_date: date } : l) }
-          : t,
+      current.map((trip) =>
+        trip.id === tripId
+          ? { ...trip, lines: trip.lines.map((line) => line.id === lineId ? { ...line, ...summary } : line) }
+          : trip,
       ),
     )
   }
 
-  const refreshMarketplaceDate = async (tripId: string, lineId: string) => {
-    if (!isSupabaseConfigured || !accountId) return
-    const { mpDate, factDate } = await getWbSupplyMarketplaceDateInSupabase(accountId, lineId)
-    if (mpDate !== null || factDate !== null) {
-      setTrips((current) =>
-        current.map((t) =>
-          t.id === tripId
-            ? {
-                ...t,
-                lines: t.lines.map((l) =>
-                  l.id === lineId
-                    ? {
-                        ...l,
-                        ...(mpDate !== null ? { planned_marketplace_delivery_date: mpDate } : {}),
-                        ...(factDate !== null ? { wb_acceptance_date: factDate } : {}),
-                      }
-                    : l,
-                ),
-              }
-            : t,
-        ),
-      )
+  const refreshWbSupply = async (tripId: string, lineId: string): Promise<WbSupplySummary> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const summary = await syncWbSupplySummaryInSupabase(accountId, lineId)
+    applyWbSupplySummary(tripId, lineId, summary)
+    return summary
+  }
+
+  const refreshTripWbSupplies = async (tripId: string): Promise<{ updated: number; failed: number; errors: string[] }> => {
+    if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const lines = trips.find((trip) => trip.id === tripId)?.lines
+      .filter((line) => /^\d+$/.test(line.wb_supply_id?.trim() ?? '')) ?? []
+    if (lines.length === 0) throw new Error('В рейсе нет поставок с числовым ID WB.')
+
+    let updated = 0
+    const errors: string[] = []
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]
+      try {
+        const summary = await syncWbSupplySummaryInSupabase(accountId, line.id)
+        applyWbSupplySummary(tripId, line.id, summary)
+        updated += 1
+      } catch (error) {
+        errors.push(`Поставка ${line.shipment_number}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      // Official FBW details limit is 30 requests/minute. Stay under it.
+      if (index < lines.length - 1) await new Promise((resolve) => window.setTimeout(resolve, 2100))
     }
+    return { updated, failed: errors.length, errors }
   }
 
   const downloadWbExcel = async (
@@ -996,9 +953,8 @@ export const useAppData = (accountId: string | null) => {
     removeWbPass,
     saveWbSupplyId,
     fetchWbBarcodes,
-    refreshCargoType,
-    saveMarketplaceDate,
-    refreshMarketplaceDate,
+    refreshWbSupply,
+    refreshTripWbSupplies,
     downloadWbExcel,
     reload: hydrateFromSupabase,
   }
