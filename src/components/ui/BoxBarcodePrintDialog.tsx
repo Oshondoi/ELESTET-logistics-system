@@ -60,12 +60,19 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
 
   const fetchCodes = (supply: FulfillmentSupplyWithBoxes) => run(async () => {
     if (!allowSupplyMapping || boxId) throw new Error('Привязка ШК WB доступна только на уровне поставки')
-    if (!supply.wb_supply_id) throw new Error('Сначала укажите ID поставки WB')
+    const id = (idDraft[supply.id] ?? '').trim()
+    if (!id) throw new Error('Укажите ID поставки WB')
+    if (!/^\d+$/.test(id)) throw new Error('Для FBO укажите числовой ID поставки WB. ID вида WB-GI-… относится к FBS.')
+    if (id !== (supply.wb_supply_id ?? '')) {
+      await saveFulfillmentWbSupplyId(supply.id, id)
+      await onIdSaved?.(id)
+    }
     const codes = await getWbFulfillmentSupplyPackageCodes(supply.account_id, supply.id)
     if (codes.length === 0) throw new Error('WB пока не вернул коды коробов этой поставки')
     if (codes.length !== supply.boxes.length) throw new Error(`WB вернул ${codes.length} ШК, а в поставке ELESTET ${supply.boxes.length} коробов. Сверьте упаковку перед привязкой.`)
     await assignFulfillmentWbBoxCodes(supply.id, codes)
     setLastMappedCount((current) => ({ ...current, [supply.id]: codes.length }))
+    setTab('wb')
   })
 
   const saveWbSupplyId = (supply: FulfillmentSupplyWithBoxes) => run(async () => {
@@ -147,8 +154,8 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
               <button type="button" disabled={working || (idDraft[supply.id] ?? '') === (supply.wb_supply_id ?? '')} onClick={() => void saveWbSupplyId(supply)} className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 disabled:opacity-40">Сохранить ID</button>
             </div>}
             {allowSupplyMapping && !boxId && supply.destination_type === 'fbo' && <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button type="button" disabled={working || !supply.wb_supply_id} onClick={() => void fetchCodes(supply)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-blue-700 disabled:opacity-40">Получить и привязать ШК из WB</button>
-              <span className="text-xs text-slate-400">{lastMappedCount[supply.id] ? `Привязано ${lastMappedCount[supply.id]} ШК: первый из ответа WB → короб №1 и далее по номеру` : 'Порядок ответа WB → короба ELESTET по номеру'}</span>
+              <button type="button" disabled={working || !(idDraft[supply.id] ?? '').trim()} onClick={() => void fetchCodes(supply)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-blue-700 disabled:opacity-40">{supply.boxes.some((box) => box.wb_barcode) ? 'Обновить ШК из WB' : 'Получить и привязать ШК из WB'}</button>
+              <span className="text-xs text-slate-400">{lastMappedCount[supply.id] ? `Обновлено ${lastMappedCount[supply.id]} ШК: первый из актуального ответа WB → короб №1 и далее по номеру` : 'Каждое нажатие заново получает актуальные ШК из WB и заменяет прежнюю привязку'}</span>
             </div>}
             <div className="mt-3 space-y-2">
               {supply.boxes.filter((box) => !boxId || box.id === boxId).map((box) => <div key={box.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs">

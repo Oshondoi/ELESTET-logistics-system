@@ -263,7 +263,7 @@ const DirectoryPanel = ({ title, items, onAdd, onDelete, onUpdate, canManage = t
 // ── Склады назначения с сортировкой и drag-and-drop ──────────────
 
 const WarehousesPanel = ({
-  title, items, onAdd, onDelete, onUpdate, canManage = true, canDelete = true, accountId,
+  title, items, onDelete, onUpdate, canManage = true, canDelete = true, accountId,
   sortMode, orderIds, onSortChange,
 }: DirectoryPanelProps & {
   accountId: string
@@ -271,9 +271,7 @@ const WarehousesPanel = ({
   orderIds: string[]
   onSortChange: (next: import('../services/directoriesService').WarehouseOrderSettings) => void
 }) => {
-  const [inputValue, setInputValue] = useState('')
-  const [isAdding, setIsAdding] = useState(false)
-  const [addError, setAddError] = useState<string | null>(null)
+  const [searchValue, setSearchValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -284,10 +282,12 @@ const WarehousesPanel = ({
   const [posInput, setPosInput] = useState('')
 
   const displayItems = useMemo(() => {
-    if (sortMode === 'alpha') return [...items].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+    const query = searchValue.trim().toLocaleLowerCase('ru')
+    const filtered = query ? items.filter((item) => item.name.toLocaleLowerCase('ru').includes(query)) : items
+    if (sortMode === 'alpha') return [...filtered].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
     const orderMap = new Map(orderIds.map((id, i) => [id, i]))
-    return [...items].sort((a, b) => (orderMap.get(a.id) ?? 999999) - (orderMap.get(b.id) ?? 999999))
-  }, [sortMode, items, orderIds])
+    return [...filtered].sort((a, b) => (orderMap.get(a.id) ?? 999999) - (orderMap.get(b.id) ?? 999999))
+  }, [sortMode, items, orderIds, searchValue])
 
   const applySortMode = (mode: 'alpha' | 'custom') => {
     if (mode === 'custom') {
@@ -322,19 +322,6 @@ const WarehousesPanel = ({
     const n = parseInt(posInput, 10)
     if (!isNaN(n) && n >= 1) handleMoveToPosition(id, n)
     setPosEditId(null)
-  }
-
-  const handleAdd = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const name = inputValue.trim()
-    if (!name) return
-    setIsAdding(true); setAddError(null)
-    try {
-      await onAdd(name)
-      setInputValue('')
-    } catch (err) {
-      setAddError(err instanceof Error ? err.message : 'Ошибка')
-    } finally { setIsAdding(false) }
   }
 
   const startEdit = (item: { id: string; name: string }) => { setEditingId(item.id); setEditValue(item.name) }
@@ -395,21 +382,21 @@ const WarehousesPanel = ({
           </div>
         </div>
 
-        {canManage && (
-          <form onSubmit={(e) => void handleAdd(e)} className="flex gap-2 border-b border-slate-100 px-4 py-3">
+        <div className="flex gap-2 border-b border-slate-100 px-4 py-3">
+          <div className="relative flex-1">
+            <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+            </svg>
             <input
               type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              placeholder="Добавить название..."
-              className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-blue-400"
+              value={searchValue}
+              onChange={(e) => setSearchValue(e.target.value)}
+              placeholder="Поиск склада..."
+              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-9 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-blue-400"
             />
-            <Button type="submit" disabled={isAdding || !inputValue.trim()} className="rounded-xl px-4 py-2 text-sm">
-              {isAdding ? '…' : '+ Добавить'}
-            </Button>
-          </form>
-        )}
-        {addError && <p className="px-4 pb-2 text-xs text-rose-500">{addError}</p>}
+            {searchValue && <button type="button" onClick={() => setSearchValue('')} aria-label="Очистить поиск" className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600">✕</button>}
+          </div>
+        </div>
 
         {displayItems.length > 0 ? (
           <ul className="divide-y divide-slate-100">
@@ -419,7 +406,7 @@ const WarehousesPanel = ({
                 className="flex items-center gap-2 px-4 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
               >
                 {/* Поле позиции — только в custom режиме */}
-                {sortMode === 'custom' && (
+                {sortMode === 'custom' && !searchValue.trim() && (
                   posEditId === item.id ? (
                     <input
                       type="number"
@@ -506,7 +493,7 @@ const WarehousesPanel = ({
             ))}
           </ul>
         ) : (
-          <div className="flex items-center justify-center py-8 text-sm text-slate-400">Список пуст</div>
+          <div className="flex items-center justify-center py-8 text-sm text-slate-400">{searchValue.trim() ? 'Склады не найдены' : 'Список пуст'}</div>
         )}
       </Card>
 

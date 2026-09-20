@@ -245,6 +245,7 @@ const BOX_EXPORT_COLUMNS = [
   { key: 'boxBarcode', label: 'ШК короба', required: true },
   { key: 'expiryDate', label: 'Срок годности', required: true },
   { key: 'boxNumber', label: 'Номер короба', required: true },
+  { key: 'wbBoxBarcode', label: 'ШК короба WB', required: false },
   { key: 'wbArticle', label: 'Артикул ВБ', required: false },
   { key: 'sellerArticle', label: 'Артикул продавца', required: false },
   { key: 'productName', label: 'Название товара', required: false },
@@ -323,7 +324,7 @@ const buildBarcodeExportRows = (boxRows: (string | number)[][]): (string | numbe
   const quantityIndex = headers.indexOf('Кол-во товаров')
   if (barcodeIndex < 0 || quantityIndex < 0) throw new Error('В выгрузке отсутствуют баркод или количество')
 
-  const excludedHeaders = new Set(['ШК короба', 'Срок годности', 'Номер короба', 'Поставка', 'Склад'])
+  const excludedHeaders = new Set(['ШК короба', 'ШК короба WB', 'Срок годности', 'Номер короба', 'Поставка', 'Склад'])
   const includedIndexes = headers.flatMap((header, index) => excludedHeaders.has(String(header)) ? [] : [index])
   const outputHeaders = includedIndexes.map((index) => headers[index])
   const outputQuantityIndex = includedIndexes.indexOf(quantityIndex)
@@ -414,6 +415,7 @@ const buildBoxExportRows = async ({
         boxBarcode,
         expiryDate: '',
         boxNumber: box.box_number,
+        wbBoxBarcode: box.wb_barcode ?? '',
         wbArticle: info?.nm_id ?? '',
         sellerArticle: info?.vendor_code ?? batchItem?.article ?? '',
         productName: info?.name ?? item.product_name ?? batchItem?.product_name ?? '',
@@ -7196,7 +7198,7 @@ const BatchDetailModal = ({
                           </div>
 
                           <div className="space-y-1.5">
-                              {BOX_EXPORT_COLUMNS.filter((column) => boxExportMode !== 'barcodes' || !['boxBarcode', 'expiryDate', 'boxNumber'].includes(column.key)).map((column) => {
+                              {BOX_EXPORT_COLUMNS.filter((column) => boxExportMode !== 'barcodes' || !['boxBarcode', 'wbBoxBarcode', 'expiryDate', 'boxNumber'].includes(column.key)).map((column) => {
                                 const selected = column.required || boxExportSelectedOptionalColumns.includes(column.key as OptionalBoxExportColumnKey)
                                 if (column.required) {
                                   return (
@@ -11628,7 +11630,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
               ))}
             </div>
             <div className="space-y-1.5">
-              {BOX_EXPORT_COLUMNS.filter((column) => batchExportMode !== 'barcodes' || !['boxBarcode', 'expiryDate', 'boxNumber'].includes(column.key)).map((column) => {
+              {BOX_EXPORT_COLUMNS.filter((column) => batchExportMode !== 'barcodes' || !['boxBarcode', 'wbBoxBarcode', 'expiryDate', 'boxNumber'].includes(column.key)).map((column) => {
                 const selected = column.required || batchExportSelectedColumns.includes(column.key as OptionalBoxExportColumnKey)
                 if (column.required) {
                   return (
