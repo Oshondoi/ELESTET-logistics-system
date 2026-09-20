@@ -105,6 +105,160 @@ function arrayFromResponse(value: unknown): JsonObject[] {
   return Array.isArray(rows) ? rows.map(asObject) : []
 }
 
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function isExtensionAlias(value: string): boolean {
+  return /^[a-z][a-z0-9_-]{0,63}$/i.test(value)
+}
+
+function extensionCandidateFromGroupCode(value: string): string {
+  return value.trim().toLowerCase()
+    .replace(/[()]/g, ' ')
+    .replace(/\b(rf|ru|kg|kz)\b/g, ' ')
+    .trim()
+    .replace(/[\s./-]+/g, '_')
+}
+
+function productGtin(product: JsonObject): string {
+  return firstText(product.gtin, product.GTIN, asObject(product.product).gtin)
+}
+
+function groupReferences(group: JsonObject): string[] {
+  return [
+    group.id,
+    group.code,
+    group.alias,
+    group.extension,
+    group.productGroupCode,
+    group.productGroupAlias,
+    group.markingCode,
+    group.shortName,
+    group.name,
+    group.nameRu,
+    group.productGroupMarkingCode,
+  ].map((value) => String(value ?? '').trim().toLowerCase()).filter(Boolean)
+}
+
+function operationExtension(operation: JsonObject): string | null {
+  const nestedGroup = asObject(
+    operation.productGroupMarkingDto
+    ?? operation.productGroupMarking
+    ?? operation.productGroup,
+  )
+  const extension = firstText(
+    operation.extension,
+    operation.productGroupAlias,
+    nestedGroup.alias,
+    nestedGroup.extension,
+    typeof operation.productGroup === 'string' ? operation.productGroup : '',
+  ).toLowerCase()
+  return isExtensionAlias(extension) ? extension : null
+}
+
+type EmissionProduct = {
+  gtin: string
+  name: string
+  status: string
+  productGroupCode: string
+  productGroupName: string
+  extension: string
+}
+
+async function resolveEmissionProduct(
+  svc: ReturnType<typeof createClient>,
+  token: string,
+  storeId: string,
+  requestedGtin: string,
+): Promise<EmissionProduct> {
+  const gtin = requestedGtin.trim()
+  if (!/^\d{8,14}$/.test(gtin)) throw new Error('GTIN должен содержать от 8 до 14 цифр')
+
+  const { data: cached } = await svc.from('teksher_products')
+    .select('teksher_id,gtin,name,full_name,product_group_code,status')
+    .eq('store_id', storeId).eq('gtin', gtin).maybeSingle()
+
+  let product: JsonObject | null = null
+  try {
+    const params = new URLSearchParams({ page: '0', size: '100', gtin })
+    const products = arrayFromResponse(await teksherJson(`${BASE}/products?${params}`, token))
+    product = products.find((item) => productGtin(item) === gtin) ?? null
+  } catch { /* try the exact product endpoint/cache below */ }
+
+  if (!product && cached?.teksher_id) {
+    try {
+      product = asObject(unwrapTeksher(await teksherJson(`${BASE}/products/${encodeURIComponent(String(cached.teksher_id))}`, token)))
+      if (productGtin(product) !== gtin) product = null
+    } catch { /* use the locally cached exact GTIN below */ }
+  }
+  if (!product && cached) product = asObject(cached)
+  if (!product) throw new Error(`GTIN ${gtin} не найден в товарах Teksher`)
+
+  const status = firstText(product.status, cached?.status).toUpperCase()
+  if (status && status !== 'PUBLISHED' && status !== 'ACTIVE') {
+    throw new Error(`Карточка GTIN ${gtin} имеет статус «${status}». Заказывать КИЗы можно только для опубликованного товара.`)
+  }
+
+  const nestedGroup = asObject(
+    product.productGroupMarkingDto
+    ?? product.productGroupMarking
+    ?? product.productGroup,
+  )
+  const productGroupCode = firstText(
+    product.productGroupCode,
+    product.product_group_code,
+    nestedGroup.code,
+    nestedGroup.id,
+    cached?.product_group_code,
+  )
+  const directAlias = firstText(
+    product.productGroupAlias,
+    product.extension,
+    nestedGroup.alias,
+    nestedGroup.extension,
+  ).toLowerCase()
+
+  let groups: JsonObject[] = []
+  try { groups = arrayFromResponse(await teksherJson(`${BASE}/product_groups?page=0&size=200`, token)) }
+  catch { /* try the older public facade route below */ }
+  if (groups.length === 0) {
+    try { groups = arrayFromResponse(await teksherJson(`${FACADE}/product_groups_marking?page=0&size=200`, token)) }
+    catch { /* a direct alias from the exact product is still sufficient */ }
+  }
+
+  const wanted = new Set([
+    productGroupCode,
+    extensionCandidateFromGroupCode(productGroupCode),
+    directAlias,
+    ...groupReferences(nestedGroup),
+  ].map((value) => value.toLowerCase()).filter(Boolean))
+  const matchedGroup = groups.find((group) => groupReferences(group).some((reference) => wanted.has(reference))) ?? null
+  const extension = firstText(
+    matchedGroup?.alias,
+    matchedGroup?.extension,
+    matchedGroup?.productGroupAlias,
+    directAlias,
+    isExtensionAlias(productGroupCode) ? productGroupCode : '',
+  ).toLowerCase()
+  if (!extension || !isExtensionAlias(extension)) {
+    throw new Error(`Teksher не вернул extension товарной группы для GTIN ${gtin}. Заказ не создан, чтобы не отправить товар в неверную группу.`)
+  }
+
+  return {
+    gtin,
+    name: firstText(product.fullName, product.full_name, product.name, cached?.full_name, cached?.name),
+    status: status || 'PUBLISHED',
+    productGroupCode,
+    productGroupName: firstText(matchedGroup?.name, matchedGroup?.nameRu, nestedGroup.name, productGroupCode),
+    extension,
+  }
+}
+
 async function teksherJson(url: string, token: string, init?: RequestInit): Promise<unknown> {
   const headers = new Headers(init?.headers)
   headers.set('Authorization', `Bearer ${token}`)
@@ -408,17 +562,35 @@ Deno.serve(async (req: Request) => {
     return ok({ ready: Boolean(d.ready) })
   }
 
+  // ── action: resolve_emission_product ──────────────────────────────────────
+  // Resolve the product group on the server. The browser never chooses an
+  // arbitrary extension for a paid emission operation.
+  if (action === 'resolve_emission_product') {
+    try {
+      const product = await resolveEmissionProduct(svc, token, store_id, String(body.gtin ?? ''))
+      return ok({ product })
+    } catch (reason) {
+      return err(reason instanceof Error ? reason.message : 'Не удалось проверить товар Teksher')
+    }
+  }
+
   // ── action: emit ────────────────────────────────────────────────────────────
   if (action === 'emit') {
-    const gtin = body.gtin as string
+    const gtin = String(body.gtin ?? '').trim()
     const quantity = Number(body.quantity)
     if (!gtin) return err('gtin обязателен')
-    if (!quantity || quantity < 1 || quantity > 1000) return err('Количество КИЗов должно быть от 1 до 1000')
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 5000) return err('Количество КИЗов должно быть от 1 до 5000')
+    let product: EmissionProduct
+    try {
+      product = await resolveEmissionProduct(svc, token, store_id, gtin)
+    } catch (reason) {
+      return err(reason instanceof Error ? reason.message : 'Не удалось определить товарную группу GTIN')
+    }
     const r = await fetch(`${ORDER_BASE}/operations/multi`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        extension: 'lp',
+        extension: product.extension,
         countryId: 199,
         items: [{ gtin, markingCodesAmount: quantity, dataSupplier: 'AUTO', template: 'SHORT' }],
       }),
@@ -426,7 +598,24 @@ Deno.serve(async (req: Request) => {
     const d = await r.json() as Record<string, unknown>
     if (!r.ok) return err((d?.message as string) ?? `Ошибка эмиссии: ${r.status}`)
     const operationIds = Object.keys((d?.data as Record<string, unknown>) ?? {})
-    return ok({ success: true, operationId: operationIds[0] ?? null })
+    const operationId = firstText(d.operationId, d.id, operationIds[0]) || null
+    let mappingWarning: string | null = operationId ? null : 'Операция создана, но Teksher не вернул её ID. Проверьте новую операцию в списке перед повторным заказом.'
+    if (operationId) {
+      const { error: mappingError } = await svc.from('teksher_emission_operations').upsert({
+        store_id,
+        operation_id: operationId,
+        gtin,
+        extension: product.extension,
+        product_group_code: product.productGroupCode || null,
+        product_group_name: product.productGroupName || null,
+        quantity,
+        created_by: user.id,
+        response_snapshot: d,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'store_id,operation_id' })
+      if (mappingError) mappingWarning = `Операция создана, но ELESTET не сохранил её товарную группу: ${mappingError.message}`
+    }
+    return ok({ success: true, operationId, product, mappingWarning })
   }
 
   // ── action: utilise ─────────────────────────────────────────────────────────
@@ -438,10 +627,30 @@ Deno.serve(async (req: Request) => {
       const rd = await readyR.json() as Record<string, unknown>
       if (!rd.ready) return err('Коды ещё не готовы. Попробуйте позже.')
     }
+    const { data: savedOperation } = await svc.from('teksher_emission_operations')
+      .select('extension').eq('store_id', store_id).eq('operation_id', orderId).maybeSingle()
+    let extension = firstText(savedOperation?.extension).toLowerCase()
+    if (!extension) {
+      try {
+        const raw = await teksherJson(`${ORDER_BASE}/operations/${encodeURIComponent(orderId)}`, token)
+        extension = operationExtension(asObject(unwrapTeksher(raw))) ?? ''
+      } catch { /* older API versions may expose operations only through filter */ }
+    }
+    if (!extension) {
+      try {
+        const raw = await teksherJson(`${BASE}/operations/filter?page=0&size=200`, token)
+        const operation = arrayFromResponse(raw).find((item) => firstText(item.operationId, item.id) === orderId)
+        extension = operation ? operationExtension(operation) ?? '' : ''
+      } catch { /* handled by the explicit error below */ }
+    }
+    if (!extension || !isExtensionAlias(extension)) {
+      return err('Не удалось определить товарную группу этой старой операции. Нанесение не отправлено, чтобы не записать КИЗы в неверную группу.')
+    }
+
     const r = await fetch(`${ORDER_BASE}/operations/utilisation`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ extension: 'lp', dataSupplier: 'AUTO', orderId }),
+      body: JSON.stringify({ extension, dataSupplier: 'AUTO', orderId }),
     })
     const d = await r.json() as Record<string, unknown>
     if (!r.ok) return err((d?.message as string) ?? `Ошибка нанесения: ${r.status}`)

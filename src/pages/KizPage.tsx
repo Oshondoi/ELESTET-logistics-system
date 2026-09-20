@@ -54,6 +54,15 @@ interface TeksherOperation {
   createdDate?: string
 }
 
+interface EmissionProduct {
+  gtin: string
+  name: string
+  status: string
+  productGroupCode: string
+  productGroupName: string
+  extension: string
+}
+
 interface TnvedItem {
   id?: string | number
   fullCode?: string
@@ -352,6 +361,9 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   const [emitLoading, setEmitLoading] = useState(false)
   const [emitError, setEmitError] = useState<string | null>(null)
   const [emitSuccess, setEmitSuccess] = useState<string | null>(null)
+  const [emitProduct, setEmitProduct] = useState<EmissionProduct | null>(null)
+  const [emitProductLoading, setEmitProductLoading] = useState(false)
+  const [emitProductError, setEmitProductError] = useState<string | null>(null)
 
   // Create product modal
   const [createProductModal, setCreateProductModal] = useState(false)
@@ -468,6 +480,31 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
       void loadStats(activeStore.id)
     }
   }, [activeStore?.id, loadStats])
+
+  useEffect(() => {
+    if (!emitModal || !activeStore?.id) return
+    const gtin = emitGtin.trim()
+    let cancelled = false
+    setEmitProduct(null)
+    setEmitProductError(null)
+    setEmitProductLoading(false)
+    if (!/^\d{8,14}$/.test(gtin)) return
+    const timeoutId = window.setTimeout(async () => {
+      setEmitProductLoading(true)
+      const { data, error } = await invoke({ store_id: activeStore.id, action: 'resolve_emission_product', gtin })
+      if (cancelled) return
+      setEmitProductLoading(false)
+      if (error) {
+        setEmitProductError(error)
+        return
+      }
+      setEmitProduct((data?.product as unknown as EmissionProduct) ?? null)
+    }, 450)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [emitModal, emitGtin, activeStore?.id])
 
   // ── Загрузка товаров ─────────────────────────────────────────────────────
   const loadProducts = useCallback(async (page = 0, search = '') => {
@@ -604,7 +641,10 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
     const { data, error } = await invoke({ store_id: activeStore.id, action: 'emit', gtin: emitGtin, quantity: Number(emitQty) })
     setEmitLoading(false)
     if (error) { setEmitError(error); return }
-    setEmitSuccess(`Операция создана${data?.operationId ? `. ID: ${String(data.operationId).slice(0, 16)}…` : ''}`)
+    const product = data?.product as unknown as EmissionProduct | undefined
+    const group = product?.productGroupName || product?.extension || emitProduct?.productGroupName || emitProduct?.extension
+    setEmitSuccess(`Операция создана${data?.operationId ? `. ID: ${String(data.operationId).slice(0, 16)}…` : ''}${group ? `. Группа: ${group}` : ''}`)
+    if (data?.mappingWarning) setEmitError(String(data.mappingWarning))
     void loadStats(activeStore.id)
   }
 
@@ -1319,6 +1359,9 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
                   ✅ {emitSuccess}
                 </div>
+                {emitError && (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{emitError}</p>
+                )}
                 <p className="text-xs text-slate-500">Операция создана. Коды генерируются — обычно 30–60 сек на 100 кодов. Проверьте статус во вкладке «Операции».</p>
                 <button
                   type="button"
@@ -1335,12 +1378,27 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                   <input
                     type="text"
                     value={emitGtin}
-                    onChange={(e) => setEmitGtin(e.target.value)}
+                    onChange={(e) => setEmitGtin(e.target.value.replace(/\D/g, ''))}
                     placeholder="4600000000000"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     required
                   />
-                  <p className="mt-1 text-xs text-slate-400">13-значный штрихкод из вкладки «Товары»</p>
+                  <p className="mt-1 text-xs text-slate-400">GTIN из вкладки «Товары». ELESTET сам определит товарную группу Teksher.</p>
+                  {emitProductLoading && (
+                    <p className="mt-2 flex items-center gap-1.5 text-xs text-blue-600">
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+                      Проверяем товар и товарную группу…
+                    </p>
+                  )}
+                  {emitProduct && !emitProductLoading && (
+                    <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                      <div className="font-medium">{emitProduct.name || `GTIN ${emitProduct.gtin}`}</div>
+                      <div className="mt-0.5">Группа: {emitProduct.productGroupName || emitProduct.productGroupCode} · extension: {emitProduct.extension}</div>
+                    </div>
+                  )}
+                  {emitProductError && !emitProductLoading && (
+                    <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{emitProductError}</p>
+                  )}
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-600">Количество кодов</label>
@@ -1349,11 +1407,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                     value={emitQty}
                     onChange={(e) => setEmitQty(e.target.value)}
                     min="1"
-                    max="1000"
+                    max="5000"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     required
                   />
-                  <p className="mt-1 text-xs text-slate-400">Макс. 1 000. Спишется {emitQty || 0} единиц с баланса.</p>
+                  <p className="mt-1 text-xs text-slate-400">Макс. 5 000 за операцию. Спишется {emitQty || 0} единиц с баланса.</p>
                 </div>
                 {emitError && (
                   <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">{emitError}</p>
@@ -1362,8 +1420,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                   <button type="button" onClick={() => setEmitModal(false)} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
                     Отмена
                   </button>
-                  <button type="submit" disabled={emitLoading} className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
-                    {emitLoading ? 'Заказываем…' : 'Заказать'}
+                  <button type="submit" disabled={emitLoading || emitProductLoading || !emitProduct} className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+                    {emitLoading ? 'Заказываем…' : emitProductLoading ? 'Проверяем…' : 'Заказать'}
                   </button>
                 </div>
               </form>
