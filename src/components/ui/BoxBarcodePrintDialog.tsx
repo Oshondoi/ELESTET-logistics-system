@@ -68,7 +68,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
       await onIdSaved?.(id)
     }
     const codes = await getWbFulfillmentSupplyPackageCodes(supply.account_id, supply.id)
-    if (codes.length === 0) throw new Error(`WB API вернул 0 упаковок с товарным составом. В ELESTET создано ${supply.boxes.length} коробов. Пустые виртуальные короба и их ШК не пришли в публичном ответе WB. После распределения товаров повторите синхронизацию.`)
+    if (codes.length === 0) throw new Error(`WB API пока вернул 0 ШК коробов. В ELESTET создано ${supply.boxes.length} коробов. Это не связано с пустым содержимым: WB обычно отдаёт и пустые короба. Повторите синхронизацию после обновления данных поставки на стороне WB.`)
     if (codes.length !== supply.boxes.length) throw new Error(`WB вернул ${codes.length} ШК, а в поставке ELESTET ${supply.boxes.length} коробов. Сверьте упаковку перед привязкой.`)
     await assignFulfillmentWbBoxCodes(supply.id, codes)
     setLastMappedCount((current) => ({ ...current, [supply.id]: codes.length }))

@@ -152,7 +152,7 @@ async function syncPackagesToElestet(
       package_count: 0,
       box_count: expectedBoxCount,
       mapped_count: 0,
-      warning: `WB API вернул 0 упаковок с товарным составом. В ELESTET ${expectedBoxCount} коробов. Пустые виртуальные короба и их ШК не пришли в публичном ответе WB; после распределения товаров повторите синхронизацию.`,
+      warning: `WB API пока вернул 0 ШК коробов. В ELESTET ${expectedBoxCount} коробов. Это не связано с пустым содержимым: WB обычно отдаёт и пустые короба. Повторите синхронизацию после обновления данных поставки на стороне WB.`,
     }
   }
 
@@ -200,7 +200,19 @@ async function fetchPackages(apiKey: string, supplyId: string): Promise<WbPackag
   })
   if (!resp.ok) throw await wbError(resp)
   const data = await resp.json()
-  return Array.isArray(data) ? (data as WbPackage[]) : []
+  const packages = Array.isArray(data) ? (data as WbPackage[]) : []
+
+  // WB codes are generated sequentially. Keep the old, proven behaviour:
+  // the smallest WB code is assigned to ELESTET box #1, the next to box #2, etc.
+  // Do not rely on the API response order, which is not documented.
+  return packages.sort((left, right) => {
+    const leftNumber = Number.parseInt(left.packageCode?.replace(/\D/g, '') || '', 10)
+    const rightNumber = Number.parseInt(right.packageCode?.replace(/\D/g, '') || '', 10)
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
+      return leftNumber - rightNumber
+    }
+    return (left.packageCode || '').localeCompare(right.packageCode || '', 'ru', { numeric: true })
+  })
 }
 
 async function fetchSupplyDetails(apiKey: string, supplyId: string): Promise<WbSupplyDetails> {
