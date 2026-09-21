@@ -6890,18 +6890,23 @@ const BatchDetailModal = ({
                                 >
                                   <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
                                 </button>
-                                {canManageStageData && !readyBoxSupply && (
+                                {canManageStageData && (
                                   <button
                                     type="button"
                                     onClick={(event) => {
                                       event.stopPropagation()
                                       setBoxExcelSupplyId(supply.id)
                                     }}
-                                    className="flex h-7 items-center justify-center rounded-lg bg-emerald-50 px-2 text-[10px] font-black text-emerald-700 transition-colors hover:bg-emerald-100 hover:text-emerald-800"
+                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-500 transition-colors hover:bg-emerald-50 hover:text-emerald-700"
                                     title="Скачать шаблон или загрузить содержимое коробов из Excel"
                                     aria-label="Действия с Excel для поставки"
                                   >
-                                    Excel
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                      <path d="M14 2v6h6" />
+                                      <path d="m8 13 4 5M12 13l-4 5" />
+                                      <path d="M15 13h2M15 16h2M15 19h2" />
+                                    </svg>
                                   </button>
                                 )}
                               </div>
