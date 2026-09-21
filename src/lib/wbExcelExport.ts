@@ -30,7 +30,7 @@ const buildBoxesRows = (supply: FulfillmentSupplyWithBoxes, wbBoxCodes: string[]
  * Колонки: Баркод | Количество
  * Один баркод = одна строка, кол-во суммируется по всем коробам
  */
-export function downloadGoodsTemplate(supply: FulfillmentSupplyWithBoxes, filename = 'товары.xlsx'): void {
+export function downloadGoodsTemplate(supply: FulfillmentSupplyWithBoxes, filename = 'товары_barcode.xlsx'): void {
   const rows = buildGoodsRows(supply)
   const ws = XLSX.utils.aoa_to_sheet(rows)
   applyExcelWorksheetStandards(XLSX.utils, ws)
@@ -48,7 +48,7 @@ export function downloadGoodsTemplate(supply: FulfillmentSupplyWithBoxes, filena
 export function downloadBoxesTemplate(
   supply: FulfillmentSupplyWithBoxes,
   wbBoxCodes: string[],
-  filename = 'короба.xlsx',
+  filename = 'короба_Box.xlsx',
 ): void {
   const rows = buildBoxesRows(supply, wbBoxCodes)
   const ws = XLSX.utils.aoa_to_sheet(rows)
@@ -61,7 +61,7 @@ export function downloadBoxesTemplate(
 export function downloadAllTemplates(
   supply: FulfillmentSupplyWithBoxes,
   wbBoxCodes: string[],
-  filename = 'товары_и_короба.xlsx',
+  filename = 'товары_и_короба_barcode_Box.xlsx',
 ): void {
   const workbook = XLSX.utils.book_new()
   const goodsSheet = XLSX.utils.aoa_to_sheet(buildGoodsRows(supply))

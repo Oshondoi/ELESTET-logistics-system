@@ -254,6 +254,11 @@ const BOX_EXPORT_COLUMNS = [
   { key: 'size', label: 'Размер', required: false },
 ] as const
 
+const BARCODE_EXPORT_COLUMNS = [
+  { key: 'barcode', label: 'Баркод', required: true },
+  { key: 'qty', label: 'Количество', required: true },
+] as const
+
 type BoxExportColumnKey = typeof BOX_EXPORT_COLUMNS[number]['key']
 type OptionalBoxExportColumnKey = Extract<typeof BOX_EXPORT_COLUMNS[number], { required: false }>['key']
 type FulfillmentExcelMode = 'boxes' | 'barcodes' | 'both'
@@ -325,24 +330,18 @@ const buildBarcodeExportRows = (boxRows: (string | number)[][]): (string | numbe
   const quantityIndex = headers.indexOf('Кол-во товаров')
   if (barcodeIndex < 0 || quantityIndex < 0) throw new Error('В выгрузке отсутствуют баркод или количество')
 
-  const excludedHeaders = new Set(['ШК короба', 'ШК короба WB', 'Срок годности', 'Номер короба', 'Поставка', 'Склад'])
-  const includedIndexes = headers.flatMap((header, index) => excludedHeaders.has(String(header)) ? [] : [index])
-  const outputHeaders = includedIndexes.map((index) => headers[index])
-  const outputQuantityIndex = includedIndexes.indexOf(quantityIndex)
-  const aggregated = new Map<string, (string | number)[]>()
+  const aggregated = new Map<string, number>()
 
   boxRows.slice(1).forEach((row) => {
     const barcode = String(row[barcodeIndex] ?? '').trim()
     if (!barcode) return
-    const existing = aggregated.get(barcode)
-    if (existing) {
-      existing[outputQuantityIndex] = Number(existing[outputQuantityIndex] ?? 0) + Number(row[quantityIndex] ?? 0)
-      return
-    }
-    aggregated.set(barcode, includedIndexes.map((index) => index === quantityIndex ? Number(row[index] ?? 0) : row[index]))
+    aggregated.set(barcode, (aggregated.get(barcode) ?? 0) + Number(row[quantityIndex] ?? 0))
   })
 
-  return [outputHeaders, ...aggregated.values()]
+  return [
+    ['Баркод', 'Количество'],
+    ...Array.from(aggregated.entries()).map(([barcode, quantity]) => [barcode, quantity]),
+  ]
 }
 
 const createBoxExportWorkbook = async (data: (string | number)[][], mode: FulfillmentExcelMode) => {
@@ -432,6 +431,9 @@ const buildBoxExportRows = async ({
 const safeBoxExportFilenamePart = (value: string) =>
   (value || 'unknown').trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').replace(/[. ]+$/g, '') || 'unknown'
 
+const getExcelModeFilenameSuffix = (mode: FulfillmentExcelMode) =>
+  mode === 'barcodes' ? 'barcode' : mode === 'boxes' ? 'Box' : 'barcode_Box'
+
 const getBoxExportFilename = ({
   accountShortId,
   batchShortId,
@@ -450,9 +452,7 @@ const getBoxExportFilename = ({
   const date = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
   const parts = [`C${accountShortId ?? 'unknown'}`, `P${batchShortId ?? 'unknown'}`, safeBoxExportFilenamePart(storeName ?? 'unknown'), safeBoxExportFilenamePart(warehouseName)]
   if (boxNumber != null) parts.push(`BOX${boxNumber}`)
-  if (mode === 'barcodes') parts.push('BARCODES')
-  if (mode === 'both') parts.push('BARCODES_BOXES')
-  parts.push(date)
+  parts.push(date, getExcelModeFilenameSuffix(mode))
   return `${parts.join('_')}.xlsx`
 }
 
@@ -470,8 +470,7 @@ const getBatchExcelExportFilename = ({
   exportMode: FulfillmentExcelMode
 }) => {
   const date = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
-  const type = exportMode === 'boxes' ? 'BOXES' : exportMode === 'barcodes' ? 'BARCODES' : 'BARCODES_BOXES'
-  return `C${accountShortId ?? 'unknown'}_P${batchShortId ?? 'unknown'}_${safeBoxExportFilenamePart(storeName ?? 'unknown')}_${selectionMode}_${type}_${date}.xlsx`
+  return `C${accountShortId ?? 'unknown'}_P${batchShortId ?? 'unknown'}_${safeBoxExportFilenamePart(storeName ?? 'unknown')}_${selectionMode}_${date}_${getExcelModeFilenameSuffix(exportMode)}.xlsx`
 }
 
 const buildBoxContentsSources = async ({
@@ -7220,7 +7219,7 @@ const BatchDetailModal = ({
                           </div>
 
                           <div className="space-y-1.5">
-                              {BOX_EXPORT_COLUMNS.filter((column) => boxExportMode !== 'barcodes' || !['boxBarcode', 'wbBoxBarcode', 'expiryDate', 'boxNumber'].includes(column.key)).map((column) => {
+                              {(boxExportMode === 'barcodes' ? BARCODE_EXPORT_COLUMNS : BOX_EXPORT_COLUMNS).map((column) => {
                                 const selected = column.required || boxExportSelectedOptionalColumns.includes(column.key as OptionalBoxExportColumnKey)
                                 if (column.required) {
                                   return (
@@ -11677,7 +11676,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
               ))}
             </div>
             <div className="space-y-1.5">
-              {BOX_EXPORT_COLUMNS.filter((column) => batchExportMode !== 'barcodes' || !['boxBarcode', 'wbBoxBarcode', 'expiryDate', 'boxNumber'].includes(column.key)).map((column) => {
+              {(batchExportMode === 'barcodes' ? BARCODE_EXPORT_COLUMNS : BOX_EXPORT_COLUMNS).map((column) => {
                 const selected = column.required || batchExportSelectedColumns.includes(column.key as OptionalBoxExportColumnKey)
                 if (column.required) {
                   return (
