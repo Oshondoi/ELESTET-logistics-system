@@ -20,6 +20,17 @@ export interface FulfillmentBoxExcelImportRow {
   box_number: number
 }
 
+export interface WbBoxCodeExcelRow {
+  sourceRow: number
+  code: string
+}
+
+export interface WbBoxCodeExcelParseResult {
+  rows: WbBoxCodeExcelRow[]
+  errors: string[]
+  sheetName: string | null
+}
+
 const REQUIRED_HEADERS = ['Баркод', 'Количество', 'Номер короба'] as const
 
 const normalizeHeader = (value: unknown) => String(value ?? '')
@@ -41,6 +52,97 @@ const normalizeIntegerCell = (value: unknown): number | null => {
 const normalizeBarcodeCell = (value: unknown): string => {
   if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value)
   return String(value ?? '').trim().replace(/\s+/g, '')
+}
+
+const WB_BOX_CODE_HEADER = 'ШК короба'
+
+const normalizeWbBoxCode = (value: unknown): string => String(value ?? '').trim()
+
+/**
+ * Reads a deliberately simple one-column workbook prepared from the WB export.
+ * Codes remain opaque strings so a future WB format is not rejected.
+ */
+export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeExcelParseResult> {
+  const XLSX = await import('xlsx')
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false })
+  if (workbook.SheetNames.length === 0) {
+    return { rows: [], errors: ['В Excel-файле нет листов.'], sheetName: null }
+  }
+
+  for (const sheetName of workbook.SheetNames) {
+    const worksheet = workbook.Sheets[sheetName]
+    // raw:false keeps text as it is displayed in Excel and avoids treating a
+    // future numeric-looking package code as a JavaScript number.
+    const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+      header: 1,
+      raw: false,
+      defval: '',
+      blankrows: true,
+    })
+    const headerLimit = Math.min(matrix.length, 50)
+    let headerRowIndex = -1
+    let codeIndex = -1
+
+    for (let rowIndex = 0; rowIndex < headerLimit; rowIndex += 1) {
+      const headers = (matrix[rowIndex] ?? []).map(normalizeHeader)
+      const candidateIndex = headers.indexOf(normalizeHeader(WB_BOX_CODE_HEADER))
+      if (candidateIndex >= 0) {
+        headerRowIndex = rowIndex
+        codeIndex = candidateIndex
+        break
+      }
+    }
+
+    if (headerRowIndex < 0) continue
+
+    const rows: WbBoxCodeExcelRow[] = []
+    const errors: string[] = []
+    const firstRowByCode = new Map<string, number>()
+    const headerCells = matrix[headerRowIndex] ?? []
+    const extraHeaders = headerCells
+      .map((value, index) => ({ value: String(value ?? '').trim(), index }))
+      .filter((entry) => entry.value !== '' && entry.index !== codeIndex)
+    if (extraHeaders.length > 0) {
+      return {
+        rows: [],
+        errors: [`Оставьте в файле только одну колонку «${WB_BOX_CODE_HEADER}». Удалите: ${extraHeaders.map((entry) => `«${entry.value}»`).join(', ')}.`],
+        sheetName,
+      }
+    }
+
+    matrix.slice(headerRowIndex + 1).forEach((source, offset) => {
+      const sourceRow = headerRowIndex + offset + 2
+      const unexpectedColumn = source.findIndex((value, index) => index !== codeIndex && String(value ?? '').trim() !== '')
+      if (unexpectedColumn >= 0) {
+        errors.push(`Строка ${sourceRow}: удалите данные вне колонки «${WB_BOX_CODE_HEADER}».`)
+        return
+      }
+      const code = normalizeWbBoxCode(source[codeIndex])
+      if (!code) return
+      if (code.length > 512) {
+        errors.push(`Строка ${sourceRow}: ШК короба слишком длинный.`)
+        return
+      }
+      const duplicateRow = firstRowByCode.get(code)
+      if (duplicateRow !== undefined) {
+        errors.push(`Строка ${sourceRow}: ШК короба «${code}» уже указан в строке ${duplicateRow}.`)
+        return
+      }
+      firstRowByCode.set(code, sourceRow)
+      rows.push({ sourceRow, code })
+    })
+
+    if (rows.length === 0 && errors.length === 0) {
+      errors.push('В найденных колонках нет ни одного ШК короба WB.')
+    }
+    return { rows, errors, sheetName }
+  }
+
+  return {
+    rows: [],
+    errors: [`Не найдена единственная обязательная колонка «${WB_BOX_CODE_HEADER}».`],
+    sheetName: null,
+  }
 }
 
 export async function downloadFulfillmentBoxImportTemplate(

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { FulfillmentSupplyWithBoxes } from '../../types'
 import {
+  assignFulfillmentWbBoxCodes,
   replaceFulfillmentBoxContentsFromExcel,
   type FulfillmentBoxExcelImportResult,
   type FulfillmentKizAuditContext,
@@ -10,7 +11,9 @@ import {
   aggregateFulfillmentBoxExcelRows,
   downloadFulfillmentBoxImportTemplate,
   parseFulfillmentBoxImportFile,
+  parseWbBoxCodesImportFile,
   type FulfillmentBoxExcelImportRow,
+  type WbBoxCodeExcelRow,
 } from '../../lib/fulfillmentBoxExcelImport'
 
 interface Props {
@@ -29,6 +32,13 @@ interface PreviewBox {
   oldUnits: number
   newPositions: number
   newUnits: number
+}
+
+interface WbBoxCodePreview {
+  boxNumber: number
+  sourceRow: number
+  oldCode: string | null
+  newCode: string
 }
 
 const sumUnits = (items: Array<{ qty: number }>) => items.reduce((sum, item) => sum + item.qty, 0)
@@ -86,12 +96,17 @@ export function FulfillmentBoxExcelDialog({
   onImported,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const wbCodesInputRef = useRef<HTMLInputElement>(null)
   const [rows, setRows] = useState<FulfillmentBoxExcelImportRow[]>([])
   const [fileName, setFileName] = useState('')
   const [errors, setErrors] = useState<string[]>([])
-  const [busyAction, setBusyAction] = useState<'template' | 'parse' | 'import' | null>(null)
+  const [busyAction, setBusyAction] = useState<'template' | 'parse' | 'import' | 'wb_parse' | 'wb_import' | null>(null)
   const [result, setResult] = useState<FulfillmentBoxExcelImportResult | null>(null)
   const [appliedPreview, setAppliedPreview] = useState<PreviewBox[]>([])
+  const [wbCodeRows, setWbCodeRows] = useState<WbBoxCodeExcelRow[]>([])
+  const [wbCodePreview, setWbCodePreview] = useState<WbBoxCodePreview[]>([])
+  const [wbCodeFileName, setWbCodeFileName] = useState('')
+  const [wbCodesApplied, setWbCodesApplied] = useState(false)
 
   const preview = useMemo<PreviewBox[]>(() => {
     const byBox = new Map<number, FulfillmentBoxExcelImportRow[]>()
@@ -152,6 +167,9 @@ export function FulfillmentBoxExcelDialog({
   const handleFile = async (file: File) => {
     setBusyAction('parse')
     setRows([])
+    setWbCodeRows([])
+    setWbCodePreview([])
+    setWbCodesApplied(false)
     setErrors([])
     setResult(null)
     setFileName(file.name)
@@ -174,6 +192,44 @@ export function FulfillmentBoxExcelDialog({
     }
   }
 
+  const handleWbCodesFile = async (file: File) => {
+    setBusyAction('wb_parse')
+    setRows([])
+    setResult(null)
+    setWbCodeRows([])
+    setWbCodePreview([])
+    setWbCodesApplied(false)
+    setErrors([])
+    setWbCodeFileName(file.name)
+    try {
+      const parsed = await parseWbBoxCodesImportFile(file)
+      const nextErrors = [...parsed.errors]
+      const boxes = [...supply.boxes].sort((left, right) => left.box_number - right.box_number || left.id.localeCompare(right.id))
+      if (!supply.wb_supply_id?.trim()) {
+        nextErrors.push('Сначала привяжите к поставке цифровой ID поставки WB.')
+      }
+      if (parsed.rows.length !== boxes.length) {
+        nextErrors.push(`В Excel найдено ${parsed.rows.length} ШК коробов WB, а в поставке ELESTET ${boxes.length} коробов. Привязка отменена.`)
+      }
+      if (nextErrors.length > 0) {
+        setErrors(nextErrors)
+        return
+      }
+      setWbCodeRows(parsed.rows)
+      setWbCodePreview(parsed.rows.map((row, index) => ({
+        boxNumber: boxes[index].box_number,
+        sourceRow: row.sourceRow,
+        oldCode: boxes[index].wb_barcode?.trim() || null,
+        newCode: row.code,
+      })))
+    } catch (error) {
+      setErrors([errorMessage(error, 'Не удалось прочитать Excel с ШК коробов WB.')])
+    } finally {
+      setBusyAction(null)
+      if (wbCodesInputRef.current) wbCodesInputRef.current.value = ''
+    }
+  }
+
   const handleImport = async () => {
     if (rows.length === 0 || busyAction) return
     setBusyAction('import')
@@ -191,6 +247,21 @@ export function FulfillmentBoxExcelDialog({
       setResult(imported)
     } catch (error) {
       setErrors([errorMessage(error, 'Не удалось заменить содержимое коробов.')])
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleWbCodesImport = async () => {
+    if (wbCodeRows.length === 0 || busyAction) return
+    setBusyAction('wb_import')
+    setErrors([])
+    try {
+      await assignFulfillmentWbBoxCodes(supply.id, wbCodeRows.map((row) => row.code))
+      await onImported()
+      setWbCodesApplied(true)
+    } catch (error) {
+      setErrors([errorMessage(error, 'Не удалось привязать ШК коробов WB.')])
     } finally {
       setBusyAction(null)
     }
@@ -226,7 +297,27 @@ export function FulfillmentBoxExcelDialog({
             </div>
           )}
 
-          {result ? (
+          {wbCodesApplied ? (
+            <div className="space-y-4">
+              <div className="rounded-2xl bg-emerald-50 p-5 text-center">
+                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500 text-xl font-black text-white">✓</div>
+                <p className="mt-3 font-black text-emerald-900">ШК коробов WB привязаны</p>
+                <p className="mt-1 text-sm text-emerald-700">{wbCodePreview.length} ШК · первый ШК к первому коробу и далее по порядку</p>
+              </div>
+              <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                {wbCodePreview.map((entry) => (
+                  <div key={entry.boxNumber} className="flex items-center gap-3 rounded-2xl border border-emerald-100 px-4 py-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-sm font-black text-emerald-700">✓</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-black text-slate-800">Короб №{entry.boxNumber}</p>
+                      <p className="break-all text-xs font-semibold text-emerald-700">{entry.newCode}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={onClose} className="w-full rounded-xl bg-slate-900 py-3 text-sm font-bold text-white">Закрыть</button>
+            </div>
+          ) : result ? (
             <div className="space-y-4">
               <div className="rounded-2xl bg-emerald-50 p-5 text-center">
                 <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500 text-xl font-black text-white">✓</div>
@@ -255,6 +346,46 @@ export function FulfillmentBoxExcelDialog({
               </div>
               <button type="button" onClick={onClose} className="w-full rounded-xl bg-slate-900 py-3 text-sm font-bold text-white">Закрыть</button>
             </div>
+          ) : wbCodePreview.length > 0 ? (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-violet-50 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-slate-800">{wbCodeFileName}</p>
+                  <p className="text-xs text-violet-600">Найдено ШК коробов WB: {wbCodePreview.length}</p>
+                </div>
+                <button type="button" disabled={Boolean(busyAction)} onClick={() => wbCodesInputRef.current?.click()} className="text-xs font-bold text-violet-700 disabled:opacity-40">Выбрать другой</button>
+              </div>
+
+              <div className="rounded-2xl border border-violet-100 bg-violet-50/50 px-4 py-3 text-xs leading-relaxed text-violet-800">
+                В файле должна быть только колонка «ШК короба». Порядок берётся из строк: первый ШК привязывается к коробу с наименьшим номером, второй — к следующему. Содержимое коробов и КИЗы не изменяются.
+              </div>
+
+              <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                {wbCodePreview.map((entry) => (
+                  <div key={entry.boxNumber} className="grid grid-cols-[80px_1fr] gap-3 rounded-2xl border border-slate-200 px-4 py-3 sm:grid-cols-[90px_1fr_1fr]">
+                    <div>
+                      <p className="text-sm font-black text-slate-800">Короб №{entry.boxNumber}</p>
+                      <p className="text-[10px] text-slate-400">строка {entry.sourceRow}</p>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="block text-[10px] font-bold uppercase text-slate-400">Новый ШК WB</span>
+                      <b className="block break-all text-xs text-violet-700">{entry.newCode}</b>
+                    </div>
+                    <div className="col-start-2 min-w-0 sm:col-start-auto">
+                      <span className="block text-[10px] font-bold uppercase text-slate-400">Сейчас</span>
+                      <span className="block break-all text-xs text-slate-500">{entry.oldCode ?? 'не привязан'}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2">
+                <button type="button" disabled={Boolean(busyAction)} onClick={() => { setWbCodeRows([]); setWbCodePreview([]); setWbCodeFileName(''); setErrors([]) }} className="flex-1 rounded-xl border border-slate-200 py-3 text-sm font-bold text-slate-600 disabled:opacity-40">Назад</button>
+                <button type="button" disabled={Boolean(busyAction)} onClick={() => void handleWbCodesImport()} className="flex-[1.5] rounded-xl bg-violet-600 py-3 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-40">
+                  {busyAction === 'wb_import' ? 'Привязываю…' : `Привязать ${wbCodePreview.length} ШК`}
+                </button>
+              </div>
+            </>
           ) : rows.length === 0 ? (
             <>
               <p className="text-sm leading-relaxed text-slate-500">
@@ -269,8 +400,13 @@ export function FulfillmentBoxExcelDialog({
                   <span className="block text-sm font-black text-blue-800">Загрузить Excel</span>
                   <span className="mt-1 block text-xs leading-relaxed text-blue-700">Проверить файл и показать заменяемые или создаваемые короба.</span>
                 </button>
+                <button type="button" disabled={Boolean(busyAction)} onClick={() => wbCodesInputRef.current?.click()} className="rounded-2xl border border-violet-200 bg-violet-50 p-5 text-left transition hover:border-violet-400 disabled:opacity-50 sm:col-span-2">
+                  <span className="block text-sm font-black text-violet-800">Загрузить ШК коробов WB</span>
+                  <span className="mt-1 block text-xs leading-relaxed text-violet-700">Excel только с одной колонкой «ШК короба». Первый ШК будет связан с первым коробом и далее по порядку.</span>
+                </button>
               </div>
               {busyAction === 'parse' && <p className="text-center text-sm font-medium text-blue-600">Читаю и проверяю файл…</p>}
+              {busyAction === 'wb_parse' && <p className="text-center text-sm font-medium text-violet-600">Читаю и проверяю ШК коробов WB…</p>}
             </>
           ) : (
             <>
@@ -318,6 +454,13 @@ export function FulfillmentBoxExcelDialog({
           accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
           className="hidden"
           onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file) }}
+        />
+        <input
+          ref={wbCodesInputRef}
+          type="file"
+          accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+          className="hidden"
+          onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWbCodesFile(file) }}
         />
       </div>
     </div>,
