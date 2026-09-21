@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { FulfillmentItem, FulfillmentSupplyWithBoxes } from '../../types'
+import type { FulfillmentSupplyWithBoxes } from '../../types'
 import {
   replaceFulfillmentBoxContentsFromExcel,
   type FulfillmentBoxExcelImportResult,
@@ -16,7 +16,6 @@ import {
 interface Props {
   supply: FulfillmentSupplyWithBoxes
   batchNumber: number | null
-  batchItems: FulfillmentItem[]
   auditContext: FulfillmentKizAuditContext
   onClose: () => void
   onImported: () => void | Promise<void>
@@ -82,7 +81,6 @@ function BoxActionIcon({ action, completed = false }: { action: PreviewBox['acti
 export function FulfillmentBoxExcelDialog({
   supply,
   batchNumber,
-  batchItems,
   auditContext,
   onClose,
   onImported,
@@ -160,11 +158,6 @@ export function FulfillmentBoxExcelDialog({
     try {
       const parsed = await parseFulfillmentBoxImportFile(file)
       const nextErrors = [...parsed.errors]
-      const knownBarcodes = new Set(batchItems.filter((item) => !item.is_excluded).map((item) => item.barcode.trim()))
-      const unknownBarcodes = [...new Set(parsed.rows.map((row) => row.barcode).filter((barcode) => !knownBarcodes.has(barcode)))]
-      if (unknownBarcodes.length > 0) {
-        nextErrors.push(`Не найдены среди товаров этой партии: ${unknownBarcodes.join(', ')}.`)
-      }
       const aggregated = aggregateFulfillmentBoxExcelRows(parsed.rows, parsed.boxNumbers)
       const tooLarge = aggregated.find((row) => row.barcode !== '' && (!Number.isSafeInteger(row.qty) || row.qty > 2_147_483_647))
       if (tooLarge) nextErrors.push(`Короб №${tooLarge.box_number}, баркод ${tooLarge.barcode}: суммарное количество слишком большое.`)

@@ -24,7 +24,6 @@ declare
   v_pair public.fulfillment_kiz_pairs%rowtype;
   v_old_pair jsonb;
   v_box_number integer;
-  v_unknown_barcodes text;
   v_reserved_box integer;
   v_reserved_order text;
   v_affected_boxes integer := 0;
@@ -80,25 +79,6 @@ begin
     where grouped.qty > 2147483647
   ) then
     raise exception 'Суммарное количество одного товара в коробе превышает допустимое значение';
-  end if;
-
-  select string_agg(missing.barcode, ', ' order by missing.barcode)
-  into v_unknown_barcodes
-  from (
-    select distinct imported.barcode
-    from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
-    where coalesce(imported.barcode, '') <> ''
-      and not exists (
-      select 1
-      from public.fulfillment_items item
-      where item.batch_id = v_supply.batch_id
-        and trim(item.barcode) = imported.barcode
-        and coalesce(item.is_excluded, false) = false
-        and (v_supply.pipeline_stage_id is null or item.pipeline_stage_id = v_supply.pipeline_stage_id)
-    )
-  ) missing;
-  if v_unknown_barcodes is not null then
-    raise exception 'Не найдены среди товаров этой партии: %', v_unknown_barcodes;
   end if;
 
   -- A source item referenced by an active FBS order is immutable until that
@@ -232,14 +212,16 @@ begin
       matched.product_name,
       sum(imported.qty)::integer
     from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
-    join lateral (
+    left join lateral (
       select item.id, item.product_name
       from public.fulfillment_items item
       where item.batch_id = v_supply.batch_id
         and trim(item.barcode) = imported.barcode
         and coalesce(item.is_excluded, false) = false
-        and (v_supply.pipeline_stage_id is null or item.pipeline_stage_id = v_supply.pipeline_stage_id)
-      order by item.created_at, item.id
+      order by
+        (v_supply.pipeline_stage_id is not null and item.pipeline_stage_id = v_supply.pipeline_stage_id) desc,
+        item.created_at desc,
+        item.id
       limit 1
     ) matched on true
     where imported.box_number = v_box_number

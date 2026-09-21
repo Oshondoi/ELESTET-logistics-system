@@ -10054,7 +10054,6 @@ const BatchDetailModal = ({
           <FulfillmentBoxExcelDialog
             supply={supply}
             batchNumber={batch.short_id}
-            batchItems={items}
             auditContext={packingKizAuditContext}
             onClose={() => setBoxExcelSupplyId(null)}
             onImported={async () => {
