@@ -130,8 +130,8 @@ async function syncPackagesToElestet(
 
   if (resolvedLineId) {
     const { error } = await db.from('trip_lines').update({
-      wb_package_codes: packageCodes,
       wb_packages_snapshot: packages,
+      ...(packageCodes.length > 0 ? { wb_package_codes: packageCodes } : {}),
     }).eq('id', resolvedLineId).eq('account_id', accountId)
     if (error) throw error
   }
@@ -147,16 +147,23 @@ async function syncPackagesToElestet(
   if (countError) throw countError
   const expectedBoxCount = boxCount ?? 0
 
-  if (packageCodes.length === 0 || packageCodes.length !== expectedBoxCount) {
+  if (packageCodes.length === 0) {
+    return {
+      package_count: 0,
+      box_count: expectedBoxCount,
+      mapped_count: 0,
+      warning: `WB API вернул 0 упаковок с товарным составом. В ELESTET ${expectedBoxCount} коробов. Пустые виртуальные короба и их ШК не пришли в публичном ответе WB; после распределения товаров повторите синхронизацию.`,
+    }
+  }
+
+  if (packageCodes.length !== expectedBoxCount) {
     const { error: clearError } = await db.from('fulfillment_boxes')
       .update({ wb_barcode: null })
       .eq('supply_id', resolvedSupplyId)
       .eq('account_id', accountId)
     if (clearError) throw clearError
 
-    const warning = packageCodes.length === 0
-      ? `WB вернул 0 ШК коробов. В поставке ELESTET ${expectedBoxCount} коробов. Сформируйте упаковку в WB и повторите синхронизацию.`
-      : `WB вернул ${packageCodes.length} ШК коробов, а в поставке ELESTET ${expectedBoxCount}. Привязка не выполнена до совпадения количества.`
+    const warning = `WB вернул ${packageCodes.length} ШК коробов, а в поставке ELESTET ${expectedBoxCount}. Привязка не выполнена до совпадения количества.`
     return { package_count: packageCodes.length, box_count: expectedBoxCount, mapped_count: 0, warning }
   }
 
@@ -425,7 +432,10 @@ Deno.serve(async (req) => {
         fetchPackages(apiKey, supplyId),
       ])
       const packageCodes = packages.map((item) => item.packageCode)
-      const summary = { ...supplySummary(details), wb_package_codes: packageCodes }
+      const summary = {
+        ...supplySummary(details),
+        ...(packageCodes.length > 0 ? { wb_package_codes: packageCodes } : {}),
+      }
       const { error } = await db.from('trip_lines').update(summary).eq('id', line_id).eq('account_id', account_id)
       if (error) throw error
       const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
@@ -451,7 +461,7 @@ Deno.serve(async (req) => {
       const summary = supplySummary(details)
       const updates = {
         ...summary,
-        wb_package_codes: packages.map((item) => item.packageCode),
+        ...(packages.length > 0 ? { wb_package_codes: packages.map((item) => item.packageCode) } : {}),
         wb_goods_snapshot: goods,
         wb_packages_snapshot: packages,
       }

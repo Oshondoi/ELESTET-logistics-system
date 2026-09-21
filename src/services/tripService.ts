@@ -594,9 +594,8 @@ export type WbSupplySummary = Pick<TripLine,
   | 'wb_actual_warehouse_name'
   | 'wb_transit_warehouse_id'
   | 'wb_transit_warehouse_name'
-  | 'wb_package_codes'
   | 'wb_synced_at'
->
+> & Partial<Pick<TripLine, 'wb_package_codes'>>
 
 export interface WbPackageSyncResult {
   package_count: number
