@@ -33,6 +33,14 @@ declare
   v_total_positions integer := 0;
   v_total_units bigint := 0;
   v_reason text;
+  v_has_content boolean;
+  v_box_existed boolean;
+  v_old_positions integer;
+  v_old_units integer;
+  v_new_positions integer;
+  v_new_units integer;
+  v_box_action text;
+  v_box_results jsonb := '[]'::jsonb;
 begin
   if jsonb_typeof(p_rows) is distinct from 'array' or jsonb_array_length(p_rows) = 0 then
     raise exception 'В Excel нет заполненных строк для загрузки';
@@ -49,9 +57,14 @@ begin
   if exists (
     select 1
     from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
-    where coalesce(imported.barcode, '') !~ '^[0-9]{13}$'
-       or imported.qty is null or imported.qty < 1 or imported.qty > 2147483647
-       or imported.box_number is null or imported.box_number < 1 or imported.box_number > 2147483647
+    where imported.box_number is null or imported.box_number < 1 or imported.box_number > 2147483647
+       or not (
+         (coalesce(imported.barcode, '') = '' and coalesce(imported.qty, 0) = 0)
+         or (
+           coalesce(imported.barcode, '') ~ '^[0-9]{13}$'
+           and imported.qty is not null and imported.qty between 1 and 2147483647
+         )
+       )
   ) then
     raise exception 'Excel содержит некорректный баркод, количество или номер короба';
   end if;
@@ -61,6 +74,7 @@ begin
     from (
       select imported.box_number, imported.barcode, sum(imported.qty) as qty
       from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
+      where coalesce(imported.barcode, '') <> ''
       group by imported.box_number, imported.barcode
     ) grouped
     where grouped.qty > 2147483647
@@ -73,7 +87,8 @@ begin
   from (
     select distinct imported.barcode
     from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
-    where not exists (
+    where coalesce(imported.barcode, '') <> ''
+      and not exists (
       select 1
       from public.fulfillment_items item
       where item.batch_id = v_supply.batch_id
@@ -98,6 +113,7 @@ begin
     and box.box_number in (
       select distinct imported.box_number::integer
       from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
+      where coalesce(imported.barcode, '') <> '' and imported.qty > 0
     )
   order by box.box_number
   limit 1;
@@ -117,8 +133,8 @@ begin
   for update;
 
   select count(distinct imported.box_number)::integer,
-         count(distinct (imported.box_number, imported.barcode))::integer,
-         sum(imported.qty)::bigint
+         (count(distinct (imported.box_number, imported.barcode)) filter (where coalesce(imported.barcode, '') <> ''))::integer,
+         coalesce(sum(imported.qty) filter (where coalesce(imported.barcode, '') <> ''), 0)::bigint
   into v_affected_boxes, v_total_positions, v_total_units
   from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint);
 
@@ -127,16 +143,49 @@ begin
     from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
     order by imported.box_number::integer
   loop
+    select exists (
+      select 1
+      from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
+      where imported.box_number = v_box_number
+        and coalesce(imported.barcode, '') <> ''
+        and imported.qty > 0
+    ) into v_has_content;
+
     select * into v_box
     from public.fulfillment_boxes
     where supply_id = v_supply.id and box_number = v_box_number
     for update;
+    v_box_existed := found;
 
-    if not found then
+    if v_box_existed then
+      select count(*)::integer, coalesce(sum(item.qty), 0)::integer
+      into v_old_positions, v_old_units
+      from public.fulfillment_box_items item
+      where item.box_id = v_box.id;
+    else
+      v_old_positions := 0;
+      v_old_units := 0;
       insert into public.fulfillment_boxes(supply_id, account_id, box_number, status)
       values (v_supply.id, v_supply.account_id, v_box_number, 'open')
       returning * into v_box;
       v_created_boxes := v_created_boxes + 1;
+    end if;
+
+    -- A box-number-only row creates a missing empty box, but never clears an
+    -- existing box or touches its KIZ history.
+    if not v_has_content then
+      v_box_action := case when v_box_existed then 'unchanged' else 'create_empty' end;
+      v_new_positions := v_old_positions;
+      v_new_units := v_old_units;
+      v_box_results := v_box_results || jsonb_build_array(jsonb_build_object(
+        'box_number', v_box_number,
+        'action', v_box_action,
+        'old_positions', v_old_positions,
+        'old_units', v_old_units,
+        'new_positions', v_new_positions,
+        'new_units', v_new_units
+      ));
+      continue;
     end if;
 
     for v_pair in
@@ -194,7 +243,27 @@ begin
       limit 1
     ) matched on true
     where imported.box_number = v_box_number
+      and coalesce(imported.barcode, '') <> ''
+      and imported.qty > 0
     group by imported.barcode, matched.id, matched.product_name;
+
+    select count(*)::integer, coalesce(sum(item.qty), 0)::integer
+    into v_new_positions, v_new_units
+    from public.fulfillment_box_items item
+    where item.box_id = v_box.id;
+    v_box_action := case
+      when not v_box_existed then 'create_filled'
+      when v_old_positions = 0 then 'fill_first'
+      else 'replace'
+    end;
+    v_box_results := v_box_results || jsonb_build_array(jsonb_build_object(
+      'box_number', v_box_number,
+      'action', v_box_action,
+      'old_positions', v_old_positions,
+      'old_units', v_old_units,
+      'new_positions', v_new_positions,
+      'new_units', v_new_units
+    ));
   end loop;
 
   return jsonb_build_object(
@@ -202,7 +271,8 @@ begin
     'created_boxes', v_created_boxes,
     'archived_kiz', v_archived_kiz,
     'total_positions', v_total_positions,
-    'total_units', v_total_units
+    'total_units', v_total_units,
+    'box_results', v_box_results
   );
 end;
 $$;

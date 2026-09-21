@@ -10,6 +10,7 @@ export interface FulfillmentBoxExcelRow {
 
 export interface FulfillmentBoxExcelParseResult {
   rows: FulfillmentBoxExcelRow[]
+  boxNumbers: number[]
   errors: string[]
 }
 
@@ -70,7 +71,7 @@ export async function parseFulfillmentBoxImportFile(file: File): Promise<Fulfill
   const XLSX = await import('xlsx')
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false })
   const firstSheetName = workbook.SheetNames[0]
-  if (!firstSheetName) return { rows: [], errors: ['В Excel-файле нет листов.'] }
+  if (!firstSheetName) return { rows: [], boxNumbers: [], errors: ['В Excel-файле нет листов.'] }
 
   const worksheet = workbook.Sheets[firstSheetName]
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
@@ -79,17 +80,18 @@ export async function parseFulfillmentBoxImportFile(file: File): Promise<Fulfill
     defval: '',
     blankrows: false,
   })
-  if (matrix.length === 0) return { rows: [], errors: ['Excel-файл пустой.'] }
+  if (matrix.length === 0) return { rows: [], boxNumbers: [], errors: ['Excel-файл пустой.'] }
 
   const headers = (matrix[0] ?? []).map(normalizeHeader)
   const indexes = REQUIRED_HEADERS.map((header) => headers.indexOf(normalizeHeader(header)))
   const missingHeaders = REQUIRED_HEADERS.filter((_, index) => indexes[index] < 0)
   if (missingHeaders.length > 0) {
-    return { rows: [], errors: [`Не найдены обязательные колонки: ${missingHeaders.join(', ')}.`] }
+    return { rows: [], boxNumbers: [], errors: [`Не найдены обязательные колонки: ${missingHeaders.join(', ')}.`] }
   }
 
   const [barcodeIndex, qtyIndex, boxIndex] = indexes
   const rows: FulfillmentBoxExcelRow[] = []
+  const boxNumbers = new Set<number>()
   const errors: string[] = []
 
   matrix.slice(1).forEach((source, offset) => {
@@ -102,10 +104,17 @@ export async function parseFulfillmentBoxImportFile(file: File): Promise<Fulfill
     const boxEmpty = cellIsEmpty(boxValue)
 
     if (barcodeEmpty && qtyEmpty && boxEmpty) return
-    // Шаблон заранее содержит номера существующих коробов. Пока баркод и
-    // количество не заполнены, такая строка является подсказкой, а не командой
-    // очистить короб.
-    if (!boxEmpty && barcodeEmpty && qtyEmpty) return
+    // Строка только с номером означает короб без содержимого. Существующий
+    // короб она не очищает, а отсутствующий — создаёт пустым.
+    if (!boxEmpty && barcodeEmpty && qtyEmpty) {
+      const boxNumber = normalizeIntegerCell(boxValue)
+      if (boxNumber === null || boxNumber < 1 || boxNumber > 2_147_483_647) {
+        errors.push(`Строка ${sourceRow}: номер короба должен быть положительным целым числом.`)
+        return
+      }
+      boxNumbers.add(boxNumber)
+      return
+    }
     if (barcodeEmpty || qtyEmpty || boxEmpty) {
       errors.push(`Строка ${sourceRow}: заполните баркод, количество и номер короба.`)
       return
@@ -126,16 +135,22 @@ export async function parseFulfillmentBoxImportFile(file: File): Promise<Fulfill
       errors.push(`Строка ${sourceRow}: номер короба должен быть положительным целым числом.`)
       return
     }
+    boxNumbers.add(boxNumber)
     rows.push({ sourceRow, barcode, qty, boxNumber })
   })
 
-  if (rows.length === 0 && errors.length === 0) errors.push('В файле нет заполненных строк для загрузки.')
-  return { rows, errors }
+  if (boxNumbers.size === 0 && errors.length === 0) errors.push('В файле нет ни одного номера короба для загрузки.')
+  return { rows, boxNumbers: [...boxNumbers].sort((left, right) => left - right), errors }
 }
 
-export function aggregateFulfillmentBoxExcelRows(rows: FulfillmentBoxExcelRow[]): FulfillmentBoxExcelImportRow[] {
+export function aggregateFulfillmentBoxExcelRows(
+  rows: FulfillmentBoxExcelRow[],
+  boxNumbers: number[] = [],
+): FulfillmentBoxExcelImportRow[] {
   const aggregated = new Map<string, FulfillmentBoxExcelImportRow>()
+  const boxesWithContent = new Set<number>()
   rows.forEach((row) => {
+    boxesWithContent.add(row.boxNumber)
     const key = `${row.boxNumber}:${row.barcode}`
     const existing = aggregated.get(key)
     if (existing) {
@@ -147,6 +162,10 @@ export function aggregateFulfillmentBoxExcelRows(rows: FulfillmentBoxExcelRow[])
       qty: row.qty,
       box_number: row.boxNumber,
     })
+  })
+  boxNumbers.forEach((boxNumber) => {
+    if (boxesWithContent.has(boxNumber)) return
+    aggregated.set(`${boxNumber}:`, { barcode: '', qty: 0, box_number: boxNumber })
   })
   return [...aggregated.values()].sort((left, right) =>
     left.box_number - right.box_number || left.barcode.localeCompare(right.barcode),

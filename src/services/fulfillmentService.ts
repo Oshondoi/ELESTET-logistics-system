@@ -1116,6 +1116,14 @@ export interface FulfillmentBoxExcelImportResult {
   archived_kiz: number
   total_positions: number
   total_units: number
+  box_results: Array<{
+    box_number: number
+    action: 'create_empty' | 'create_filled' | 'replace' | 'fill_first' | 'unchanged'
+    old_positions: number
+    old_units: number
+    new_positions: number
+    new_units: number
+  }>
 }
 
 /** Atomically replaces the contents of only the box numbers present in an Excel import. */
