@@ -43,6 +43,7 @@ import {
   fetchArchivedTripLines as fetchArchivedTripLinesInSupabase,
   syncWbSupplySummary as syncWbSupplySummaryInSupabase,
   type WbSupplySummary,
+  type WbSupplySyncResult,
   getWbSupplyPackageCodes as getWbSupplyPackageCodesInSupabase,
   updateTripLineTripId as updateTripLineTripIdInSupabase,
 } from '../services/tripService'
@@ -836,14 +837,14 @@ export const useAppData = (accountId: string | null) => {
     )
   }
 
-  const refreshWbSupply = async (tripId: string, lineId: string): Promise<WbSupplySummary> => {
+  const refreshWbSupply = async (tripId: string, lineId: string): Promise<WbSupplySyncResult> => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
-    const summary = await syncWbSupplySummaryInSupabase(accountId, lineId)
-    applyWbSupplySummary(tripId, lineId, summary)
-    return summary
+    const result = await syncWbSupplySummaryInSupabase(accountId, lineId)
+    applyWbSupplySummary(tripId, lineId, result.summary)
+    return result
   }
 
-  const refreshTripWbSupplies = async (tripId: string): Promise<{ updated: number; failed: number; errors: string[] }> => {
+  const refreshTripWbSupplies = async (tripId: string): Promise<{ updated: number; failed: number; errors: string[]; warnings: string[] }> => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const lines = trips.find((trip) => trip.id === tripId)?.lines
       .filter((line) => /^\d+$/.test(line.wb_supply_id?.trim() ?? '')) ?? []
@@ -851,11 +852,13 @@ export const useAppData = (accountId: string | null) => {
 
     let updated = 0
     const errors: string[] = []
+    const warnings: string[] = []
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index]
       try {
-        const summary = await syncWbSupplySummaryInSupabase(accountId, line.id)
-        applyWbSupplySummary(tripId, line.id, summary)
+        const result = await syncWbSupplySummaryInSupabase(accountId, line.id)
+        applyWbSupplySummary(tripId, line.id, result.summary)
+        if (result.package_sync.warning) warnings.push(`Поставка ${line.shipment_number}: ${result.package_sync.warning}`)
         updated += 1
       } catch (error) {
         errors.push(`Поставка ${line.shipment_number}: ${error instanceof Error ? error.message : String(error)}`)
@@ -863,7 +866,7 @@ export const useAppData = (accountId: string | null) => {
       // Official FBW details limit is 30 requests/minute. Stay under it.
       if (index < lines.length - 1) await new Promise((resolve) => window.setTimeout(resolve, 2100))
     }
-    return { updated, failed: errors.length, errors }
+    return { updated, failed: errors.length, errors, warnings }
   }
 
   const downloadWbExcel = async (

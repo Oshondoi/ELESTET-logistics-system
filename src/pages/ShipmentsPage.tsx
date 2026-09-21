@@ -16,6 +16,7 @@ import {
 } from '../services/columnConfigService'
 import { fetchExecutorOptions } from '../services/outsourceService'
 import { fetchIncomingTripLineTransfers } from '../services/tripService'
+import type { WbSupplySyncResult } from '../services/tripService'
 
 const pluralize = (count: number, one: string, few: string, many: string) => {
   const mod10 = count % 10
@@ -58,8 +59,8 @@ interface ShipmentsPageProps {
   onFetchWbBarcodes: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onDownloadWbExcel?: (tripId: string, lineId: string, type: 'goods' | 'boxes' | 'all') => Promise<void>
-  onRefreshWbSupply?: (tripId: string, lineId: string) => Promise<unknown>
-  onRefreshTripWbSupplies?: (tripId: string) => Promise<{ updated: number; failed: number; errors: string[] }>
+  onRefreshWbSupply?: (tripId: string, lineId: string) => Promise<WbSupplySyncResult>
+  onRefreshTripWbSupplies?: (tripId: string) => Promise<{ updated: number; failed: number; errors: string[]; warnings: string[] }>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveWbPass: (tripId: string, lineId: string, index: number) => Promise<void>
   onUpdateTripCustomFields?: (tripId: string, fields: Record<string, unknown>) => Promise<void>

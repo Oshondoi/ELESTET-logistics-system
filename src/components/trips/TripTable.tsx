@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { cn, formatDate, pluralRu } from '../../lib/utils'
 import type { ColumnConfig, CustomColDef } from '../../services/columnConfigService'
 import { DEFAULT_COLUMN_CONFIG } from '../../services/columnConfigService'
+import type { WbSupplySyncResult } from '../../services/tripService'
 import type { ExecutorOption, PaymentStatus, ShipmentStatus, Store, TripFormValues, TripLineFormValues, TripLineWithStore, TripStatus, TripWithLines } from '../../types'
 import { tripStatuses, shipmentStatuses, paymentStatuses } from '../../lib/constants'
 import { supabase } from '../../lib/supabase'
@@ -265,8 +266,8 @@ interface TripTableProps {
   onSaveWbSupplyId: (tripId: string, lineId: string, wbSupplyId: string) => Promise<void>
   onDownloadWbExcel?: (tripId: string, lineId: string, type: 'goods' | 'boxes' | 'all') => Promise<void>
   isOwnerOrAdmin?: boolean
-  onRefreshWbSupply?: (tripId: string, lineId: string) => Promise<unknown>
-  onRefreshTripWbSupplies?: (tripId: string) => Promise<{ updated: number; failed: number; errors: string[] }>
+  onRefreshWbSupply?: (tripId: string, lineId: string) => Promise<WbSupplySyncResult>
+  onRefreshTripWbSupplies?: (tripId: string) => Promise<{ updated: number; failed: number; errors: string[]; warnings: string[] }>
   onUploadWbPass: (tripId: string, lineId: string, file: File) => Promise<void>
   onRemoveWbPass: (tripId: string, lineId: string, index: number) => Promise<void>
   canManage?: boolean
@@ -507,7 +508,7 @@ export const TripTable = ({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [refreshingCargoIds, setRefreshingCargoIds] = useState<Set<string>>(new Set())
   const [refreshingTripIds, setRefreshingTripIds] = useState<Set<string>>(new Set())
-  const [syncNotice, setSyncNotice] = useState<{ tone: 'success' | 'error'; text: string } | null>(null)
+  const [syncNotice, setSyncNotice] = useState<{ tone: 'success' | 'warning' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
     onExpandedCountChange?.(expandedIds.size)
@@ -656,8 +657,10 @@ export const TripTable = ({
     if (!onRefreshWbSupply) return
     setRefreshingCargoIds((current) => new Set(current).add(lineId))
     try {
-      await onRefreshWbSupply(tripId, lineId)
-      setSyncNotice({ tone: 'success', text: 'Данные поставки WB обновлены.' })
+      const result = await onRefreshWbSupply(tripId, lineId)
+      setSyncNotice(result.package_sync.warning
+        ? { tone: 'warning', text: `Статус и даты WB обновлены. ${result.package_sync.warning}` }
+        : { tone: 'success', text: `Данные поставки WB обновлены. Привязано ШК коробов: ${result.package_sync.mapped_count}.` })
     } catch (error) {
       setSyncNotice({ tone: 'error', text: error instanceof Error ? error.message : String(error) })
       throw error
@@ -672,9 +675,10 @@ export const TripTable = ({
     try {
       const result = await onRefreshTripWbSupplies(tripId)
       const suffix = result.failed > 0 ? ` Не обновлено: ${result.failed}. ${result.errors.join(' ')}` : ''
+      const warnings = result.warnings.length > 0 ? ` ${result.warnings.join(' ')}` : ''
       setSyncNotice({
-        tone: result.failed > 0 ? 'error' : 'success',
-        text: `Обновлено поставок WB: ${result.updated}.${suffix}`,
+        tone: result.failed > 0 ? 'error' : result.warnings.length > 0 ? 'warning' : 'success',
+        text: `Обновлено поставок WB: ${result.updated}.${suffix}${warnings}`,
       })
     } catch (error) {
       setSyncNotice({ tone: 'error', text: error instanceof Error ? error.message : String(error) })
@@ -784,7 +788,9 @@ export const TripTable = ({
           'fixed right-5 top-5 z-[10000] max-w-md rounded-2xl px-4 py-3 text-sm shadow-xl ring-1',
           syncNotice.tone === 'success'
             ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
-            : 'bg-rose-50 text-rose-700 ring-rose-200',
+            : syncNotice.tone === 'warning'
+              ? 'bg-amber-50 text-amber-800 ring-amber-200'
+              : 'bg-rose-50 text-rose-700 ring-rose-200',
         )}>
           {syncNotice.text}
         </div>,

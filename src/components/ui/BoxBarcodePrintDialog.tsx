@@ -68,7 +68,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
       await onIdSaved?.(id)
     }
     const codes = await getWbFulfillmentSupplyPackageCodes(supply.account_id, supply.id)
-    if (codes.length === 0) throw new Error('WB пока не вернул коды коробов этой поставки')
+    if (codes.length === 0) throw new Error(`WB вернул 0 ШК коробов. В ELESTET создано ${supply.boxes.length}. Сформируйте упаковку этой поставки в WB и повторите синхронизацию.`)
     if (codes.length !== supply.boxes.length) throw new Error(`WB вернул ${codes.length} ШК, а в поставке ELESTET ${supply.boxes.length} коробов. Сверьте упаковку перед привязкой.`)
     await assignFulfillmentWbBoxCodes(supply.id, codes)
     setLastMappedCount((current) => ({ ...current, [supply.id]: codes.length }))
@@ -89,7 +89,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
     .map((box) => ({ supply, box })))
     .sort((left, right) => left.supply.supply_number - right.supply.supply_number || left.box.box_number - right.box.box_number)
   const allMapped = visible.length > 0 && visible.every(({ supply, box }) => supply.wb_supply_id && box.wb_barcode)
-  const wbAvailable = supplies.length > 0 && supplies.every((supply) => supply.destination_type === 'fbo') && allMapped
+  const wbAvailable = supplies.length > 0 && allMapped
 
   const makePdf = () => {
     if (accountShortId == null || batchShortId == null) throw new Error('Не найден номер компании или партии')
@@ -148,12 +148,12 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
         <div className="space-y-4 overflow-y-auto p-5">
           {supplies.map((supply) => <section key={supply.id} className="rounded-xl border border-slate-200 p-3">
             <p className="text-sm font-semibold text-slate-800">Поставка S{supply.supply_number} · {supply.warehouse_name}</p>
-            {allowSupplyMapping && !boxId && supply.destination_type === 'fbo' && <div className="mt-2 flex flex-wrap items-center gap-2">
+            {allowSupplyMapping && !boxId && <div className="mt-2 flex flex-wrap items-center gap-2">
               <label className="text-xs text-slate-500" htmlFor={`wb-id-${supply.id}`}>ID поставки WB</label>
               <input id={`wb-id-${supply.id}`} inputMode="numeric" value={idDraft[supply.id] ?? ''} onChange={(event) => setIdDraft((current) => ({ ...current, [supply.id]: event.target.value }))} placeholder="Числовой ID FBW-поставки" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm" />
               <button type="button" disabled={working || (idDraft[supply.id] ?? '') === (supply.wb_supply_id ?? '')} onClick={() => void saveWbSupplyId(supply)} className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 disabled:opacity-40">Сохранить ID</button>
             </div>}
-            {allowSupplyMapping && !boxId && supply.destination_type === 'fbo' && <div className="mt-2 flex flex-wrap items-center gap-2">
+            {allowSupplyMapping && !boxId && <div className="mt-2 flex flex-wrap items-center gap-2">
               <button type="button" disabled={working || !(idDraft[supply.id] ?? '').trim()} onClick={() => void fetchCodes(supply)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-blue-700 disabled:opacity-40">{supply.boxes.some((box) => box.wb_barcode) ? 'Обновить ШК из WB' : 'Получить и привязать ШК из WB'}</button>
               <span className="text-xs text-slate-400">{lastMappedCount[supply.id] ? `Обновлено ${lastMappedCount[supply.id]} ШК: первый из актуального ответа WB → короб №1 и далее по номеру` : 'Каждое нажатие заново получает актуальные ШК из WB и заменяет прежнюю привязку'}</span>
             </div>}

@@ -148,7 +148,6 @@ begin
   where id = p_supply_id
   for update;
   if not found then raise exception 'Поставка не найдена или недоступна'; end if;
-  if v_supply.destination_type <> 'fbo' then raise exception 'ШК WB доступны только для FBO-поставки'; end if;
   if nullif(btrim(v_supply.wb_supply_id), '') is null then raise exception 'Сначала укажите ID поставки WB'; end if;
 
   select count(*) into v_box_count

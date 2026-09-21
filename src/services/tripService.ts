@@ -594,8 +594,21 @@ export type WbSupplySummary = Pick<TripLine,
   | 'wb_actual_warehouse_name'
   | 'wb_transit_warehouse_id'
   | 'wb_transit_warehouse_name'
+  | 'wb_package_codes'
   | 'wb_synced_at'
 >
+
+export interface WbPackageSyncResult {
+  package_count: number
+  box_count: number | null
+  mapped_count: number
+  warning: string | null
+}
+
+export interface WbSupplySyncResult {
+  summary: WbSupplySummary
+  package_sync: WbPackageSyncResult
+}
 
 const wbInvokeError = (error: unknown) => {
   const message = (error as { message?: string } | null)?.message ?? String(error)
@@ -608,9 +621,13 @@ const wbInvokeError = (error: unknown) => {
 export const syncWbSupplySummary = async (
   accountId: string,
   lineId: string,
-): Promise<WbSupplySummary> => {
+): Promise<WbSupplySyncResult> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase.functions.invoke<{ summary?: WbSupplySummary; error?: string }>(
+  const { data, error } = await supabase.functions.invoke<{
+    summary?: WbSupplySummary
+    package_sync?: WbPackageSyncResult
+    error?: string
+  }>(
     'wb-supply',
     { body: { account_id: accountId, line_id: lineId, action: 'sync_summary' } },
   )
@@ -618,7 +635,15 @@ export const syncWbSupplySummary = async (
   if (!data) throw new Error('Пустой ответ от сервера. Попробуйте ещё раз.')
   if (data.error) throw new Error(data.error)
   if (!data.summary) throw new Error('WB не вернул данные поставки.')
-  return data.summary
+  return {
+    summary: data.summary,
+    package_sync: data.package_sync ?? {
+      package_count: data.summary.wb_package_codes?.length ?? 0,
+      box_count: null,
+      mapped_count: 0,
+      warning: 'Статус поставки обновлён, но сервер не вернул результат синхронизации ШК коробов.',
+    },
+  }
 }
 
 /** Получить штрихкоды поставки FBW через WB API (Edge Function) */

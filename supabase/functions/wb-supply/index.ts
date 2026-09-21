@@ -76,6 +76,99 @@ interface WbSupplyGood {
   acceptedQuantity?: number
 }
 
+interface PackageSyncResult {
+  package_count: number
+  box_count: number | null
+  mapped_count: number
+  warning: string | null
+}
+
+async function syncPackagesToElestet(
+  db: ReturnType<typeof createClient>,
+  accountId: string,
+  packages: WbPackage[],
+  lineId?: string,
+  fulfillmentSupplyId?: string,
+): Promise<PackageSyncResult> {
+  const packageCodes = packages.map((item) => item.packageCode?.trim()).filter((code): code is string => Boolean(code))
+
+  if (packageCodes.length !== packages.length || new Set(packageCodes).size !== packageCodes.length) {
+    throw new Error('WB вернул пустые или повторяющиеся ШК коробов. Привязка отменена.')
+  }
+
+  let resolvedSupplyId = fulfillmentSupplyId || ''
+  let resolvedLineId = lineId || ''
+
+  if (resolvedSupplyId) {
+    const { data: supply, error } = await db.from('fulfillment_supplies')
+      .select('id, trip_line_id')
+      .eq('id', resolvedSupplyId)
+      .eq('account_id', accountId)
+      .maybeSingle()
+    if (error) throw error
+    if (!supply) throw new Error('Поставка Фулфилмента не найдена')
+    resolvedLineId = resolvedLineId || supply.trip_line_id || ''
+  } else if (resolvedLineId) {
+    const { data: line, error: lineError } = await db.from('trip_lines')
+      .select('fulfillment_supply_id')
+      .eq('id', resolvedLineId)
+      .eq('account_id', accountId)
+      .maybeSingle()
+    if (lineError) throw lineError
+    resolvedSupplyId = line?.fulfillment_supply_id || ''
+
+    if (!resolvedSupplyId) {
+      const { data: supply, error: supplyError } = await db.from('fulfillment_supplies')
+        .select('id')
+        .eq('trip_line_id', resolvedLineId)
+        .eq('account_id', accountId)
+        .maybeSingle()
+      if (supplyError) throw supplyError
+      resolvedSupplyId = supply?.id || ''
+    }
+  }
+
+  if (resolvedLineId) {
+    const { error } = await db.from('trip_lines').update({
+      wb_package_codes: packageCodes,
+      wb_packages_snapshot: packages,
+    }).eq('id', resolvedLineId).eq('account_id', accountId)
+    if (error) throw error
+  }
+
+  if (!resolvedSupplyId) {
+    return { package_count: packageCodes.length, box_count: null, mapped_count: 0, warning: null }
+  }
+
+  const { count: boxCount, error: countError } = await db.from('fulfillment_boxes')
+    .select('id', { count: 'exact', head: true })
+    .eq('supply_id', resolvedSupplyId)
+    .eq('account_id', accountId)
+  if (countError) throw countError
+  const expectedBoxCount = boxCount ?? 0
+
+  if (packageCodes.length === 0 || packageCodes.length !== expectedBoxCount) {
+    const { error: clearError } = await db.from('fulfillment_boxes')
+      .update({ wb_barcode: null })
+      .eq('supply_id', resolvedSupplyId)
+      .eq('account_id', accountId)
+    if (clearError) throw clearError
+
+    const warning = packageCodes.length === 0
+      ? `WB вернул 0 ШК коробов. В поставке ELESTET ${expectedBoxCount} коробов. Сформируйте упаковку в WB и повторите синхронизацию.`
+      : `WB вернул ${packageCodes.length} ШК коробов, а в поставке ELESTET ${expectedBoxCount}. Привязка не выполнена до совпадения количества.`
+    return { package_count: packageCodes.length, box_count: expectedBoxCount, mapped_count: 0, warning }
+  }
+
+  const { error: assignError } = await db.rpc('assign_fulfillment_wb_box_codes', {
+    p_supply_id: resolvedSupplyId,
+    p_codes: packageCodes,
+  })
+  if (assignError) throw new Error(`Не удалось привязать ШК WB к коробам ELESTET: ${assignError.message}`)
+
+  return { package_count: packageCodes.length, box_count: expectedBoxCount, mapped_count: packageCodes.length, warning: null }
+}
+
 async function wbError(resp: Response): Promise<Error> {
   let detail = ''
   try {
@@ -255,9 +348,9 @@ Deno.serve(async (req) => {
       .eq('account_id', account_id).eq('user_id', authData.user.id).maybeSingle()
     if (!membership) return jsonError('Нет доступа к этой компании')
     const { data: supply } = await db.from('fulfillment_supplies')
-      .select('id, account_id, batch_id, wb_supply_id, destination_type')
+      .select('id, account_id, batch_id, trip_line_id, wb_supply_id')
       .eq('id', fulfillment_supply_id).eq('account_id', account_id).maybeSingle()
-    if (!supply || supply.destination_type !== 'fbo') return jsonError('FBO-поставка не найдена')
+    if (!supply) return jsonError('Поставка Фулфилмента не найдена')
     if (!supply.wb_supply_id) return jsonError('Сначала привяжите ID поставки WB')
     const { data: batch } = await db.from('fulfillment_batches')
       .select('store_id').eq('id', supply.batch_id).eq('account_id', account_id).maybeSingle()
@@ -269,7 +362,14 @@ Deno.serve(async (req) => {
       const cargoType = await fetchSupplyCargoType(batchStore.api_key, supply.wb_supply_id)
       if (cargoType === 2) return jsonError('WB-поставка оформлена как паллеты. Поштучная привязка ШК коробов для неё недоступна.')
       const packages = await fetchPackages(batchStore.api_key, supply.wb_supply_id)
-      return jsonOk({ package_codes: packages.map((pkg) => pkg.packageCode) })
+      const packageSync = await syncPackagesToElestet(
+        db,
+        account_id,
+        packages,
+        supply.trip_line_id || undefined,
+        fulfillment_supply_id,
+      )
+      return jsonOk({ package_codes: packages.map((pkg) => pkg.packageCode), package_sync: packageSync })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
     }
@@ -310,7 +410,8 @@ Deno.serve(async (req) => {
   if (action === 'package_info') {
     try {
       const packages = await fetchPackages(apiKey, supplyId)
-      return jsonOk({ package_codes: packages.map((p) => p.packageCode) })
+      const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
+      return jsonOk({ package_codes: packages.map((p) => p.packageCode), package_sync: packageSync })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
     }
@@ -319,12 +420,18 @@ Deno.serve(async (req) => {
   // Full WB summary. `mp_date` remains as a compatibility alias for old clients.
   if (action === 'sync_summary' || action === 'mp_date') {
     try {
-      const details = await fetchSupplyDetails(apiKey, supplyId)
-      const summary = supplySummary(details)
+      const [details, packages] = await Promise.all([
+        fetchSupplyDetails(apiKey, supplyId),
+        fetchPackages(apiKey, supplyId),
+      ])
+      const packageCodes = packages.map((item) => item.packageCode)
+      const summary = { ...supplySummary(details), wb_package_codes: packageCodes }
       const { error } = await db.from('trip_lines').update(summary).eq('id', line_id).eq('account_id', account_id)
       if (error) throw error
+      const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
       return jsonOk({
         summary,
+        package_sync: packageSync,
         mp_date: summary.planned_marketplace_delivery_date,
         fact_date: summary.wb_acceptance_date,
       })
@@ -350,7 +457,8 @@ Deno.serve(async (req) => {
       }
       const { error } = await db.from('trip_lines').update(updates).eq('id', line_id).eq('account_id', account_id)
       if (error) throw error
-      return jsonOk({ summary, goods, packages })
+      const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
+      return jsonOk({ summary: updates, goods, packages, package_sync: packageSync })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
     }
@@ -373,6 +481,7 @@ Deno.serve(async (req) => {
       wb_packages_snapshot: packages,
     }).eq('id', line_id).eq('account_id', account_id)
     if (error) throw error
+    const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
     const pdfBytes = await buildPdf(packages)
     const stickerUrl = await uploadPdf(db, account_id, line_id, pdfBytes, 'qr-stickers')
     return jsonOk({
@@ -380,6 +489,7 @@ Deno.serve(async (req) => {
       sticker_urls: [stickerUrl],
       cargo_type: summary.wb_cargo_type,
       package_codes: packageCodes,
+      package_sync: packageSync,
       summary,
     })
   } catch (e) {
