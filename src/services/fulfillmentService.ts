@@ -1104,6 +1104,42 @@ export const incrementBoxItem = async (data: {
   return row as FulfillmentBoxItem
 }
 
+export interface FulfillmentBoxExcelImportRow {
+  barcode: string
+  qty: number
+  box_number: number
+}
+
+export interface FulfillmentBoxExcelImportResult {
+  affected_boxes: number
+  created_boxes: number
+  archived_kiz: number
+  total_positions: number
+  total_units: number
+}
+
+/** Atomically replaces the contents of only the box numbers present in an Excel import. */
+export const replaceFulfillmentBoxContentsFromExcel = async (data: {
+  supply_id: string
+  rows: FulfillmentBoxExcelImportRow[]
+  filename: string
+  context: FulfillmentKizAuditContext
+}): Promise<FulfillmentBoxExcelImportResult> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data: result, error } = await (supabase as any).rpc('replace_fulfillment_box_contents_from_excel', {
+    p_supply_id: data.supply_id,
+    p_rows: data.rows,
+    p_filename: data.filename,
+    p_actor_name: data.context.actor_name,
+    p_actor_email: data.context.actor_email,
+    p_device_id: data.context.device_id,
+    p_device_name: data.context.device_name,
+    p_scanner_model: data.context.scanner_model,
+  })
+  if (error) throw error
+  return result as FulfillmentBoxExcelImportResult
+}
+
 export const transferSupplyToLogistics = async (
   supplyId: string,
   tripId: string,

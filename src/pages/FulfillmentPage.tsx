@@ -116,6 +116,7 @@ import { GS_SEPARATOR, scannerCharacterFromKeyboardCode } from '../lib/scannerIn
 import { showScanSuccess } from '../components/ui/ScanSuccessOverlay'
 import { FulfillmentKizPairsModal } from '../components/fulfillment/FulfillmentKizPairsModal'
 import { FulfillmentElestetScanner } from '../components/fulfillment/FulfillmentElestetScanner'
+import { FulfillmentBoxExcelDialog } from '../components/fulfillment/FulfillmentBoxExcelDialog'
 import {
   buildFulfillmentBoxContentsPdf,
   type FulfillmentBoxContentsFormat,
@@ -996,6 +997,7 @@ const BatchDetailModal = ({
   const [packingAutoAdd, setPackingAutoAdd] = useState(() => localStorage.getItem(packingAutoAddStorageKey) === 'true')
   const [boxExportSelectedOptionalColumns, setBoxExportSelectedOptionalColumns] = useState<OptionalBoxExportColumnKey[]>(getStoredBoxExportColumns)
   const [boxExportDialog, setBoxExportDialog] = useState<{ supplyId: string; boxId?: string } | null>(null)
+  const [boxExcelSupplyId, setBoxExcelSupplyId] = useState<string | null>(null)
   const [boxExportMode, setBoxExportMode] = useState<FulfillmentExcelMode>('boxes')
   const [boxQrDialog, setBoxQrDialog] = useState<{ supplyId: string; boxId: string } | null>(null)
   const [boxPrintSupplyIds, setBoxPrintSupplyIds] = useState<string[] | null>(null)
@@ -1524,6 +1526,7 @@ const BatchDetailModal = ({
     || deleteBoxItemConfirm
     || deleteSupplyConfirm
     || boxExportDialog
+    || boxExcelSupplyId
     || boxQrDialog
     || transferSupplyId
     || packingCameraOpen
@@ -6887,6 +6890,20 @@ const BatchDetailModal = ({
                                 >
                                   <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
                                 </button>
+                                {canManageStageData && !readyBoxSupply && (
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      setBoxExcelSupplyId(supply.id)
+                                    }}
+                                    className="flex h-7 items-center justify-center rounded-lg bg-emerald-50 px-2 text-[10px] font-black text-emerald-700 transition-colors hover:bg-emerald-100 hover:text-emerald-800"
+                                    title="Скачать шаблон или загрузить содержимое коробов из Excel"
+                                    aria-label="Действия с Excel для поставки"
+                                  >
+                                    Excel
+                                  </button>
+                                )}
                               </div>
                               {canTransferLateSupply && (
                                 <button
@@ -10022,6 +10039,32 @@ const BatchDetailModal = ({
             readOnly={!canManageStageData || isShippedFbo}
             onClose={() => setPackingKizList(null)}
             onChanged={() => refreshPackingKizData(supply.id)}
+          />
+        )
+      })()}
+      {boxExcelSupplyId && (() => {
+        const supply = supplies.find((candidate) => candidate.id === boxExcelSupplyId)
+        if (!supply) return null
+        return (
+          <FulfillmentBoxExcelDialog
+            supply={supply}
+            batchNumber={batch.short_id}
+            batchItems={items}
+            auditContext={packingKizAuditContext}
+            onClose={() => setBoxExcelSupplyId(null)}
+            onImported={async () => {
+              const refreshed = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
+              setSupplies(refreshed)
+              rebuildSlotsFromSupplies(refreshed)
+              if (activeSupplyId === supply.id) {
+                const activeBoxStillExists = refreshed
+                  .find((candidate) => candidate.id === supply.id)
+                  ?.boxes.some((box) => box.id === packingOpenBoxId)
+                if (!activeBoxStillExists) setPackingOpenBoxId(null)
+                const pairs = await fetchFulfillmentKizPairs(supply.id)
+                setPackingKizPairs(pairs)
+              }
+            }}
           />
         )
       })()}
