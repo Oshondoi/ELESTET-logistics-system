@@ -7,8 +7,12 @@ export interface FulfillmentBoxQrLabel {
   batchShortId: number
   supplyNumber: number
   boxNumber: number
-  storeName: string
+  sellerName: string
   warehouseName: string
+  itemQuantity: number
+  wbSupplyId: string
+  plannedDeliveryDate: string
+  wbCargoType: number | null
 }
 
 const LABEL_WIDTH_MM = 60
@@ -47,6 +51,17 @@ const fitCanvasText = (
   }
   ctx.font = `${weight} ${size}px Arial, sans-serif`
   return size
+}
+
+const formatShortDate = (value: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value)
+  return match ? `${match[3]}.${match[2]}.${match[1].slice(2)}` : value
+}
+
+const cargoTypeLabel = (value: number | null) => {
+  if (value === 1) return 'Короб'
+  if (value === 2) return 'Паллета'
+  return ''
 }
 
 /**
@@ -124,21 +139,43 @@ const renderInfoBlock = (label: FulfillmentBoxQrLabel) => {
   const left = 6
   const maxWidth = canvas.width - left * 2
 
-  ctx.font = '700 35px Arial, sans-serif'
-  ctx.fillText(`КОРОБ №${label.boxNumber}`, left, 41)
+  let prefixSize = 28
+  let numberSize = 42
+  const headerPrefix = 'КОРОБ №'
+  const headerNumber = String(label.boxNumber)
+  while (prefixSize > 20) {
+    ctx.font = `700 ${prefixSize}px Arial, sans-serif`
+    const prefixWidth = ctx.measureText(headerPrefix).width
+    ctx.font = `900 ${numberSize}px Arial, sans-serif`
+    if (prefixWidth + ctx.measureText(headerNumber).width <= maxWidth) break
+    prefixSize -= 1
+    numberSize -= 1
+  }
+  ctx.fillStyle = '#0f172a'
+  ctx.font = `700 ${prefixSize}px Arial, sans-serif`
+  ctx.fillText(headerPrefix, left, 27)
+  const numberLeft = left + ctx.measureText(headerPrefix).width
+  ctx.font = `900 ${numberSize}px Arial, sans-serif`
+  ctx.fillText(headerNumber, numberLeft, 27)
 
-  const store = label.storeName?.trim() || 'Магазин не указан'
-  fitCanvasText(ctx, store, maxWidth, 27, 18, 700)
-  ctx.fillText(store, left, 111)
+  const lines: Array<{ text: string; weight?: number; color?: string }> = []
+  if (label.sellerName?.trim()) lines.push({ text: label.sellerName.trim(), weight: 700 })
+  if (label.warehouseName?.trim()) lines.push({ text: `Склад: ${label.warehouseName.trim()}`, weight: 700 })
+  lines.push({ text: `Партия P${label.batchShortId} · Поставка S${label.supplyNumber}` })
+  lines.push({ text: `Кол-во товаров: ${label.itemQuantity} шт`, weight: 700 })
+  if (label.wbSupplyId?.trim()) lines.push({ text: `ВБ поставка: ${label.wbSupplyId.trim()}`, weight: 700 })
+  if (label.plannedDeliveryDate?.trim()) lines.push({ text: `Плановая дата: ${formatShortDate(label.plannedDeliveryDate.trim())}` })
+  const packageType = cargoTypeLabel(label.wbCargoType)
+  if (packageType) lines.push({ text: `Тип поставки: ${packageType}` })
 
-  const warehouse = label.warehouseName?.trim() || 'Склад не указан'
-  fitCanvasText(ctx, warehouse, maxWidth, 25, 17, 600)
-  ctx.fillText(warehouse, left, 159)
-
-  ctx.fillStyle = '#334155'
-  ctx.font = '600 23px Arial, sans-serif'
-  ctx.fillText(`Партия P${label.batchShortId}`, left, 237)
-  ctx.fillText(`Поставка S${label.supplyNumber}`, left, 287)
+  const firstLineY = 74
+  const lastLineY = canvas.height - 22
+  const lineStep = lines.length > 1 ? (lastLineY - firstLineY) / (lines.length - 1) : 0
+  lines.forEach((line, index) => {
+    ctx.fillStyle = line.color ?? (index < 2 ? '#0f172a' : '#334155')
+    fitCanvasText(ctx, line.text, maxWidth, index < 2 ? 23 : 21, 15, line.weight ?? 600)
+    ctx.fillText(line.text, left, firstLineY + lineStep * index)
+  })
 
   return canvas.toDataURL('image/png')
 }

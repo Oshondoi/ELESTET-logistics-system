@@ -16,11 +16,18 @@ interface Props {
   onIdSaved?: (id: string) => Promise<void>
 }
 
+interface SupplyPrintMetadata {
+  wbWarehouseName: string
+  plannedDeliveryDate: string
+  wbCargoType: number | null
+}
+
 export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = false, onClose, onSaved, onIdSaved }: Props) => {
   const [supplies, setSupplies] = useState<FulfillmentSupplyWithBoxes[]>([])
   const [accountShortId, setAccountShortId] = useState<number | null>(null)
   const [batchShortId, setBatchShortId] = useState<number | null>(null)
-  const [storeName, setStoreName] = useState('')
+  const [sellerName, setSellerName] = useState('')
+  const [printMetadata, setPrintMetadata] = useState<Record<string, SupplyPrintMetadata>>({})
   const [tab, setTab] = useState<'system' | 'wb'>('system')
   const [idDraft, setIdDraft] = useState<Record<string, string>>({})
   const [lastMappedCount, setLastMappedCount] = useState<Record<string, number>>({})
@@ -39,23 +46,43 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
     ])
     if (accountResult.error) throw accountResult.error
     if (batchResult.error) throw batchResult.error
-    let resolvedStoreName = ''
+    let resolvedSellerName = ''
     if (batchResult.data?.store_id) {
       const { data: store, error: storeError } = await (supabase as any)
         .from('stores')
-        .select('name')
+        .select('name,supplier,supplier_full')
         .eq('id', batchResult.data.store_id)
         .eq('account_id', first.account_id)
         .maybeSingle()
       if (storeError) throw storeError
-      resolvedStoreName = store?.name?.trim() ?? ''
+      resolvedSellerName = store?.supplier_full?.trim()
+        || store?.supplier?.trim()
+        || store?.name?.trim()
+        || ''
     }
     const selected = rows.filter((row) => supplyIds.includes(row.id))
     if (selected.length !== supplyIds.length) throw new Error('Часть поставок недоступна')
+    const tripLineIds = [...new Set(selected.map((row) => row.trip_line_id).filter((id): id is string => Boolean(id)))]
+    const nextPrintMetadata: Record<string, SupplyPrintMetadata> = {}
+    if (tripLineIds.length > 0) {
+      const { data: tripLines, error: tripLinesError } = await (supabase as any)
+        .from('trip_lines')
+        .select('id,wb_warehouse_name,planned_marketplace_delivery_date,wb_cargo_type')
+        .in('id', tripLineIds)
+      if (tripLinesError) throw tripLinesError
+      for (const line of tripLines ?? []) {
+        nextPrintMetadata[line.id] = {
+          wbWarehouseName: line.wb_warehouse_name?.trim() ?? '',
+          plannedDeliveryDate: line.planned_marketplace_delivery_date ?? '',
+          wbCargoType: typeof line.wb_cargo_type === 'number' ? line.wb_cargo_type : null,
+        }
+      }
+    }
     setSupplies(selected)
     setAccountShortId(accountResult.data?.short_id ?? null)
     setBatchShortId(batchResult.data?.short_id ?? null)
-    setStoreName(resolvedStoreName)
+    setSellerName(resolvedSellerName)
+    setPrintMetadata(nextPrintMetadata)
     setIdDraft(Object.fromEntries(selected.map((row) => [row.id, row.wb_supply_id ?? ''])))
   }, [supplyIds])
 
@@ -114,8 +141,18 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
       batchShortId,
       supplyNumber: supply.supply_number,
       boxNumber: box.box_number,
-      storeName,
-      warehouseName: supply.warehouse_name,
+      sellerName,
+      warehouseName: supply.destination_type === 'fbo' && supply.wb_supply_id && supply.trip_line_id
+        ? printMetadata[supply.trip_line_id]?.wbWarehouseName || supply.warehouse_name
+        : supply.warehouse_name,
+      itemQuantity: box.items.reduce((total, item) => total + item.qty, 0),
+      wbSupplyId: supply.destination_type === 'fbo' ? supply.wb_supply_id ?? '' : '',
+      plannedDeliveryDate: supply.destination_type === 'fbo' && supply.wb_supply_id && supply.trip_line_id
+        ? printMetadata[supply.trip_line_id]?.plannedDeliveryDate ?? ''
+        : '',
+      wbCargoType: supply.destination_type === 'fbo' && supply.wb_supply_id && supply.trip_line_id
+        ? printMetadata[supply.trip_line_id]?.wbCargoType ?? null
+        : null,
     }))
     return buildFulfillmentBoxQrPdf(labels)
   }
@@ -160,12 +197,12 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
         <div className="space-y-4 overflow-y-auto p-5">
           {supplies.map((supply) => <section key={supply.id} className="rounded-xl border border-slate-200 p-3">
             <p className="text-sm font-semibold text-slate-800">Поставка S{supply.supply_number} · {supply.warehouse_name}</p>
-            {allowSupplyMapping && !boxId && <div className="mt-2 flex flex-wrap items-center gap-2">
+            {allowSupplyMapping && !boxId && supply.destination_type === 'fbo' && <div className="mt-2 flex flex-wrap items-center gap-2">
               <label className="text-xs text-slate-500" htmlFor={`wb-id-${supply.id}`}>ID поставки WB</label>
               <input id={`wb-id-${supply.id}`} inputMode="numeric" value={idDraft[supply.id] ?? ''} onChange={(event) => setIdDraft((current) => ({ ...current, [supply.id]: event.target.value }))} placeholder="Числовой ID FBW-поставки" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm" />
               <button type="button" disabled={working || (idDraft[supply.id] ?? '') === (supply.wb_supply_id ?? '')} onClick={() => void saveWbSupplyId(supply)} className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 disabled:opacity-40">Сохранить ID</button>
             </div>}
-            {allowSupplyMapping && !boxId && <div className="mt-2 flex flex-wrap items-center gap-2">
+            {allowSupplyMapping && !boxId && supply.destination_type === 'fbo' && <div className="mt-2 flex flex-wrap items-center gap-2">
               <button type="button" disabled={working || !(idDraft[supply.id] ?? '').trim()} onClick={() => void fetchCodes(supply)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-blue-700 disabled:opacity-40">{supply.boxes.some((box) => box.wb_barcode || box.wb_external_barcode) ? 'Обновить ШК из WB' : 'Получить и привязать ШК из WB'}</button>
               <span className="text-xs text-slate-400">{lastMappedCount[supply.id] ? `Обновлено ${lastMappedCount[supply.id]} ШК: первый из актуального ответа WB → короб №1 и далее по номеру` : 'Синхронизация обновляет только тот вид ШК, который вернул WB; второй вид ШК сохраняется'}</span>
             </div>}
