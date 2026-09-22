@@ -142,7 +142,9 @@ async function syncPackagesToElestet(
   if (resolvedLineId) {
     const { error } = await db.from('trip_lines').update({
       wb_packages_snapshot: packages,
-      ...(packageCodeKind === 'ordinary' || packageCodeKind === 'legacy' ? { wb_package_codes: packageCodes } : {}),
+      ...(!resolvedSupplyId && (packageCodeKind === 'ordinary' || packageCodeKind === 'legacy')
+        ? { wb_package_codes: packageCodes }
+        : {}),
     }).eq('id', resolvedLineId).eq('account_id', accountId)
     if (error) throw error
   }
@@ -151,12 +153,14 @@ async function syncPackagesToElestet(
     return { package_count: packageCodes.length, box_count: null, mapped_count: 0, warning: null }
   }
 
-  const { count: boxCount, error: countError } = await db.from('fulfillment_boxes')
-    .select('id', { count: 'exact', head: true })
+  const { data: boxes, error: boxesError } = await db.from('fulfillment_boxes')
+    .select('id, box_number, wb_barcode, wb_external_barcode')
     .eq('supply_id', resolvedSupplyId)
     .eq('account_id', accountId)
-  if (countError) throw countError
-  const expectedBoxCount = boxCount ?? 0
+    .order('box_number', { ascending: true })
+    .order('id', { ascending: true })
+  if (boxesError) throw boxesError
+  const expectedBoxCount = boxes?.length ?? 0
 
   if (packageCodes.length === 0) {
     return {
@@ -181,9 +185,27 @@ async function syncPackagesToElestet(
     }
   }
 
+  // An Excel import establishes a verified WB code -> ELESTET box identity.
+  // If WB later returns the exact same set in another order, keep that known
+  // identity instead of moving codes between boxes. A genuinely new set still
+  // follows the untouched WB response order above.
+  let codesToAssign = packageCodes
+  const existingCodes = (boxes ?? []).map((box) => (
+    packageCodeKind === 'external'
+      ? String(box.wb_external_barcode ?? '').trim()
+      : String(box.wb_barcode ?? '').trim()
+  ))
+  if (
+    existingCodes.every(Boolean)
+    && new Set(existingCodes).size === existingCodes.length
+    && existingCodes.every((code) => packageCodes.includes(code))
+  ) {
+    codesToAssign = existingCodes
+  }
+
   const { error: assignError } = await db.rpc('assign_fulfillment_wb_box_codes_by_kind', {
     p_supply_id: resolvedSupplyId,
-    p_codes: packageCodes,
+    p_codes: codesToAssign,
     p_kind: packageCodeKind,
   })
   if (assignError) throw new Error(`Не удалось привязать ШК WB к коробам ELESTET: ${assignError.message}`)
