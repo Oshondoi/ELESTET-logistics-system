@@ -217,17 +217,10 @@ async function fetchPackages(apiKey: string, supplyId: string): Promise<WbPackag
   const data = await resp.json()
   const packages = Array.isArray(data) ? (data as WbPackage[]) : []
 
-  // WB codes are generated sequentially. Keep the old, proven behaviour:
-  // the smallest WB code is assigned to ELESTET box #1, the next to box #2, etc.
-  // Do not rely on the API response order, which is not documented.
-  return packages.sort((left, right) => {
-    const leftNumber = Number.parseInt(left.packageCode?.replace(/\D/g, '') || '', 10)
-    const rightNumber = Number.parseInt(right.packageCode?.replace(/\D/g, '') || '', 10)
-    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftNumber !== rightNumber) {
-      return leftNumber - rightNumber
-    }
-    return (left.packageCode || '').localeCompare(right.packageCode || '', 'ru', { numeric: true })
-  })
+  // Position in the WB response is the only box-order signal available from
+  // this endpoint. Keep it byte-for-byte: sorting opaque packageCode values
+  // breaks the same row pairing that WB uses in its Excel barcode template.
+  return packages
 }
 
 async function fetchSupplyDetails(apiKey: string, supplyId: string): Promise<WbSupplyDetails> {
