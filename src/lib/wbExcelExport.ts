@@ -17,10 +17,25 @@ const buildBoxesRows = (supply: FulfillmentSupplyWithBoxes, wbBoxCodes: string[]
   const codes = [...wbBoxCodes]
   const boxes = [...supply.boxes].sort((left, right) => left.box_number - right.box_number)
   if (codes.length < boxes.length) throw new Error(`В WB получено ${codes.length} ШК коробов, а в поставке ELESTET ${boxes.length} коробов. Завершите упаковку в WB и обновите коды.`)
-  const rows: (string | number)[][] = [['Баркод товара', 'Кол-во товаров', 'ШК короба', 'Срок годности']]
+  const externalCodes = boxes.map((box) => box.wb_external_barcode?.trim() ?? '')
+  if (!externalCodes.every(Boolean)) {
+    throw new Error('Не для всех коробов загружен ШК WB для печати в стороннем сервисе.')
+  }
+  const rows: (string | number)[][] = [[
+    'Баркод товара',
+    'Кол-во товаров',
+    'ШК короба',
+    'Срок годности',
+    'ШК короба для печати в стороннем сервисе',
+  ]]
   boxes.forEach((box, index) => {
     const wbCode = codes[index]
-    box.items.forEach((item) => rows.push([item.barcode, item.qty, wbCode, '']))
+    const externalCode = externalCodes[index]
+    if (box.items.length === 0) {
+      rows.push(['', 0, wbCode, '', externalCode])
+      return
+    }
+    box.items.forEach((item) => rows.push([item.barcode, item.qty, wbCode, '', externalCode]))
   })
   return rows
 }
@@ -41,7 +56,7 @@ export function downloadGoodsTemplate(supply: FulfillmentSupplyWithBoxes, filena
 
 /**
  * Шаблон 2 — Распределение товаров по коробам
- * Колонки: Баркод товара | Кол-во товара | ШК короба | Срок годности
+ * Колонки: Баркод товара | Кол-во товаров | ШК короба | Срок годности | ШК короба для печати в стороннем сервисе
  * wbBoxCodes — список ШК WB, сопоставляемый с коробами по номеру:
  * первый код в ответе WB → первый короб, второй → второй и т.д.
  */

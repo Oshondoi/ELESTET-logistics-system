@@ -1054,6 +1054,7 @@ export interface FulfillmentBox {
   box_number: number
   barcode: string
   wb_barcode?: string | null
+  wb_external_barcode?: string | null
   status: 'open' | 'closed'
   created_at: string
   _local?: boolean

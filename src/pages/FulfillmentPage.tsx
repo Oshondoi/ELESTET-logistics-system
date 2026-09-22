@@ -247,6 +247,7 @@ const BOX_EXPORT_COLUMNS = [
   { key: 'expiryDate', label: 'Срок годности', required: true },
   { key: 'boxNumber', label: 'Номер короба', required: true },
   { key: 'wbBoxBarcode', label: 'ШК короба WB', required: false },
+  { key: 'wbExternalBoxBarcode', label: 'ШК короба WB для сторонних сервисов', required: false },
   { key: 'wbArticle', label: 'Артикул ВБ', required: false },
   { key: 'sellerArticle', label: 'Артикул продавца', required: false },
   { key: 'productName', label: 'Название товара', required: false },
@@ -260,11 +261,16 @@ const BARCODE_EXPORT_COLUMNS = [
 ] as const
 
 type BoxExportColumnKey = typeof BOX_EXPORT_COLUMNS[number]['key']
-type OptionalBoxExportColumnKey = Extract<typeof BOX_EXPORT_COLUMNS[number], { required: false }>['key']
+type OptionalBoxExportColumnKey = Exclude<Extract<typeof BOX_EXPORT_COLUMNS[number], { required: false }>['key'], 'wbExternalBoxBarcode'>
 type FulfillmentExcelMode = 'boxes' | 'barcodes' | 'both'
 
 const BOX_EXPORT_OPTIONAL_COLUMNS = BOX_EXPORT_COLUMNS
-  .filter((column): column is Extract<typeof BOX_EXPORT_COLUMNS[number], { required: false }> => !column.required)
+  .filter((column) => !column.required && column.key !== 'wbExternalBoxBarcode') as ReadonlyArray<{
+    key: OptionalBoxExportColumnKey
+    label: string
+    required: false
+  }>
+const BOX_EXPORT_PICKER_COLUMNS = BOX_EXPORT_COLUMNS.filter((column) => column.key !== 'wbExternalBoxBarcode')
 const BOX_EXPORT_STORAGE_KEY = 'fulfillment_box_export_optional_columns'
 
 // ── Props ─────────────────────────────────────────────────────
@@ -390,7 +396,12 @@ const buildBoxExportRows = async ({
   const sortedBoxes = [...boxes].sort((a, b) => a.box_number - b.box_number)
   const barcodes = [...new Set(sortedBoxes.flatMap((box) => box.items.map((item) => item.barcode)))]
   const selectedOptional = new Set(optionalColumnKeys)
-  const selectedColumns = BOX_EXPORT_COLUMNS.filter((column) => column.required || selectedOptional.has(column.key as OptionalBoxExportColumnKey))
+  const selectedColumns = BOX_EXPORT_COLUMNS.filter((column) =>
+    column.required
+    || (column.key === 'wbExternalBoxBarcode'
+      ? selectedOptional.has('wbBoxBarcode')
+      : selectedOptional.has(column.key as OptionalBoxExportColumnKey)),
+  )
   const productInfoMap = optionalColumnKeys.length > 0
     ? await fetchProductInfoByBarcodes(accountId, storeId, barcodes)
     : {}
@@ -416,6 +427,7 @@ const buildBoxExportRows = async ({
         expiryDate: '',
         boxNumber: box.box_number,
         wbBoxBarcode: box.wb_barcode ?? '',
+        wbExternalBoxBarcode: box.wb_external_barcode ?? '',
         wbArticle: info?.nm_id ?? '',
         sellerArticle: info?.vendor_code ?? batchItem?.article ?? '',
         productName: info?.name ?? item.product_name ?? batchItem?.product_name ?? '',
@@ -7219,7 +7231,7 @@ const BatchDetailModal = ({
                           </div>
 
                           <div className="space-y-1.5">
-                              {(boxExportMode === 'barcodes' ? BARCODE_EXPORT_COLUMNS : BOX_EXPORT_COLUMNS).map((column) => {
+                              {(boxExportMode === 'barcodes' ? BARCODE_EXPORT_COLUMNS : BOX_EXPORT_PICKER_COLUMNS).map((column) => {
                                 const selected = column.required || boxExportSelectedOptionalColumns.includes(column.key as OptionalBoxExportColumnKey)
                                 if (column.required) {
                                   return (
@@ -11676,7 +11688,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
               ))}
             </div>
             <div className="space-y-1.5">
-              {(batchExportMode === 'barcodes' ? BARCODE_EXPORT_COLUMNS : BOX_EXPORT_COLUMNS).map((column) => {
+              {(batchExportMode === 'barcodes' ? BARCODE_EXPORT_COLUMNS : BOX_EXPORT_PICKER_COLUMNS).map((column) => {
                 const selected = column.required || batchExportSelectedColumns.includes(column.key as OptionalBoxExportColumnKey)
                 if (column.required) {
                   return (

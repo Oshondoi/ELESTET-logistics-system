@@ -4,7 +4,7 @@ import type { FulfillmentSupplyWithBoxes } from '../../types'
 import { supabase } from '../../lib/supabase'
 import { buildFulfillmentBoxBarcode } from '../../lib/fulfillmentBoxBarcode'
 import { buildFulfillmentBoxQrPdf } from '../../lib/fulfillmentBoxQrPdf'
-import { assignFulfillmentWbBoxCodes, fetchSupplies, saveFulfillmentWbSupplyId } from '../../services/fulfillmentService'
+import { fetchSupplies, saveFulfillmentWbSupplyId } from '../../services/fulfillmentService'
 import { getWbFulfillmentSupplyPackageCodes } from '../../services/tripService'
 
 interface Props {
@@ -70,7 +70,6 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
     const codes = await getWbFulfillmentSupplyPackageCodes(supply.account_id, supply.id)
     if (codes.length === 0) throw new Error(`WB API пока вернул 0 ШК коробов. В ELESTET создано ${supply.boxes.length} коробов. Это не связано с пустым содержимым: WB обычно отдаёт и пустые короба. Повторите синхронизацию после обновления данных поставки на стороне WB.`)
     if (codes.length !== supply.boxes.length) throw new Error(`WB вернул ${codes.length} ШК, а в поставке ELESTET ${supply.boxes.length} коробов. Сверьте упаковку перед привязкой.`)
-    await assignFulfillmentWbBoxCodes(supply.id, codes)
     setLastMappedCount((current) => ({ ...current, [supply.id]: codes.length }))
     setTab('wb')
   })
@@ -88,14 +87,14 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
     .filter((box) => !boxId || box.id === boxId)
     .map((box) => ({ supply, box })))
     .sort((left, right) => left.supply.supply_number - right.supply.supply_number || left.box.box_number - right.box.box_number)
-  const allMapped = visible.length > 0 && visible.every(({ supply, box }) => supply.wb_supply_id && box.wb_barcode)
+  const allMapped = visible.length > 0 && visible.every(({ supply, box }) => supply.wb_supply_id && box.wb_external_barcode)
   const wbAvailable = supplies.length > 0 && allMapped
 
   const makePdf = () => {
     if (accountShortId == null || batchShortId == null) throw new Error('Не найден номер компании или партии')
     if (tab === 'wb' && !allMapped) throw new Error('Получите ШК WB для каждого выбранного короба через поставку')
     const labels = visible.map(({ supply, box }) => ({
-      barcode: tab === 'wb' ? box.wb_barcode! : (box.barcode || buildFulfillmentBoxBarcode({
+      barcode: tab === 'wb' ? box.wb_external_barcode! : (box.barcode || buildFulfillmentBoxBarcode({
         accountShortId, batchShortId, supplyNumber: supply.supply_number, boxNumber: box.box_number,
       })),
       accountShortId,
@@ -154,15 +153,18 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
               <button type="button" disabled={working || (idDraft[supply.id] ?? '') === (supply.wb_supply_id ?? '')} onClick={() => void saveWbSupplyId(supply)} className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 disabled:opacity-40">Сохранить ID</button>
             </div>}
             {allowSupplyMapping && !boxId && <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button type="button" disabled={working || !(idDraft[supply.id] ?? '').trim()} onClick={() => void fetchCodes(supply)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-blue-700 disabled:opacity-40">{supply.boxes.some((box) => box.wb_barcode) ? 'Обновить ШК из WB' : 'Получить и привязать ШК из WB'}</button>
-              <span className="text-xs text-slate-400">{lastMappedCount[supply.id] ? `Обновлено ${lastMappedCount[supply.id]} ШК: первый из актуального ответа WB → короб №1 и далее по номеру` : 'Каждое нажатие заново получает актуальные ШК из WB и заменяет прежнюю привязку'}</span>
+              <button type="button" disabled={working || !(idDraft[supply.id] ?? '').trim()} onClick={() => void fetchCodes(supply)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-blue-700 disabled:opacity-40">{supply.boxes.some((box) => box.wb_barcode || box.wb_external_barcode) ? 'Обновить ШК из WB' : 'Получить и привязать ШК из WB'}</button>
+              <span className="text-xs text-slate-400">{lastMappedCount[supply.id] ? `Обновлено ${lastMappedCount[supply.id]} ШК: первый из актуального ответа WB → короб №1 и далее по номеру` : 'Синхронизация обновляет только тот вид ШК, который вернул WB; второй вид ШК сохраняется'}</span>
             </div>}
             <div className="mt-3 space-y-2">
               {supply.boxes.filter((box) => !boxId || box.id === boxId).map((box) => <div key={box.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs">
                 <span className="w-20 font-semibold text-slate-700">Короб №{box.box_number}</span>
                 {tab === 'system'
                   ? <span className="break-all text-slate-600">{box.barcode || (accountShortId != null && batchShortId != null ? buildFulfillmentBoxBarcode({ accountShortId, batchShortId, supplyNumber: supply.supply_number, boxNumber: box.box_number }) : 'Загрузка…')}</span>
-                  : <span className="break-all text-slate-600">{box.wb_barcode || 'ШК WB ещё не получен для этой поставки'}</span>}
+                  : <span className="min-w-0 text-slate-600">
+                    <span className="block break-all">ШК WB: {box.wb_barcode || 'не получен'}</span>
+                    <span className="mt-0.5 block break-all">Для других сервисов: {box.wb_external_barcode || 'не получен'}</span>
+                  </span>}
               </div>)}
             </div>
           </section>)}

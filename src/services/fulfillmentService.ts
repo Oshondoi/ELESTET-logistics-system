@@ -1033,6 +1033,21 @@ export const assignFulfillmentWbBoxCodes = async (supplyId: string, codes: strin
   if (error) throw error
 }
 
+/** Atomically assigns both WB box-code columns without changing ELESTET barcodes or box contents. */
+export const assignFulfillmentWbBoxCodePairs = async (
+  supplyId: string,
+  codes: string[],
+  externalCodes: string[],
+): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any).rpc('assign_fulfillment_wb_box_code_pairs', {
+    p_supply_id: supplyId,
+    p_codes: codes,
+    p_external_codes: externalCodes,
+  })
+  if (error) throw error
+}
+
 // ── Packing: Boxes ────────────────────────────────────────────
 
 export const createBox = async (data: {

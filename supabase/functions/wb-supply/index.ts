@@ -83,6 +83,16 @@ interface PackageSyncResult {
   warning: string | null
 }
 
+type WbPackageCodeKind = 'ordinary' | 'external' | 'legacy'
+
+const detectPackageCodeKind = (codes: string[]): WbPackageCodeKind | null => {
+  if (codes.length === 0) return null
+  if (codes.every((code) => /^\d+$/.test(code))) return 'ordinary'
+  if (codes.every((code) => code.startsWith('$Ts;'))) return 'external'
+  if (codes.every((code) => /^WB_/i.test(code))) return 'legacy'
+  return null
+}
+
 async function syncPackagesToElestet(
   db: ReturnType<typeof createClient>,
   accountId: string,
@@ -91,6 +101,7 @@ async function syncPackagesToElestet(
   fulfillmentSupplyId?: string,
 ): Promise<PackageSyncResult> {
   const packageCodes = packages.map((item) => item.packageCode?.trim()).filter((code): code is string => Boolean(code))
+  const packageCodeKind = detectPackageCodeKind(packageCodes)
 
   if (packageCodes.length !== packages.length || new Set(packageCodes).size !== packageCodes.length) {
     throw new Error('WB вернул пустые или повторяющиеся ШК коробов. Привязка отменена.')
@@ -131,7 +142,7 @@ async function syncPackagesToElestet(
   if (resolvedLineId) {
     const { error } = await db.from('trip_lines').update({
       wb_packages_snapshot: packages,
-      ...(packageCodes.length > 0 ? { wb_package_codes: packageCodes } : {}),
+      ...(packageCodeKind === 'ordinary' || packageCodeKind === 'legacy' ? { wb_package_codes: packageCodes } : {}),
     }).eq('id', resolvedLineId).eq('account_id', accountId)
     if (error) throw error
   }
@@ -157,19 +168,23 @@ async function syncPackagesToElestet(
   }
 
   if (packageCodes.length !== expectedBoxCount) {
-    const { error: clearError } = await db.from('fulfillment_boxes')
-      .update({ wb_barcode: null })
-      .eq('supply_id', resolvedSupplyId)
-      .eq('account_id', accountId)
-    if (clearError) throw clearError
-
-    const warning = `WB вернул ${packageCodes.length} ШК коробов, а в поставке ELESTET ${expectedBoxCount}. Привязка не выполнена до совпадения количества.`
+    const warning = `WB вернул ${packageCodes.length} ШК коробов, а в поставке ELESTET ${expectedBoxCount}. Сохранённые ШК не изменены; привязка не выполнена до совпадения количества.`
     return { package_count: packageCodes.length, box_count: expectedBoxCount, mapped_count: 0, warning }
   }
 
-  const { error: assignError } = await db.rpc('assign_fulfillment_wb_box_codes', {
+  if (!packageCodeKind) {
+    return {
+      package_count: packageCodes.length,
+      box_count: expectedBoxCount,
+      mapped_count: 0,
+      warning: 'WB вернул ШК коробов неизвестного или смешанного формата. Сохранённые обычные и печатные ШК не изменены.',
+    }
+  }
+
+  const { error: assignError } = await db.rpc('assign_fulfillment_wb_box_codes_by_kind', {
     p_supply_id: resolvedSupplyId,
     p_codes: packageCodes,
+    p_kind: packageCodeKind,
   })
   if (assignError) throw new Error(`Не удалось привязать ШК WB к коробам ELESTET: ${assignError.message}`)
 
@@ -446,7 +461,6 @@ Deno.serve(async (req) => {
       const packageCodes = packages.map((item) => item.packageCode)
       const summary = {
         ...supplySummary(details),
-        ...(packageCodes.length > 0 ? { wb_package_codes: packageCodes } : {}),
       }
       const { error } = await db.from('trip_lines').update(summary).eq('id', line_id).eq('account_id', account_id)
       if (error) throw error
@@ -473,7 +487,6 @@ Deno.serve(async (req) => {
       const summary = supplySummary(details)
       const updates = {
         ...summary,
-        ...(packages.length > 0 ? { wb_package_codes: packages.map((item) => item.packageCode) } : {}),
         wb_goods_snapshot: goods,
         wb_packages_snapshot: packages,
       }
@@ -499,7 +512,6 @@ Deno.serve(async (req) => {
     // Синяя кнопка WB обновляет не только ШК коробов, но и актуальные факты поставки.
     const { error } = await db.from('trip_lines').update({
       ...summary,
-      wb_package_codes: packageCodes,
       wb_packages_snapshot: packages,
     }).eq('id', line_id).eq('account_id', account_id)
     if (error) throw error

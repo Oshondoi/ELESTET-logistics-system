@@ -712,10 +712,12 @@ export const getWbFulfillmentSupplyPackageCodes = async (
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase.functions.invoke<{
     package_codes?: string[]
+    package_sync?: { warning?: string | null }
     error?: string
   }>('wb-supply', { body: { account_id: accountId, fulfillment_supply_id: supplyId, action: 'package_info' } })
   if (error) throw new Error(error.message || 'Не удалось получить ШК коробов WB')
   if (!data) throw new Error('Пустой ответ от сервера')
   if (data.error) throw new Error(data.error)
+  if (data.package_sync?.warning) throw new Error(data.package_sync.warning)
   return data.package_codes ?? []
 }

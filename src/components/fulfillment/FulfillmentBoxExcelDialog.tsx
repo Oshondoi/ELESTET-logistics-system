@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { FulfillmentSupplyWithBoxes } from '../../types'
 import {
-  assignFulfillmentWbBoxCodes,
+  assignFulfillmentWbBoxCodePairs,
   replaceFulfillmentBoxContentsFromExcel,
   type FulfillmentBoxExcelImportResult,
   type FulfillmentKizAuditContext,
@@ -38,7 +38,9 @@ interface WbBoxCodePreview {
   boxNumber: number
   sourceRow: number
   oldCode: string | null
+  oldExternalCode: string | null
   newCode: string
+  newExternalCode: string
 }
 
 const sumUnits = (items: Array<{ qty: number }>) => items.reduce((sum, item) => sum + item.qty, 0)
@@ -220,7 +222,9 @@ export function FulfillmentBoxExcelDialog({
         boxNumber: boxes[index].box_number,
         sourceRow: row.sourceRow,
         oldCode: boxes[index].wb_barcode?.trim() || null,
+        oldExternalCode: boxes[index].wb_external_barcode?.trim() || null,
         newCode: row.code,
+        newExternalCode: row.externalCode,
       })))
     } catch (error) {
       setErrors([errorMessage(error, 'Не удалось прочитать Excel с ШК коробов WB.')])
@@ -257,7 +261,11 @@ export function FulfillmentBoxExcelDialog({
     setBusyAction('wb_import')
     setErrors([])
     try {
-      await assignFulfillmentWbBoxCodes(supply.id, wbCodeRows.map((row) => row.code))
+      await assignFulfillmentWbBoxCodePairs(
+        supply.id,
+        wbCodeRows.map((row) => row.code),
+        wbCodeRows.map((row) => row.externalCode),
+      )
       await onImported()
       setWbCodesApplied(true)
     } catch (error) {
@@ -301,8 +309,8 @@ export function FulfillmentBoxExcelDialog({
             <div className="space-y-4">
               <div className="rounded-2xl bg-emerald-50 p-5 text-center">
                 <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500 text-xl font-black text-white">✓</div>
-                <p className="mt-3 font-black text-emerald-900">ШК коробов WB привязаны</p>
-                <p className="mt-1 text-sm text-emerald-700">{wbCodePreview.length} ШК · первый ШК к первому коробу и далее по порядку</p>
+                <p className="mt-3 font-black text-emerald-900">Оба ШК коробов WB привязаны</p>
+                <p className="mt-1 text-sm text-emerald-700">{wbCodePreview.length} коробов · обе колонки записаны по порядку</p>
               </div>
               <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
                 {wbCodePreview.map((entry) => (
@@ -310,7 +318,8 @@ export function FulfillmentBoxExcelDialog({
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-sm font-black text-emerald-700">✓</span>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-black text-slate-800">Короб №{entry.boxNumber}</p>
-                      <p className="break-all text-xs font-semibold text-emerald-700">{entry.newCode}</p>
+                      <p className="break-all text-xs font-semibold text-emerald-700">ШК WB: {entry.newCode}</p>
+                      <p className="break-all text-xs text-emerald-700">Для других сервисов: {entry.newExternalCode}</p>
                     </div>
                   </div>
                 ))}
@@ -351,13 +360,13 @@ export function FulfillmentBoxExcelDialog({
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-violet-50 px-4 py-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-slate-800">{wbCodeFileName}</p>
-                  <p className="text-xs text-violet-600">Найдено ШК коробов WB: {wbCodePreview.length}</p>
+                  <p className="text-xs text-violet-600">Найдено пар ШК коробов WB: {wbCodePreview.length}</p>
                 </div>
                 <button type="button" disabled={Boolean(busyAction)} onClick={() => wbCodesInputRef.current?.click()} className="text-xs font-bold text-violet-700 disabled:opacity-40">Выбрать другой</button>
               </div>
 
               <div className="rounded-2xl border border-violet-100 bg-violet-50/50 px-4 py-3 text-xs leading-relaxed text-violet-800">
-                В файле должна быть только колонка «ШК короба». Порядок берётся из строк: первый ШК привязывается к коробу с наименьшим номером, второй — к следующему. Содержимое коробов и КИЗы не изменяются.
+                В файле должны быть только две колонки: «ШК ВБ» и «ШК ВБ для других сервисов». Порядок берётся из строк: первая пара привязывается к коробу с наименьшим номером. Системные ШК, содержимое коробов и КИЗы не изменяются.
               </div>
 
               <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
@@ -368,12 +377,14 @@ export function FulfillmentBoxExcelDialog({
                       <p className="text-[10px] text-slate-400">строка {entry.sourceRow}</p>
                     </div>
                     <div className="min-w-0">
-                      <span className="block text-[10px] font-bold uppercase text-slate-400">Новый ШК WB</span>
+                      <span className="block text-[10px] font-bold uppercase text-slate-400">Новые ШК WB</span>
                       <b className="block break-all text-xs text-violet-700">{entry.newCode}</b>
+                      <b className="mt-1 block break-all text-xs text-violet-700">{entry.newExternalCode}</b>
                     </div>
                     <div className="col-start-2 min-w-0 sm:col-start-auto">
                       <span className="block text-[10px] font-bold uppercase text-slate-400">Сейчас</span>
                       <span className="block break-all text-xs text-slate-500">{entry.oldCode ?? 'не привязан'}</span>
+                      <span className="mt-1 block break-all text-xs text-slate-500">{entry.oldExternalCode ?? 'не привязан'}</span>
                     </div>
                   </div>
                 ))}
@@ -382,7 +393,7 @@ export function FulfillmentBoxExcelDialog({
               <div className="flex gap-2">
                 <button type="button" disabled={Boolean(busyAction)} onClick={() => { setWbCodeRows([]); setWbCodePreview([]); setWbCodeFileName(''); setErrors([]) }} className="flex-1 rounded-xl border border-slate-200 py-3 text-sm font-bold text-slate-600 disabled:opacity-40">Назад</button>
                 <button type="button" disabled={Boolean(busyAction)} onClick={() => void handleWbCodesImport()} className="flex-[1.5] rounded-xl bg-violet-600 py-3 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-40">
-                  {busyAction === 'wb_import' ? 'Привязываю…' : `Привязать ${wbCodePreview.length} ШК`}
+                  {busyAction === 'wb_import' ? 'Привязываю…' : `Привязать ${wbCodePreview.length} пар ШК`}
                 </button>
               </div>
             </>
@@ -401,8 +412,8 @@ export function FulfillmentBoxExcelDialog({
                   <span className="mt-1 block text-xs leading-relaxed text-blue-700">Проверить файл и показать заменяемые или создаваемые короба.</span>
                 </button>
                 <button type="button" disabled={Boolean(busyAction)} onClick={() => wbCodesInputRef.current?.click()} className="rounded-2xl border border-violet-200 bg-violet-50 p-5 text-left transition hover:border-violet-400 disabled:opacity-50 sm:col-span-2">
-                  <span className="block text-sm font-black text-violet-800">Загрузить ШК коробов WB</span>
-                  <span className="mt-1 block text-xs leading-relaxed text-violet-700">Excel только с одной колонкой «ШК короба». Первый ШК будет связан с первым коробом и далее по порядку.</span>
+                  <span className="block text-sm font-black text-violet-800">Загрузить два ШК коробов WB</span>
+                  <span className="mt-1 block text-xs leading-relaxed text-violet-700">Excel с колонками «ШК ВБ» и «ШК ВБ для других сервисов». Первая строка соответствует первому коробу и далее по порядку.</span>
                 </button>
               </div>
               {busyAction === 'parse' && <p className="text-center text-sm font-medium text-blue-600">Читаю и проверяю файл…</p>}

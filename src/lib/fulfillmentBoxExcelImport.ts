@@ -23,6 +23,7 @@ export interface FulfillmentBoxExcelImportRow {
 export interface WbBoxCodeExcelRow {
   sourceRow: number
   code: string
+  externalCode: string
 }
 
 export interface WbBoxCodeExcelParseResult {
@@ -54,12 +55,16 @@ const normalizeBarcodeCell = (value: unknown): string => {
   return String(value ?? '').trim().replace(/\s+/g, '')
 }
 
-const WB_BOX_CODE_HEADER = 'ШК короба'
+const WB_BOX_CODE_HEADERS = ['ШК ВБ', 'ШК короба'] as const
+const WB_EXTERNAL_BOX_CODE_HEADERS = [
+  'ШК ВБ для других сервисов',
+  'ШК короба для печати в стороннем сервисе',
+] as const
 
 const normalizeWbBoxCode = (value: unknown): string => String(value ?? '').trim()
 
 /**
- * Reads a deliberately simple one-column workbook prepared from the WB export.
+ * Reads a deliberately simple two-column workbook prepared from the WB export.
  * Codes remain opaque strings so a future WB format is not rejected.
  */
 export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeExcelParseResult> {
@@ -82,13 +87,16 @@ export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeEx
     const headerLimit = Math.min(matrix.length, 50)
     let headerRowIndex = -1
     let codeIndex = -1
+    let externalCodeIndex = -1
 
     for (let rowIndex = 0; rowIndex < headerLimit; rowIndex += 1) {
       const headers = (matrix[rowIndex] ?? []).map(normalizeHeader)
-      const candidateIndex = headers.indexOf(normalizeHeader(WB_BOX_CODE_HEADER))
-      if (candidateIndex >= 0) {
+      const candidateIndex = headers.findIndex((header) => WB_BOX_CODE_HEADERS.some((candidate) => header === normalizeHeader(candidate)))
+      const candidateExternalIndex = headers.findIndex((header) => WB_EXTERNAL_BOX_CODE_HEADERS.some((candidate) => header === normalizeHeader(candidate)))
+      if (candidateIndex >= 0 && candidateExternalIndex >= 0) {
         headerRowIndex = rowIndex
         codeIndex = candidateIndex
+        externalCodeIndex = candidateExternalIndex
         break
       }
     }
@@ -98,29 +106,35 @@ export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeEx
     const rows: WbBoxCodeExcelRow[] = []
     const errors: string[] = []
     const firstRowByCode = new Map<string, number>()
+    const firstRowByExternalCode = new Map<string, number>()
     const headerCells = matrix[headerRowIndex] ?? []
     const extraHeaders = headerCells
       .map((value, index) => ({ value: String(value ?? '').trim(), index }))
-      .filter((entry) => entry.value !== '' && entry.index !== codeIndex)
+      .filter((entry) => entry.value !== '' && entry.index !== codeIndex && entry.index !== externalCodeIndex)
     if (extraHeaders.length > 0) {
       return {
         rows: [],
-        errors: [`Оставьте в файле только одну колонку «${WB_BOX_CODE_HEADER}». Удалите: ${extraHeaders.map((entry) => `«${entry.value}»`).join(', ')}.`],
+        errors: [`Оставьте в файле только колонки «ШК ВБ» и «ШК ВБ для других сервисов». Удалите: ${extraHeaders.map((entry) => `«${entry.value}»`).join(', ')}.`],
         sheetName,
       }
     }
 
     matrix.slice(headerRowIndex + 1).forEach((source, offset) => {
       const sourceRow = headerRowIndex + offset + 2
-      const unexpectedColumn = source.findIndex((value, index) => index !== codeIndex && String(value ?? '').trim() !== '')
+      const unexpectedColumn = source.findIndex((value, index) => index !== codeIndex && index !== externalCodeIndex && String(value ?? '').trim() !== '')
       if (unexpectedColumn >= 0) {
-        errors.push(`Строка ${sourceRow}: удалите данные вне колонки «${WB_BOX_CODE_HEADER}».`)
+        errors.push(`Строка ${sourceRow}: удалите данные вне двух колонок ШК WB.`)
         return
       }
       const code = normalizeWbBoxCode(source[codeIndex])
-      if (!code) return
-      if (code.length > 512) {
-        errors.push(`Строка ${sourceRow}: ШК короба слишком длинный.`)
+      const externalCode = normalizeWbBoxCode(source[externalCodeIndex])
+      if (!code && !externalCode) return
+      if (!code || !externalCode) {
+        errors.push(`Строка ${sourceRow}: заполните оба ШК WB.`)
+        return
+      }
+      if (code.length > 512 || externalCode.length > 512) {
+        errors.push(`Строка ${sourceRow}: ШК WB слишком длинный.`)
         return
       }
       const duplicateRow = firstRowByCode.get(code)
@@ -129,7 +143,13 @@ export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeEx
         return
       }
       firstRowByCode.set(code, sourceRow)
-      rows.push({ sourceRow, code })
+      const duplicateExternalRow = firstRowByExternalCode.get(externalCode)
+      if (duplicateExternalRow !== undefined) {
+        errors.push(`Строка ${sourceRow}: ШК WB для других сервисов «${externalCode}» уже указан в строке ${duplicateExternalRow}.`)
+        return
+      }
+      firstRowByExternalCode.set(externalCode, sourceRow)
+      rows.push({ sourceRow, code, externalCode })
     })
 
     if (rows.length === 0 && errors.length === 0) {
@@ -140,7 +160,7 @@ export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeEx
 
   return {
     rows: [],
-    errors: [`Не найдена единственная обязательная колонка «${WB_BOX_CODE_HEADER}».`],
+    errors: ['Не найдены обе обязательные колонки: «ШК ВБ» и «ШК ВБ для других сервисов».'],
     sheetName: null,
   }
 }
