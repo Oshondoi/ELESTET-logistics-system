@@ -1037,6 +1037,11 @@ export interface FulfillmentSupply {
   trip_id: string | null
   trip_line_id: string | null
   wb_supply_id?: string | null
+  wb_warehouse_id?: number | null
+  wb_warehouse_name?: string | null
+  wb_planned_delivery_date?: string | null
+  wb_cargo_type?: number | null
+  wb_synced_at?: string | null
   weight: number | null
   logistics_tariff_type: 'per_box' | 'per_kg' | null
   source_item_id: string | null

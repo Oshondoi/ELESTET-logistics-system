@@ -132,7 +132,7 @@ const renderInfoBlock = (label: FulfillmentBoxQrLabel) => {
 
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
-  ctx.fillStyle = '#0f172a'
+  ctx.fillStyle = '#000000'
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
 
@@ -151,15 +151,15 @@ const renderInfoBlock = (label: FulfillmentBoxQrLabel) => {
     prefixSize -= 1
     numberSize -= 1
   }
-  ctx.fillStyle = '#0f172a'
+  ctx.fillStyle = '#000000'
   ctx.font = `700 ${prefixSize}px Arial, sans-serif`
   ctx.fillText(headerPrefix, left, 27)
   const numberLeft = left + ctx.measureText(headerPrefix).width
   ctx.font = `900 ${numberSize}px Arial, sans-serif`
   ctx.fillText(headerNumber, numberLeft, 27)
 
-  const lines: Array<{ text: string; weight?: number; color?: string }> = []
-  if (label.sellerName?.trim()) lines.push({ text: label.sellerName.trim(), weight: 700 })
+  const lines: Array<{ text: string; weight?: number }> = []
+  if (label.sellerName?.trim()) lines.push({ text: `Продавец: ${label.sellerName.trim()}`, weight: 700 })
   if (label.warehouseName?.trim()) lines.push({ text: `Склад: ${label.warehouseName.trim()}`, weight: 700 })
   lines.push({ text: `Партия P${label.batchShortId} · Поставка S${label.supplyNumber}` })
   lines.push({ text: `Кол-во товаров: ${label.itemQuantity} шт`, weight: 700 })
@@ -171,7 +171,7 @@ const renderInfoBlock = (label: FulfillmentBoxQrLabel) => {
   const firstLineY = 74
   const lineStep = 43
   lines.forEach((line, index) => {
-    ctx.fillStyle = line.color ?? (index < 2 ? '#0f172a' : '#334155')
+    ctx.fillStyle = '#000000'
     fitCanvasText(ctx, line.text, maxWidth, index < 2 ? 23 : 21, 15, line.weight ?? 600)
     ctx.fillText(line.text, left, firstLineY + lineStep * index)
   })

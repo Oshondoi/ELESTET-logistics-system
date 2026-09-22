@@ -248,11 +248,6 @@ function cargoTypeFromDetails(data: WbSupplyDetails): number | null {
   return null
 }
 
-/** Получить тип отгрузки поставки: 1=короба, 2=паллеты */
-async function fetchSupplyCargoType(apiKey: string, supplyId: string): Promise<number | null> {
-  return cargoTypeFromDetails(await fetchSupplyDetails(apiKey, supplyId))
-}
-
 async function fetchGoods(apiKey: string, supplyId: string): Promise<WbSupplyGood[]> {
   assertNumericSupplyId(supplyId)
   const result: WbSupplyGood[] = []
@@ -297,6 +292,70 @@ function supplySummary(details: WbSupplyDetails, cargoType = cargoTypeFromDetail
     wb_transit_warehouse_name: details.transitWarehouseName || null,
     wb_synced_at: new Date().toISOString(),
   }
+}
+
+function fulfillmentMetadata(summary: Record<string, unknown>): Record<string, unknown> {
+  return {
+    wb_warehouse_id: summary.wb_warehouse_id ?? null,
+    wb_warehouse_name: summary.wb_warehouse_name ?? null,
+    wb_planned_delivery_date: summary.planned_marketplace_delivery_date ?? null,
+    wb_cargo_type: summary.wb_cargo_type ?? null,
+    wb_synced_at: summary.wb_synced_at ?? null,
+  }
+}
+
+async function persistWbSummaryForLine(
+  db: ReturnType<typeof createClient>,
+  accountId: string,
+  lineId: string,
+  summary: Record<string, unknown>,
+): Promise<void> {
+  const { data: line, error: lineError } = await db.from('trip_lines')
+    .update(summary)
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+    .select('fulfillment_supply_id')
+    .maybeSingle()
+  if (lineError) throw lineError
+
+  let supplyId = line?.fulfillment_supply_id || ''
+  if (!supplyId) {
+    const { data: supply, error: supplyError } = await db.from('fulfillment_supplies')
+      .select('id')
+      .eq('trip_line_id', lineId)
+      .eq('account_id', accountId)
+      .maybeSingle()
+    if (supplyError) throw supplyError
+    supplyId = supply?.id || ''
+  }
+  if (!supplyId) return
+
+  const { error: fulfillmentError } = await db.from('fulfillment_supplies')
+    .update(fulfillmentMetadata(summary))
+    .eq('id', supplyId)
+    .eq('account_id', accountId)
+  if (fulfillmentError) throw fulfillmentError
+}
+
+async function persistWbSummaryForFulfillment(
+  db: ReturnType<typeof createClient>,
+  accountId: string,
+  supplyId: string,
+  lineId: string | null,
+  summary: Record<string, unknown>,
+): Promise<void> {
+  const { error: supplyError } = await db.from('fulfillment_supplies')
+    .update(fulfillmentMetadata(summary))
+    .eq('id', supplyId)
+    .eq('account_id', accountId)
+  if (supplyError) throw supplyError
+  if (!lineId) return
+
+  const { error: lineError } = await db.from('trip_lines')
+    .update(summary)
+    .eq('id', lineId)
+    .eq('account_id', accountId)
+  if (lineError) throw lineError
 }
 
 // deno-lint-ignore no-explicit-any
@@ -393,7 +452,16 @@ Deno.serve(async (req) => {
       .eq('id', batch.store_id).eq('account_id', account_id).maybeSingle()
     if (!batchStore?.api_key) return jsonError('У магазина не задан API-ключ WB')
     try {
-      const cargoType = await fetchSupplyCargoType(batchStore.api_key, supply.wb_supply_id)
+      const details = await fetchSupplyDetails(batchStore.api_key, supply.wb_supply_id)
+      const summary = supplySummary(details)
+      await persistWbSummaryForFulfillment(
+        db,
+        account_id,
+        fulfillment_supply_id,
+        supply.trip_line_id || null,
+        summary,
+      )
+      const cargoType = summary.wb_cargo_type as number | null
       if (cargoType === 2) return jsonError('WB-поставка оформлена как паллеты. Поштучная привязка ШК коробов для неё недоступна.')
       const packages = await fetchPackages(batchStore.api_key, supply.wb_supply_id)
       const packageSync = await syncPackagesToElestet(
@@ -403,7 +471,7 @@ Deno.serve(async (req) => {
         supply.trip_line_id || undefined,
         fulfillment_supply_id,
       )
-      return jsonOk({ package_codes: packages.map((pkg) => pkg.packageCode), package_sync: packageSync })
+      return jsonOk({ package_codes: packages.map((pkg) => pkg.packageCode), package_sync: packageSync, summary })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
     }
@@ -433,7 +501,7 @@ Deno.serve(async (req) => {
     try {
       const details = await fetchSupplyDetails(apiKey, supplyId)
       const summary = supplySummary(details)
-      await db.from('trip_lines').update(summary).eq('id', line_id).eq('account_id', account_id)
+      await persistWbSummaryForLine(db, account_id, line_id, summary)
       return jsonOk({ cargo_type: summary.wb_cargo_type, summary })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
@@ -443,9 +511,14 @@ Deno.serve(async (req) => {
   // action=package_info — список штрихкодов коробов WB (для Excel-шаблона распределения)
   if (action === 'package_info') {
     try {
-      const packages = await fetchPackages(apiKey, supplyId)
+      const [details, packages] = await Promise.all([
+        fetchSupplyDetails(apiKey, supplyId),
+        fetchPackages(apiKey, supplyId),
+      ])
+      const summary = supplySummary(details)
+      await persistWbSummaryForLine(db, account_id, line_id, summary)
       const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
-      return jsonOk({ package_codes: packages.map((p) => p.packageCode), package_sync: packageSync })
+      return jsonOk({ package_codes: packages.map((p) => p.packageCode), package_sync: packageSync, summary })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
     }
@@ -462,8 +535,7 @@ Deno.serve(async (req) => {
       const summary = {
         ...supplySummary(details),
       }
-      const { error } = await db.from('trip_lines').update(summary).eq('id', line_id).eq('account_id', account_id)
-      if (error) throw error
+      await persistWbSummaryForLine(db, account_id, line_id, summary)
       const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
       return jsonOk({
         summary,
@@ -490,8 +562,7 @@ Deno.serve(async (req) => {
         wb_goods_snapshot: goods,
         wb_packages_snapshot: packages,
       }
-      const { error } = await db.from('trip_lines').update(updates).eq('id', line_id).eq('account_id', account_id)
-      if (error) throw error
+      await persistWbSummaryForLine(db, account_id, line_id, updates)
       const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
       return jsonOk({ summary: updates, goods, packages, package_sync: packageSync })
     } catch (e) {
@@ -510,11 +581,10 @@ Deno.serve(async (req) => {
     }
     const packageCodes = packages.map((p) => p.packageCode)
     // Синяя кнопка WB обновляет не только ШК коробов, но и актуальные факты поставки.
-    const { error } = await db.from('trip_lines').update({
+    await persistWbSummaryForLine(db, account_id, line_id, {
       ...summary,
       wb_packages_snapshot: packages,
-    }).eq('id', line_id).eq('account_id', account_id)
-    if (error) throw error
+    })
     const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
     const pdfBytes = await buildPdf(packages)
     const stickerUrl = await uploadPdf(db, account_id, line_id, pdfBytes, 'qr-stickers')
