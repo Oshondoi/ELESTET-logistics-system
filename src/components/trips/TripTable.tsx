@@ -1201,9 +1201,14 @@ export const TripTable = ({
                                           {canManage && onRefreshWbSupply && (
                                             <button
                                               type="button"
+                                              aria-label="Синхронизировать поставку с WB"
                                               title="Синхронизировать статус, даты и условия приёмки с WB"
                                               disabled={!line.wb_supply_id || refreshingCargoIds.has(line.id)}
-                                              className={cn('text-slate-300 hover:text-slate-500 disabled:opacity-40', !line.wb_supply_id && 'invisible')}
+                                              className={cn(
+                                                'rounded p-0.5 text-violet-500 transition hover:bg-violet-50 hover:text-violet-700 disabled:opacity-40',
+                                                refreshingCargoIds.has(line.id) && 'bg-violet-50 text-violet-600',
+                                                !line.wb_supply_id && 'invisible',
+                                              )}
                                               onClick={async () => {
                                                 if (!line.wb_supply_id) return
                                                 try { await refreshOneWbSupply(trip.id, line.id) } catch { /* notice already shown */ }
