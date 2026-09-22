@@ -149,7 +149,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
 
   return createPortal(
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+      <div className="flex h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between border-b border-slate-100 p-5">
           <div><h2 className="text-lg font-semibold text-slate-900">ШК коробов</h2><p className="text-sm text-slate-500">Выберите источник кода, затем откройте или скачайте PDF</p></div>
           <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-100" aria-label="Закрыть">✕</button>
