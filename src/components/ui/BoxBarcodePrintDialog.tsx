@@ -20,6 +20,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
   const [supplies, setSupplies] = useState<FulfillmentSupplyWithBoxes[]>([])
   const [accountShortId, setAccountShortId] = useState<number | null>(null)
   const [batchShortId, setBatchShortId] = useState<number | null>(null)
+  const [storeName, setStoreName] = useState('')
   const [tab, setTab] = useState<'system' | 'wb'>('system')
   const [idDraft, setIdDraft] = useState<Record<string, string>>({})
   const [lastMappedCount, setLastMappedCount] = useState<Record<string, number>>({})
@@ -34,15 +35,27 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
     const [rows, accountResult, batchResult] = await Promise.all([
       fetchSupplies(first.batch_id),
       (supabase as any).from('accounts').select('short_id').eq('id', first.account_id).single(),
-      (supabase as any).from('fulfillment_batches').select('short_id').eq('id', first.batch_id).single(),
+      (supabase as any).from('fulfillment_batches').select('short_id,store_id').eq('id', first.batch_id).single(),
     ])
     if (accountResult.error) throw accountResult.error
     if (batchResult.error) throw batchResult.error
+    let resolvedStoreName = ''
+    if (batchResult.data?.store_id) {
+      const { data: store, error: storeError } = await (supabase as any)
+        .from('stores')
+        .select('name')
+        .eq('id', batchResult.data.store_id)
+        .eq('account_id', first.account_id)
+        .maybeSingle()
+      if (storeError) throw storeError
+      resolvedStoreName = store?.name?.trim() ?? ''
+    }
     const selected = rows.filter((row) => supplyIds.includes(row.id))
     if (selected.length !== supplyIds.length) throw new Error('Часть поставок недоступна')
     setSupplies(selected)
     setAccountShortId(accountResult.data?.short_id ?? null)
     setBatchShortId(batchResult.data?.short_id ?? null)
+    setStoreName(resolvedStoreName)
     setIdDraft(Object.fromEntries(selected.map((row) => [row.id, row.wb_supply_id ?? ''])))
   }, [supplyIds])
 
@@ -101,7 +114,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
       batchShortId,
       supplyNumber: supply.supply_number,
       boxNumber: box.box_number,
-      storeName: '',
+      storeName,
       warehouseName: supply.warehouse_name,
     }))
     return buildFulfillmentBoxQrPdf(labels)

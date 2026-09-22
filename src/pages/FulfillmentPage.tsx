@@ -489,10 +489,12 @@ const buildBoxContentsSources = async ({
   accountId,
   batch,
   supplies,
+  storeName,
 }: {
   accountId: string
   batch: FulfillmentBatchWithItems
   supplies: FulfillmentSupplyWithBoxes[]
+  storeName: string
 }): Promise<FulfillmentBoxContentsPageSource[]> => {
   const boxes = supplies.flatMap((supply) => supply.boxes)
   const barcodes = [...new Set(boxes.flatMap((box) => box.items.map((item) => item.barcode)).filter(Boolean))]
@@ -506,6 +508,7 @@ const buildBoxContentsSources = async ({
       .map((box) => ({
         batchNumber: batch.short_id,
         batchName: batch.name,
+        storeName,
         supplyNumber: supply.supply_number,
         warehouseName: supply.warehouse_name,
         boxNumber: box.box_number,
@@ -522,13 +525,14 @@ const openBoxContentsPdf = async (
   batch: FulfillmentBatchWithItems,
   supplies: FulfillmentSupplyWithBoxes[],
   format: FulfillmentBoxContentsFormat,
+  storeName: string,
 ) => {
   const preview = window.open('', '_blank')
   if (!preview) {
     throw new Error('Браузер заблокировал PDF. Разрешите всплывающие окна для сайта.')
   }
   try {
-    const sources = await buildBoxContentsSources({ accountId, batch, supplies })
+    const sources = await buildBoxContentsSources({ accountId, batch, supplies, storeName })
     const url = URL.createObjectURL(buildFulfillmentBoxContentsPdf(sources, format))
     preview.location.href = url
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
@@ -7163,7 +7167,7 @@ const BatchDetailModal = ({
                     <BoxContentsFormatModal
                       description={boxContentsDialog.description}
                       onClose={() => setBoxContentsDialog(null)}
-                      onPrint={(format) => openBoxContentsPdf(accountId, { ...batch, items }, boxContentsDialog.supplies, format)}
+                      onPrint={(format) => openBoxContentsPdf(accountId, { ...batch, items }, boxContentsDialog.supplies, format, store?.name ?? '')}
                     />
                   )}
 
@@ -11542,7 +11546,13 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
         <BoxContentsFormatModal
           description={batchContentsDialog.description}
           onClose={() => setBatchContentsDialog(null)}
-          onPrint={(format) => openBoxContentsPdf(accountId, batchContentsDialog.batch, batchContentsDialog.supplies, format)}
+          onPrint={(format) => openBoxContentsPdf(
+            accountId,
+            batchContentsDialog.batch,
+            batchContentsDialog.supplies,
+            format,
+            stores.find((candidate) => candidate.id === batchContentsDialog.batch.store_id)?.name ?? '',
+          )}
         />
       )}
       {batchPrintSupplyIds && <BoxBarcodePrintDialog supplyIds={batchPrintSupplyIds} onClose={() => setBatchPrintSupplyIds(null)} onSaved={() => { void onRefreshTrips?.() }} />}

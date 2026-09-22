@@ -11,6 +11,7 @@ export interface FulfillmentBoxContentsRow {
 export interface FulfillmentBoxContentsPageSource {
   batchNumber: number | null
   batchName: string
+  storeName: string
   supplyNumber: number
   warehouseName: string
   boxNumber: number
@@ -60,7 +61,7 @@ function renderPage(
   context.fillText(`${page}/${pages}`, canvas.width - margin, margin + px(0.8))
   context.textAlign = 'left'
 
-  const batchLabel = `${source.batchNumber != null ? `P-${source.batchNumber}` : source.batchName || 'Партия'} · S-${source.supplyNumber} · ${source.warehouseName || 'Склад не указан'}`
+  const batchLabel = `${source.storeName || 'Магазин не указан'} · ${source.batchNumber != null ? `P-${source.batchNumber}` : source.batchName || 'Партия'} · S-${source.supplyNumber} · ${source.warehouseName || 'Склад не указан'}`
   context.font = `600 ${px(isA4 ? 3.8 : 2.7)}px Arial, sans-serif`
   context.fillStyle = '#334155'
   context.fillText(fitText(context, batchLabel, contentWidth), margin, margin + px(isA4 ? 8.5 : 6.3))
