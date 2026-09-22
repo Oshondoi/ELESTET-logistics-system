@@ -169,8 +169,7 @@ const renderInfoBlock = (label: FulfillmentBoxQrLabel) => {
   if (packageType) lines.push({ text: `Тип поставки: ${packageType}` })
 
   const firstLineY = 74
-  const lastLineY = canvas.height - 22
-  const lineStep = lines.length > 1 ? (lastLineY - firstLineY) / (lines.length - 1) : 0
+  const lineStep = 43
   lines.forEach((line, index) => {
     ctx.fillStyle = line.color ?? (index < 2 ? '#0f172a' : '#334155')
     fitCanvasText(ctx, line.text, maxWidth, index < 2 ? 23 : 21, 15, line.weight ?? 600)
