@@ -1,5 +1,25 @@
 # Tech Context
 
+## Current FBO Excel and WB box barcode work — 24.09.2026
+
+- `src/components/fulfillment/FulfillmentBoxExcelDialog.tsx` — единая модалка `Содержимое коробов / Загрузить WB ШК / Экспорт`, высота `90vh`, scroll только центральной области, закреплённый подвал.
+- `src/lib/fulfillmentBoxExcelImport.ts` — строгий однолистный импорт WB по заголовкам `ШК короба` и `ШК короба для печати в стороннем сервисе`; произвольный порядок и лишние колонки допустимы, пустые строки пропускаются, половинчатые пары/формулы/дубли запрещены.
+- `src/lib/wbExcelExport.ts` и `src/components/fulfillment/FulfillmentSupplyExcelExport.tsx` — отдельные системный и WB-режимы; WB формирует точный пятиколоночный шаблон только из сохранённых проверенных пар.
+- `supabase/patch_fulfillment_wb_box_code_registry.sql` — production registry WB-пар по `supply_id + box_number`, восстановление после удаления/повторного создания номера, атомарное применение точного набора и блокировка API-назначения.
+- `supabase/functions/wb-supply/index.ts` — package-code sync отключён; обычный sync продолжает обновлять метаданные FBO-поставки без изменения WB ШК коробов. Флаг `WB_PACKAGE_SYNC_ENABLED` по умолчанию `false` и не является разрешением вернуться к API-сопоставлению.
+- `src/components/fulfillment/FulfillmentExcelHistory.tsx` и `supabase/patch_fulfillment_excel_action_history.sql` — локально реализованная append-only история изменяющих Excel-загрузок и усиленная серверная проверка `fulfillment_manage` (commit `b86d7c9`). Миграция и frontend ещё не production; сначала применить SQL после авторизации Supabase CLI, затем push.
+- Production frontend актуален через `551bcc0`; локальная ветка также содержит `b86d7c9` и документационное правило модальных подвалов `050f3c1`.
+- Канонические правила и все ограничения: `memory-bank/components/wb-excel-export.md`.
+
+## Fulfillment KIZ and transgran work — 17–22.09.2026
+
+- `src/components/fulfillment/FulfillmentElestetScanner.tsx` и `FulfillmentKizPairsModal.tsx` — физическая связка `короб → товарный баркод → КИЗ`, сохранение исходных GS1-байтов/GS, черновик/подтверждение короба, просмотр, пересвязка и удаление с аудитом.
+- `supabase/patch_fulfillment_kiz_inventory.sql`, `patch_fulfillment_kiz_gtin_links.sql`, `patch_fulfillment_kiz_independent_of_teksher.sql` — уникальность активного КИЗ, immutable events, защита от отгрузки незавершённой КИЗ-поставки, GTIN link и возможность физической приёмки без доступного кабинета Teksher.
+- Настройка сканера общая для FBS и fulfillment, но идентифицируется по конкретному устройству/профилю; публичное имя режима — `Режим ELESTET`.
+- `src/components/kiz/TransgranPanel.tsx` и `supabase/patch_transgran_workflow.sql` — раздельные FBO/FBS-источники, snapshot КИЗ, диагностика, Teksher lifecycle, immutable events и отдельные поля/статусы СПОТ.
+- `supabase/functions/teksher-auth/index.ts` выполняет серверные `transgran_diagnose`, `transgran_submit`, `transgran_sync`, `transgran_cancel`; `supabase/patch_teksher_emission_product_groups.sql` сохраняет точную товарную группу операции эмиссии, не позволяя поздней утилизации молча перейти на `lp`.
+- Эти изменения находятся в `origin/main`. В рамках аудита Memory Bank 24.09.2026 отдельно не перепроверялись фактические версии production SQL и Edge Function; при следующем изменении трансграна их нужно сверить с deployed backend, а не считать статус только по Git.
+
 ## Current feature files — 24.08.2026
 - `src/pages/FbsOrdersPage.tsx` — FBS cache UI, поставки/заказы, синк, перенос, печать, лист подбора, товарное обогащение.
 - `src/pages/ProductsPage.tsx` — каталог товаров, поиск с очисткой, редактирование себестоимости и Excel с обязательными/выборочными колонками по точному варианту.

@@ -30,6 +30,14 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - При аппаратном сканировании КИЗ сервис обязан получить исходную GS1-последовательность без потери управляющих символов. Внутренний ASCII Group Separator — байт `0x1D`/символ `\u001d` — является частью КИЗ и сохраняется на своём месте до отправки в WB.
 - Для точной модели сканера, официально поддерживающей USB-COM, основной путь маркировки — COM через Web Serial с параметрами из её профиля. Клавиатурный USB-HID остаётся fallback только при отдельно подтверждённой для этой модели передаче GS.
 
+## Current operational rule — FBO/FBW box identity
+
+- ELESTET является источником истины по составу физических коробов. Новая FBO/FBW-поставка WB рассматривается как пустая; содержимое из WB не используется для построения внутренних коробов.
+- У каждого физического короба сохраняются собственный системный ШК и, после отдельного импорта, полная пара кодов WB: `ШК короба` и `ШК короба для печати в стороннем сервисе`.
+- Пока нет иного официального ответа WB, соответствие определяется порядком заполненных пар в однолистном Excel WB: первая пара относится к коробу №1, вторая — к №2 и далее; полностью пустые строки пропускаются. Порядок package codes из API не является идентичностью короба и не может назначать WB ШК.
+- Импорт применяется только при точном совпадении полного набора коробов. Никаких частичных привязок. Удаление и повторное создание того же номера короба возвращает сохранённые системный и WB ШК из registry.
+- Подробная каноническая спецификация: `memory-bank/components/wb-excel-export.md`.
+
 ## Current operational rule — WMS
 - A WMS zone is a complete rack: columns are pallet positions, rows are tiers; a new rack starts with three tiers by default.
 - A rack has one or two physical sides, named `Сторона 1` and `Сторона 2` by default. Their stable WMS codes are `F1` and `F2`; `S` remains reserved for fulfillment supplies. Each side has one shared box-slot geometry; the default is `2 × 4 = 8` slots per pallet position.

@@ -90,6 +90,41 @@
 - Safe backfill assigns only the sole WMS warehouse of an executor; ambiguous historical stages remain unassigned.
 - Deployment status: applied through Supabase Management API after a full transactional `ROLLBACK` check. Structural verification, authenticated pipeline behavior and completed legacy/RPC rollback tests passed.
 
+## Fulfillment Excel contents import (applied in production)
+
+- Patch: `supabase/patch_fulfillment_box_excel_import.sql`.
+- Excel is parsed and validated client-side, then the complete intended replacement is sent to a transactional RPC. A product barcode must contain exactly 13 digits; quantity and box number must be positive integers; duplicate `barcode + box` rows are aggregated.
+- A row containing only a box number may create a missing empty box, but never clears an existing box. If a box has product rows in the file, the specified content fully replaces that box; boxes absent from the file remain unchanged.
+- An active FBS stock allocation blocks unsafe replacement of the affected content.
+- Active KIZ records of replaced contents are archived into history with the Excel-replacement reason instead of being silently deleted. Re-scanning an archived KIZ can bind it to the new item without incorrectly increasing already imported quantity.
+
+## Fulfillment KIZ inventory and transgran (repository state 17–22.09.2026)
+
+- `fulfillment_kiz_pairs` stores the physical `box + product barcode + original/normalized KIZ` relationship, GTIN/serial, product/hierarchy snapshots, operator and scanner identity, and `draft/committed/deleted/replaced` lifecycle. `fulfillment_kiz_events` is immutable audit history.
+- KIZ intake preserves meaningful GS1 separators, rejects duplicate active codes and separates scanning from final box commit. Product/GTIN links can be prepared and confirmed, but physical intake does not require a currently available Teksher cabinet.
+- Parent removal and Excel content replacement move affected KIZ to `deleted/replaced` through audited database paths. FBO shipping is blocked while the supply has unresolved `draft` pairs.
+- `transgran_shipments`, `transgran_items`, `transgran_events` keep FBO and FBS as separate source kinds. Creation snapshots only confirmed source KIZ; one active transgran per source is protected by partial unique indexes; events cannot be edited or deleted.
+- Teksher operation lifecycle and СПОТ lifecycle are distinct: diagnostic/create/sync/cancel belongs to Teksher, while СПОТ channel, carrier, vehicle, QR and customs declarations are stored separately.
+- Relevant patches: `patch_fulfillment_kiz_inventory.sql`, `patch_fulfillment_kiz_gtin_links.sql`, `patch_fulfillment_kiz_independent_of_teksher.sql`, `patch_transgran_workflow.sql`, `patch_teksher_emission_product_groups.sql`.
+- These migrations exist in `origin/main`; their exact deployed production version was not independently revalidated during the 24.09.2026 Memory Bank audit and must be checked before a future backend change.
+
+## Fulfillment WB box-code registry (applied in production)
+
+- Patch: `supabase/patch_fulfillment_wb_box_code_registry.sql`.
+- `fulfillment_wb_box_code_registry` stores the verified pair `wb_barcode + wb_external_barcode` by stable business key `supply_id + box_number`; the pair is not identified by the temporary UUID of `fulfillment_boxes`.
+- Creation/recreation trigger restores the deterministic system barcode and the saved WB pair when the same box number returns after deletion.
+- The exact-set apply RPC validates the entire supply and writes atomically. Missing and extra numbers, duplicate codes, half-filled pairs and tenant/permission mismatches reject the whole operation; partial assignment is forbidden.
+- Direct mutation of WB-code columns and old API-assignment functions are guarded/disabled. Changing `fulfillment_supplies.wb_supply_id` clears the old WB registry/mapping and cached WB metadata, while system barcodes and box contents remain intact.
+- `wb-supply` may synchronize safe supply metadata, but package codes returned by WB API are not persisted as physical-box identity.
+
+## Fulfillment Excel action history (local, not yet production)
+
+- Pending patch: `supabase/patch_fulfillment_excel_action_history.sql`, paired with local commit `b86d7c9`.
+- `fulfillment_excel_action_history` is append-only and records successful mutating imports of box contents and WB codes: actor, timestamp, source filename, action/result and exact before/after JSON snapshots.
+- Re-uploading an identical WB mapping is recorded as `unchanged` without rewriting the registry. Excel downloads are not audit events; automatic rollback/restoration is deliberately absent.
+- RPC access verifies `fulfillment_manage`, including the actual pipeline-stage executor; direct authenticated writes to the WB registry and legacy mutating bypasses are closed.
+- Deployment order is mandatory: apply and verify this SQL/RLS/RPC patch first, then publish the frontend that calls it. Until both steps are complete, history and the strengthened permission layer are not production capabilities.
+
 ## Important SQL Patterns
 
 ### Store Code Generation
