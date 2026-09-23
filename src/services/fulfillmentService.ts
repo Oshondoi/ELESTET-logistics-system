@@ -1023,29 +1023,20 @@ export const saveFulfillmentWbSupplyId = async (supplyId: string, wbSupplyId: st
   if (error) throw error
 }
 
-/** Assign the ordered WB package codes to every box in a supply atomically. */
-export const assignFulfillmentWbBoxCodes = async (supplyId: string, codes: string[]): Promise<void> => {
-  if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await (supabase as any).rpc('assign_fulfillment_wb_box_codes', {
-    p_supply_id: supplyId,
-    p_codes: codes,
-  })
-  if (error) throw error
-}
-
-/** Atomically assigns both WB box-code columns without changing ELESTET barcodes or box contents. */
+/** Atomically assigns both WB code columns to explicit box numbers. */
 export const assignFulfillmentWbBoxCodePairs = async (
   supplyId: string,
-  codes: string[],
-  externalCodes: string[],
-): Promise<void> => {
+  pairs: Array<{ box_number: number; code: string; external_code: string }>,
+  filename: string,
+): Promise<{ applied: number; unchanged: boolean; total: number }> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { error } = await (supabase as any).rpc('assign_fulfillment_wb_box_code_pairs', {
+  const { data, error } = await (supabase as any).rpc('apply_fulfillment_wb_box_code_pairs', {
     p_supply_id: supplyId,
-    p_codes: codes,
-    p_external_codes: externalCodes,
+    p_pairs: pairs,
+    p_filename: filename,
   })
   if (error) throw error
+  return data as { applied: number; unchanged: boolean; total: number }
 }
 
 // ── Packing: Boxes ────────────────────────────────────────────

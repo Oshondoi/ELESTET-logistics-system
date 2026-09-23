@@ -5,7 +5,7 @@ import { supabase } from '../../lib/supabase'
 import { buildFulfillmentBoxBarcode } from '../../lib/fulfillmentBoxBarcode'
 import { buildFulfillmentBoxQrPdf } from '../../lib/fulfillmentBoxQrPdf'
 import { fetchSupplies, saveFulfillmentWbSupplyId } from '../../services/fulfillmentService'
-import { getWbFulfillmentSupplyPackageCodes } from '../../services/tripService'
+import { syncWbFulfillmentSupplySummary } from '../../services/tripService'
 
 interface Props {
   supplyIds: string[]
@@ -23,7 +23,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
   const [sellerName, setSellerName] = useState('')
   const [tab, setTab] = useState<'system' | 'wb'>('system')
   const [idDraft, setIdDraft] = useState<Record<string, string>>({})
-  const [lastMappedCount, setLastMappedCount] = useState<Record<string, number>>({})
+  const [lastSynced, setLastSynced] = useState<Record<string, boolean>>({})
   const [working, setWorking] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -78,8 +78,8 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
     setWorking(false)
   }
 
-  const fetchCodes = (supply: FulfillmentSupplyWithBoxes) => run(async () => {
-    if (!allowSupplyMapping || boxId) throw new Error('Привязка ШК WB доступна только на уровне поставки')
+  const syncMetadata = (supply: FulfillmentSupplyWithBoxes) => run(async () => {
+    if (!allowSupplyMapping || boxId) throw new Error('Синхронизация доступна только на уровне поставки')
     const id = (idDraft[supply.id] ?? '').trim()
     if (!id) throw new Error('Укажите ID поставки WB')
     if (!/^\d+$/.test(id)) throw new Error('Для FBO укажите числовой ID поставки WB. ID вида WB-GI-… относится к FBS.')
@@ -87,11 +87,8 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
       await saveFulfillmentWbSupplyId(supply.id, id)
       await onIdSaved?.(id)
     }
-    const codes = await getWbFulfillmentSupplyPackageCodes(supply.account_id, supply.id)
-    if (codes.length === 0) throw new Error(`WB API пока вернул 0 ШК коробов. В ELESTET создано ${supply.boxes.length} коробов. Это не связано с пустым содержимым: WB обычно отдаёт и пустые короба. Повторите синхронизацию после обновления данных поставки на стороне WB.`)
-    if (codes.length !== supply.boxes.length) throw new Error(`WB вернул ${codes.length} ШК, а в поставке ELESTET ${supply.boxes.length} коробов. Сверьте упаковку перед привязкой.`)
-    setLastMappedCount((current) => ({ ...current, [supply.id]: codes.length }))
-    setTab('wb')
+    await syncWbFulfillmentSupplySummary(supply.account_id, supply.id)
+    setLastSynced((current) => ({ ...current, [supply.id]: true }))
   })
 
   const saveWbSupplyId = (supply: FulfillmentSupplyWithBoxes) => run(async () => {
@@ -100,7 +97,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
     await saveFulfillmentWbSupplyId(supply.id, id)
     await onIdSaved?.(id)
     setTab('system')
-    setLastMappedCount((current) => ({ ...current, [supply.id]: 0 }))
+    setLastSynced((current) => ({ ...current, [supply.id]: false }))
   })
 
   const visible = supplies.flatMap((supply) => supply.boxes
@@ -172,7 +169,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
           <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-100" aria-label="Закрыть">✕</button>
         </div>
         <div className="flex gap-2 border-b border-slate-100 px-5 pt-3">
-          {(['system', 'wb'] as const).map((value) => <button key={value} type="button" disabled={value === 'wb' && !wbAvailable} onClick={() => { setTab(value); setError(null) }} className={`border-b-2 px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${tab === value ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}>{value === 'system' ? 'Системный ШК' : 'ШК WB'}</button>)}
+          {(['system', 'wb'] as const).map((value) => <button key={value} type="button" disabled={value === 'wb' && !wbAvailable} onClick={() => { setTab(value); setError(null) }} className={`border-b-2 px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${tab === value ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}>{value === 'system' ? 'Системный ШК' : <span>ШК WB{!wbAvailable && <small className="ml-1 text-amber-600">Отсутствует</small>}</span>}</button>)}
         </div>
         <div className="space-y-4 overflow-y-auto p-5">
           {supplies.map((supply) => <section key={supply.id} className="rounded-xl border border-slate-200 p-3">
@@ -183,8 +180,11 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
               <button type="button" disabled={working || (idDraft[supply.id] ?? '') === (supply.wb_supply_id ?? '')} onClick={() => void saveWbSupplyId(supply)} className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 disabled:opacity-40">Сохранить ID</button>
             </div>}
             {allowSupplyMapping && !boxId && (supply.destination_type === 'fbo' || Boolean(supply.wb_supply_id)) && <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button type="button" disabled={working || !(idDraft[supply.id] ?? '').trim()} onClick={() => void fetchCodes(supply)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-blue-700 disabled:opacity-40">Синхронизировать с WB</button>
-              <span className="text-xs text-slate-400">{lastMappedCount[supply.id] ? `Обновлены данные поставки и ${lastMappedCount[supply.id]} ШК: первый ШК WB → короб №1 и далее по номеру` : 'Получает склад, дату, тип поставки и актуальные ШК коробов WB'}</span>
+              <button type="button" disabled={working || !(idDraft[supply.id] ?? '').trim()} onClick={() => void syncMetadata(supply)} className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-40">
+                {working && <svg viewBox="0 0 24 24" className="h-3 w-3 animate-spin" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></svg>}
+                Синхронизировать с WB
+              </button>
+              <span className="text-xs text-slate-400">{lastSynced[supply.id] ? 'Данные поставки обновлены' : 'Получает склад, дату и тип поставки'}</span>
             </div>}
             <div className="mt-3 space-y-2">
               {supply.boxes.filter((box) => !boxId || box.id === boxId).map((box) => <div key={box.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs">

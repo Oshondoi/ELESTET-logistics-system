@@ -1396,7 +1396,6 @@ export const TripTable = ({
                                       onRemove={canManage ? (idx) => onRemoveStickerFile(trip.id, line.id, idx) : undefined}
                                       onAddCombined={canManage ? (file) => onAddCombinedStickerFile(trip.id, line.id, file) : undefined}
                                       onRemoveCombined={canManage ? (idx) => onRemoveCombinedStickerFile(trip.id, line.id, idx) : undefined}
-                                      onFetchWbBarcodes={(wbId) => onFetchWbBarcodes(trip.id, line.id, wbId)}
                                       onUploadPass={canManage ? (file) => onUploadWbPass(trip.id, line.id, file) : undefined}
                                       onRemovePass={canManage ? (idx) => onRemoveWbPass(trip.id, line.id, idx) : undefined}
                                       onDownloadWbExcel={onDownloadWbExcel ? (type) => onDownloadWbExcel(trip.id, line.id, type) : undefined}

@@ -117,6 +117,19 @@ import { showScanSuccess } from '../components/ui/ScanSuccessOverlay'
 import { FulfillmentKizPairsModal } from '../components/fulfillment/FulfillmentKizPairsModal'
 import { FulfillmentElestetScanner } from '../components/fulfillment/FulfillmentElestetScanner'
 import { FulfillmentBoxExcelDialog } from '../components/fulfillment/FulfillmentBoxExcelDialog'
+import { FulfillmentSupplyExcelExport } from '../components/fulfillment/FulfillmentSupplyExcelExport'
+import { downloadBoxesTemplate } from '../lib/wbExcelExport'
+import {
+  BARCODE_EXPORT_COLUMNS,
+  BOX_EXPORT_OPTIONAL_COLUMNS,
+  BOX_EXPORT_STORAGE_KEY,
+  SYSTEM_BOX_EXPORT_COLUMNS,
+  getStoredBoxExportColumns,
+  hasCompleteWbBoxCodes,
+  type BoxExportColumnKey,
+  type FulfillmentExcelMode,
+  type OptionalBoxExportColumnKey,
+} from '../lib/fulfillmentBoxExportConfig'
 import {
   buildFulfillmentBoxContentsPdf,
   type FulfillmentBoxContentsFormat,
@@ -240,38 +253,7 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-slate-100 text-slate-500',
 }
 
-const BOX_EXPORT_COLUMNS = [
-  { key: 'barcode', label: 'Баркод товара', required: true },
-  { key: 'qty', label: 'Кол-во товаров', required: true },
-  { key: 'boxBarcode', label: 'ШК короба', required: true },
-  { key: 'expiryDate', label: 'Срок годности', required: true },
-  { key: 'boxNumber', label: 'Номер короба', required: true },
-  { key: 'wbBoxBarcode', label: 'ШК короба WB', required: false },
-  { key: 'wbExternalBoxBarcode', label: 'ШК короба WB для сторонних сервисов', required: false },
-  { key: 'wbArticle', label: 'Артикул ВБ', required: false },
-  { key: 'sellerArticle', label: 'Артикул продавца', required: false },
-  { key: 'productName', label: 'Название товара', required: false },
-  { key: 'color', label: 'Цвет', required: false },
-  { key: 'size', label: 'Размер', required: false },
-] as const
-
-const BARCODE_EXPORT_COLUMNS = [
-  { key: 'barcode', label: 'Баркод', required: true },
-  { key: 'qty', label: 'Количество', required: true },
-] as const
-
-type BoxExportColumnKey = typeof BOX_EXPORT_COLUMNS[number]['key']
-type OptionalBoxExportColumnKey = Exclude<Extract<typeof BOX_EXPORT_COLUMNS[number], { required: false }>['key'], 'wbExternalBoxBarcode'>
-type FulfillmentExcelMode = 'boxes' | 'barcodes' | 'both'
-
-const BOX_EXPORT_OPTIONAL_COLUMNS = BOX_EXPORT_COLUMNS
-  .filter((column) => !column.required && column.key !== 'wbExternalBoxBarcode') as ReadonlyArray<{
-    key: OptionalBoxExportColumnKey
-    label: string
-    required: false
-  }>
-const BOX_EXPORT_PICKER_COLUMNS = BOX_EXPORT_COLUMNS.filter((column) => column.key !== 'wbExternalBoxBarcode')
-const BOX_EXPORT_STORAGE_KEY = 'fulfillment_box_export_optional_columns'
+const BOX_EXPORT_PICKER_COLUMNS = SYSTEM_BOX_EXPORT_COLUMNS
 
 // ── Props ─────────────────────────────────────────────────────
 interface FulfillmentPageProps {
@@ -318,17 +300,6 @@ const getEnabledStages = (batch: FulfillmentBatch): FulfillmentStage[] => {
 
 const sumField = (items: FulfillmentItem[], field: keyof FulfillmentItem) =>
   items.reduce((sum, i) => sum + ((i[field] as number | null) ?? 0), 0)
-
-const getStoredBoxExportColumns = (): OptionalBoxExportColumnKey[] => {
-  try {
-    const saved = JSON.parse(localStorage.getItem(BOX_EXPORT_STORAGE_KEY) ?? 'null')
-    if (!Array.isArray(saved)) return BOX_EXPORT_OPTIONAL_COLUMNS.map((column) => column.key)
-    const allowed = new Set(BOX_EXPORT_OPTIONAL_COLUMNS.map((column) => column.key))
-    return saved.filter((key): key is OptionalBoxExportColumnKey => typeof key === 'string' && allowed.has(key as OptionalBoxExportColumnKey))
-  } catch {
-    return BOX_EXPORT_OPTIONAL_COLUMNS.map((column) => column.key)
-  }
-}
 
 const buildBarcodeExportRows = (boxRows: (string | number)[][]): (string | number)[][] => {
   const headers = boxRows[0] ?? []
@@ -396,11 +367,8 @@ const buildBoxExportRows = async ({
   const sortedBoxes = [...boxes].sort((a, b) => a.box_number - b.box_number)
   const barcodes = [...new Set(sortedBoxes.flatMap((box) => box.items.map((item) => item.barcode)))]
   const selectedOptional = new Set(optionalColumnKeys)
-  const selectedColumns = BOX_EXPORT_COLUMNS.filter((column) =>
-    column.required
-    || (column.key === 'wbExternalBoxBarcode'
-      ? selectedOptional.has('wbBoxBarcode')
-      : selectedOptional.has(column.key as OptionalBoxExportColumnKey)),
+  const selectedColumns = SYSTEM_BOX_EXPORT_COLUMNS.filter((column) =>
+    column.required || selectedOptional.has(column.key as OptionalBoxExportColumnKey),
   )
   const productInfoMap = optionalColumnKeys.length > 0
     ? await fetchProductInfoByBarcodes(accountId, storeId, barcodes)
@@ -426,8 +394,6 @@ const buildBoxExportRows = async ({
         boxBarcode,
         expiryDate: '',
         boxNumber: box.box_number,
-        wbBoxBarcode: box.wb_barcode ?? '',
-        wbExternalBoxBarcode: box.wb_external_barcode ?? '',
         wbArticle: info?.nm_id ?? '',
         sellerArticle: info?.vendor_code ?? batchItem?.article ?? '',
         productName: info?.name ?? item.product_name ?? batchItem?.product_name ?? '',
@@ -6888,42 +6854,29 @@ const BatchDetailModal = ({
                                 <button
                                   type="button"
                                   disabled={totalItems === 0}
-                                  onClick={() => openBoxExportDialog({ supplyId: supply.id })}
-                                  className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
-                                  title={totalItems === 0 ? 'В коробах нет товаров' : 'Скачать все короба поставки'}
-                                >
-                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
-                                  </svg>
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={totalItems === 0}
                                   onClick={() => openSupplyBoxContents(supply)}
                                   className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
                                   title={totalItems === 0 ? 'В коробах нет товаров' : 'Распечатать содержимое коробов поставки'}
                                 >
                                   <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
                                 </button>
-                                {canManageStageData && (
-                                  <button
-                                    type="button"
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      setBoxExcelSupplyId(supply.id)
-                                    }}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-500 transition-colors hover:bg-emerald-50 hover:text-emerald-700"
-                                    title="Скачать шаблон или загрузить содержимое коробов из Excel"
-                                    aria-label="Действия с Excel для поставки"
-                                  >
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                                      <path d="M14 2v6h6" />
-                                      <path d="m8 13 4 5M12 13l-4 5" />
-                                      <path d="M15 13h2M15 16h2M15 19h2" />
-                                    </svg>
-                                  </button>
-                                )}
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    setBoxExcelSupplyId(supply.id)
+                                  }}
+                                  className="flex h-7 w-7 items-center justify-center rounded-lg text-emerald-500 transition-colors hover:bg-emerald-50 hover:text-emerald-700"
+                                  title="Действия с Excel"
+                                  aria-label="Действия с Excel для поставки"
+                                >
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                    <path d="M14 2v6h6" />
+                                    <path d="m8 13 4 5M12 13l-4 5" />
+                                    <path d="M15 13h2M15 16h2M15 19h2" />
+                                  </svg>
+                                </button>
                               </div>
                               {canTransferLateSupply && (
                                 <button
@@ -10070,6 +10023,17 @@ const BatchDetailModal = ({
             supply={supply}
             batchNumber={batch.short_id}
             auditContext={packingKizAuditContext}
+            canManage={canManageStageData}
+            exportContent={(
+              <FulfillmentSupplyExcelExport
+                supply={supply}
+                onDownloadSystem={(optionalColumns, mode) => downloadSupplyBoxesExcel(supply, optionalColumns, mode)}
+                onDownloadWb={async () => {
+                  const filename = boxExportFilename(supply, 'boxes').replace(/_Box\.xlsx$/i, '_WB_Box.xlsx')
+                  downloadBoxesTemplate(supply, filename)
+                }}
+              />
+            )}
             onClose={() => setBoxExcelSupplyId(null)}
             onImported={async () => {
               const refreshed = await fetchSupplies(batch.id, displayPipelineStage?.id ?? null)
@@ -11301,7 +11265,10 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
     )
   }
 
-  const handleDownloadBatchBoxes = async () => {
+  const handleDownloadBatchBoxes = async (
+    selectedColumns: OptionalBoxExportColumnKey[] = batchExportSelectedColumns,
+    selectedMode: FulfillmentExcelMode = batchExportMode,
+  ) => {
     if (!batchExportTarget || isExportingBatchBoxes) return
     setIsExportingBatchBoxes(true)
     setBatchExportError(null)
@@ -11318,15 +11285,15 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
           storeId: batch.store_id,
           batchItems: batch.items,
           boxes: supply.boxes,
-          optionalColumnKeys: batchExportSelectedColumns,
+          optionalColumnKeys: selectedColumns,
         })
         await writeBoxExportWorkbook(data, getBoxExportFilename({
           accountShortId,
           batchShortId: batch.short_id,
           storeName: store?.name,
           warehouseName: supply.warehouse_name,
-          mode: batchExportMode,
-        }), batchExportMode)
+          mode: selectedMode,
+        }), selectedMode)
       } else {
         const supplyData = await Promise.all(supplies.map(async (supply) => ({
           supply,
@@ -11338,7 +11305,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
             storeId: batch.store_id,
             batchItems: batch.items,
             boxes: supply.boxes,
-            optionalColumnKeys: batchExportSelectedColumns,
+            optionalColumnKeys: selectedColumns,
           }),
         })))
         const baseHeaders = supplyData[0]?.rows[0] ?? []
@@ -11355,8 +11322,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
           batchShortId: batch.short_id,
           storeName: store?.name,
           selectionMode: archiveMode ?? 'CUSTOM',
-          exportMode: batchExportMode,
-        }), batchExportMode)
+          exportMode: selectedMode,
+        }), selectedMode)
       }
       setBatchExportTarget(null)
     } catch (error) {
@@ -11666,7 +11633,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
       )}
       {batchExportTarget && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!isExportingBatchBoxes) setBatchExportTarget(null) }}>
-          <div className="w-full max-w-md space-y-4 rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="w-full max-w-xl space-y-4 rounded-3xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-base font-semibold text-slate-800">Выберите колонки Excel</p>
@@ -11680,6 +11647,25 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
               </button>
             </div>
+            {batchExportTarget.supplies.length === 1 ? (
+              <FulfillmentSupplyExcelExport
+                supply={batchExportTarget.supplies[0]}
+                onDownloadSystem={(columns, mode) => handleDownloadBatchBoxes(columns, mode)}
+                onDownloadWb={async () => {
+                  const supply = batchExportTarget.supplies[0]
+                  const store = stores.find((candidate) => candidate.id === batchExportTarget.batch.store_id)
+                  const filename = getBoxExportFilename({
+                    accountShortId,
+                    batchShortId: batchExportTarget.batch.short_id,
+                    storeName: store?.name,
+                    warehouseName: supply.warehouse_name,
+                    mode: 'boxes',
+                  }).replace(/_Box\.xlsx$/i, '_WB_Box.xlsx')
+                  downloadBoxesTemplate(supply, filename)
+                  setBatchExportTarget(null)
+                }}
+              />
+            ) : <>
             <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
               {([
                 ['boxes', 'По коробам'],
@@ -11735,6 +11721,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                 {isExportingBatchBoxes ? 'Подготовка…' : 'Скачать Excel'}
               </button>
             </div>
+            </>}
           </div>
         </div>,
         document.body,

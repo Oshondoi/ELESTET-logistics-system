@@ -637,12 +637,30 @@ export const syncWbSupplySummary = async (
   return {
     summary: data.summary,
     package_sync: data.package_sync ?? {
-      package_count: data.summary.wb_package_codes?.length ?? 0,
+      package_count: 0,
       box_count: null,
       mapped_count: 0,
-      warning: 'Статус поставки обновлён, но сервер не вернул результат синхронизации ШК коробов.',
+      warning: null,
     },
   }
+}
+
+/** Refresh safe WB metadata for a fulfillment supply without requesting package codes. */
+export const syncWbFulfillmentSupplySummary = async (
+  accountId: string,
+  supplyId: string,
+): Promise<WbSupplySyncResult> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.functions.invoke<{
+    summary?: WbSupplySummary
+    package_sync?: WbPackageSyncResult
+    error?: string
+  }>('wb-supply', { body: { account_id: accountId, fulfillment_supply_id: supplyId, action: 'sync_summary' } })
+  if (error) throw wbInvokeError(error)
+  if (!data) throw new Error('Пустой ответ от сервера. Попробуйте ещё раз.')
+  if (data.error) throw new Error(data.error)
+  if (!data.summary) throw new Error('WB не вернул данные поставки.')
+  return { summary: data.summary, package_sync: data.package_sync ?? { package_count: 0, box_count: null, mapped_count: 0, warning: null } }
 }
 
 /** Получить штрихкоды поставки FBW через WB API (Edge Function) */
@@ -657,31 +675,10 @@ export const getWbSupplyStickers = async (
   package_codes: string[]
   summary?: WbSupplySummary
 }> => {
-  if (!supabase) throw new Error('Supabase is not configured')
-  const body: Record<string, string> = { account_id: accountId, line_id: lineId }
-  if (wbSupplyId) body.wb_supply_id = wbSupplyId
-  const { data, error } = await supabase.functions.invoke<{
-    wb_supply_id?: string
-    sticker_urls?: string[]
-    cargo_type?: number | null
-    package_codes?: string[]
-    summary?: WbSupplySummary
-    error?: string
-  }>('wb-supply', { body })
-  if (error) {
-    const msg = (error as { message?: string }).message ?? String(error)
-    if (msg.includes('non-2xx') || msg.includes('Failed to send')) throw new Error('Не удалось связаться с сервером. Проверьте интернет-соединение.')
-    throw new Error(msg)
-  }
-  if (!data) throw new Error('Пустой ответ от сервера. Попробуйте ещё раз.')
-  if (data.error) throw new Error(data.error)
-  return {
-    wb_supply_id: data.wb_supply_id!,
-    sticker_urls: data.sticker_urls ?? [],
-    cargo_type: data.cargo_type ?? null,
-    package_codes: data.package_codes ?? [],
-    summary: data.summary,
-  }
+  void accountId
+  void lineId
+  void wbSupplyId
+  throw new Error('Скачивание ШК коробов через API отключено. Загрузите Excel WB.')
 }
 
 /** Получить список штрихкодов коробов поставки WB (для Excel-шаблона распределения) */
@@ -689,19 +686,9 @@ export const getWbSupplyPackageCodes = async (
   accountId: string,
   lineId: string,
 ): Promise<string[]> => {
-  if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase.functions.invoke<{
-    package_codes?: string[]
-    error?: string
-  }>('wb-supply', { body: { account_id: accountId, line_id: lineId, action: 'package_info' } })
-  if (error) {
-    const msg = (error as { message?: string }).message ?? String(error)
-    if (msg.includes('non-2xx') || msg.includes('Failed to send')) throw new Error('Не удалось связаться с сервером. Проверьте интернет-соединение.')
-    throw new Error(msg)
-  }
-  if (!data) throw new Error('Пустой ответ от сервера.')
-  if (data.error) throw new Error(data.error)
-  return data.package_codes ?? []
+  void accountId
+  void lineId
+  throw new Error('Привязка ШК коробов через API отключена. Загрузите Excel WB.')
 }
 
 /** WB package codes for a fulfillment supply not yet transferred to Logistics. */
@@ -709,15 +696,7 @@ export const getWbFulfillmentSupplyPackageCodes = async (
   accountId: string,
   supplyId: string,
 ): Promise<string[]> => {
-  if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase.functions.invoke<{
-    package_codes?: string[]
-    package_sync?: { warning?: string | null }
-    error?: string
-  }>('wb-supply', { body: { account_id: accountId, fulfillment_supply_id: supplyId, action: 'package_info' } })
-  if (error) throw new Error(error.message || 'Не удалось получить ШК коробов WB')
-  if (!data) throw new Error('Пустой ответ от сервера')
-  if (data.error) throw new Error(data.error)
-  if (data.package_sync?.warning) throw new Error(data.package_sync.warning)
-  return data.package_codes ?? []
+  void accountId
+  void supplyId
+  throw new Error('Привязка ШК коробов через API отключена. Загрузите Excel WB.')
 }

@@ -1,7 +1,7 @@
 ﻿/**
- * wb-supply — генерирует PDF со стикерами QR-кодов (58x40 мм) для поставки WB.
- * GET /api/v1/supplies/{ID}/package -> packageCode[] -> PDF
- * /passes не существует в WB Supplies API (404)
+ * wb-supply — синхронизирует безопасные метаданные FBW-поставки.
+ * Получение packageCode и PDF оставлено за выключенным флагом: WB API не
+ * предоставляет подтверждённый стабильный номер короба для packageCode[].
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -12,6 +12,16 @@ import qrcodegen from 'https://esm.sh/qrcode-generator@1.4.4'
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const WB_BASE = 'https://supplies-api.wildberries.ru'
+// API package order is not documented as box identity. Keep the old code
+// available for a future verified shadow test, but disabled by default and in
+// production until WB provides a stable ordinal.
+const WB_PACKAGE_SYNC_ENABLED = Deno.env.get('WB_PACKAGE_SYNC_ENABLED') === 'true'
+const PACKAGE_SYNC_DISABLED = {
+  package_count: 0,
+  box_count: null,
+  mapped_count: 0,
+  warning: null,
+}
 
 const PAGE_W = 164.4
 const PAGE_H = 113.4
@@ -447,7 +457,8 @@ Deno.serve(async (req) => {
   // Fulfillment boxes can be assigned before the supply is transferred to Logistics.
   // Resolve the WB token from the batch's store, never from a client-supplied ID.
   if (fulfillment_supply_id) {
-    if (action !== 'package_info' || line_id) return jsonError('Недопустимое действие для поставки Фулфилмента')
+    if (line_id || !['sync_summary', 'cargo_type', 'package_info'].includes(action)) return jsonError('Недопустимое действие для поставки Фулфилмента')
+    if (action === 'package_info' && !WB_PACKAGE_SYNC_ENABLED) return jsonError('Привязка ШК коробов через API отключена. Загрузите Excel WB.')
     const jwt = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
     if (!jwt) return jsonError('Требуется вход в ELESTET')
     const { data: authData, error: authError } = await db.auth.getUser(jwt)
@@ -476,16 +487,9 @@ Deno.serve(async (req) => {
         supply.trip_line_id || null,
         summary,
       )
-      const cargoType = summary.wb_cargo_type as number | null
-      if (cargoType === 2) return jsonError('WB-поставка оформлена как паллеты. Поштучная привязка ШК коробов для неё недоступна.')
+      if (action !== 'package_info') return jsonOk({ summary, cargo_type: summary.wb_cargo_type, package_sync: PACKAGE_SYNC_DISABLED })
       const packages = await fetchPackages(batchStore.api_key, supply.wb_supply_id)
-      const packageSync = await syncPackagesToElestet(
-        db,
-        account_id,
-        packages,
-        supply.trip_line_id || undefined,
-        fulfillment_supply_id,
-      )
+      const packageSync = await syncPackagesToElestet(db, account_id, packages, supply.trip_line_id || undefined, fulfillment_supply_id)
       return jsonOk({ package_codes: packages.map((pkg) => pkg.packageCode), package_sync: packageSync, summary })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
@@ -525,6 +529,7 @@ Deno.serve(async (req) => {
 
   // action=package_info — список штрихкодов коробов WB (для Excel-шаблона распределения)
   if (action === 'package_info') {
+    if (!WB_PACKAGE_SYNC_ENABLED) return jsonError('Привязка ШК коробов через API отключена. Загрузите Excel WB.')
     try {
       const [details, packages] = await Promise.all([
         fetchSupplyDetails(apiKey, supplyId),
@@ -542,19 +547,12 @@ Deno.serve(async (req) => {
   // Full WB summary. `mp_date` remains as a compatibility alias for old clients.
   if (action === 'sync_summary' || action === 'mp_date') {
     try {
-      const [details, packages] = await Promise.all([
-        fetchSupplyDetails(apiKey, supplyId),
-        fetchPackages(apiKey, supplyId),
-      ])
-      const packageCodes = packages.map((item) => item.packageCode)
-      const summary = {
-        ...supplySummary(details),
-      }
+      const details = await fetchSupplyDetails(apiKey, supplyId)
+      const summary = { ...supplySummary(details) }
       await persistWbSummaryForLine(db, account_id, line_id, summary)
-      const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
       return jsonOk({
         summary,
-        package_sync: packageSync,
+        package_sync: PACKAGE_SYNC_DISABLED,
         mp_date: summary.planned_marketplace_delivery_date,
         fact_date: summary.wb_acceptance_date,
       })
@@ -566,24 +564,23 @@ Deno.serve(async (req) => {
   // On-demand detailed snapshot for the ELESTET ↔ WB reconciliation window.
   if (action === 'sync_detail') {
     try {
-      const [details, goods, packages] = await Promise.all([
+      const [details, goods] = await Promise.all([
         fetchSupplyDetails(apiKey, supplyId),
         fetchGoods(apiKey, supplyId),
-        fetchPackages(apiKey, supplyId),
       ])
       const summary = supplySummary(details)
       const updates = {
         ...summary,
         wb_goods_snapshot: goods,
-        wb_packages_snapshot: packages,
       }
       await persistWbSummaryForLine(db, account_id, line_id, updates)
-      const packageSync = await syncPackagesToElestet(db, account_id, packages, line_id)
-      return jsonOk({ summary: updates, goods, packages, package_sync: packageSync })
+      return jsonOk({ summary: updates, goods, packages: [], package_sync: PACKAGE_SYNC_DISABLED })
     } catch (e) {
       return jsonError(e instanceof Error ? e.message : String(e))
     }
   }
+
+  if (!WB_PACKAGE_SYNC_ENABLED) return jsonError('Скачивание ШК коробов через API отключено. Используйте ШК WB, загруженные из Excel.')
 
   try {
     const [packages, details] = await Promise.all([

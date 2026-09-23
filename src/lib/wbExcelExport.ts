@@ -13,13 +13,16 @@ const buildGoodsRows = (supply: FulfillmentSupplyWithBoxes): (string | number)[]
   ]
 }
 
-const buildBoxesRows = (supply: FulfillmentSupplyWithBoxes, wbBoxCodes: string[]): (string | number)[][] => {
-  const codes = [...wbBoxCodes]
+export const buildWbBoxesRows = (supply: FulfillmentSupplyWithBoxes): (string | number)[][] => {
   const boxes = [...supply.boxes].sort((left, right) => left.box_number - right.box_number)
-  if (codes.length < boxes.length) throw new Error(`В WB получено ${codes.length} ШК коробов, а в поставке ELESTET ${boxes.length} коробов. Завершите упаковку в WB и обновите коды.`)
+  if (boxes.length === 0) throw new Error('В поставке нет коробов.')
+  const codes = boxes.map((box) => box.wb_barcode?.trim() ?? '')
   const externalCodes = boxes.map((box) => box.wb_external_barcode?.trim() ?? '')
-  if (!externalCodes.every(Boolean)) {
-    throw new Error('Не для всех коробов загружен ШК WB для печати в стороннем сервисе.')
+  const missing = boxes
+    .filter((_, index) => !codes[index] || !externalCodes[index])
+    .map((box) => box.box_number)
+  if (missing.length > 0) {
+    throw new Error(`Отсутствуют ШК WB для коробов: ${missing.map((number) => `№${number}`).join(', ')}.`)
   }
   const rows: (string | number)[][] = [[
     'Баркод товара',
@@ -57,15 +60,14 @@ export function downloadGoodsTemplate(supply: FulfillmentSupplyWithBoxes, filena
 /**
  * Шаблон 2 — Распределение товаров по коробам
  * Колонки: Баркод товара | Кол-во товаров | ШК короба | Срок годности | ШК короба для печати в стороннем сервисе
- * wbBoxCodes — список ШК WB, сопоставляемый с коробами по номеру:
- * первый код в ответе WB → первый короб, второй → второй и т.д.
+ * Both WB code columns come only from the verified Excel mapping stored on
+ * each ELESTET box. API package order is never used here.
  */
 export function downloadBoxesTemplate(
   supply: FulfillmentSupplyWithBoxes,
-  wbBoxCodes: string[],
   filename = 'короба_Box.xlsx',
 ): void {
-  const rows = buildBoxesRows(supply, wbBoxCodes)
+  const rows = buildWbBoxesRows(supply)
   const ws = XLSX.utils.aoa_to_sheet(rows)
   applyExcelWorksheetStandards(XLSX.utils, ws)
   const wb = XLSX.utils.book_new()
@@ -75,12 +77,11 @@ export function downloadBoxesTemplate(
 
 export function downloadAllTemplates(
   supply: FulfillmentSupplyWithBoxes,
-  wbBoxCodes: string[],
   filename = 'товары_и_короба_barcode_Box.xlsx',
 ): void {
   const workbook = XLSX.utils.book_new()
   const goodsSheet = XLSX.utils.aoa_to_sheet(buildGoodsRows(supply))
-  const boxesSheet = XLSX.utils.aoa_to_sheet(buildBoxesRows(supply, wbBoxCodes))
+  const boxesSheet = XLSX.utils.aoa_to_sheet(buildWbBoxesRows(supply))
   applyExcelWorksheetStandards(XLSX.utils, goodsSheet)
   applyExcelWorksheetStandards(XLSX.utils, boxesSheet)
   XLSX.utils.book_append_sheet(workbook, goodsSheet, 'По баркодам')

@@ -22,6 +22,7 @@ export interface FulfillmentBoxExcelImportRow {
 
 export interface WbBoxCodeExcelRow {
   sourceRow: number
+  boxNumber: number
   code: string
   externalCode: string
 }
@@ -55,114 +56,124 @@ const normalizeBarcodeCell = (value: unknown): string => {
   return String(value ?? '').trim().replace(/\s+/g, '')
 }
 
-const WB_BOX_CODE_HEADERS = ['ШК ВБ', 'ШК короба'] as const
+const WB_BOX_CODE_HEADERS = ['ШК короба', 'ШК ВБ'] as const
 const WB_EXTERNAL_BOX_CODE_HEADERS = [
-  'ШК ВБ для других сервисов',
   'ШК короба для печати в стороннем сервисе',
+  'ШК ВБ для других сервисов',
 ] as const
 
 const normalizeWbBoxCode = (value: unknown): string => String(value ?? '').trim()
 
 /**
- * Reads a deliberately simple two-column workbook prepared from the WB export.
- * Codes remain opaque strings so a future WB format is not rejected.
+ * Finds the two WB box-code columns by header. Every other column is ignored,
+ * allowing the original WB workbook, a two-column copy or a larger hybrid
+ * report to be imported without manual cleanup.
  */
 export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeExcelParseResult> {
+  if (!/\.xlsx?$/i.test(file.name)) {
+    return { rows: [], errors: ['Поддерживаются только файлы Excel .xlsx и .xls.'], sheetName: null }
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    return { rows: [], errors: ['Excel-файл больше 20 МБ.'], sheetName: null }
+  }
   const XLSX = await import('xlsx')
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false })
   if (workbook.SheetNames.length === 0) {
     return { rows: [], errors: ['В Excel-файле нет листов.'], sheetName: null }
   }
-
-  for (const sheetName of workbook.SheetNames) {
-    const worksheet = workbook.Sheets[sheetName]
-    // raw:false keeps text as it is displayed in Excel and avoids treating a
-    // future numeric-looking package code as a JavaScript number.
-    const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-      header: 1,
-      raw: false,
-      defval: '',
-      blankrows: true,
-    })
-    const headerLimit = Math.min(matrix.length, 50)
-    let headerRowIndex = -1
-    let codeIndex = -1
-    let externalCodeIndex = -1
-
-    for (let rowIndex = 0; rowIndex < headerLimit; rowIndex += 1) {
-      const headers = (matrix[rowIndex] ?? []).map(normalizeHeader)
-      const candidateIndex = headers.findIndex((header) => WB_BOX_CODE_HEADERS.some((candidate) => header === normalizeHeader(candidate)))
-      const candidateExternalIndex = headers.findIndex((header) => WB_EXTERNAL_BOX_CODE_HEADERS.some((candidate) => header === normalizeHeader(candidate)))
-      if (candidateIndex >= 0 && candidateExternalIndex >= 0) {
-        headerRowIndex = rowIndex
-        codeIndex = candidateIndex
-        externalCodeIndex = candidateExternalIndex
-        break
-      }
-    }
-
-    if (headerRowIndex < 0) continue
-
-    const rows: WbBoxCodeExcelRow[] = []
-    const errors: string[] = []
-    const firstRowByCode = new Map<string, number>()
-    const firstRowByExternalCode = new Map<string, number>()
-    const headerCells = matrix[headerRowIndex] ?? []
-    const extraHeaders = headerCells
-      .map((value, index) => ({ value: String(value ?? '').trim(), index }))
-      .filter((entry) => entry.value !== '' && entry.index !== codeIndex && entry.index !== externalCodeIndex)
-    if (extraHeaders.length > 0) {
-      return {
-        rows: [],
-        errors: [`Оставьте в файле только колонки «ШК ВБ» и «ШК ВБ для других сервисов». Удалите: ${extraHeaders.map((entry) => `«${entry.value}»`).join(', ')}.`],
-        sheetName,
-      }
-    }
-
-    matrix.slice(headerRowIndex + 1).forEach((source, offset) => {
-      const sourceRow = headerRowIndex + offset + 2
-      const unexpectedColumn = source.findIndex((value, index) => index !== codeIndex && index !== externalCodeIndex && String(value ?? '').trim() !== '')
-      if (unexpectedColumn >= 0) {
-        errors.push(`Строка ${sourceRow}: удалите данные вне двух колонок ШК WB.`)
-        return
-      }
-      const code = normalizeWbBoxCode(source[codeIndex])
-      const externalCode = normalizeWbBoxCode(source[externalCodeIndex])
-      if (!code && !externalCode) return
-      if (!code || !externalCode) {
-        errors.push(`Строка ${sourceRow}: заполните оба ШК WB.`)
-        return
-      }
-      if (code.length > 512 || externalCode.length > 512) {
-        errors.push(`Строка ${sourceRow}: ШК WB слишком длинный.`)
-        return
-      }
-      const duplicateRow = firstRowByCode.get(code)
-      if (duplicateRow !== undefined) {
-        errors.push(`Строка ${sourceRow}: ШК короба «${code}» уже указан в строке ${duplicateRow}.`)
-        return
-      }
-      firstRowByCode.set(code, sourceRow)
-      const duplicateExternalRow = firstRowByExternalCode.get(externalCode)
-      if (duplicateExternalRow !== undefined) {
-        errors.push(`Строка ${sourceRow}: ШК WB для других сервисов «${externalCode}» уже указан в строке ${duplicateExternalRow}.`)
-        return
-      }
-      firstRowByExternalCode.set(externalCode, sourceRow)
-      rows.push({ sourceRow, code, externalCode })
-    })
-
-    if (rows.length === 0 && errors.length === 0) {
-      errors.push('В найденных колонках нет ни одного ШК короба WB.')
-    }
-    return { rows, errors, sheetName }
+  if (workbook.SheetNames.length !== 1) {
+    return { rows: [], errors: [`В файле должен быть ровно один лист. Найдено: ${workbook.SheetNames.length}.`], sheetName: null }
   }
 
-  return {
-    rows: [],
-    errors: ['Не найдены обе обязательные колонки: «ШК ВБ» и «ШК ВБ для других сервисов».'],
-    sheetName: null,
+  const sheetName = workbook.SheetNames[0]
+  const worksheet = workbook.Sheets[sheetName]
+  // raw:false keeps the displayed text and prevents numeric-looking WB codes
+  // from being coerced into JavaScript numbers.
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+    header: 1,
+    raw: false,
+    defval: '',
+    blankrows: true,
+  })
+  const headerMatches: Array<{ rowIndex: number; codeIndex: number; externalCodeIndex: number }> = []
+  const duplicateHeaderRows: number[] = []
+
+  matrix.forEach((source, rowIndex) => {
+    const headers = source.map(normalizeHeader)
+    const codeIndexes = headers
+      .map((header, index) => WB_BOX_CODE_HEADERS.some((candidate) => header === normalizeHeader(candidate)) ? index : -1)
+      .filter((index) => index >= 0)
+    const externalIndexes = headers
+      .map((header, index) => WB_EXTERNAL_BOX_CODE_HEADERS.some((candidate) => header === normalizeHeader(candidate)) ? index : -1)
+      .filter((index) => index >= 0)
+    if (codeIndexes.length > 1 || externalIndexes.length > 1) duplicateHeaderRows.push(rowIndex + 1)
+    if (codeIndexes.length === 1 && externalIndexes.length === 1 && codeIndexes[0] !== externalIndexes[0]) {
+      headerMatches.push({ rowIndex, codeIndex: codeIndexes[0], externalCodeIndex: externalIndexes[0] })
+    }
+  })
+
+  if (duplicateHeaderRows.length > 0) {
+    return { rows: [], errors: [`Нужные заголовки повторяются в строке ${duplicateHeaderRows.join(', ')}.`], sheetName }
   }
+  if (headerMatches.length === 0) {
+    return {
+      rows: [],
+      errors: ['Не найдены обе обязательные колонки: «ШК короба» и «ШК короба для печати в стороннем сервисе».'],
+      sheetName,
+    }
+  }
+  if (headerMatches.length > 1) {
+    return {
+      rows: [],
+      errors: [`Найдено несколько возможных строк заголовков: ${headerMatches.map((match) => match.rowIndex + 1).join(', ')}.`],
+      sheetName,
+    }
+  }
+
+  const [{ rowIndex: headerRowIndex, codeIndex, externalCodeIndex }] = headerMatches
+  const rows: WbBoxCodeExcelRow[] = []
+  const errors: string[] = []
+  const firstRowByCode = new Map<string, number>()
+  const firstRowByExternalCode = new Map<string, number>()
+
+  matrix.slice(headerRowIndex + 1).forEach((source, offset) => {
+    const sourceRow = headerRowIndex + offset + 2
+    const codeCell = worksheet[XLSX.utils.encode_cell({ r: sourceRow - 1, c: codeIndex })]
+    const externalCell = worksheet[XLSX.utils.encode_cell({ r: sourceRow - 1, c: externalCodeIndex })]
+    const code = normalizeWbBoxCode(source[codeIndex])
+    const externalCode = normalizeWbBoxCode(source[externalCodeIndex])
+    if (codeCell?.f || externalCell?.f || codeCell?.t === 'e' || externalCell?.t === 'e') {
+      errors.push(`Строка ${sourceRow}: ШК WB должны быть обычным текстом, без формул и ошибок Excel.`)
+      return
+    }
+    if (!code && !externalCode) return
+    if (!code || !externalCode) {
+      errors.push(`Строка ${sourceRow}: заполните оба ШК WB.`)
+      return
+    }
+    if (code.length > 512 || externalCode.length > 512) {
+      errors.push(`Строка ${sourceRow}: ШК WB слишком длинный.`)
+      return
+    }
+    const duplicateRow = firstRowByCode.get(code)
+    if (duplicateRow !== undefined) {
+      errors.push(`Строка ${sourceRow}: ШК короба «${code}» уже указан в строке ${duplicateRow}.`)
+      return
+    }
+    firstRowByCode.set(code, sourceRow)
+    const duplicateExternalRow = firstRowByExternalCode.get(externalCode)
+    if (duplicateExternalRow !== undefined) {
+      errors.push(`Строка ${sourceRow}: ШК для печати «${externalCode}» уже указан в строке ${duplicateExternalRow}.`)
+      return
+    }
+    firstRowByExternalCode.set(externalCode, sourceRow)
+    rows.push({ sourceRow, boxNumber: rows.length + 1, code, externalCode })
+  })
+
+  if (rows.length === 0 && errors.length === 0) {
+    errors.push('В найденных колонках нет ни одного ШК короба WB.')
+  }
+  return { rows, errors, sheetName }
 }
 
 export async function downloadFulfillmentBoxImportTemplate(
