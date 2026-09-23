@@ -15,6 +15,7 @@ import {
   type FulfillmentBoxExcelImportRow,
   type WbBoxCodeExcelRow,
 } from '../../lib/fulfillmentBoxExcelImport'
+import { FulfillmentExcelHistory } from './FulfillmentExcelHistory'
 
 interface Props {
   supply: FulfillmentSupplyWithBoxes
@@ -106,6 +107,7 @@ export function FulfillmentBoxExcelDialog({ supply, batchNumber, auditContext, c
   const fileInputRef = useRef<HTMLInputElement>(null)
   const wbCodesInputRef = useRef<HTMLInputElement>(null)
   const [activeTab, setActiveTab] = useState<ExcelTab>(canManage ? 'contents' : 'export')
+  const [showHistory, setShowHistory] = useState(false)
   const [rows, setRows] = useState<FulfillmentBoxExcelImportRow[]>([])
   const [fileName, setFileName] = useState('')
   const [errors, setErrors] = useState<string[]>([])
@@ -152,10 +154,11 @@ export function FulfillmentBoxExcelDialog({ supply, batchNumber, auditContext, c
   const wbMappedPreview = wbCodePreview.filter((entry) => entry.status === 'mapped')
   const wbAllIdentical = wbMappedPreview.length > 0 && !wbHasMismatch && wbMappedPreview.every((entry) => entry.oldCode === entry.newCode && entry.oldExternalCode === entry.newExternalCode)
   const wbIsReplacement = wbMappedPreview.some((entry) => entry.oldCode || entry.oldExternalCode)
-  const widePreview = activeTab === 'wb' && (wbCodePreview.length > 0 || wbCodesApplied !== null)
+  const widePreview = showHistory || (activeTab === 'wb' && (wbCodePreview.length > 0 || wbCodesApplied !== null))
 
   const changeTab = (tab: ExcelTab) => {
     if (busyAction || (!canManage && tab !== 'export')) return
+    setShowHistory(false)
     setActiveTab(tab)
     setErrors([])
   }
@@ -244,7 +247,6 @@ export function FulfillmentBoxExcelDialog({ supply, batchNumber, auditContext, c
 
   const handleWbCodesImport = async () => {
     if (wbCodeRows.length === 0 || busyAction || wbHasMismatch) return
-    if (wbAllIdentical) { setWbCodesApplied('unchanged'); return }
     setBusyAction('wb_import')
     setErrors([])
     try {
@@ -252,6 +254,7 @@ export function FulfillmentBoxExcelDialog({ supply, batchNumber, auditContext, c
         supply.id,
         wbCodeRows.map((row) => ({ box_number: row.boxNumber, code: row.code, external_code: row.externalCode })),
         wbCodeFileName,
+        auditContext,
       )
       await onImported()
       setWbCodesApplied(applied.unchanged ? 'unchanged' : 'applied')
@@ -339,13 +342,22 @@ export function FulfillmentBoxExcelDialog({ supply, batchNumber, auditContext, c
   return createPortal(
     <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/45 p-4" onMouseDown={() => { if (!busyAction) onClose() }} onClick={(event) => event.stopPropagation()}>
       <div className={`flex h-[90vh] max-h-[90vh] w-full flex-col overflow-hidden rounded-3xl bg-white shadow-2xl transition-[max-width] ${widePreview ? 'max-w-6xl' : 'max-w-3xl'}`} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="flex shrink-0 items-start justify-between border-b border-slate-100 px-6 py-5"><div className="flex items-center gap-2"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-xs font-black text-emerald-700">XLS</span><div><h3 className="font-black text-slate-900">Действия с Excel</h3><p className="text-xs text-slate-400">{supply.warehouse_name} · Поставка П-{supply.supply_number}</p></div></div><button type="button" disabled={Boolean(busyAction)} onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 disabled:opacity-40">×</button></div>
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-6 py-5">
+          <div className="flex min-w-0 items-center gap-2"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-xs font-black text-emerald-700">XLS</span><div className="min-w-0"><h3 className="font-black text-slate-900">Действия с Excel</h3><p className="truncate text-xs text-slate-400">{supply.warehouse_name} · Поставка П-{supply.supply_number}</p></div></div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button type="button" disabled={Boolean(busyAction)} onClick={() => { setShowHistory((value) => !value); setErrors([]) }} className={`flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-bold transition disabled:opacity-40 ${showHistory ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></svg>
+              <span className="hidden sm:inline">{showHistory ? 'К действиям' : 'История'}</span>
+            </button>
+            <button type="button" disabled={Boolean(busyAction)} onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 disabled:opacity-40">×</button>
+          </div>
+        </div>
         <div className="grid shrink-0 grid-cols-3 border-b border-slate-100 px-6 pt-2">
-          {([['contents', 'Содержимое коробов'], ['wb', 'Загрузить WB ШК'], ['export', 'Экспорт']] as const).map(([tab, label]) => <button key={tab} type="button" disabled={Boolean(busyAction) || (!canManage && tab !== 'export')} title={!canManage && tab !== 'export' ? 'Нет права изменять данные коробов' : undefined} onClick={() => changeTab(tab)} className={`border-b-2 px-2 py-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-sm ${activeTab === tab ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{label}</button>)}
+          {([['contents', 'Содержимое коробов'], ['wb', 'Загрузить WB ШК'], ['export', 'Экспорт']] as const).map(([tab, label]) => <button key={tab} type="button" disabled={Boolean(busyAction) || (!canManage && tab !== 'export')} title={!canManage && tab !== 'export' ? 'Нет права изменять данные коробов' : undefined} onClick={() => changeTab(tab)} className={`border-b-2 px-2 py-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-sm ${!showHistory && activeTab === tab ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain p-6 [scrollbar-gutter:stable]">
-          {errors.length > 0 && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"><p className="font-bold">Excel не применён</p><ul className="mt-1 list-disc space-y-1 pl-5">{errors.map((error, index) => <li key={`${index}-${error}`}>{error}</li>)}</ul></div>}
-          {activeTab === 'contents' ? renderContents() : activeTab === 'wb' ? renderWb() : exportContent}
+          {!showHistory && errors.length > 0 && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"><p className="font-bold">Excel не применён</p><ul className="mt-1 list-disc space-y-1 pl-5">{errors.map((error, index) => <li key={`${index}-${error}`}>{error}</li>)}</ul></div>}
+          {showHistory ? <FulfillmentExcelHistory supplyId={supply.id} /> : activeTab === 'contents' ? renderContents() : activeTab === 'wb' ? renderWb() : exportContent}
         </div>
         <input ref={fileInputRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file) }} />
         <input ref={wbCodesInputRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWbCodesFile(file) }} />

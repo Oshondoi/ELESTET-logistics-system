@@ -1028,12 +1028,18 @@ export const assignFulfillmentWbBoxCodePairs = async (
   supplyId: string,
   pairs: Array<{ box_number: number; code: string; external_code: string }>,
   filename: string,
+  context: FulfillmentKizAuditContext,
 ): Promise<{ applied: number; unchanged: boolean; total: number }> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await (supabase as any).rpc('apply_fulfillment_wb_box_code_pairs', {
+  const { data, error } = await (supabase as any).rpc('apply_fulfillment_wb_box_code_pairs_with_history', {
     p_supply_id: supplyId,
     p_pairs: pairs,
     p_filename: filename,
+    p_actor_name: context.actor_name,
+    p_actor_email: context.actor_email,
+    p_device_id: context.device_id,
+    p_device_name: context.device_name,
+    p_scanner_model: context.scanner_model,
   })
   if (error) throw error
   return data as { applied: number; unchanged: boolean; total: number }
@@ -1140,7 +1146,7 @@ export const replaceFulfillmentBoxContentsFromExcel = async (data: {
   context: FulfillmentKizAuditContext
 }): Promise<FulfillmentBoxExcelImportResult> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data: result, error } = await (supabase as any).rpc('replace_fulfillment_box_contents_from_excel', {
+  const { data: result, error } = await (supabase as any).rpc('replace_fulfillment_box_contents_from_excel_with_history', {
     p_supply_id: data.supply_id,
     p_rows: data.rows,
     p_filename: data.filename,
@@ -1152,6 +1158,54 @@ export const replaceFulfillmentBoxContentsFromExcel = async (data: {
   })
   if (error) throw error
   return result as FulfillmentBoxExcelImportResult
+}
+
+export interface FulfillmentExcelActionHistory {
+  id: string
+  account_id: string
+  supply_id: string
+  action_type: 'box_contents_import' | 'wb_box_codes_import'
+  result: 'applied' | 'unchanged'
+  source_filename: string | null
+  actor_user_id: string | null
+  actor_name: string | null
+  actor_email: string | null
+  summary: Record<string, unknown>
+  details?: {
+    summary?: Record<string, unknown>
+    before?: Array<Record<string, unknown>>
+    after?: Array<Record<string, unknown>>
+  }
+  created_at: string
+}
+
+export const fetchFulfillmentExcelActionHistory = async (
+  supplyId: string,
+): Promise<FulfillmentExcelActionHistory[]> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_excel_action_history')
+    .select('id,account_id,supply_id,action_type,result,source_filename,actor_user_id,actor_name,actor_email,summary:details->summary,created_at')
+    .eq('supply_id', supplyId)
+    .order('created_at', { ascending: false })
+    .limit(100)
+  if (error) throw error
+  return (data ?? []) as FulfillmentExcelActionHistory[]
+}
+
+export const fetchFulfillmentExcelActionHistoryDetails = async (
+  historyId: string,
+  supplyId: string,
+): Promise<NonNullable<FulfillmentExcelActionHistory['details']>> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any)
+    .from('fulfillment_excel_action_history')
+    .select('details')
+    .eq('id', historyId)
+    .eq('supply_id', supplyId)
+    .single()
+  if (error) throw error
+  return (data?.details ?? {}) as NonNullable<FulfillmentExcelActionHistory['details']>
 }
 
 export const transferSupplyToLogistics = async (

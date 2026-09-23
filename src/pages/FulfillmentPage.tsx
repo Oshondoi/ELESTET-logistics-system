@@ -10023,7 +10023,7 @@ const BatchDetailModal = ({
             supply={supply}
             batchNumber={batch.short_id}
             auditContext={packingKizAuditContext}
-            canManage={canManageStageData}
+            canManage={canManageStageData && canManage}
             exportContent={(
               <FulfillmentSupplyExcelExport
                 supply={supply}
