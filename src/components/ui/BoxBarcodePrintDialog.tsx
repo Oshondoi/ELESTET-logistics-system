@@ -164,14 +164,14 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
   return createPortal(
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div className="flex h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-start justify-between border-b border-slate-100 p-5">
+        <div className="flex shrink-0 items-start justify-between border-b border-slate-100 p-5">
           <div><h2 className="text-lg font-semibold text-slate-900">ШК коробов</h2><p className="text-sm text-slate-500">Выберите источник кода, затем откройте или скачайте PDF</p></div>
           <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-100" aria-label="Закрыть">✕</button>
         </div>
-        <div className="flex gap-2 border-b border-slate-100 px-5 pt-3">
+        <div className="flex shrink-0 gap-2 border-b border-slate-100 px-5 pt-3">
           {(['system', 'wb'] as const).map((value) => <button key={value} type="button" disabled={value === 'wb' && !wbAvailable} onClick={() => { setTab(value); setError(null) }} className={`border-b-2 px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${tab === value ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}>{value === 'system' ? 'Системный ШК' : <span>ШК WB{!wbAvailable && <small className="ml-1 text-amber-600">Отсутствует</small>}</span>}</button>)}
         </div>
-        <div className="space-y-4 overflow-y-auto p-5">
+        <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain p-5 [scrollbar-gutter:stable]">
           {supplies.map((supply) => <section key={supply.id} className="rounded-xl border border-slate-200 p-3">
             <p className="text-sm font-semibold text-slate-800">Поставка S{supply.supply_number} · {supply.warehouse_name}</p>
             {allowSupplyMapping && !boxId && (supply.destination_type === 'fbo' || Boolean(supply.wb_supply_id)) && <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -202,7 +202,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
           {!allowSupplyMapping && !wbAvailable && <p className="text-xs text-slate-500">Чтобы печатать ШК WB, откройте поставку и получите её коды из WB. Здесь доступна только печать.</p>}
           {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{error}</p>}
         </div>
-        <div className="flex justify-end gap-2 border-t border-slate-100 p-4">
+        <div className="flex shrink-0 justify-end gap-2 border-t border-slate-100 p-4">
           <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600">Отмена</button>
           <button type="button" onClick={download} disabled={working || visible.length === 0 || (tab === 'wb' && !allMapped)} className="rounded-xl border border-blue-200 px-4 py-2 text-sm font-medium text-blue-700 disabled:opacity-40">Скачать PDF</button>
           <button type="button" onClick={print} disabled={working || visible.length === 0 || (tab === 'wb' && !allMapped)} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">Открыть PDF</button>

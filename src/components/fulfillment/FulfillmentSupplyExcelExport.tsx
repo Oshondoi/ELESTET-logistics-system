@@ -93,7 +93,7 @@ export function FulfillmentSupplyExcelExport({ supply, onDownloadSystem, onDownl
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-full flex-col gap-4">
       {barcodeSource === 'system' && (
         <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
           {([
@@ -155,7 +155,7 @@ export function FulfillmentSupplyExcelExport({ supply, onDownloadSystem, onDownl
         </p>
       )}
       {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
-      <div className="flex justify-end border-t border-slate-100 pt-4">
+      <div className="mt-auto flex shrink-0 justify-end border-t border-slate-100 pt-4">
         <button
           type="button"
           disabled={busy || (barcodeSource === 'wb' && !wbAvailable)}
