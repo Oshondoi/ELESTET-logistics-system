@@ -113,7 +113,7 @@ export function FulfillmentSupplyExcelExport({ supply, onDownloadSystem, onDownl
               </button>
               {disabledByWb && (
                 <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 w-max max-w-52 -translate-x-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-center text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
-                  Для ШК WB — только «По коробам»
+                  Доступно для системных ШК
                 </span>
               )}
             </span>
