@@ -94,25 +94,32 @@ export function FulfillmentSupplyExcelExport({ supply, onDownloadSystem, onDownl
 
   return (
     <div className="flex min-h-full flex-col gap-4">
-      {barcodeSource === 'system' && (
-        <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
-          {([
-            ['boxes', 'По коробам'],
-            ['barcodes', 'По баркодам'],
-            ['both', 'Оба'],
-          ] as const).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              disabled={busy}
-              onClick={() => { setMode(value); setError(null) }}
-              className={`rounded-lg px-2 py-2 text-xs font-semibold transition ${mode === value ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
+        {([
+          ['boxes', 'По коробам'],
+          ['barcodes', 'По баркодам'],
+          ['both', 'Оба'],
+        ] as const).map(([value, label]) => {
+          const disabledByWb = barcodeSource === 'wb' && value !== 'boxes'
+          return (
+            <span key={value} className="group relative block">
+              <button
+                type="button"
+                disabled={busy || disabledByWb}
+                onClick={() => { setMode(value); setError(null) }}
+                className={`w-full rounded-lg px-2 py-2 text-xs font-semibold transition disabled:cursor-not-allowed ${mode === value ? 'bg-white text-blue-700 shadow-sm' : disabledByWb ? 'text-slate-300' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                {label}
+              </button>
+              {disabledByWb && (
+                <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 w-max max-w-52 -translate-x-1/2 rounded-lg bg-slate-900 px-2.5 py-1.5 text-center text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+                  Для ШК WB — только «По коробам»
+                </span>
+              )}
+            </span>
+          )
+        })}
+      </div>
 
       <div className="space-y-1.5">
         {leadingColumns.map(renderColumn)}
@@ -130,7 +137,7 @@ export function FulfillmentSupplyExcelExport({ supply, onDownloadSystem, onDownl
             <button
               type="button"
               disabled={busy || !wbAvailable}
-              onClick={() => { setBarcodeSource('wb'); setError(null) }}
+              onClick={() => { setBarcodeSource('wb'); setMode('boxes'); setError(null) }}
               className={`rounded-lg px-2 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed ${barcodeSource === 'wb' ? 'bg-white text-violet-700 shadow-sm' : wbAvailable ? 'text-slate-500 hover:text-violet-700' : 'text-slate-400'}`}
             >
               <span className="block">ШК короба WB</span>
