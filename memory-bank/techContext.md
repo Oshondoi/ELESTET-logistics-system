@@ -1,17 +1,20 @@
 # Tech Context
 
-## Admin discussions and versioned decisions — 24.09.2026
+## Admin discussions and versioned decisions — 25.09.2026
 
 - `src/pages/TzPromptsPage.tsx` exposes tabs in order `Обсуждение / Задачи / Промпты ТЗ`; the saved localStorage tab remains respected.
 - `src/components/admin/DiscussionsTab.tsx` renders the active/completed archive, editing, completion/restoration, automatic version history, granular agreement states, current-revision diff highlighting and numeric point navigation.
 - Stable block keys derive from normalized `##` headings; stable row keys derive from the owning block plus bullet/numbered content and occurrence. These keys are persisted in `item_states` and must remain deterministic when refactoring the renderer.
 - New-content highlighting compares current content with the newest archived revision whose `content` is actually different. Agreement-only revisions intentionally do not redefine what counts as newly added text.
-- History modal is fixed at `90vh × 80vw`. Its layout is `versions | numeric navigation | content`; numeric navigation and content scroll independently, while scroll-spy keeps the active blue number visible.
-- The active discussion card has a sticky numeric navigation rail tied to window scrolling. `DiscussionContent` accepts an anchor prefix so history and live-card DOM IDs never collide.
+- History modal is fixed at `90vh × 80vw`. Its layout is `versions | numeric navigation | content`; numeric navigation and content scroll independently. Navigation uses each block's orange/blue/green state, darkens the active number in the same tone and auto-scrolls it into view.
+- The live card uses a compact fixed header and an internal scroll container for content plus numeric navigation; the outer page/header does not move with discussion content. `DiscussionContent` accepts an anchor prefix so history and live-card DOM IDs never collide.
+- Agreement clicks modify local draft state only. Explicit Save persists the complete `item_states` snapshot once and therefore creates at most one revision; Cancel restores the saved snapshot. Content edits reset agreement only for impacted section signatures.
+- Rows use a slightly stronger tone than their parent state block. Black code/diagram panels remain black and express state through a `12px` colored left border.
 - Production DB patches: `supabase/patch_tz_discussions.sql`, `supabase/patch_tz_discussion_item_states.sql`. Both are applied.
-- Production frontend sequence: `2f2a673`, `f1628e9`, `25815d9`, `abde446`, `fd83ef4`, `99fa5de`, `96d3b33`, `fb7874c`, `2908559`, `024ed22`, `d9ebe9b`. The last asset was verified on `elestet.net` after deploy.
+- Production frontend discussion sequence continues through `14c47a7`, `b93c225`, `01906f3` and `31f8106`; the deployed asset containing the compact review UI was verified on `elestet.net`.
 - No Supabase personal access token is stored in repository files. Any token pasted into chat must be rotated by the owner when practical and must never be copied into Memory Bank, code, scripts or commits.
 - Product specification discussed in the initial active answer is documented separately in `memory-bank/components/intake-requests.md`; it is target design, not current fulfillment production behavior.
+- Revision workflow must treat the active discussion as one coherent snapshot: compute dependency impact, update every affected section in the same content save, scan for stale/conflicting terminology, then create one revision. Revision 9 currently contains 38 sections and the permanent rule in section 23.
 
 ## Current FBO Excel and WB box barcode work — 24.09.2026
 
