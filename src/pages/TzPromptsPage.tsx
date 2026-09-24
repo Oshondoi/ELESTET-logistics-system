@@ -664,6 +664,8 @@ export function TzPromptsPage() {
   const [prompts, setPrompts] = useState<TzPrompt[]>([])
   const [loading, setLoading] = useState(true)
   const [showDone, setShowDone] = useState(false)
+  const [discussionToolbarTarget, setDiscussionToolbarTarget] = useState<HTMLDivElement | null>(null)
+  const [discussionHasUnsaved, setDiscussionHasUnsaved] = useState(false)
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<TzPrompt | null>(null)
@@ -743,6 +745,12 @@ export function TzPromptsPage() {
   const active = prompts.filter((p) => !p.is_done)
   const done = prompts.filter((p) => p.is_done)
 
+  const changeActiveTab = (nextTab: 'prompts' | 'tasks' | 'discussions') => {
+    if (nextTab === activeTab) return
+    if (activeTab === 'discussions' && discussionHasUnsaved && !window.confirm('Несохранённые отметки обсуждения будут отменены. Продолжить?')) return
+    setActiveTab(nextTab)
+  }
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-slate-400">
@@ -752,11 +760,12 @@ export function TzPromptsPage() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className={`flex h-full min-h-0 flex-col gap-3 ${activeTab === 'discussions' ? 'overflow-hidden' : ''}`}>
+      <div className="flex shrink-0 items-center justify-between gap-3">
       <div className="flex w-fit items-center rounded-xl bg-slate-100 p-1">
         <button
           type="button"
-          onClick={() => setActiveTab('discussions')}
+          onClick={() => changeActiveTab('discussions')}
           className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
             activeTab === 'discussions'
               ? 'bg-white text-slate-800 shadow-sm'
@@ -767,7 +776,7 @@ export function TzPromptsPage() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab('tasks')}
+          onClick={() => changeActiveTab('tasks')}
           className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
             activeTab === 'tasks'
               ? 'bg-white text-slate-800 shadow-sm'
@@ -778,7 +787,7 @@ export function TzPromptsPage() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab('prompts')}
+          onClick={() => changeActiveTab('prompts')}
           className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
             activeTab === 'prompts'
               ? 'bg-white text-slate-800 shadow-sm'
@@ -788,8 +797,10 @@ export function TzPromptsPage() {
           Промпты ТЗ
         </button>
       </div>
+      {activeTab === 'discussions' && <div ref={setDiscussionToolbarTarget} className="flex min-w-0 justify-end" />}
+      </div>
 
-      {activeTab === 'tasks' ? <TasksTab /> : activeTab === 'discussions' ? <DiscussionsTab /> : (
+      {activeTab === 'tasks' ? <TasksTab /> : activeTab === 'discussions' ? <DiscussionsTab toolbarTarget={discussionToolbarTarget} onDirtyChange={setDiscussionHasUnsaved} /> : (
       <>
       {/* ── Header ── */}
       <div className="flex items-center justify-between">

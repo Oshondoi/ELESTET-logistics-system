@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '../../lib/supabase'
 
 interface Discussion {
@@ -382,7 +383,7 @@ function DiscussionContent({
   )
 }
 
-export function DiscussionsTab() {
+export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget?: HTMLElement | null; onDirtyChange?: (dirty: boolean) => void }) {
   const [view, setView] = useState<DiscussionView>('active')
   const [discussions, setDiscussions] = useState<Discussion[]>([])
   const [loading, setLoading] = useState(true)
@@ -400,6 +401,8 @@ export function DiscussionsTab() {
   const [previousContentByDiscussion, setPreviousContentByDiscussion] = useState<Record<string, string>>({})
   const [activeHistoryPointKey, setActiveHistoryPointKey] = useState<string | null>(null)
   const [activeDiscussionPointKey, setActiveDiscussionPointKey] = useState<string | null>(null)
+  const [draftItemStatesByDiscussion, setDraftItemStatesByDiscussion] = useState<Record<string, DiscussionItemStates>>({})
+  const [dirtyDiscussionIds, setDirtyDiscussionIds] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
     if (!supabase) {
@@ -434,6 +437,20 @@ export function DiscussionsTab() {
   useEffect(() => { void load() }, [load])
 
   useEffect(() => {
+    const dirty = dirtyDiscussionIds.size > 0
+    onDirtyChange?.(dirty)
+    if (!dirty) return
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeUnload)
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
+  }, [dirtyDiscussionIds, onDirtyChange])
+
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
+
+  useEffect(() => {
     if (!historyDiscussion || !activeHistoryPointKey) return
     const frame = window.requestAnimationFrame(() => {
       const navigation = document.getElementById('discussion-history-navigation')
@@ -450,26 +467,6 @@ export function DiscussionsTab() {
   const active = discussions.filter((item) => item.status === 'active')
   const completed = discussions.filter((item) => item.status === 'completed')
   const visible = view === 'active' ? active : completed
-
-  useEffect(() => {
-    const discussion = discussions.find((item) => item.status === 'active')
-    if (!discussion) return
-    const navigationItems = getDiscussionNavigation(discussion.content)
-    const anchorPrefix = `discussion-${discussion.id}`
-    const trackActivePoint = () => {
-      if (navigationItems.length === 0) return
-      let activeKey = navigationItems[0].key
-      navigationItems.forEach((item) => {
-        const section = document.getElementById(`${anchorPrefix}-${item.key}`)
-        if (section && section.getBoundingClientRect().top <= 140) activeKey = item.key
-      })
-      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) activeKey = navigationItems[navigationItems.length - 1].key
-      setActiveDiscussionPointKey((current) => current === activeKey ? current : activeKey)
-    }
-    trackActivePoint()
-    window.addEventListener('scroll', trackActivePoint, { passive: true })
-    return () => window.removeEventListener('scroll', trackActivePoint)
-  }, [discussions])
 
   useEffect(() => {
     const discussion = discussions.find((item) => item.status === 'active')
@@ -585,22 +582,49 @@ export function DiscussionsTab() {
     setHistoryLoading(false)
   }
 
-  const saveItemStates = async (discussion: Discussion, itemStates: DiscussionItemStates) => {
-    if (!supabase || itemStatesSavingId) return
-    const previous = discussion.item_states || {}
+  const stageItemStates = (discussion: Discussion, itemStates: DiscussionItemStates) => {
+    setDraftItemStatesByDiscussion((current) => ({ ...current, [discussion.id]: itemStates }))
+    setDirtyDiscussionIds((current) => new Set(current).add(discussion.id))
+  }
+
+  const discardItemStates = (discussionId: string) => {
+    setDraftItemStatesByDiscussion((current) => {
+      const next = { ...current }
+      delete next[discussionId]
+      return next
+    })
+    setDirtyDiscussionIds((current) => {
+      const next = new Set(current)
+      next.delete(discussionId)
+      return next
+    })
+  }
+
+  const saveItemStates = async (discussion: Discussion) => {
+    const itemStates = draftItemStatesByDiscussion[discussion.id]
+    if (!supabase || !itemStates || itemStatesSavingId) return
     setItemStatesSavingId(discussion.id)
     setError('')
-    setDiscussions((current) => current.map((item) => item.id === discussion.id ? { ...item, item_states: itemStates } : item))
     const { error: saveError } = await (supabase as any)
       .from('tz_discussions')
       .update({ item_states: itemStates, updated_at: new Date().toISOString() })
       .eq('id', discussion.id)
       .eq('status', 'active')
     if (saveError) {
-      setDiscussions((current) => current.map((item) => item.id === discussion.id ? { ...item, item_states: previous } : item))
       setError(saveError.message || 'Не удалось сохранить состояние пунктов')
-    } else await load()
+    } else {
+      discardItemStates(discussion.id)
+      await load()
+    }
     setItemStatesSavingId(null)
+  }
+
+  const changeView = (nextView: DiscussionView) => {
+    if (nextView === view) return
+    if (dirtyDiscussionIds.size > 0 && !window.confirm('Несохранённые отметки будут отменены. Продолжить?')) return
+    setDraftItemStatesByDiscussion({})
+    setDirtyDiscussionIds(new Set())
+    setView(nextView)
   }
 
   const toggleExpanded = (id: string) => {
@@ -612,19 +636,20 @@ export function DiscussionsTab() {
     })
   }
 
+  const viewControls = (
+    <div className="flex w-fit items-center rounded-xl bg-slate-100 p-1">
+      <button type="button" onClick={() => changeView('active')} className={`h-8 rounded-lg px-4 text-sm font-medium transition ${view === 'active' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+        Актуальный{active.length > 0 ? ` (${active.length})` : ''}
+      </button>
+      <button type="button" onClick={() => changeView('completed')} className={`h-8 rounded-lg px-4 text-sm font-medium transition ${view === 'completed' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+        Завершённые{completed.length > 0 ? ` (${completed.length})` : ''}
+      </button>
+    </div>
+  )
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex w-fit items-center rounded-xl bg-slate-100 p-1">
-          <button type="button" onClick={() => setView('active')} className={`h-8 rounded-lg px-4 text-sm font-medium transition ${view === 'active' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-            Актуальный{active.length > 0 ? ` (${active.length})` : ''}
-          </button>
-          <button type="button" onClick={() => setView('completed')} className={`h-8 rounded-lg px-4 text-sm font-medium transition ${view === 'completed' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-            Завершённые{completed.length > 0 ? ` (${completed.length})` : ''}
-          </button>
-        </div>
-        <p className="text-xs text-slate-400">«Снять ответ» фиксирует финальную версию и переносит её в архив.</p>
-      </div>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {toolbarTarget ? createPortal(viewControls, toolbarTarget) : <div className="mb-3 flex justify-end">{viewControls}</div>}
 
       {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>}
 
@@ -635,7 +660,7 @@ export function DiscussionsTab() {
           {view === 'active' ? 'Актуального ответа пока нет.' : 'Завершённых обсуждений пока нет.'}
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className={`min-h-0 flex-1 ${view === 'active' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
           {visible.map((discussion) => {
             const expanded = view === 'active' || expandedIds.has(discussion.id)
             const navigationItems = getDiscussionNavigation(discussion.content)
@@ -645,9 +670,30 @@ export function DiscussionsTab() {
             const anchorPrefix = `discussion-${discussion.id}`
             const selectedPointKey = activeDiscussionPointKey ?? navigationItems[0]?.key
             const showPointNavigation = discussion.status === 'active'
+            const effectiveItemStates = draftItemStatesByDiscussion[discussion.id] ?? discussion.item_states
+            const itemStatesDirty = dirtyDiscussionIds.has(discussion.id)
+            const trackActivePoint = (container: HTMLElement) => {
+              if (navigationItems.length === 0) return
+              const containerTop = container.getBoundingClientRect().top
+              let activeKey = navigationItems[0].key
+              navigationItems.forEach((item) => {
+                const section = document.getElementById(`${anchorPrefix}-${item.key}`)
+                if (section && section.getBoundingClientRect().top - containerTop <= 28) activeKey = item.key
+              })
+              if (container.scrollTop + container.clientHeight >= container.scrollHeight - 2) activeKey = navigationItems[navigationItems.length - 1].key
+              setActiveDiscussionPointKey((current) => current === activeKey ? current : activeKey)
+            }
+            const scrollToPoint = (key: string) => {
+              setActiveDiscussionPointKey(key)
+              const container = document.getElementById(`discussion-content-${discussion.id}`)
+              const section = document.getElementById(`${anchorPrefix}-${key}`)
+              if (!container || !section) return
+              const targetTop = container.scrollTop + section.getBoundingClientRect().top - container.getBoundingClientRect().top
+              container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+            }
             return (
-              <article key={discussion.id} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <article key={discussion.id} className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${discussion.status === 'active' ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'mb-3'}`}>
+                <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-2.5">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-base font-bold text-slate-900">{discussion.title}</h2>
@@ -661,7 +707,12 @@ export function DiscussionsTab() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button type="button" onClick={() => void openHistory(discussion)} className="h-8 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700">
+                    {itemStatesDirty && discussion.status === 'active' && <>
+                      <span className="hidden text-[11px] font-medium text-amber-600 xl:inline">Есть несохранённые отметки</span>
+                      <button type="button" disabled={itemStatesSavingId === discussion.id} onClick={() => discardItemStates(discussion.id)} className="h-8 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">Отменить</button>
+                      <button type="button" disabled={itemStatesSavingId === discussion.id} onClick={() => void saveItemStates(discussion)} className="h-8 rounded-xl bg-blue-600 px-3 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-50">{itemStatesSavingId === discussion.id ? 'Сохранение...' : 'Сохранить'}</button>
+                    </>}
+                    <button type="button" disabled={itemStatesDirty} title={itemStatesDirty ? 'Сначала сохраните или отмените отметки' : undefined} onClick={() => void openHistory(discussion)} className="h-8 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-40">
                       Версии ({discussion.revision_no})
                     </button>
                     {discussion.status === 'completed' && (
@@ -676,27 +727,26 @@ export function DiscussionsTab() {
                     )}
                     {discussion.status === 'active' && (
                       <>
-                        <button type="button" onClick={() => startEditing(discussion)} className="h-8 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700">Редактировать</button>
-                        <button type="button" disabled={saving} onClick={() => void completeDiscussion(discussion)} className="h-8 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">Снять ответ</button>
+                        <button type="button" disabled={itemStatesDirty} title={itemStatesDirty ? 'Сначала сохраните или отмените отметки' : undefined} onClick={() => startEditing(discussion)} className="h-8 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-40">Редактировать</button>
+                        <button type="button" disabled={saving || itemStatesDirty} title={itemStatesDirty ? 'Сначала сохраните или отмените отметки' : undefined} onClick={() => void completeDiscussion(discussion)} className="h-8 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">Снять ответ</button>
                       </>
                     )}
                   </div>
                 </header>
                 {expanded && (
-                  <div className={showPointNavigation ? 'grid grid-cols-[52px_minmax(0,1fr)]' : ''}>
-                    {showPointNavigation && <nav id={`discussion-navigation-${discussion.id}`} className="sticky top-4 max-h-[calc(100vh-2rem)] self-start overflow-y-auto scroll-smooth border-r border-slate-100 bg-white px-2 py-5" aria-label="Навигация по пунктам обсуждения">
+                  <div className={`${showPointNavigation ? 'grid grid-cols-[52px_minmax(0,1fr)]' : ''} min-h-0 flex-1 overflow-hidden`}>
+                    {showPointNavigation && <nav id={`discussion-navigation-${discussion.id}`} className="min-h-0 overflow-y-auto scroll-smooth border-r border-slate-100 bg-white px-2 py-3" aria-label="Навигация по пунктам обсуждения">
                       <div className="flex flex-col items-center gap-1.5">
                         {navigationItems.map((item, index) => (
                           <button id={`discussion-nav-${discussion.id}-${item.key}`} key={item.key} type="button" onClick={() => {
-                            setActiveDiscussionPointKey(item.key)
-                            document.getElementById(`${anchorPrefix}-${item.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                          }} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${pointNavigationClass(getDiscussionPointTone(item, discussion.item_states, previousNavigationByKey), selectedPointKey === item.key)}`}>
+                            scrollToPoint(item.key)
+                          }} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${pointNavigationClass(getDiscussionPointTone(item, effectiveItemStates, previousNavigationByKey), selectedPointKey === item.key)}`}>
                             {item.label.match(/^(\d+)/)?.[1] ?? index + 1}
                           </button>
                         ))}
                       </div>
                     </nav>}
-                    <div className="min-w-0 px-5 py-5 sm:px-7"><DiscussionContent content={discussion.content} previousContent={discussion.status === 'active' ? previousContentByDiscussion[discussion.id] : null} itemStates={discussion.item_states} onItemStatesChange={discussion.status === 'active' ? (states) => void saveItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} anchorPrefix={anchorPrefix} /></div>
+                    <div id={`discussion-content-${discussion.id}`} onScroll={(event) => trackActivePoint(event.currentTarget)} className="min-h-0 min-w-0 scroll-smooth overflow-y-auto px-5 py-3 sm:px-7"><DiscussionContent content={discussion.content} previousContent={discussion.status === 'active' ? previousContentByDiscussion[discussion.id] : null} itemStates={effectiveItemStates} onItemStatesChange={discussion.status === 'active' ? (states) => stageItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} anchorPrefix={anchorPrefix} /></div>
                   </div>
                 )}
               </article>
