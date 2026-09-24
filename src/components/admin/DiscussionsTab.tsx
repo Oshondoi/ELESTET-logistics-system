@@ -592,8 +592,8 @@ export function DiscussionsTab() {
               {historyLoading ? (
                 <div className="flex flex-1 items-center justify-center text-sm text-slate-400">Загрузка версий...</div>
               ) : (
-                <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)]">
-                  <aside className="min-h-0 overflow-y-auto scroll-smooth border-b border-slate-100 bg-slate-50 p-3 md:border-b-0 md:border-r">
+                <div className="grid min-h-0 flex-1 grid-cols-[220px_52px_minmax(0,1fr)] lg:grid-cols-[260px_56px_minmax(0,1fr)]">
+                  <aside className="min-h-0 overflow-y-auto scroll-smooth border-r border-slate-100 bg-slate-50 p-3">
                     <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Версии</p>
                     <div className="space-y-1.5">
                       {versions.map((revision) => (
@@ -604,19 +604,16 @@ export function DiscussionsTab() {
                         </button>
                       ))}
                     </div>
-                    {navigationItems.length > 0 && (
-                      <nav className="mt-4 border-t border-slate-200 pt-4" aria-label="Навигация по пунктам редакции">
-                        <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Пункты редакции</p>
-                        <div className="flex flex-col gap-1">
-                          {navigationItems.map((item) => (
-                            <button key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className="w-full rounded-lg px-2.5 py-2 text-left text-xs font-medium leading-4 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700">
-                              {item.label}
-                            </button>
-                          ))}
-                        </div>
-                      </nav>
-                    )}
                   </aside>
+                  <nav className="min-h-0 overflow-y-auto border-r border-slate-100 bg-white px-2 py-3" aria-label="Навигация по пунктам редакции">
+                    <div className="flex flex-col items-center gap-1.5">
+                      {navigationItems.map((item, index) => (
+                        <button key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-xs font-bold text-slate-500 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">
+                          {item.label.match(/^(\d+)/)?.[1] ?? index + 1}
+                        </button>
+                      ))}
+                    </div>
+                  </nav>
                   <main className="min-h-0 scroll-smooth overflow-y-auto px-5 py-5 sm:px-7">
                     <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-4">
                       <h3 className="text-base font-bold text-slate-900">{selected.title}</h3>
