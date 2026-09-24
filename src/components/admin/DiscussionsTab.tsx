@@ -103,10 +103,10 @@ function DiscussionContent({ content }: { content: string }) {
   }, [content])
 
   return (
-    <div className="space-y-2.5 text-sm leading-6 text-slate-600">
+    <div className="space-y-1.5 text-sm leading-6 text-slate-600">
       {blocks.map((block) => {
         if (block.kind === 'heading-1') return <h2 key={block.index} className="pt-4 text-xl font-bold text-slate-900 first:pt-0">{block.value}</h2>
-        if (block.kind === 'heading-2') return <h3 key={block.index} className="border-t border-slate-100 pt-5 text-base font-bold text-slate-900 first:border-0 first:pt-0">{block.value}</h3>
+        if (block.kind === 'heading-2') return <h3 key={block.index} className="border-t border-slate-100 pt-4 text-base font-bold text-slate-900 first:border-0 first:pt-0">{block.value}</h3>
         if (block.kind === 'heading-3' || block.kind === 'heading-4') return <h4 key={block.index} className="pt-2 text-sm font-bold text-slate-800">{block.value}</h4>
         if (block.kind === 'code') return <pre key={block.index} className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200">{block.value}</pre>
         if (block.kind === 'bullet') return <div key={block.index} className="flex gap-2 pl-1"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" /><span>{block.value}</span></div>
