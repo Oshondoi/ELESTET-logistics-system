@@ -12,7 +12,10 @@ interface Discussion {
   created_at: string
   updated_at: string
   completed_at: string | null
+  item_states: DiscussionItemStates
 }
+
+type DiscussionItemStates = Record<string, 'agreed'>
 
 interface DiscussionRevision {
   id: string
@@ -23,6 +26,7 @@ interface DiscussionRevision {
   status: 'active' | 'completed'
   completed_at: string | null
   saved_at: string
+  item_states: DiscussionItemStates
   is_current?: boolean
 }
 
@@ -41,10 +45,42 @@ const formatDate = (value: string | null) => {
   }).format(date).replace(',', '')
 }
 
-function DiscussionContent({ content }: { content: string }) {
-  const blocks = useMemo(() => {
+interface DiscussionToken {
+  kind: string
+  value: string
+  index: number
+  itemKey?: string
+}
+
+interface DiscussionSection {
+  key: string
+  tokens: DiscussionToken[]
+  itemKeys: string[]
+}
+
+const stableKey = (value: string) => {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function DiscussionContent({
+  content,
+  itemStates = {},
+  onItemStatesChange,
+  busy = false,
+}: {
+  content: string
+  itemStates?: DiscussionItemStates
+  onItemStatesChange?: (states: DiscussionItemStates) => void
+  busy?: boolean
+}) {
+  const sections = useMemo(() => {
     const lines = content.replace(/\r\n/g, '\n').split('\n')
-    const result: Array<{ kind: string; value: string; index: number }> = []
+    const result: DiscussionToken[] = []
     let code: string[] | null = null
     let paragraph: string[] = []
     let index = 0
@@ -99,23 +135,93 @@ function DiscussionContent({ content }: { content: string }) {
     }
     flushParagraph()
     if (code) result.push({ kind: 'code', value: code.join('\n'), index: index++ })
-    return result
+    const grouped: DiscussionSection[] = []
+    let current: DiscussionSection = { key: 'block-intro', tokens: [], itemKeys: [] }
+    const keyOccurrences = new Map<string, number>()
+    grouped.push(current)
+
+    result.forEach((token) => {
+      if (token.kind === 'heading-2') {
+        const baseKey = `block-${stableKey(token.value)}`
+        const occurrence = keyOccurrences.get(baseKey) ?? 0
+        keyOccurrences.set(baseKey, occurrence + 1)
+        current = { key: `${baseKey}-${occurrence}`, tokens: [], itemKeys: [] }
+        grouped.push(current)
+      }
+      if (token.kind === 'bullet' || token.kind === 'numbered') {
+        const baseKey = `${current.key}-row-${stableKey(`${token.kind}:${token.value}`)}`
+        const occurrence = keyOccurrences.get(baseKey) ?? 0
+        keyOccurrences.set(baseKey, occurrence + 1)
+        token.itemKey = `${baseKey}-${occurrence}`
+        current.itemKeys.push(token.itemKey)
+      }
+      current.tokens.push(token)
+    })
+
+    return grouped.filter((section) => section.tokens.length > 0)
   }, [content])
 
+  const updateSection = (section: DiscussionSection) => {
+    if (!onItemStatesChange || busy) return
+    const isAgreed = itemStates[section.key] === 'agreed'
+    const next = { ...itemStates }
+    if (isAgreed) {
+      delete next[section.key]
+      section.itemKeys.forEach((key) => delete next[key])
+    } else {
+      next[section.key] = 'agreed'
+      section.itemKeys.forEach((key) => { next[key] = 'agreed' })
+    }
+    onItemStatesChange(next)
+  }
+
+  const updateRow = (section: DiscussionSection, itemKey: string) => {
+    if (!onItemStatesChange || busy) return
+    const next = { ...itemStates }
+    if (next[itemKey] === 'agreed') delete next[itemKey]
+    else next[itemKey] = 'agreed'
+    const allRowsAgreed = section.itemKeys.length > 0 && section.itemKeys.every((key) => next[key] === 'agreed')
+    if (allRowsAgreed) next[section.key] = 'agreed'
+    else delete next[section.key]
+    onItemStatesChange(next)
+  }
+
   return (
-    <div className="space-y-1.5 text-sm leading-6 text-slate-600">
-      {blocks.map((block) => {
-        if (block.kind === 'heading-1') return <h2 key={block.index} className="pt-4 text-xl font-bold text-slate-900 first:pt-0">{block.value}</h2>
-        if (block.kind === 'heading-2') return <h3 key={block.index} className="border-t border-slate-100 pt-4 text-base font-bold text-slate-900 first:border-0 first:pt-0">{block.value}</h3>
-        if (block.kind === 'heading-3' || block.kind === 'heading-4') return <h4 key={block.index} className="pt-2 text-sm font-bold text-slate-800">{block.value}</h4>
-        if (block.kind === 'code') return <pre key={block.index} className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200">{block.value}</pre>
-        if (block.kind === 'bullet') return <div key={block.index} className="flex gap-2 pl-1"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" /><span>{block.value}</span></div>
-        if (block.kind === 'numbered') {
-          const [number, value] = block.value.split('\t')
-          return <div key={block.index} className="flex gap-2 pl-1"><span className="min-w-5 font-semibold text-violet-600">{number}.</span><span>{value}</span></div>
-        }
-        if (block.kind === 'quote') return <blockquote key={block.index} className="rounded-r-xl border-l-4 border-violet-300 bg-violet-50 px-4 py-2 text-slate-700">{block.value}</blockquote>
-        return <p key={block.index} className="whitespace-pre-wrap">{block.value}</p>
+    <div className="space-y-2 text-sm leading-6 text-slate-600">
+      {sections.map((section) => {
+        const agreed = itemStates[section.key] === 'agreed'
+        return (
+          <section key={section.key} className={`rounded-2xl border px-3 py-2.5 transition ${agreed ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/35'}`}>
+            <div className="mb-1.5 flex justify-end">
+              {onItemStatesChange ? (
+                <button type="button" disabled={busy} onClick={() => updateSection(section)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase transition disabled:cursor-wait disabled:opacity-50 ${agreed ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}>
+                  {agreed ? 'Согласовано' : 'В обсуждении'}
+                </button>
+              ) : (
+                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${agreed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{agreed ? 'Согласовано' : 'В обсуждении'}</span>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              {section.tokens.map((block) => {
+                if (block.kind === 'heading-1') return <h2 key={block.index} className="pt-2 text-xl font-bold text-slate-900 first:pt-0">{block.value}</h2>
+                if (block.kind === 'heading-2') return <h3 key={block.index} className="text-base font-bold text-slate-900">{block.value}</h3>
+                if (block.kind === 'heading-3' || block.kind === 'heading-4') return <h4 key={block.index} className="pt-2 text-sm font-bold text-slate-800">{block.value}</h4>
+                if (block.kind === 'code') return <pre key={block.index} className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200">{block.value}</pre>
+                if (block.kind === 'bullet' && block.itemKey) {
+                  const rowAgreed = itemStates[block.itemKey] === 'agreed'
+                  return <button key={block.index} type="button" disabled={!onItemStatesChange || busy} onClick={() => updateRow(section, block.itemKey!)} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : 'bg-amber-100/70 text-amber-900'} ${onItemStatesChange ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><span>{block.value}</span></button>
+                }
+                if (block.kind === 'numbered' && block.itemKey) {
+                  const [number, value] = block.value.split('\t')
+                  const rowAgreed = itemStates[block.itemKey] === 'agreed'
+                  return <button key={block.index} type="button" disabled={!onItemStatesChange || busy} onClick={() => updateRow(section, block.itemKey!)} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : 'bg-amber-100/70 text-amber-900'} ${onItemStatesChange ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowAgreed ? 'bg-emerald-500 text-white' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><span>{value}</span></button>
+                }
+                if (block.kind === 'quote') return <blockquote key={block.index} className="rounded-r-xl border-l-4 border-violet-300 bg-violet-50 px-4 py-2 text-slate-700">{block.value}</blockquote>
+                return <p key={block.index} className="whitespace-pre-wrap">{block.value}</p>
+              })}
+            </div>
+          </section>
+        )
       })}
     </div>
   )
@@ -135,6 +241,7 @@ export function DiscussionsTab() {
   const [revisions, setRevisions] = useState<DiscussionRevision[]>([])
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [itemStatesSavingId, setItemStatesSavingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!supabase) {
@@ -149,7 +256,7 @@ export function DiscussionsTab() {
       .order('position', { ascending: true })
       .order('created_at', { ascending: false })
     if (loadError) setError(loadError.message || 'Не удалось загрузить обсуждения')
-    else setDiscussions((data || []) as Discussion[])
+    else setDiscussions((data || []).map((item: Discussion) => ({ ...item, item_states: item.item_states || {} })))
     setLoading(false)
   }, [])
 
@@ -244,14 +351,32 @@ export function DiscussionsTab() {
     setError('')
     const { data, error: historyError } = await (supabase as any)
       .from('tz_discussion_revisions')
-      .select('id, discussion_id, revision_no, title, content, status, completed_at, saved_at')
+      .select('id, discussion_id, revision_no, title, content, status, completed_at, saved_at, item_states')
       .eq('discussion_id', discussion.id)
       .order('revision_no', { ascending: false })
     if (historyError) {
       setError(historyError.message || 'Не удалось загрузить версии ответа')
       setHistoryDiscussion(null)
-    } else setRevisions((data || []) as DiscussionRevision[])
+    } else setRevisions((data || []).map((item: DiscussionRevision) => ({ ...item, item_states: item.item_states || {} })))
     setHistoryLoading(false)
+  }
+
+  const saveItemStates = async (discussion: Discussion, itemStates: DiscussionItemStates) => {
+    if (!supabase || itemStatesSavingId) return
+    const previous = discussion.item_states || {}
+    setItemStatesSavingId(discussion.id)
+    setError('')
+    setDiscussions((current) => current.map((item) => item.id === discussion.id ? { ...item, item_states: itemStates } : item))
+    const { error: saveError } = await (supabase as any)
+      .from('tz_discussions')
+      .update({ item_states: itemStates, updated_at: new Date().toISOString() })
+      .eq('id', discussion.id)
+      .eq('status', 'active')
+    if (saveError) {
+      setDiscussions((current) => current.map((item) => item.id === discussion.id ? { ...item, item_states: previous } : item))
+      setError(saveError.message || 'Не удалось сохранить состояние пунктов')
+    } else await load()
+    setItemStatesSavingId(null)
   }
 
   const toggleExpanded = (id: string) => {
@@ -326,7 +451,7 @@ export function DiscussionsTab() {
                     )}
                   </div>
                 </header>
-                {expanded && <div className="px-5 py-5 sm:px-7"><DiscussionContent content={discussion.content} /></div>}
+                {expanded && <div className="px-5 py-5 sm:px-7"><DiscussionContent content={discussion.content} itemStates={discussion.item_states} onItemStatesChange={discussion.status === 'active' ? (states) => void saveItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} /></div>}
               </article>
             )
           })}
@@ -362,6 +487,7 @@ export function DiscussionsTab() {
           status: historyDiscussion.status,
           completed_at: historyDiscussion.completed_at,
           saved_at: historyDiscussion.updated_at,
+          item_states: historyDiscussion.item_states || {},
           is_current: true,
         }
         const versions = [currentRevision, ...revisions]
@@ -394,7 +520,7 @@ export function DiscussionsTab() {
                       <h3 className="text-base font-bold text-slate-900">{selected.title}</h3>
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">Редакция {selected.revision_no}</span>
                     </div>
-                    <DiscussionContent content={selected.content} />
+                    <DiscussionContent content={selected.content} itemStates={selected.item_states} />
                   </main>
                 </div>
               )}

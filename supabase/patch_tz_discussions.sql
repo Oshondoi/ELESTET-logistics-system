@@ -7,6 +7,7 @@ create table if not exists public.tz_discussions (
   discussion_key text not null unique check (length(btrim(discussion_key)) > 0),
   title text not null check (length(btrim(title)) > 0),
   content text not null check (length(btrim(content)) > 0),
+  item_states jsonb not null default '{}'::jsonb check (jsonb_typeof(item_states) = 'object'),
   status text not null default 'active' check (status in ('active', 'completed')),
   revision_no integer not null default 1 check (revision_no > 0),
   position integer not null default 0,
@@ -32,6 +33,7 @@ create table if not exists public.tz_discussion_revisions (
   revision_no integer not null check (revision_no > 0),
   title text not null,
   content text not null,
+  item_states jsonb not null default '{}'::jsonb check (jsonb_typeof(item_states) = 'object'),
   status text not null check (status in ('active', 'completed')),
   completed_at timestamptz,
   saved_by uuid references auth.users(id) on delete set null,
@@ -46,14 +48,15 @@ security invoker
 set search_path = public
 as $$
 begin
-  if row(old.title, old.content, old.status, old.completed_at)
+  if row(old.title, old.content, old.item_states, old.status, old.completed_at)
      is distinct from
-     row(new.title, new.content, new.status, new.completed_at) then
+     row(new.title, new.content, new.item_states, new.status, new.completed_at) then
     insert into public.tz_discussion_revisions (
       discussion_id,
       revision_no,
       title,
       content,
+      item_states,
       status,
       completed_at,
       saved_by,
@@ -63,6 +66,7 @@ begin
       old.revision_no,
       old.title,
       old.content,
+      old.item_states,
       old.status,
       old.completed_at,
       auth.uid(),
