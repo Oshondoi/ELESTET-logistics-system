@@ -180,6 +180,14 @@ const pointNavigationClass = (tone: DiscussionPointTone, active: boolean) => {
     : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-400 hover:bg-amber-100'
 }
 
+function FullscreenIcon({ active = false }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d={active ? 'M9 4v5H4m11-5v5h5M9 20v-5H4m11 5v-5h5' : 'M4 9V4h5m11 5V4h-5M4 15v5h5m11-5v5h-5'} />
+    </svg>
+  )
+}
+
 const reconcileItemStatesAfterEdit = (
   previousContent: string,
   nextContent: string,
@@ -206,6 +214,8 @@ function DiscussionContent({
   itemStates = {},
   onItemStatesChange,
   busy = false,
+  fullscreenSectionKey,
+  onToggleSectionFullscreen,
 }: {
   content: string
   previousContent?: string | null
@@ -213,6 +223,8 @@ function DiscussionContent({
   itemStates?: DiscussionItemStates
   onItemStatesChange?: (states: DiscussionItemStates) => void
   busy?: boolean
+  fullscreenSectionKey?: string | null
+  onToggleSectionFullscreen?: (sectionKey: string) => void
 }) {
   const sections = useMemo(() => {
     const lines = content.replace(/\r\n/g, '\n').split('\n')
@@ -343,9 +355,26 @@ function DiscussionContent({
         const hasRevisionChange = isNewSection || isChangedSection
         const agreed = itemStates[section.key] === `agreed:${stableKey(currentSection?.signature || '')}` || (!hasRevisionChange && itemStates[section.key] === 'agreed')
         const sectionTone: DiscussionPointTone = agreed ? 'agreed' : hasRevisionChange ? 'changed' : 'discussion'
+        const sectionFullscreen = fullscreenSectionKey === section.key
         return (
-          <section id={anchorPrefix ? `${anchorPrefix}-${section.key}` : undefined} key={section.key} className={`scroll-mt-5 rounded-2xl border px-3 py-2.5 transition ${agreed ? 'border-emerald-200 bg-emerald-50/50' : hasRevisionChange ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50/35'}`}>
+          <section
+            id={anchorPrefix ? `${anchorPrefix}-${section.key}` : undefined}
+            key={section.key}
+            data-discussion-section-key={section.key}
+            className={`scroll-mt-5 border transition ${sectionFullscreen ? 'flex h-screen w-screen min-h-0 flex-col overflow-hidden rounded-none border-0 px-6 py-4' : 'rounded-2xl px-3 py-2.5'} ${agreed ? 'border-emerald-200 bg-emerald-50' : hasRevisionChange ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50'}`}
+          >
             <div className="mb-1.5 flex items-center justify-end gap-2">
+              {onToggleSectionFullscreen && (
+                <button
+                  type="button"
+                  onClick={() => onToggleSectionFullscreen(section.key)}
+                  title={sectionFullscreen ? 'Вернуть пункт обсуждения в обычный вид (Esc)' : 'Открыть только этот пункт на весь экран'}
+                  className="mr-auto flex h-7 items-center gap-1.5 rounded-lg border border-slate-200 bg-white/80 px-2.5 text-[10px] font-semibold text-slate-600 transition hover:border-blue-300 hover:bg-white hover:text-blue-700"
+                >
+                  <FullscreenIcon active={sectionFullscreen} />
+                  {sectionFullscreen ? 'Свернуть' : 'Фулл скрин'}
+                </button>
+              )}
               {hasRevisionChange && <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-bold uppercase text-blue-700">{isNewSection ? 'Добавлено' : 'Изменено'}</span>}
               {onItemStatesChange ? (
                 <button type="button" disabled={busy} onClick={() => updateSection(section)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase transition disabled:cursor-wait disabled:opacity-50 ${agreed ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}>
@@ -355,7 +384,7 @@ function DiscussionContent({
                 <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${agreed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{agreed ? 'Согласовано' : 'В обсуждении'}</span>
               )}
             </div>
-            <div className="space-y-1.5">
+            <div className={`space-y-1.5 ${sectionFullscreen ? 'min-h-0 flex-1 overflow-y-auto scroll-smooth pr-2' : ''}`}>
               {section.tokens.map((block) => {
                 if (block.kind === 'heading-1') return <h2 key={block.index} className="pt-2 text-xl font-bold text-slate-900 first:pt-0">{block.value}</h2>
                 if (block.kind === 'heading-2') return <h3 key={block.index} className="text-base font-bold text-slate-900">{block.value}</h3>
@@ -403,6 +432,8 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
   const [activeDiscussionPointKey, setActiveDiscussionPointKey] = useState<string | null>(null)
   const [draftItemStatesByDiscussion, setDraftItemStatesByDiscussion] = useState<Record<string, DiscussionItemStates>>({})
   const [dirtyDiscussionIds, setDirtyDiscussionIds] = useState<Set<string>>(new Set())
+  const [fullscreenDiscussionId, setFullscreenDiscussionId] = useState<string | null>(null)
+  const [fullscreenSectionKey, setFullscreenSectionKey] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!supabase) {
@@ -451,6 +482,17 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   useEffect(() => {
+    const syncFullscreenState = () => {
+      const element = document.fullscreenElement as HTMLElement | null
+      const elementId = element?.id ?? ''
+      setFullscreenDiscussionId(elementId.startsWith('discussion-card-') ? elementId.slice('discussion-card-'.length) : null)
+      setFullscreenSectionKey(element?.dataset.discussionSectionKey ?? null)
+    }
+    document.addEventListener('fullscreenchange', syncFullscreenState)
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState)
+  }, [])
+
+  useEffect(() => {
     if (!historyDiscussion || !activeHistoryPointKey) return
     const frame = window.requestAnimationFrame(() => {
       const navigation = document.getElementById('discussion-history-navigation')
@@ -488,6 +530,31 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
     setEditTitle(discussion.title)
     setEditContent(discussion.content)
     setError('')
+  }
+
+  const toggleFullscreen = async (discussionId: string) => {
+    const element = document.getElementById(`discussion-card-${discussionId}`)
+    if (!element) return
+    try {
+      if (document.fullscreenElement === element) await document.exitFullscreen()
+      else {
+        if (document.fullscreenElement) await document.exitFullscreen()
+        await element.requestFullscreen()
+      }
+    } catch {
+      setError('Браузер не разрешил открыть обсуждение на весь экран')
+    }
+  }
+
+  const toggleSectionFullscreen = async (discussionId: string, sectionKey: string) => {
+    const element = document.getElementById(`discussion-${discussionId}-${sectionKey}`)
+    if (!element) return
+    try {
+      if (document.fullscreenElement === element) await document.exitFullscreen()
+      else await element.requestFullscreen()
+    } catch {
+      setError('Браузер не разрешил открыть пункт обсуждения на весь экран')
+    }
   }
 
   const closeEditing = () => {
@@ -672,6 +739,7 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
             const showPointNavigation = discussion.status === 'active'
             const effectiveItemStates = draftItemStatesByDiscussion[discussion.id] ?? discussion.item_states
             const itemStatesDirty = dirtyDiscussionIds.has(discussion.id)
+            const isFullscreen = fullscreenDiscussionId === discussion.id
             const trackActivePoint = (container: HTMLElement) => {
               if (navigationItems.length === 0) return
               const containerTop = container.getBoundingClientRect().top
@@ -692,7 +760,7 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
               container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
             }
             return (
-              <article key={discussion.id} className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${discussion.status === 'active' ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'mb-3'}`}>
+              <article id={`discussion-card-${discussion.id}`} key={discussion.id} className={`${isFullscreen ? 'flex h-screen w-screen min-h-0 flex-col overflow-hidden rounded-none border-0' : 'rounded-2xl border border-slate-200 shadow-sm'} bg-white ${discussion.status === 'active' ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'mb-3'}`}>
                 <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-2.5">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -712,6 +780,10 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
                       <button type="button" disabled={itemStatesSavingId === discussion.id} onClick={() => discardItemStates(discussion.id)} className="h-8 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">Отменить</button>
                       <button type="button" disabled={itemStatesSavingId === discussion.id} onClick={() => void saveItemStates(discussion)} className="h-8 rounded-xl bg-blue-600 px-3 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-50">{itemStatesSavingId === discussion.id ? 'Сохранение...' : 'Сохранить'}</button>
                     </>}
+                    {discussion.status === 'active' && <button type="button" onClick={() => void toggleFullscreen(discussion.id)} title={isFullscreen ? 'Вернуть поле обсуждения в обычный вид (Esc)' : 'Развернуть поле обсуждения на весь экран'} className="flex h-8 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">
+                      <FullscreenIcon active={isFullscreen} />
+                      {isFullscreen ? 'Свернуть' : 'Фулл скрин'}
+                    </button>}
                     <button type="button" disabled={itemStatesDirty} title={itemStatesDirty ? 'Сначала сохраните или отмените отметки' : undefined} onClick={() => void openHistory(discussion)} className="h-8 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-40">
                       Версии ({discussion.revision_no})
                     </button>
@@ -746,7 +818,7 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
                         ))}
                       </div>
                     </nav>}
-                    <div id={`discussion-content-${discussion.id}`} onScroll={(event) => trackActivePoint(event.currentTarget)} className="min-h-0 min-w-0 scroll-smooth overflow-y-auto px-5 py-3 sm:px-7"><DiscussionContent content={discussion.content} previousContent={discussion.status === 'active' ? previousContentByDiscussion[discussion.id] : null} itemStates={effectiveItemStates} onItemStatesChange={discussion.status === 'active' ? (states) => stageItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} anchorPrefix={anchorPrefix} /></div>
+                    <div id={`discussion-content-${discussion.id}`} onScroll={(event) => trackActivePoint(event.currentTarget)} className="min-h-0 min-w-0 scroll-smooth overflow-y-auto px-5 py-3 sm:px-7"><DiscussionContent content={discussion.content} previousContent={discussion.status === 'active' ? previousContentByDiscussion[discussion.id] : null} itemStates={effectiveItemStates} onItemStatesChange={discussion.status === 'active' ? (states) => stageItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} anchorPrefix={anchorPrefix} fullscreenSectionKey={fullscreenSectionKey} onToggleSectionFullscreen={discussion.status === 'active' ? (sectionKey) => void toggleSectionFullscreen(discussion.id, sectionKey) : undefined} /></div>
                   </div>
                 )}
               </article>
