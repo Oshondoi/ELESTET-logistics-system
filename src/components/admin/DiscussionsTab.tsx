@@ -347,6 +347,20 @@ export function DiscussionsTab() {
 
   useEffect(() => { void load() }, [load])
 
+  useEffect(() => {
+    if (!historyDiscussion || !activeHistoryPointKey) return
+    const frame = window.requestAnimationFrame(() => {
+      const navigation = document.getElementById('discussion-history-navigation')
+      const activeButton = document.getElementById(`discussion-history-nav-${activeHistoryPointKey}`)
+      if (!navigation || !activeButton) return
+      const navigationRect = navigation.getBoundingClientRect()
+      const buttonRect = activeButton.getBoundingClientRect()
+      const targetTop = navigation.scrollTop + buttonRect.top - navigationRect.top - ((navigation.clientHeight - buttonRect.height) / 2)
+      navigation.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeHistoryPointKey, historyDiscussion, selectedRevision])
+
   const active = discussions.filter((item) => item.status === 'active')
   const completed = discussions.filter((item) => item.status === 'completed')
   const visible = view === 'active' ? active : completed
@@ -624,10 +638,10 @@ export function DiscussionsTab() {
                       ))}
                     </div>
                   </aside>
-                  <nav className="min-h-0 overflow-y-auto border-r border-slate-100 bg-white px-2 py-3" aria-label="Навигация по пунктам редакции">
+                  <nav id="discussion-history-navigation" className="min-h-0 overflow-y-auto scroll-smooth border-r border-slate-100 bg-white px-2 py-3" aria-label="Навигация по пунктам редакции">
                     <div className="flex flex-col items-center gap-1.5">
                       {navigationItems.map((item, index) => (
-                        <button key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${activeHistoryPointKey === item.key ? 'border-blue-600 bg-blue-600 text-white shadow-sm' : 'border-slate-200 text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'}`}>
+                        <button id={`discussion-history-nav-${item.key}`} key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${activeHistoryPointKey === item.key ? 'border-blue-600 bg-blue-600 text-white shadow-sm' : 'border-slate-200 text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'}`}>
                           {item.label.match(/^(\d+)/)?.[1] ?? index + 1}
                         </button>
                       ))}
