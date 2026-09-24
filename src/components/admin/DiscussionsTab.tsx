@@ -188,6 +188,14 @@ function FullscreenIcon({ active = false }: { active?: boolean }) {
   )
 }
 
+function CopyRowIcon({ copied = false }: { copied?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d={copied ? 'm5 12 4 4L19 6' : 'M9 8.25V6.75A2.75 2.75 0 0 1 11.75 4h5.5A2.75 2.75 0 0 1 20 6.75v5.5A2.75 2.75 0 0 1 17.25 15h-1.5M6.75 9h5.5A2.75 2.75 0 0 1 15 11.75v5.5A2.75 2.75 0 0 1 12.25 20h-5.5A2.75 2.75 0 0 1 4 17.25v-5.5A2.75 2.75 0 0 1 6.75 9Z'} />
+    </svg>
+  )
+}
+
 const reconcileItemStatesAfterEdit = (
   previousContent: string,
   nextContent: string,
@@ -226,6 +234,7 @@ function DiscussionContent({
   fullscreenSectionKey?: string | null
   onToggleSectionFullscreen?: (sectionKey: string) => void
 }) {
+  const [copiedItemKey, setCopiedItemKey] = useState<string | null>(null)
   const sections = useMemo(() => {
     const lines = content.replace(/\r\n/g, '\n').split('\n')
     const result: DiscussionToken[] = []
@@ -345,6 +354,26 @@ function DiscussionContent({
     onItemStatesChange(next)
   }
 
+  const copyRowText = async (itemKey: string, value: string) => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value)
+      else {
+        const textarea = document.createElement('textarea')
+        textarea.value = value
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        textarea.remove()
+      }
+      setCopiedItemKey(itemKey)
+      window.setTimeout(() => setCopiedItemKey((current) => current === itemKey ? null : current), 1400)
+    } catch {
+      setCopiedItemKey(null)
+    }
+  }
+
   return (
     <div className="space-y-2 text-sm leading-6 text-slate-600">
       {sections.map((section) => {
@@ -393,13 +422,15 @@ function DiscussionContent({
                 if (block.kind === 'bullet' && block.itemKey) {
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
                   const isNewRow = Boolean(previousKeys && !previousKeys.has(block.itemKey))
-                  return <button key={block.index} type="button" disabled={!onItemStatesChange || busy} onClick={() => updateRow(section, block.itemKey!)} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : isNewRow ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${onItemStatesChange ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? 'border-emerald-500 bg-emerald-500 text-white' : isNewRow ? 'border-blue-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><span className="flex-1">{block.value}</span>{isNewRow && <span className="mt-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">Новое</span>}</button>
+                  const canToggle = Boolean(onItemStatesChange && !busy)
+                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : isNewRow ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? 'border-emerald-500 bg-emerald-500 text-white' : isNewRow ? 'border-blue-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, block.value) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? 'bg-emerald-100 text-emerald-700' : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="flex-1">{block.value}</span>{isNewRow && <span className="mt-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">Новое</span>}</div>
                 }
                 if (block.kind === 'numbered' && block.itemKey) {
                   const [number, value] = block.value.split('\t')
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
                   const isNewRow = Boolean(previousKeys && !previousKeys.has(block.itemKey))
-                  return <button key={block.index} type="button" disabled={!onItemStatesChange || busy} onClick={() => updateRow(section, block.itemKey!)} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : isNewRow ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${onItemStatesChange ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowAgreed ? 'bg-emerald-500 text-white' : isNewRow ? 'bg-blue-100 text-blue-800' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><span className="flex-1">{value}</span>{isNewRow && <span className="mt-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">Новое</span>}</button>
+                  const canToggle = Boolean(onItemStatesChange && !busy)
+                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : isNewRow ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowAgreed ? 'bg-emerald-500 text-white' : isNewRow ? 'bg-blue-100 text-blue-800' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, `${number}. ${value}`) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? 'bg-emerald-100 text-emerald-700' : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="flex-1">{value}</span>{isNewRow && <span className="mt-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">Новое</span>}</div>
                 }
                 if (block.kind === 'quote') return <blockquote key={block.index} className="rounded-r-xl border-l-4 border-violet-300 bg-violet-50 px-4 py-2 text-slate-700">{block.value}</blockquote>
                 return <p key={block.index} className="whitespace-pre-wrap">{block.value}</p>
