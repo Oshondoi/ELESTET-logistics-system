@@ -67,13 +67,53 @@ const stableKey = (value: string) => {
   return (hash >>> 0).toString(36)
 }
 
+const getDiscussionItemKeys = (content: string) => {
+  const keys = new Set<string>()
+  const keyOccurrences = new Map<string, number>()
+  let currentSectionKey = 'block-intro'
+  let inCode = false
+  keys.add(currentSectionKey)
+
+  content.replace(/\r\n/g, '\n').split('\n').forEach((line) => {
+    if (line.trim().startsWith('```')) {
+      inCode = !inCode
+      return
+    }
+    if (inCode) return
+
+    const heading = line.match(/^##\s+(.+)$/)
+    if (heading) {
+      const baseKey = `block-${stableKey(heading[1])}`
+      const occurrence = keyOccurrences.get(baseKey) ?? 0
+      keyOccurrences.set(baseKey, occurrence + 1)
+      currentSectionKey = `${baseKey}-${occurrence}`
+      keys.add(currentSectionKey)
+      return
+    }
+
+    const bullet = line.match(/^\s*-\s+(.+)$/)
+    const numbered = line.match(/^\s*(\d+)\.\s+(.+)$/)
+    if (!bullet && !numbered) return
+    const kind = bullet ? 'bullet' : 'numbered'
+    const value = bullet ? bullet[1] : `${numbered![1]}\t${numbered![2]}`
+    const baseKey = `${currentSectionKey}-row-${stableKey(`${kind}:${value}`)}`
+    const occurrence = keyOccurrences.get(baseKey) ?? 0
+    keyOccurrences.set(baseKey, occurrence + 1)
+    keys.add(`${baseKey}-${occurrence}`)
+  })
+
+  return keys
+}
+
 function DiscussionContent({
   content,
+  previousContent,
   itemStates = {},
   onItemStatesChange,
   busy = false,
 }: {
   content: string
+  previousContent?: string | null
   itemStates?: DiscussionItemStates
   onItemStatesChange?: (states: DiscussionItemStates) => void
   busy?: boolean
@@ -161,6 +201,8 @@ function DiscussionContent({
     return grouped.filter((section) => section.tokens.length > 0)
   }, [content])
 
+  const previousKeys = useMemo(() => previousContent ? getDiscussionItemKeys(previousContent) : null, [previousContent])
+
   const updateSection = (section: DiscussionSection) => {
     if (!onItemStatesChange || busy) return
     const isAgreed = itemStates[section.key] === 'agreed'
@@ -190,9 +232,11 @@ function DiscussionContent({
     <div className="space-y-2 text-sm leading-6 text-slate-600">
       {sections.map((section) => {
         const agreed = itemStates[section.key] === 'agreed'
+        const isNewSection = Boolean(previousKeys && !previousKeys.has(section.key))
         return (
-          <section key={section.key} className={`rounded-2xl border px-3 py-2.5 transition ${agreed ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/35'}`}>
-            <div className="mb-1.5 flex justify-end">
+          <section key={section.key} className={`rounded-2xl border px-3 py-2.5 transition ${agreed ? 'border-emerald-200 bg-emerald-50/50' : isNewSection ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50/35'}`}>
+            <div className="mb-1.5 flex items-center justify-end gap-2">
+              {isNewSection && <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-bold uppercase text-blue-700">Добавлено</span>}
               {onItemStatesChange ? (
                 <button type="button" disabled={busy} onClick={() => updateSection(section)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase transition disabled:cursor-wait disabled:opacity-50 ${agreed ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}>
                   {agreed ? 'Согласовано' : 'В обсуждении'}
@@ -209,12 +253,14 @@ function DiscussionContent({
                 if (block.kind === 'code') return <pre key={block.index} className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200">{block.value}</pre>
                 if (block.kind === 'bullet' && block.itemKey) {
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
-                  return <button key={block.index} type="button" disabled={!onItemStatesChange || busy} onClick={() => updateRow(section, block.itemKey!)} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : 'bg-amber-100/70 text-amber-900'} ${onItemStatesChange ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><span>{block.value}</span></button>
+                  const isNewRow = Boolean(previousKeys && !previousKeys.has(block.itemKey))
+                  return <button key={block.index} type="button" disabled={!onItemStatesChange || busy} onClick={() => updateRow(section, block.itemKey!)} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : isNewRow ? 'bg-blue-50 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${onItemStatesChange ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? 'border-emerald-500 bg-emerald-500 text-white' : isNewRow ? 'border-blue-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><span className="flex-1">{block.value}</span>{isNewRow && <span className="mt-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">Новое</span>}</button>
                 }
                 if (block.kind === 'numbered' && block.itemKey) {
                   const [number, value] = block.value.split('\t')
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
-                  return <button key={block.index} type="button" disabled={!onItemStatesChange || busy} onClick={() => updateRow(section, block.itemKey!)} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : 'bg-amber-100/70 text-amber-900'} ${onItemStatesChange ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowAgreed ? 'bg-emerald-500 text-white' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><span>{value}</span></button>
+                  const isNewRow = Boolean(previousKeys && !previousKeys.has(block.itemKey))
+                  return <button key={block.index} type="button" disabled={!onItemStatesChange || busy} onClick={() => updateRow(section, block.itemKey!)} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : isNewRow ? 'bg-blue-50 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${onItemStatesChange ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowAgreed ? 'bg-emerald-500 text-white' : isNewRow ? 'bg-blue-100 text-blue-800' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><span className="flex-1">{value}</span>{isNewRow && <span className="mt-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">Новое</span>}</button>
                 }
                 if (block.kind === 'quote') return <blockquote key={block.index} className="rounded-r-xl border-l-4 border-violet-300 bg-violet-50 px-4 py-2 text-slate-700">{block.value}</blockquote>
                 return <p key={block.index} className="whitespace-pre-wrap">{block.value}</p>
@@ -242,6 +288,7 @@ export function DiscussionsTab() {
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [itemStatesSavingId, setItemStatesSavingId] = useState<string | null>(null)
+  const [previousContentByDiscussion, setPreviousContentByDiscussion] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     if (!supabase) {
@@ -256,7 +303,20 @@ export function DiscussionsTab() {
       .order('position', { ascending: true })
       .order('created_at', { ascending: false })
     if (loadError) setError(loadError.message || 'Не удалось загрузить обсуждения')
-    else setDiscussions((data || []).map((item: Discussion) => ({ ...item, item_states: item.item_states || {} })))
+    else {
+      const loadedDiscussions = (data || []).map((item: Discussion) => ({ ...item, item_states: item.item_states || {} }))
+      setDiscussions(loadedDiscussions)
+      const activeDiscussion = loadedDiscussions.find((item: Discussion) => item.status === 'active')
+      if (activeDiscussion) {
+        const { data: revisionData } = await (supabase as any)
+          .from('tz_discussion_revisions')
+          .select('content, revision_no')
+          .eq('discussion_id', activeDiscussion.id)
+          .order('revision_no', { ascending: false })
+        const previousContent = (revisionData || []).find((revision: { content: string }) => revision.content !== activeDiscussion.content)?.content
+        setPreviousContentByDiscussion(previousContent ? { [activeDiscussion.id]: previousContent } : {})
+      } else setPreviousContentByDiscussion({})
+    }
     setLoading(false)
   }, [])
 
@@ -451,7 +511,7 @@ export function DiscussionsTab() {
                     )}
                   </div>
                 </header>
-                {expanded && <div className="px-5 py-5 sm:px-7"><DiscussionContent content={discussion.content} itemStates={discussion.item_states} onItemStatesChange={discussion.status === 'active' ? (states) => void saveItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} /></div>}
+                {expanded && <div className="px-5 py-5 sm:px-7"><DiscussionContent content={discussion.content} previousContent={discussion.status === 'active' ? previousContentByDiscussion[discussion.id] : null} itemStates={discussion.item_states} onItemStatesChange={discussion.status === 'active' ? (states) => void saveItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} /></div>}
               </article>
             )
           })}
