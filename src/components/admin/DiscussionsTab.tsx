@@ -313,6 +313,7 @@ export function DiscussionsTab() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [itemStatesSavingId, setItemStatesSavingId] = useState<string | null>(null)
   const [previousContentByDiscussion, setPreviousContentByDiscussion] = useState<Record<string, string>>({})
+  const [activeHistoryPointKey, setActiveHistoryPointKey] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!supabase) {
@@ -432,6 +433,7 @@ export function DiscussionsTab() {
     setHistoryLoading(true)
     setRevisions([])
     setSelectedRevision(discussion.revision_no)
+    setActiveHistoryPointKey(getDiscussionNavigation(discussion.content)[0]?.key ?? null)
     setError('')
     const { data, error: historyError } = await (supabase as any)
       .from('tz_discussion_revisions')
@@ -580,7 +582,24 @@ export function DiscussionsTab() {
         const navigationItems = getDiscussionNavigation(selected.content)
         const anchorPrefix = `history-${selected.id}`
         const scrollToPoint = (key: string) => {
+          setActiveHistoryPointKey(key)
           document.getElementById(`${anchorPrefix}-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
+        const selectHistoryRevision = (revision: DiscussionRevision) => {
+          setSelectedRevision(revision.revision_no)
+          setActiveHistoryPointKey(getDiscussionNavigation(revision.content)[0]?.key ?? null)
+          document.getElementById('discussion-history-content')?.scrollTo({ top: 0, behavior: 'smooth' })
+        }
+        const trackActiveHistoryPoint = (container: HTMLElement) => {
+          if (navigationItems.length === 0) return
+          const containerTop = container.getBoundingClientRect().top
+          let activeKey = navigationItems[0].key
+          navigationItems.forEach((item) => {
+            const section = document.getElementById(`${anchorPrefix}-${item.key}`)
+            if (section && section.getBoundingClientRect().top - containerTop <= 72) activeKey = item.key
+          })
+          if (container.scrollTop + container.clientHeight >= container.scrollHeight - 2) activeKey = navigationItems[navigationItems.length - 1].key
+          setActiveHistoryPointKey((current) => current === activeKey ? current : activeKey)
         }
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
@@ -597,7 +616,7 @@ export function DiscussionsTab() {
                     <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Версии</p>
                     <div className="space-y-1.5">
                       {versions.map((revision) => (
-                        <button key={revision.id} type="button" onClick={() => setSelectedRevision(revision.revision_no)} className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${selected.revision_no === revision.revision_no ? 'border-violet-200 bg-white shadow-sm' : 'border-transparent hover:border-slate-200 hover:bg-white'}`}>
+                        <button key={revision.id} type="button" onClick={() => selectHistoryRevision(revision)} className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${selected.revision_no === revision.revision_no ? 'border-violet-200 bg-white shadow-sm' : 'border-transparent hover:border-slate-200 hover:bg-white'}`}>
                           <div className="flex items-center justify-between gap-2"><span className={`text-sm font-semibold ${selected.revision_no === revision.revision_no ? 'text-violet-700' : 'text-slate-700'}`}>Редакция {revision.revision_no}</span>{revision.is_current && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-bold uppercase text-violet-600">Текущая</span>}</div>
                           <p className="mt-1 text-[11px] text-slate-400">{formatDate(revision.saved_at)}</p>
                           <p className="mt-0.5 text-[11px] text-slate-500">{revision.status === 'active' ? 'Была актуальной' : 'Была завершённой'}</p>
@@ -608,13 +627,13 @@ export function DiscussionsTab() {
                   <nav className="min-h-0 overflow-y-auto border-r border-slate-100 bg-white px-2 py-3" aria-label="Навигация по пунктам редакции">
                     <div className="flex flex-col items-center gap-1.5">
                       {navigationItems.map((item, index) => (
-                        <button key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-xs font-bold text-slate-500 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">
+                        <button key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${activeHistoryPointKey === item.key ? 'border-blue-600 bg-blue-600 text-white shadow-sm' : 'border-slate-200 text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'}`}>
                           {item.label.match(/^(\d+)/)?.[1] ?? index + 1}
                         </button>
                       ))}
                     </div>
                   </nav>
-                  <main className="min-h-0 scroll-smooth overflow-y-auto px-5 py-5 sm:px-7">
+                  <main id="discussion-history-content" onScroll={(event) => trackActiveHistoryPoint(event.currentTarget)} className="min-h-0 scroll-smooth overflow-y-auto px-5 py-5 sm:px-7">
                     <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-4">
                       <h3 className="text-base font-bold text-slate-900">{selected.title}</h3>
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">Редакция {selected.revision_no}</span>
