@@ -13,7 +13,7 @@
 - initial RLS policies
 - FBS cached orders and sync metadata
 - WMS warehouses, racks, sides, pallet positions, physical boxes and box contents
-- superadmin technical prompts and tasks
+- superadmin technical prompts, tasks and versioned discussions
 
 ## `tz_tasks` (applied 09.08.2026)
 - Patch: `supabase/patch_tz_tasks.sql`.
@@ -21,6 +21,17 @@
 - RLS enabled; CRUD requires `profiles.platform_role = 'superadmin'` for `auth.uid()`.
 - Index keeps stable `position, created_at` ordering.
 - Seed: `supabase/seed_tz_tasks_20260809.sql`, idempotent by exact task text.
+
+## `tz_discussions` and revisions (applied 24.09.2026)
+
+- Patches: `supabase/patch_tz_discussions.sql` and `supabase/patch_tz_discussion_item_states.sql`.
+- `tz_discussions` stores the current materialized answer: stable `discussion_key`, title, content, `active/completed` status, monotonically increasing `revision_no`, ordering, timestamps and `item_states jsonb`.
+- A partial unique index permits at most one row with `status='active'` across the service.
+- `tz_discussion_revisions` is the immutable history saved automatically before each material update. It keeps the previous revision number, title, content, status, completion time, saved time and exact agreement states.
+- The archive trigger increments `revision_no` and preserves changes caused by text edits, completion/restoration and agreement toggles. The frontend therefore finds the prior **different content**, not merely revision `N-1`, when calculating which blocks/rows are new.
+- `item_states` is constrained to a JSON object and maps deterministic UI keys to the value `agreed`; absence means `В обсуждении`.
+- RLS is enabled on both tables. Read/write access requires `profiles.platform_role='superadmin'` for `auth.uid()`.
+- Both patches were applied to production before the dependent frontend was pushed. The initial active architectural answer was seeded and later extended in revision 4 with the ready-box reception mode.
 
 ## FBS tables
 - `fbs_orders`: tenant/store cache of WB orders, unique `(store_id, wb_order_id)`; keeps raw data, WB statuses, supply relation and synchronized variant fields.

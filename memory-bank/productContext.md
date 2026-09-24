@@ -53,6 +53,17 @@ The product is being created to manage logistics operations for shipments going 
 - Dense vertical cards maximize tasks visible on one screen.
 - Completion is reversible and visually obvious through gray strike-through text.
 - Tab choice persists after refresh; task data persists in Supabase.
+- Long architectural conversations live in a separate `Обсуждение` tab. The owner sees only the current revision by default, can inspect every old revision, agree individual blocks/rows, archive the whole answer and restore it later.
+- Numeric sticky navigation is required because an active architectural answer can contain more than twenty blocks. The same interaction exists in the live answer and its history.
+- Agreement colors have distinct meanings: amber is unresolved, green is agreed, light blue is content newly introduced by the current textual revision.
+
+## Planned client intake workflow
+
+- The planned client-facing flow introduces a separate request entity before a fulfillment batch. Starting actual reception creates one linked batch, copies the client's declaration into `Заявлено`, and records scans/counts separately in `Принято`.
+- Actual reception is location-independent and supports both loose goods and goods already distributed into ready boxes. In the ready-box mode the operator scans a physical box and then every product barcode directly into it.
+- The source request, all revisions and the client/recipient snapshots remain auditable after conversion. A completed batch may also be transferred to another company as a new incoming request without destroying the sender's batch.
+- Client access combines short routes with secure authentication/invitation tokens; public company/request IDs are never authorization secrets. One client identity covers multiple request links instead of one password per request.
+- Full target rules, statuses, permissions boundaries, documents, signatures, payments and unresolved decisions are in `memory-bank/components/intake-requests.md`. This workflow is design-only until its schema/API/UI are implemented and deployed.
 
 ## Target Users
 - Logistics operators

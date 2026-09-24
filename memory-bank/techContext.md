@@ -1,5 +1,18 @@
 # Tech Context
 
+## Admin discussions and versioned decisions — 24.09.2026
+
+- `src/pages/TzPromptsPage.tsx` exposes tabs in order `Обсуждение / Задачи / Промпты ТЗ`; the saved localStorage tab remains respected.
+- `src/components/admin/DiscussionsTab.tsx` renders the active/completed archive, editing, completion/restoration, automatic version history, granular agreement states, current-revision diff highlighting and numeric point navigation.
+- Stable block keys derive from normalized `##` headings; stable row keys derive from the owning block plus bullet/numbered content and occurrence. These keys are persisted in `item_states` and must remain deterministic when refactoring the renderer.
+- New-content highlighting compares current content with the newest archived revision whose `content` is actually different. Agreement-only revisions intentionally do not redefine what counts as newly added text.
+- History modal is fixed at `90vh × 80vw`. Its layout is `versions | numeric navigation | content`; numeric navigation and content scroll independently, while scroll-spy keeps the active blue number visible.
+- The active discussion card has a sticky numeric navigation rail tied to window scrolling. `DiscussionContent` accepts an anchor prefix so history and live-card DOM IDs never collide.
+- Production DB patches: `supabase/patch_tz_discussions.sql`, `supabase/patch_tz_discussion_item_states.sql`. Both are applied.
+- Production frontend sequence: `2f2a673`, `f1628e9`, `25815d9`, `abde446`, `fd83ef4`, `99fa5de`, `96d3b33`, `fb7874c`, `2908559`, `024ed22`, `d9ebe9b`. The last asset was verified on `elestet.net` after deploy.
+- No Supabase personal access token is stored in repository files. Any token pasted into chat must be rotated by the owner when practical and must never be copied into Memory Bank, code, scripts or commits.
+- Product specification discussed in the initial active answer is documented separately in `memory-bank/components/intake-requests.md`; it is target design, not current fulfillment production behavior.
+
 ## Current FBO Excel and WB box barcode work — 24.09.2026
 
 - `src/components/fulfillment/FulfillmentBoxExcelDialog.tsx` — единая модалка `Содержимое коробов / Загрузить WB ШК / Экспорт`, высота `90vh`, scroll только центральной области, закреплённый подвал.
@@ -7,8 +20,8 @@
 - `src/lib/wbExcelExport.ts` и `src/components/fulfillment/FulfillmentSupplyExcelExport.tsx` — отдельные системный и WB-режимы; WB формирует точный пятиколоночный шаблон только из сохранённых проверенных пар.
 - `supabase/patch_fulfillment_wb_box_code_registry.sql` — production registry WB-пар по `supply_id + box_number`, восстановление после удаления/повторного создания номера, атомарное применение точного набора и блокировка API-назначения.
 - `supabase/functions/wb-supply/index.ts` — package-code sync отключён; обычный sync продолжает обновлять метаданные FBO-поставки без изменения WB ШК коробов. Флаг `WB_PACKAGE_SYNC_ENABLED` по умолчанию `false` и не является разрешением вернуться к API-сопоставлению.
-- `src/components/fulfillment/FulfillmentExcelHistory.tsx` и `supabase/patch_fulfillment_excel_action_history.sql` — локально реализованная append-only история изменяющих Excel-загрузок и усиленная серверная проверка `fulfillment_manage` (commit `b86d7c9`). Миграция и frontend ещё не production; сначала применить SQL после авторизации Supabase CLI, затем push.
-- Production frontend актуален через `551bcc0`; локальная ветка также содержит `b86d7c9` и документационное правило модальных подвалов `050f3c1`.
+- `src/components/fulfillment/FulfillmentExcelHistory.tsx` и `supabase/patch_fulfillment_excel_action_history.sql` — append-only история изменяющих Excel-загрузок и усиленная серверная проверка `fulfillment_manage` (commit `b86d7c9`). Миграция применена, а frontend опубликован в production до начала работ над обсуждениями.
+- Основной Excel-процесс опубликован через `551bcc0`; история из `b86d7c9`, правило модальных подвалов `050f3c1` и последующие изменения обсуждений также находятся в `main` и production.
 - Канонические правила и все ограничения: `memory-bank/components/wb-excel-export.md`.
 
 ## Fulfillment KIZ and transgran work — 17–22.09.2026

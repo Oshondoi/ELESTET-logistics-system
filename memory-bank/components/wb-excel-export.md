@@ -100,9 +100,9 @@
 - Получение/печать package codes через WB API отключено. Серверный `package_info` безопасно отказывает и направляет к Excel.
 - Системные и WB PDF доступны на уровнях короба, поставки, партии и связанной строки Логистики по уже сохранённым данным.
 
-## История Excel и права — подготовлено локально, ещё не production
+## История Excel и права — production
 
-Коммит `b86d7c9` подготовил, но пока не опубликовал:
+Коммит `b86d7c9` реализовал и опубликовал:
 
 - append-only `fulfillment_excel_action_history` для успешных изменяющих загрузок содержимого и WB ШК;
 - пользователь, дата, исходное имя файла, результат `applied/unchanged`, точные снимки `до/после`;
@@ -112,13 +112,13 @@
 - серверная проверка `fulfillment_manage`, включая фактического исполнителя pipeline-стадии;
 - запрет прямой записи в registry и отключение старых обходных mutating RPC для `authenticated`.
 
-До применения `supabase/patch_fulfillment_excel_action_history.sql` и публикации соответствующего frontend эта история и усиленная серверная проверка не считаются production-функцией. Frontend нельзя выпускать раньше миграции, потому что он вызывает новые RPC.
+`supabase/patch_fulfillment_excel_action_history.sql` применён в production до публикации зависимого frontend. Порядок `сначала миграция, затем frontend` остаётся обязательным для подобных RPC-зависимых изменений.
 
 ## Статус публикации на 24.09.2026
 
-- Production frontend содержит канонический Excel-процесс через commit `551bcc0` и все предшествующие изменения до него.
+- Production frontend содержит канонический Excel-процесс через commit `551bcc0`, историю Excel из `b86d7c9` и последующие изменения `main`.
 - Registry WB-пар, отключение API-привязки и безопасный metadata sync применены в production ранее.
-- Локальная ветка опережает `origin/main`: история Excel (`b86d7c9`) и правило закреплённого подвала (`050f3c1`) ещё не отправлены; для истории требуется повторная авторизация Supabase CLI и применение миграции перед push.
+- История Excel, серверная проверка прав и правило закреплённого подвала находятся в `main` и production.
 - Пока WB не ответит, Excel WB остаётся временным эталоном порядка. Ответ поддержки может изменить правило только отдельным подтверждённым решением, а не автоматическим возвратом API-сопоставления.
 
 ## Основные файлы
@@ -128,11 +128,11 @@
 - `src/lib/fulfillmentBoxExportConfig.ts`
 - `src/components/fulfillment/FulfillmentBoxExcelDialog.tsx`
 - `src/components/fulfillment/FulfillmentSupplyExcelExport.tsx`
-- `src/components/fulfillment/FulfillmentExcelHistory.tsx` — локально, ожидает deploy
+- `src/components/fulfillment/FulfillmentExcelHistory.tsx`
 - `src/components/ui/BoxBarcodePrintDialog.tsx`
 - `src/services/fulfillmentService.ts`
 - `src/services/tripService.ts`
 - `supabase/functions/wb-supply/index.ts`
 - `supabase/patch_fulfillment_box_excel_import.sql`
 - `supabase/patch_fulfillment_wb_box_code_registry.sql`
-- `supabase/patch_fulfillment_excel_action_history.sql` — локально, ожидает deploy
+- `supabase/patch_fulfillment_excel_action_history.sql` — применён в production
