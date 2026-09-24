@@ -359,7 +359,7 @@ function DiscussionContent({
                 if (block.kind === 'heading-1') return <h2 key={block.index} className="pt-2 text-xl font-bold text-slate-900 first:pt-0">{block.value}</h2>
                 if (block.kind === 'heading-2') return <h3 key={block.index} className="text-base font-bold text-slate-900">{block.value}</h3>
                 if (block.kind === 'heading-3' || block.kind === 'heading-4') return <h4 key={block.index} className="pt-2 text-sm font-bold text-slate-800">{block.value}</h4>
-                if (block.kind === 'code') return <pre key={block.index} className={`overflow-x-auto whitespace-pre-wrap rounded-2xl border-l-4 bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200 ${sectionTone === 'agreed' ? 'border-l-emerald-500' : sectionTone === 'changed' ? 'border-l-blue-500' : 'border-l-amber-500'}`}>{block.value}</pre>
+                if (block.kind === 'code') return <pre key={block.index} className={`overflow-x-auto whitespace-pre-wrap rounded-2xl border-l-[12px] bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200 ${sectionTone === 'agreed' ? 'border-l-emerald-500' : sectionTone === 'changed' ? 'border-l-blue-500' : 'border-l-amber-500'}`}>{block.value}</pre>
                 if (block.kind === 'bullet' && block.itemKey) {
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
                   const isNewRow = Boolean(previousKeys && !previousKeys.has(block.itemKey))
