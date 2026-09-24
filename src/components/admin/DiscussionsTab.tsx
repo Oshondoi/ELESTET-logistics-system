@@ -105,15 +105,39 @@ const getDiscussionItemKeys = (content: string) => {
   return keys
 }
 
+const getDiscussionNavigation = (content: string) => {
+  const items: Array<{ key: string; label: string }> = []
+  const keyOccurrences = new Map<string, number>()
+  let inCode = false
+
+  content.replace(/\r\n/g, '\n').split('\n').forEach((line) => {
+    if (line.trim().startsWith('```')) {
+      inCode = !inCode
+      return
+    }
+    if (inCode) return
+    const heading = line.match(/^##\s+(.+)$/)
+    if (!heading) return
+    const baseKey = `block-${stableKey(heading[1])}`
+    const occurrence = keyOccurrences.get(baseKey) ?? 0
+    keyOccurrences.set(baseKey, occurrence + 1)
+    items.push({ key: `${baseKey}-${occurrence}`, label: heading[1] })
+  })
+
+  return items
+}
+
 function DiscussionContent({
   content,
   previousContent,
+  anchorPrefix,
   itemStates = {},
   onItemStatesChange,
   busy = false,
 }: {
   content: string
   previousContent?: string | null
+  anchorPrefix?: string
   itemStates?: DiscussionItemStates
   onItemStatesChange?: (states: DiscussionItemStates) => void
   busy?: boolean
@@ -234,7 +258,7 @@ function DiscussionContent({
         const agreed = itemStates[section.key] === 'agreed'
         const isNewSection = Boolean(previousKeys && !previousKeys.has(section.key))
         return (
-          <section key={section.key} className={`rounded-2xl border px-3 py-2.5 transition ${agreed ? 'border-emerald-200 bg-emerald-50/50' : isNewSection ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50/35'}`}>
+          <section id={anchorPrefix ? `${anchorPrefix}-${section.key}` : undefined} key={section.key} className={`scroll-mt-5 rounded-2xl border px-3 py-2.5 transition ${agreed ? 'border-emerald-200 bg-emerald-50/50' : isNewSection ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50/35'}`}>
             <div className="mb-1.5 flex items-center justify-end gap-2">
               {isNewSection && <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-bold uppercase text-blue-700">Добавлено</span>}
               {onItemStatesChange ? (
@@ -553,6 +577,11 @@ export function DiscussionsTab() {
         const versions = [currentRevision, ...revisions]
           .sort((left, right) => right.revision_no - left.revision_no)
         const selected = versions.find((item) => item.revision_no === selectedRevision) ?? currentRevision
+        const navigationItems = getDiscussionNavigation(selected.content)
+        const anchorPrefix = `history-${selected.id}`
+        const scrollToPoint = (key: string) => {
+          document.getElementById(`${anchorPrefix}-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
             <div className="flex h-[90vh] w-[80vw] max-w-none flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
@@ -564,7 +593,8 @@ export function DiscussionsTab() {
                 <div className="flex flex-1 items-center justify-center text-sm text-slate-400">Загрузка версий...</div>
               ) : (
                 <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)]">
-                  <aside className="min-h-0 overflow-y-auto border-b border-slate-100 bg-slate-50 p-3 md:border-b-0 md:border-r">
+                  <aside className="min-h-0 overflow-y-auto scroll-smooth border-b border-slate-100 bg-slate-50 p-3 md:border-b-0 md:border-r">
+                    <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Версии</p>
                     <div className="space-y-1.5">
                       {versions.map((revision) => (
                         <button key={revision.id} type="button" onClick={() => setSelectedRevision(revision.revision_no)} className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${selected.revision_no === revision.revision_no ? 'border-violet-200 bg-white shadow-sm' : 'border-transparent hover:border-slate-200 hover:bg-white'}`}>
@@ -574,13 +604,25 @@ export function DiscussionsTab() {
                         </button>
                       ))}
                     </div>
+                    {navigationItems.length > 0 && (
+                      <nav className="mt-4 border-t border-slate-200 pt-4" aria-label="Навигация по пунктам редакции">
+                        <p className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Пункты редакции</p>
+                        <div className="flex flex-col gap-1">
+                          {navigationItems.map((item) => (
+                            <button key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className="w-full rounded-lg px-2.5 py-2 text-left text-xs font-medium leading-4 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700">
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                      </nav>
+                    )}
                   </aside>
-                  <main className="min-h-0 overflow-y-auto px-5 py-5 sm:px-7">
+                  <main className="min-h-0 scroll-smooth overflow-y-auto px-5 py-5 sm:px-7">
                     <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-4">
                       <h3 className="text-base font-bold text-slate-900">{selected.title}</h3>
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">Редакция {selected.revision_no}</span>
                     </div>
-                    <DiscussionContent content={selected.content} itemStates={selected.item_states} />
+                    <DiscussionContent content={selected.content} itemStates={selected.item_states} anchorPrefix={anchorPrefix} />
                   </main>
                 </div>
               )}
