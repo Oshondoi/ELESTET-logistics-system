@@ -314,6 +314,7 @@ export function DiscussionsTab() {
   const [itemStatesSavingId, setItemStatesSavingId] = useState<string | null>(null)
   const [previousContentByDiscussion, setPreviousContentByDiscussion] = useState<Record<string, string>>({})
   const [activeHistoryPointKey, setActiveHistoryPointKey] = useState<string | null>(null)
+  const [activeDiscussionPointKey, setActiveDiscussionPointKey] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!supabase) {
@@ -364,6 +365,41 @@ export function DiscussionsTab() {
   const active = discussions.filter((item) => item.status === 'active')
   const completed = discussions.filter((item) => item.status === 'completed')
   const visible = view === 'active' ? active : completed
+
+  useEffect(() => {
+    const discussion = discussions.find((item) => item.status === 'active')
+    if (!discussion) return
+    const navigationItems = getDiscussionNavigation(discussion.content)
+    const anchorPrefix = `discussion-${discussion.id}`
+    const trackActivePoint = () => {
+      if (navigationItems.length === 0) return
+      let activeKey = navigationItems[0].key
+      navigationItems.forEach((item) => {
+        const section = document.getElementById(`${anchorPrefix}-${item.key}`)
+        if (section && section.getBoundingClientRect().top <= 140) activeKey = item.key
+      })
+      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) activeKey = navigationItems[navigationItems.length - 1].key
+      setActiveDiscussionPointKey((current) => current === activeKey ? current : activeKey)
+    }
+    trackActivePoint()
+    window.addEventListener('scroll', trackActivePoint, { passive: true })
+    return () => window.removeEventListener('scroll', trackActivePoint)
+  }, [discussions])
+
+  useEffect(() => {
+    const discussion = discussions.find((item) => item.status === 'active')
+    if (!discussion || !activeDiscussionPointKey) return
+    const frame = window.requestAnimationFrame(() => {
+      const navigation = document.getElementById(`discussion-navigation-${discussion.id}`)
+      const activeButton = document.getElementById(`discussion-nav-${discussion.id}-${activeDiscussionPointKey}`)
+      if (!navigation || !activeButton) return
+      const navigationRect = navigation.getBoundingClientRect()
+      const buttonRect = activeButton.getBoundingClientRect()
+      const targetTop = navigation.scrollTop + buttonRect.top - navigationRect.top - ((navigation.clientHeight - buttonRect.height) / 2)
+      navigation.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeDiscussionPointKey, discussions])
 
   const startEditing = (discussion: Discussion) => {
     setEditing(discussion)
@@ -514,8 +550,12 @@ export function DiscussionsTab() {
         <div className="flex flex-col gap-3">
           {visible.map((discussion) => {
             const expanded = view === 'active' || expandedIds.has(discussion.id)
+            const navigationItems = getDiscussionNavigation(discussion.content)
+            const anchorPrefix = `discussion-${discussion.id}`
+            const selectedPointKey = activeDiscussionPointKey ?? navigationItems[0]?.key
+            const showPointNavigation = discussion.status === 'active'
             return (
-              <article key={discussion.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <article key={discussion.id} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -551,7 +591,23 @@ export function DiscussionsTab() {
                     )}
                   </div>
                 </header>
-                {expanded && <div className="px-5 py-5 sm:px-7"><DiscussionContent content={discussion.content} previousContent={discussion.status === 'active' ? previousContentByDiscussion[discussion.id] : null} itemStates={discussion.item_states} onItemStatesChange={discussion.status === 'active' ? (states) => void saveItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} /></div>}
+                {expanded && (
+                  <div className={showPointNavigation ? 'grid grid-cols-[52px_minmax(0,1fr)]' : ''}>
+                    {showPointNavigation && <nav id={`discussion-navigation-${discussion.id}`} className="sticky top-4 max-h-[calc(100vh-2rem)] self-start overflow-y-auto scroll-smooth border-r border-slate-100 bg-white px-2 py-5" aria-label="Навигация по пунктам обсуждения">
+                      <div className="flex flex-col items-center gap-1.5">
+                        {navigationItems.map((item, index) => (
+                          <button id={`discussion-nav-${discussion.id}-${item.key}`} key={item.key} type="button" onClick={() => {
+                            setActiveDiscussionPointKey(item.key)
+                            document.getElementById(`${anchorPrefix}-${item.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                          }} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${selectedPointKey === item.key ? 'border-blue-600 bg-blue-600 text-white shadow-sm' : 'border-slate-200 text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'}`}>
+                            {item.label.match(/^(\d+)/)?.[1] ?? index + 1}
+                          </button>
+                        ))}
+                      </div>
+                    </nav>}
+                    <div className="min-w-0 px-5 py-5 sm:px-7"><DiscussionContent content={discussion.content} previousContent={discussion.status === 'active' ? previousContentByDiscussion[discussion.id] : null} itemStates={discussion.item_states} onItemStatesChange={discussion.status === 'active' ? (states) => void saveItemStates(discussion, states) : undefined} busy={itemStatesSavingId === discussion.id} anchorPrefix={anchorPrefix} /></div>
+                  </div>
+                )}
               </article>
             )
           })}
