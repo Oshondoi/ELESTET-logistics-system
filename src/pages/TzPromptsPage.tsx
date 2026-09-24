@@ -756,6 +756,17 @@ export function TzPromptsPage() {
       <div className="flex w-fit items-center rounded-xl bg-slate-100 p-1">
         <button
           type="button"
+          onClick={() => setActiveTab('discussions')}
+          className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
+            activeTab === 'discussions'
+              ? 'bg-white text-slate-800 shadow-sm'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Обсуждение
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('tasks')}
           className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
             activeTab === 'tasks'
@@ -775,17 +786,6 @@ export function TzPromptsPage() {
           }`}
         >
           Промпты ТЗ
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('discussions')}
-          className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
-            activeTab === 'discussions'
-              ? 'bg-white text-slate-800 shadow-sm'
-              : 'text-slate-500 hover:text-slate-700'
-          }`}
-        >
-          Обсуждение
         </button>
       </div>
 
