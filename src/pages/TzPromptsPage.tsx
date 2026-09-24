@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { Modal } from '../components/ui/Modal'
+import { DiscussionsTab } from '../components/admin/DiscussionsTab'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -656,9 +657,9 @@ function PromptCard({
 // ─── TzPromptsPage ────────────────────────────────────────────────────────────
 
 export function TzPromptsPage() {
-  const [activeTab, setActiveTab] = useState<'prompts' | 'tasks'>(() => {
+  const [activeTab, setActiveTab] = useState<'prompts' | 'tasks' | 'discussions'>(() => {
     const savedTab = localStorage.getItem('elestet-tz-prompts-active-tab')
-    return savedTab === 'tasks' || savedTab === 'prompts' ? savedTab : 'tasks'
+    return savedTab === 'tasks' || savedTab === 'prompts' || savedTab === 'discussions' ? savedTab : 'tasks'
   })
   const [prompts, setPrompts] = useState<TzPrompt[]>([])
   const [loading, setLoading] = useState(true)
@@ -775,9 +776,20 @@ export function TzPromptsPage() {
         >
           Промпты ТЗ
         </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('discussions')}
+          className={`h-8 cursor-pointer rounded-lg px-4 text-sm font-medium transition ${
+            activeTab === 'discussions'
+              ? 'bg-white text-slate-800 shadow-sm'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Обсуждение
+        </button>
       </div>
 
-      {activeTab === 'tasks' ? <TasksTab /> : (
+      {activeTab === 'tasks' ? <TasksTab /> : activeTab === 'discussions' ? <DiscussionsTab /> : (
       <>
       {/* ── Header ── */}
       <div className="flex items-center justify-between">
