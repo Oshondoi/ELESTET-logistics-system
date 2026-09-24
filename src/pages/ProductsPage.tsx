@@ -491,7 +491,7 @@ export const ProductsPage = ({ stores, activeAccountId, selectedStoreId, onStore
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-700">
                         {d.batch_short_id != null
-                          ? <span className="font-medium">П-{d.batch_short_id}</span>
+                          ? <span className="font-medium">P-{d.batch_short_id}</span>
                           : null}
                         {d.batch_name && <span className="ml-1.5 text-slate-400">{d.batch_name}</span>}
                       </td>

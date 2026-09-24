@@ -6837,7 +6837,7 @@ const BatchDetailModal = ({
                               <p className="truncate text-xs font-bold text-blue-600 leading-tight w-full pr-6">{supply.warehouse_name ?? <span className="text-slate-400 font-normal italic">склад не указан</span>}</p>
                               <p className="text-xs text-slate-400">{totalBoxes} кор. · {totalItems} ед.</p>
                               <p className={`text-xs font-medium ${supply.trip_line_id ? 'text-emerald-600' : 'text-slate-400'}`}>
-                                {linkedLine ? `Поставка П-${linkedLine.shipment_number}` : supply.trip_line_id ? 'Передана в логистику' : 'Не передана в логистику'}
+                                {linkedLine ? `Поставка S-${linkedLine.shipment_number}` : supply.trip_line_id ? 'Передана в логистику' : 'Не передана в логистику'}
                               </p>
                             </button>
                             <div className="flex min-h-9 flex-shrink-0 items-end justify-between gap-2 px-2 pb-2">
@@ -6949,7 +6949,7 @@ const BatchDetailModal = ({
                             <div className="min-w-0">
                               <h3 className="text-lg font-semibold text-slate-800">Изменить склад назначения</h3>
                               <p className="mt-1 truncate text-sm text-slate-400">
-                                Поставка П-{editedSupply.supply_number} · {editedSupply.warehouse_name}
+                                Поставка S-{editedSupply.supply_number} · {editedSupply.warehouse_name}
                               </p>
                             </div>
                             <button

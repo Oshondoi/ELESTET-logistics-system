@@ -15,7 +15,8 @@ interface Discussion {
   item_states: DiscussionItemStates
 }
 
-type DiscussionItemStates = Record<string, 'agreed'>
+type DiscussionItemState = 'agreed' | `agreed:${string}`
+type DiscussionItemStates = Record<string, DiscussionItemState>
 
 interface DiscussionRevision {
   id: string
@@ -105,26 +106,96 @@ const getDiscussionItemKeys = (content: string) => {
   return keys
 }
 
-const getDiscussionNavigation = (content: string) => {
-  const items: Array<{ key: string; label: string }> = []
+interface DiscussionSectionMeta {
+  key: string
+  label: string
+  signature: string
+  itemKeys: string[]
+}
+
+const getDiscussionSectionMeta = (content: string) => {
+  const items: DiscussionSectionMeta[] = []
   const keyOccurrences = new Map<string, number>()
+  let current: DiscussionSectionMeta = { key: 'block-intro', label: '', signature: '', itemKeys: [] }
+  items.push(current)
   let inCode = false
 
   content.replace(/\r\n/g, '\n').split('\n').forEach((line) => {
     if (line.trim().startsWith('```')) {
       inCode = !inCode
+      current.signature += `${line}\n`
       return
     }
+    const heading = !inCode ? line.match(/^##\s+(.+)$/) : null
+    if (heading) {
+      const baseKey = `block-${stableKey(heading[1])}`
+      const occurrence = keyOccurrences.get(baseKey) ?? 0
+      keyOccurrences.set(baseKey, occurrence + 1)
+      current = { key: `${baseKey}-${occurrence}`, label: heading[1], signature: `${line}\n`, itemKeys: [] }
+      items.push(current)
+      return
+    }
+    current.signature += `${line}\n`
     if (inCode) return
-    const heading = line.match(/^##\s+(.+)$/)
-    if (!heading) return
-    const baseKey = `block-${stableKey(heading[1])}`
+    const bullet = line.match(/^\s*-\s+(.+)$/)
+    const numbered = line.match(/^\s*(\d+)\.\s+(.+)$/)
+    if (!bullet && !numbered) return
+    const kind = bullet ? 'bullet' : 'numbered'
+    const value = bullet ? bullet[1] : `${numbered![1]}\t${numbered![2]}`
+    const baseKey = `${current.key}-row-${stableKey(`${kind}:${value}`)}`
     const occurrence = keyOccurrences.get(baseKey) ?? 0
     keyOccurrences.set(baseKey, occurrence + 1)
-    items.push({ key: `${baseKey}-${occurrence}`, label: heading[1] })
+    current.itemKeys.push(`${baseKey}-${occurrence}`)
   })
 
-  return items
+  return items.filter((item) => item.signature.trim().length > 0)
+}
+
+const getDiscussionNavigation = (content: string) => getDiscussionSectionMeta(content).filter((item) => item.key !== 'block-intro')
+
+type DiscussionPointTone = 'agreed' | 'changed' | 'discussion'
+
+const getDiscussionPointTone = (
+  item: DiscussionSectionMeta,
+  itemStates: DiscussionItemStates,
+  previousByKey: Map<string, DiscussionSectionMeta> | null,
+): DiscussionPointTone => {
+  const previous = previousByKey?.get(item.key)
+  const changed = Boolean(previousByKey && (!previous || previous.signature !== item.signature))
+  const state = itemStates[item.key]
+  if (state === `agreed:${stableKey(item.signature)}` || (!changed && state === 'agreed')) return 'agreed'
+  return changed ? 'changed' : 'discussion'
+}
+
+const pointNavigationClass = (tone: DiscussionPointTone, active: boolean) => {
+  if (tone === 'agreed') return active
+    ? 'border-emerald-700 bg-emerald-700 text-white shadow-sm'
+    : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
+  if (tone === 'changed') return active
+    ? 'border-blue-700 bg-blue-700 text-white shadow-sm'
+    : 'border-blue-200 bg-blue-50 text-blue-700 hover:border-blue-400 hover:bg-blue-100'
+  return active
+    ? 'border-amber-600 bg-amber-600 text-white shadow-sm'
+    : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-400 hover:bg-amber-100'
+}
+
+const reconcileItemStatesAfterEdit = (
+  previousContent: string,
+  nextContent: string,
+  itemStates: DiscussionItemStates,
+) => {
+  const previousByKey = new Map(getDiscussionSectionMeta(previousContent).map((section) => [section.key, section]))
+  const nextStates: DiscussionItemStates = {}
+  getDiscussionSectionMeta(nextContent).forEach((section) => {
+    const previous = previousByKey.get(section.key)
+    if (!previous) return
+    if (previous.signature === section.signature && itemStates[section.key]) nextStates[section.key] = itemStates[section.key]
+    const previousRowKeys = new Set(previous.itemKeys)
+    section.itemKeys.forEach((key) => {
+      if (previousRowKeys.has(key) && itemStates[key] === 'agreed') nextStates[key] = 'agreed'
+    })
+  })
+  return nextStates
 }
 
 function DiscussionContent({
@@ -226,16 +297,24 @@ function DiscussionContent({
   }, [content])
 
   const previousKeys = useMemo(() => previousContent ? getDiscussionItemKeys(previousContent) : null, [previousContent])
+  const currentSectionsByKey = useMemo(() => new Map(getDiscussionSectionMeta(content).map((section) => [section.key, section])), [content])
+  const previousSectionsByKey = useMemo(() => previousContent
+    ? new Map(getDiscussionSectionMeta(previousContent).map((section) => [section.key, section]))
+    : null, [previousContent])
 
   const updateSection = (section: DiscussionSection) => {
     if (!onItemStatesChange || busy) return
-    const isAgreed = itemStates[section.key] === 'agreed'
+    const currentSection = currentSectionsByKey.get(section.key)
+    const previousSection = previousSectionsByKey?.get(section.key)
+    const hasRevisionChange = Boolean(previousSectionsByKey && (!previousSection || previousSection.signature !== currentSection?.signature))
+    const currentAgreement: DiscussionItemState = currentSection ? `agreed:${stableKey(currentSection.signature)}` : 'agreed'
+    const isAgreed = itemStates[section.key] === currentAgreement || (!hasRevisionChange && itemStates[section.key] === 'agreed')
     const next = { ...itemStates }
     if (isAgreed) {
       delete next[section.key]
       section.itemKeys.forEach((key) => delete next[key])
     } else {
-      next[section.key] = 'agreed'
+      next[section.key] = currentAgreement
       section.itemKeys.forEach((key) => { next[key] = 'agreed' })
     }
     onItemStatesChange(next)
@@ -247,7 +326,8 @@ function DiscussionContent({
     if (next[itemKey] === 'agreed') delete next[itemKey]
     else next[itemKey] = 'agreed'
     const allRowsAgreed = section.itemKeys.length > 0 && section.itemKeys.every((key) => next[key] === 'agreed')
-    if (allRowsAgreed) next[section.key] = 'agreed'
+    const currentSection = currentSectionsByKey.get(section.key)
+    if (allRowsAgreed) next[section.key] = currentSection ? `agreed:${stableKey(currentSection.signature)}` : 'agreed'
     else delete next[section.key]
     onItemStatesChange(next)
   }
@@ -255,12 +335,17 @@ function DiscussionContent({
   return (
     <div className="space-y-2 text-sm leading-6 text-slate-600">
       {sections.map((section) => {
-        const agreed = itemStates[section.key] === 'agreed'
-        const isNewSection = Boolean(previousKeys && !previousKeys.has(section.key))
+        const currentSection = currentSectionsByKey.get(section.key)
+        const previousSection = previousSectionsByKey?.get(section.key)
+        const isNewSection = Boolean(previousSectionsByKey && !previousSection)
+        const isChangedSection = Boolean(previousSection && currentSection && previousSection.signature !== currentSection.signature)
+        const hasRevisionChange = isNewSection || isChangedSection
+        const agreed = itemStates[section.key] === `agreed:${stableKey(currentSection?.signature || '')}` || (!hasRevisionChange && itemStates[section.key] === 'agreed')
+        const sectionTone: DiscussionPointTone = agreed ? 'agreed' : hasRevisionChange ? 'changed' : 'discussion'
         return (
-          <section id={anchorPrefix ? `${anchorPrefix}-${section.key}` : undefined} key={section.key} className={`scroll-mt-5 rounded-2xl border px-3 py-2.5 transition ${agreed ? 'border-emerald-200 bg-emerald-50/50' : isNewSection ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50/35'}`}>
+          <section id={anchorPrefix ? `${anchorPrefix}-${section.key}` : undefined} key={section.key} className={`scroll-mt-5 rounded-2xl border px-3 py-2.5 transition ${agreed ? 'border-emerald-200 bg-emerald-50/50' : hasRevisionChange ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50/35'}`}>
             <div className="mb-1.5 flex items-center justify-end gap-2">
-              {isNewSection && <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-bold uppercase text-blue-700">Добавлено</span>}
+              {hasRevisionChange && <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-bold uppercase text-blue-700">{isNewSection ? 'Добавлено' : 'Изменено'}</span>}
               {onItemStatesChange ? (
                 <button type="button" disabled={busy} onClick={() => updateSection(section)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase transition disabled:cursor-wait disabled:opacity-50 ${agreed ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}>
                   {agreed ? 'Согласовано' : 'В обсуждении'}
@@ -274,7 +359,7 @@ function DiscussionContent({
                 if (block.kind === 'heading-1') return <h2 key={block.index} className="pt-2 text-xl font-bold text-slate-900 first:pt-0">{block.value}</h2>
                 if (block.kind === 'heading-2') return <h3 key={block.index} className="text-base font-bold text-slate-900">{block.value}</h3>
                 if (block.kind === 'heading-3' || block.kind === 'heading-4') return <h4 key={block.index} className="pt-2 text-sm font-bold text-slate-800">{block.value}</h4>
-                if (block.kind === 'code') return <pre key={block.index} className="overflow-x-auto whitespace-pre-wrap rounded-2xl bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200">{block.value}</pre>
+                if (block.kind === 'code') return <pre key={block.index} className={`overflow-x-auto whitespace-pre-wrap rounded-2xl border-l-4 bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200 ${sectionTone === 'agreed' ? 'border-l-emerald-500' : sectionTone === 'changed' ? 'border-l-blue-500' : 'border-l-amber-500'}`}>{block.value}</pre>
                 if (block.kind === 'bullet' && block.itemKey) {
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
                   const isNewRow = Boolean(previousKeys && !previousKeys.has(block.itemKey))
@@ -419,11 +504,14 @@ export function DiscussionsTab() {
     if (!supabase || !editing || !editTitle.trim() || !editContent.trim() || saving) return
     setSaving(true)
     setError('')
+    const nextContent = editContent.trim()
+    const nextItemStates = reconcileItemStatesAfterEdit(editing.content, nextContent, editing.item_states || {})
     const { error: saveError } = await (supabase as any)
       .from('tz_discussions')
       .update({
         title: editTitle.trim(),
-        content: editContent.trim(),
+        content: nextContent,
+        item_states: nextItemStates,
         updated_at: new Date().toISOString(),
       })
       .eq('id', editing.id)
@@ -551,6 +639,9 @@ export function DiscussionsTab() {
           {visible.map((discussion) => {
             const expanded = view === 'active' || expandedIds.has(discussion.id)
             const navigationItems = getDiscussionNavigation(discussion.content)
+            const previousNavigationByKey = previousContentByDiscussion[discussion.id]
+              ? new Map(getDiscussionSectionMeta(previousContentByDiscussion[discussion.id]).map((item) => [item.key, item]))
+              : null
             const anchorPrefix = `discussion-${discussion.id}`
             const selectedPointKey = activeDiscussionPointKey ?? navigationItems[0]?.key
             const showPointNavigation = discussion.status === 'active'
@@ -599,7 +690,7 @@ export function DiscussionsTab() {
                           <button id={`discussion-nav-${discussion.id}-${item.key}`} key={item.key} type="button" onClick={() => {
                             setActiveDiscussionPointKey(item.key)
                             document.getElementById(`${anchorPrefix}-${item.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                          }} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${selectedPointKey === item.key ? 'border-blue-600 bg-blue-600 text-white shadow-sm' : 'border-slate-200 text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'}`}>
+                          }} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${pointNavigationClass(getDiscussionPointTone(item, discussion.item_states, previousNavigationByKey), selectedPointKey === item.key)}`}>
                             {item.label.match(/^(\d+)/)?.[1] ?? index + 1}
                           </button>
                         ))}
@@ -650,6 +741,13 @@ export function DiscussionsTab() {
           .sort((left, right) => right.revision_no - left.revision_no)
         const selected = versions.find((item) => item.revision_no === selectedRevision) ?? currentRevision
         const navigationItems = getDiscussionNavigation(selected.content)
+        const selectedVersionIndex = versions.findIndex((item) => item.id === selected.id)
+        const previousVersionContent = versions
+          .slice(selectedVersionIndex + 1)
+          .find((item) => item.content !== selected.content)?.content ?? null
+        const previousHistoryNavigationByKey = previousVersionContent
+          ? new Map(getDiscussionSectionMeta(previousVersionContent).map((item) => [item.key, item]))
+          : null
         const anchorPrefix = `history-${selected.id}`
         const scrollToPoint = (key: string) => {
           setActiveHistoryPointKey(key)
@@ -697,7 +795,7 @@ export function DiscussionsTab() {
                   <nav id="discussion-history-navigation" className="min-h-0 overflow-y-auto scroll-smooth border-r border-slate-100 bg-white px-2 py-3" aria-label="Навигация по пунктам редакции">
                     <div className="flex flex-col items-center gap-1.5">
                       {navigationItems.map((item, index) => (
-                        <button id={`discussion-history-nav-${item.key}`} key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${activeHistoryPointKey === item.key ? 'border-blue-600 bg-blue-600 text-white shadow-sm' : 'border-slate-200 text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'}`}>
+                        <button id={`discussion-history-nav-${item.key}`} key={item.key} type="button" onClick={() => scrollToPoint(item.key)} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-xs font-bold transition ${pointNavigationClass(getDiscussionPointTone(item, selected.item_states, previousHistoryNavigationByKey), activeHistoryPointKey === item.key)}`}>
                           {item.label.match(/^(\d+)/)?.[1] ?? index + 1}
                         </button>
                       ))}
@@ -708,7 +806,7 @@ export function DiscussionsTab() {
                       <h3 className="text-base font-bold text-slate-900">{selected.title}</h3>
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">Редакция {selected.revision_no}</span>
                     </div>
-                    <DiscussionContent content={selected.content} itemStates={selected.item_states} anchorPrefix={anchorPrefix} />
+                    <DiscussionContent content={selected.content} previousContent={previousVersionContent} itemStates={selected.item_states} anchorPrefix={anchorPrefix} />
                   </main>
                 </div>
               )}
