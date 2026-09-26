@@ -207,7 +207,7 @@ const getDiscussionRowOrigins = (
 
 const getDiscussionNavigation = (content: string) => getDiscussionSectionMeta(content).filter((item) => item.key !== 'block-intro')
 
-type DiscussionPointTone = 'agreed' | 'changed' | 'discussion'
+type DiscussionPointTone = 'agreed' | 'revised-agreed' | 'revised-discussion' | 'discussion'
 
 const getDiscussionPointTone = (
   item: DiscussionSectionMeta,
@@ -217,20 +217,52 @@ const getDiscussionPointTone = (
   const previous = previousByKey?.get(item.key)
   const changed = Boolean(previousByKey && (!previous || previous.signature !== item.signature))
   const state = itemStates[item.key]
-  if (state === `agreed:${stableKey(item.signature)}` || (!changed && state === 'agreed')) return 'agreed'
-  return changed ? 'changed' : 'discussion'
+  const agreed = state === `agreed:${stableKey(item.signature)}` || (!changed && state === 'agreed')
+  if (agreed) return changed ? 'revised-agreed' : 'agreed'
+  return changed ? 'revised-discussion' : 'discussion'
 }
 
 const pointNavigationClass = (tone: DiscussionPointTone, active: boolean) => {
   if (tone === 'agreed') return active
     ? 'border-emerald-700 bg-emerald-700 text-white shadow-sm'
     : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
-  if (tone === 'changed') return active
+  if (tone === 'revised-agreed') return active
     ? 'border-blue-700 bg-blue-700 text-white shadow-sm'
     : 'border-blue-200 bg-blue-50 text-blue-700 hover:border-blue-400 hover:bg-blue-100'
+  if (tone === 'revised-discussion') return active
+    ? 'border-violet-700 bg-violet-700 text-white shadow-sm'
+    : 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-400 hover:bg-violet-100'
   return active
     ? 'border-amber-600 bg-amber-600 text-white shadow-sm'
     : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-400 hover:bg-amber-100'
+}
+
+const discussionSurfaceClass = (tone: DiscussionPointTone) => {
+  if (tone === 'agreed') return 'border-emerald-200 bg-emerald-50'
+  if (tone === 'revised-agreed') return 'border-blue-200 bg-blue-50'
+  if (tone === 'revised-discussion') return 'border-violet-200 bg-violet-50'
+  return 'border-amber-200 bg-amber-50'
+}
+
+const discussionRowClass = (tone: DiscussionPointTone) => {
+  if (tone === 'agreed') return 'bg-emerald-100/80 text-emerald-900'
+  if (tone === 'revised-agreed') return 'bg-blue-100/80 text-blue-900'
+  if (tone === 'revised-discussion') return 'bg-violet-100/70 text-violet-900 ring-1 ring-inset ring-violet-200'
+  return 'bg-amber-100/70 text-amber-900'
+}
+
+const discussionBadgeClass = (tone: DiscussionPointTone) => {
+  if (tone === 'agreed') return 'bg-emerald-100 text-emerald-700'
+  if (tone === 'revised-agreed') return 'bg-blue-100 text-blue-700'
+  if (tone === 'revised-discussion') return 'bg-violet-100 text-violet-700'
+  return 'bg-amber-100 text-amber-700'
+}
+
+const discussionCodeBorderClass = (tone: DiscussionPointTone) => {
+  if (tone === 'agreed') return 'border-l-emerald-500'
+  if (tone === 'revised-agreed') return 'border-l-blue-500'
+  if (tone === 'revised-discussion') return 'border-l-violet-500'
+  return 'border-l-amber-500'
 }
 
 function FullscreenIcon({ active = false }: { active?: boolean }) {
@@ -443,14 +475,16 @@ function DiscussionContent({
         const isChangedSection = Boolean(previousSection && currentSection && previousSection.signature !== currentSection.signature)
         const hasRevisionChange = isNewSection || isChangedSection
         const agreed = itemStates[section.key] === `agreed:${stableKey(currentSection?.signature || '')}` || (!hasRevisionChange && itemStates[section.key] === 'agreed')
-        const sectionTone: DiscussionPointTone = agreed ? 'agreed' : hasRevisionChange ? 'changed' : 'discussion'
+        const sectionTone: DiscussionPointTone = agreed
+          ? hasRevisionChange ? 'revised-agreed' : 'agreed'
+          : hasRevisionChange ? 'revised-discussion' : 'discussion'
         const sectionFullscreen = fullscreenSectionKey === section.key
         return (
           <section
             id={anchorPrefix ? `${anchorPrefix}-${section.key}` : undefined}
             key={section.key}
             data-discussion-section-key={section.key}
-            className={`scroll-mt-5 border transition ${sectionFullscreen ? 'flex h-screen w-screen min-h-0 flex-col overflow-hidden rounded-none border-0 px-6 py-4' : 'rounded-2xl px-3 py-2.5'} ${agreed ? 'border-emerald-200 bg-emerald-50' : hasRevisionChange ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50'}`}
+            className={`scroll-mt-5 border transition ${sectionFullscreen ? 'flex h-screen w-screen min-h-0 flex-col overflow-hidden rounded-none border-0 px-6 py-4' : 'rounded-2xl px-3 py-2.5'} ${discussionSurfaceClass(sectionTone)}`}
           >
             <div className="mb-1.5 flex items-center justify-end gap-2">
               {onToggleSectionFullscreen && (
@@ -464,13 +498,13 @@ function DiscussionContent({
                   {sectionFullscreen ? 'Свернуть' : 'Фулл скрин'}
                 </button>
               )}
-              {hasRevisionChange && <span className="rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-bold uppercase text-blue-700">{isNewSection ? 'Добавлено' : 'Изменено'}</span>}
+              {hasRevisionChange && <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${discussionBadgeClass(sectionTone)}`}>{isNewSection ? 'Добавлено' : 'Изменено'}</span>}
               {onItemStatesChange ? (
-                <button type="button" disabled={busy} onClick={() => updateSection(section)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase transition disabled:cursor-wait disabled:opacity-50 ${agreed ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}>
+                <button type="button" disabled={busy} onClick={() => updateSection(section)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase transition hover:brightness-95 disabled:cursor-wait disabled:opacity-50 ${discussionBadgeClass(sectionTone)}`}>
                   {agreed ? 'Согласовано' : 'В обсуждении'}
                 </button>
               ) : (
-                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${agreed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{agreed ? 'Согласовано' : 'В обсуждении'}</span>
+                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${discussionBadgeClass(sectionTone)}`}>{agreed ? 'Согласовано' : 'В обсуждении'}</span>
               )}
             </div>
             <div className={`space-y-1.5 ${sectionFullscreen ? 'min-h-0 flex-1 overflow-y-auto scroll-smooth pr-2' : ''}`}>
@@ -478,15 +512,18 @@ function DiscussionContent({
                 if (block.kind === 'heading-1') return <h2 key={block.index} className="pt-2 text-xl font-bold text-slate-900 first:pt-0">{block.value}</h2>
                 if (block.kind === 'heading-2') return <h3 key={block.index} className="text-base font-bold text-slate-900">{block.value}</h3>
                 if (block.kind === 'heading-3' || block.kind === 'heading-4') return <h4 key={block.index} className="pt-2 text-sm font-bold text-slate-800">{block.value}</h4>
-                if (block.kind === 'code') return <pre key={block.index} className={`overflow-x-auto whitespace-pre-wrap rounded-2xl border-l-[12px] bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200 ${sectionTone === 'agreed' ? 'border-l-emerald-500' : sectionTone === 'changed' ? 'border-l-blue-500' : 'border-l-amber-500'}`}>{block.value}</pre>
+                if (block.kind === 'code') return <pre key={block.index} className={`overflow-x-auto whitespace-pre-wrap rounded-2xl border-l-[12px] bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200 ${discussionCodeBorderClass(sectionTone)}`}>{block.value}</pre>
                 if (block.kind === 'bullet' && block.itemKey) {
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
                   const rowOrigin = rowOriginsByKey.get(block.itemKey) ?? (previousKeys?.has(block.itemKey) ? 'unchanged' : 'new')
                   const isNewRow = rowOrigin === 'new'
                   const isChangedRow = rowOrigin === 'changed'
                   const hasRowRevisionChange = isNewRow || isChangedRow
+                  const rowTone: DiscussionPointTone = rowAgreed
+                    ? hasRowRevisionChange ? 'revised-agreed' : 'agreed'
+                    : hasRowRevisionChange ? 'revised-discussion' : 'discussion'
                   const canToggle = Boolean(onItemStatesChange && !busy)
-                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : hasRowRevisionChange ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? 'border-emerald-500 bg-emerald-500 text-white' : hasRowRevisionChange ? 'border-blue-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, block.value) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? 'bg-emerald-100 text-emerald-700' : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="min-w-0 flex-1">{block.value}</span><span className="mt-0.5 flex shrink-0 flex-wrap justify-end gap-1">{hasRowRevisionChange && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">{isNewRow ? 'Новое' : 'Изменено'}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${rowAgreed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{rowAgreed ? 'Согласовано' : 'В обсуждении'}</span></span></div>
+                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${discussionRowClass(rowTone)} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? rowTone === 'revised-agreed' ? 'border-blue-500 bg-blue-500 text-white' : 'border-emerald-500 bg-emerald-500 text-white' : rowTone === 'revised-discussion' ? 'border-violet-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, block.value) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? discussionBadgeClass(rowTone) : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="min-w-0 flex-1">{block.value}</span><span className="mt-0.5 flex shrink-0 flex-wrap justify-end gap-1">{hasRowRevisionChange && <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${discussionBadgeClass(rowTone)}`}>{isNewRow ? 'Новое' : 'Изменено'}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${discussionBadgeClass(rowTone)}`}>{rowAgreed ? 'Согласовано' : 'В обсуждении'}</span></span></div>
                 }
                 if (block.kind === 'numbered' && block.itemKey) {
                   const [number, value] = block.value.split('\t')
@@ -495,8 +532,11 @@ function DiscussionContent({
                   const isNewRow = rowOrigin === 'new'
                   const isChangedRow = rowOrigin === 'changed'
                   const hasRowRevisionChange = isNewRow || isChangedRow
+                  const rowTone: DiscussionPointTone = rowAgreed
+                    ? hasRowRevisionChange ? 'revised-agreed' : 'agreed'
+                    : hasRowRevisionChange ? 'revised-discussion' : 'discussion'
                   const canToggle = Boolean(onItemStatesChange && !busy)
-                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : hasRowRevisionChange ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowAgreed ? 'bg-emerald-500 text-white' : hasRowRevisionChange ? 'bg-blue-100 text-blue-800' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, `${number}. ${value}`) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? 'bg-emerald-100 text-emerald-700' : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="min-w-0 flex-1">{value}</span><span className="mt-0.5 flex shrink-0 flex-wrap justify-end gap-1">{hasRowRevisionChange && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">{isNewRow ? 'Новое' : 'Изменено'}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${rowAgreed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{rowAgreed ? 'Согласовано' : 'В обсуждении'}</span></span></div>
+                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${discussionRowClass(rowTone)} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowTone === 'agreed' ? 'bg-emerald-500 text-white' : rowTone === 'revised-agreed' ? 'bg-blue-500 text-white' : rowTone === 'revised-discussion' ? 'bg-violet-200 text-violet-800' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, `${number}. ${value}`) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? discussionBadgeClass(rowTone) : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="min-w-0 flex-1">{value}</span><span className="mt-0.5 flex shrink-0 flex-wrap justify-end gap-1">{hasRowRevisionChange && <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${discussionBadgeClass(rowTone)}`}>{isNewRow ? 'Новое' : 'Изменено'}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${discussionBadgeClass(rowTone)}`}>{rowAgreed ? 'Согласовано' : 'В обсуждении'}</span></span></div>
                 }
                 if (block.kind === 'quote') return <blockquote key={block.index} className="rounded-r-xl border-l-4 border-violet-300 bg-violet-50 px-4 py-2 text-slate-700">{block.value}</blockquote>
                 return <p key={block.index} className="whitespace-pre-wrap">{block.value}</p>
