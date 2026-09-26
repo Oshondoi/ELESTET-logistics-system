@@ -112,12 +112,13 @@ interface DiscussionSectionMeta {
   label: string
   signature: string
   itemKeys: string[]
+  rowSignatures: string[]
 }
 
 const getDiscussionSectionMeta = (content: string) => {
   const items: DiscussionSectionMeta[] = []
   const keyOccurrences = new Map<string, number>()
-  let current: DiscussionSectionMeta = { key: 'block-intro', label: '', signature: '', itemKeys: [] }
+  let current: DiscussionSectionMeta = { key: 'block-intro', label: '', signature: '', itemKeys: [], rowSignatures: [] }
   items.push(current)
   let inCode = false
 
@@ -132,7 +133,7 @@ const getDiscussionSectionMeta = (content: string) => {
       const baseKey = `block-${stableKey(heading[1])}`
       const occurrence = keyOccurrences.get(baseKey) ?? 0
       keyOccurrences.set(baseKey, occurrence + 1)
-      current = { key: `${baseKey}-${occurrence}`, label: heading[1], signature: `${line}\n`, itemKeys: [] }
+      current = { key: `${baseKey}-${occurrence}`, label: heading[1], signature: `${line}\n`, itemKeys: [], rowSignatures: [] }
       items.push(current)
       return
     }
@@ -143,13 +144,65 @@ const getDiscussionSectionMeta = (content: string) => {
     if (!bullet && !numbered) return
     const kind = bullet ? 'bullet' : 'numbered'
     const value = bullet ? bullet[1] : `${numbered![1]}\t${numbered![2]}`
-    const baseKey = `${current.key}-row-${stableKey(`${kind}:${value}`)}`
+    const rowSignature = `${kind}:${value}`
+    const baseKey = `${current.key}-row-${stableKey(rowSignature)}`
     const occurrence = keyOccurrences.get(baseKey) ?? 0
     keyOccurrences.set(baseKey, occurrence + 1)
     current.itemKeys.push(`${baseKey}-${occurrence}`)
+    current.rowSignatures.push(rowSignature)
   })
 
   return items.filter((item) => item.signature.trim().length > 0)
+}
+
+type DiscussionRowOrigin = 'unchanged' | 'changed' | 'new'
+
+const getDiscussionRowOrigins = (
+  current: DiscussionSectionMeta,
+  previous: DiscussionSectionMeta | undefined,
+) => {
+  const result = new Map<string, DiscussionRowOrigin>()
+  if (!previous) {
+    current.itemKeys.forEach((key) => result.set(key, 'new'))
+    return result
+  }
+
+  const currentRows = current.rowSignatures
+  const previousRows = previous.rowSignatures
+  const lengths = Array.from({ length: previousRows.length + 1 }, () => Array<number>(currentRows.length + 1).fill(0))
+  for (let previousIndex = previousRows.length - 1; previousIndex >= 0; previousIndex -= 1) {
+    for (let currentIndex = currentRows.length - 1; currentIndex >= 0; currentIndex -= 1) {
+      lengths[previousIndex][currentIndex] = previousRows[previousIndex] === currentRows[currentIndex]
+        ? lengths[previousIndex + 1][currentIndex + 1] + 1
+        : Math.max(lengths[previousIndex + 1][currentIndex], lengths[previousIndex][currentIndex + 1])
+    }
+  }
+
+  const matches: Array<[number, number]> = []
+  let previousIndex = 0
+  let currentIndex = 0
+  while (previousIndex < previousRows.length && currentIndex < currentRows.length) {
+    if (previousRows[previousIndex] === currentRows[currentIndex]) {
+      matches.push([previousIndex, currentIndex])
+      result.set(current.itemKeys[currentIndex], 'unchanged')
+      previousIndex += 1
+      currentIndex += 1
+    } else if (lengths[previousIndex + 1][currentIndex] >= lengths[previousIndex][currentIndex + 1]) previousIndex += 1
+    else currentIndex += 1
+  }
+
+  const anchors: Array<[number, number]> = [[-1, -1], ...matches, [previousRows.length, currentRows.length]]
+  for (let anchorIndex = 1; anchorIndex < anchors.length; anchorIndex += 1) {
+    const [previousStart, currentStart] = anchors[anchorIndex - 1]
+    const [previousEnd, currentEnd] = anchors[anchorIndex]
+    const unmatchedPreviousCount = previousEnd - previousStart - 1
+    const unmatchedCurrentCount = currentEnd - currentStart - 1
+    const changedCount = Math.min(unmatchedPreviousCount, unmatchedCurrentCount)
+    for (let offset = 1; offset <= unmatchedCurrentCount; offset += 1) {
+      result.set(current.itemKeys[currentStart + offset], offset <= changedCount ? 'changed' : 'new')
+    }
+  }
+  return result
 }
 
 const getDiscussionNavigation = (content: string) => getDiscussionSectionMeta(content).filter((item) => item.key !== 'block-intro')
@@ -323,6 +376,13 @@ function DiscussionContent({
   const previousSectionsByKey = useMemo(() => previousContent
     ? new Map(getDiscussionSectionMeta(previousContent).map((section) => [section.key, section]))
     : null, [previousContent])
+  const rowOriginsByKey = useMemo(() => {
+    const origins = new Map<string, DiscussionRowOrigin>()
+    currentSectionsByKey.forEach((section, key) => {
+      getDiscussionRowOrigins(section, previousSectionsByKey?.get(key)).forEach((origin, itemKey) => origins.set(itemKey, origin))
+    })
+    return origins
+  }, [currentSectionsByKey, previousSectionsByKey])
 
   const updateSection = (section: DiscussionSection) => {
     if (!onItemStatesChange || busy) return
@@ -421,16 +481,22 @@ function DiscussionContent({
                 if (block.kind === 'code') return <pre key={block.index} className={`overflow-x-auto whitespace-pre-wrap rounded-2xl border-l-[12px] bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200 ${sectionTone === 'agreed' ? 'border-l-emerald-500' : sectionTone === 'changed' ? 'border-l-blue-500' : 'border-l-amber-500'}`}>{block.value}</pre>
                 if (block.kind === 'bullet' && block.itemKey) {
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
-                  const isNewRow = Boolean(previousKeys && !previousKeys.has(block.itemKey))
+                  const rowOrigin = rowOriginsByKey.get(block.itemKey) ?? (previousKeys?.has(block.itemKey) ? 'unchanged' : 'new')
+                  const isNewRow = rowOrigin === 'new'
+                  const isChangedRow = rowOrigin === 'changed'
+                  const hasRowRevisionChange = isNewRow || isChangedRow
                   const canToggle = Boolean(onItemStatesChange && !busy)
-                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : isNewRow ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? 'border-emerald-500 bg-emerald-500 text-white' : isNewRow ? 'border-blue-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, block.value) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? 'bg-emerald-100 text-emerald-700' : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="flex-1">{block.value}</span>{isNewRow && <span className="mt-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">Новое</span>}</div>
+                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : hasRowRevisionChange ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? 'border-emerald-500 bg-emerald-500 text-white' : hasRowRevisionChange ? 'border-blue-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, block.value) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? 'bg-emerald-100 text-emerald-700' : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="min-w-0 flex-1">{block.value}</span><span className="mt-0.5 flex shrink-0 flex-wrap justify-end gap-1">{hasRowRevisionChange && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">{isNewRow ? 'Новое' : 'Изменено'}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${rowAgreed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{rowAgreed ? 'Согласовано' : 'В обсуждении'}</span></span></div>
                 }
                 if (block.kind === 'numbered' && block.itemKey) {
                   const [number, value] = block.value.split('\t')
                   const rowAgreed = itemStates[block.itemKey] === 'agreed'
-                  const isNewRow = Boolean(previousKeys && !previousKeys.has(block.itemKey))
+                  const rowOrigin = rowOriginsByKey.get(block.itemKey) ?? (previousKeys?.has(block.itemKey) ? 'unchanged' : 'new')
+                  const isNewRow = rowOrigin === 'new'
+                  const isChangedRow = rowOrigin === 'changed'
+                  const hasRowRevisionChange = isNewRow || isChangedRow
                   const canToggle = Boolean(onItemStatesChange && !busy)
-                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : isNewRow ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowAgreed ? 'bg-emerald-500 text-white' : isNewRow ? 'bg-blue-100 text-blue-800' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, `${number}. ${value}`) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? 'bg-emerald-100 text-emerald-700' : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="flex-1">{value}</span>{isNewRow && <span className="mt-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">Новое</span>}</div>
+                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${rowAgreed ? 'bg-emerald-100/80 text-emerald-900' : hasRowRevisionChange ? 'bg-blue-100/70 text-blue-800 ring-1 ring-inset ring-blue-200' : 'bg-amber-100/70 text-amber-900'} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`flex min-w-6 items-center justify-center rounded px-1 text-xs font-bold ${rowAgreed ? 'bg-emerald-500 text-white' : hasRowRevisionChange ? 'bg-blue-100 text-blue-800' : 'bg-amber-200 text-amber-800'}`}>{number}.</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, `${number}. ${value}`) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? 'bg-emerald-100 text-emerald-700' : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="min-w-0 flex-1">{value}</span><span className="mt-0.5 flex shrink-0 flex-wrap justify-end gap-1">{hasRowRevisionChange && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase text-blue-700">{isNewRow ? 'Новое' : 'Изменено'}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${rowAgreed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{rowAgreed ? 'Согласовано' : 'В обсуждении'}</span></span></div>
                 }
                 if (block.kind === 'quote') return <blockquote key={block.index} className="rounded-r-xl border-l-4 border-violet-300 bg-violet-50 px-4 py-2 text-slate-700">{block.value}</blockquote>
                 return <p key={block.index} className="whitespace-pre-wrap">{block.value}</p>
