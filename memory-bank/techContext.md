@@ -4,7 +4,9 @@
 
 - `src/components/admin/DiscussionsTab.tsx` разбирает содержимое в три независимых уровня: блок `##`, строки с чекбоксами и code-блоки, привязанные к блоку либо вложенной строке.
 - Происхождение сравнивается с предыдущей содержательно отличающейся редакцией; перестановка строк внутри блока нейтральна, смена родителя определяется как перенос. Ведущие номера заголовков исключены из идентичности блока.
-- Согласование хранится в `item_states`; legacy-ключи прежнего parser нормализуются при загрузке. Code-блок не хранит собственной галочки и наследует решение родителя.
+- Согласование хранится в `item_states`: строковые значения `agreed` и `implemented`, а для блоков без строк — подписанные значения `agreed:<hash>` / `implemented:<hash>`. Legacy-ключи и прежняя подпись блока нормализуются при загрузке. Code-блок не хранит собственной галочки и наследует решение родителя.
+- Блок со строками агрегирует их уровни, игнорируя собственный текст при вычислении согласования. Блок без строк использует подпись поясняющего текста без `##`-заголовка: изменение пояснения сбрасывает статус, простое переименование заголовка сохраняет его.
+- UI позволяет владельцу переключать только `В обсуждении / Согласовано`. Значение `implemented` записывает ИИ после проверки; реализованная строка не имеет интерактивного чекбокса и отображается серым, как и наследующий её статус code-блок.
 - Основная карточка не отображает контент до успешной загрузки ревизий всех обсуждений. Ошибка истории является ошибкой загрузки, а не отсутствием предшественника.
 - Одноразовый транзакционный reset `supabase/reset_active_tz_discussion_to_revision_one.sql` защищён точным `discussion_key`, проверен в production с `ROLLBACK` и затем применён. Текст активного обсуждения сохранён, объект получил новый UUID и редакцию 1 без архивных ревизий.
 
@@ -14,9 +16,9 @@
 - `src/components/admin/DiscussionsTab.tsx` renders the active/completed archive, editing, completion/restoration, automatic version history, granular agreement states, current-revision diff highlighting and numeric point navigation.
 - Stable block keys derive from normalized `##` headings; stable row keys derive from the owning block plus bullet/numbered content and occurrence. These keys are persisted in `item_states` and must remain deterministic when refactoring the renderer.
 - New-content highlighting compares current content with the newest archived revision whose `content` is actually different. Agreement-only revisions intentionally do not redefine what counts as newly added text.
-- History modal is fixed at `90vh × 80vw`. Its layout is `versions | numeric navigation | content`; numeric navigation and content scroll independently. Navigation uses each block's orange/blue/green state, darkens the active number in the same tone and auto-scrolls it into view.
+- History modal is fixed at `90vh × 80vw`. Its layout is `versions | numeric navigation | content`; numeric navigation and content scroll independently. Navigation uses each block's orange/violet/blue/green/gray state, darkens the active number in the same tone and auto-scrolls it into view.
 - The live card uses a compact fixed header and an internal scroll container for content plus numeric navigation; the outer page/header does not move with discussion content. `DiscussionContent` accepts an anchor prefix so history and live-card DOM IDs never collide.
-- Agreement clicks modify local draft state only. Explicit Save persists the complete `item_states` snapshot once and therefore creates at most one revision; Cancel restores the saved snapshot. Content edits reset agreement only for impacted section signatures.
+- Agreement clicks modify local draft state only and cannot create or remove `implemented`. Explicit Save persists the complete `item_states` snapshot once and therefore creates at most one revision; Cancel restores the saved snapshot. Row edits reset that row; for a rowless block only explanatory-text edits reset the signed status, while a `##` title rename does not.
 - Rows use a slightly stronger tone than their parent state block. Black code/diagram panels remain black and express state through a `12px` colored left border.
 - Production DB patches: `supabase/patch_tz_discussions.sql`, `supabase/patch_tz_discussion_item_states.sql`. Both are applied.
 - Production frontend discussion sequence continues through `14c47a7`, `b93c225`, `01906f3` and `31f8106`; the deployed asset containing the compact review UI was verified on `elestet.net`.

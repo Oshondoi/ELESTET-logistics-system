@@ -16,7 +16,8 @@ interface Discussion {
   item_states: DiscussionItemStates
 }
 
-type DiscussionItemState = 'agreed' | `agreed:${string}`
+type DiscussionAgreement = 'discussion' | 'agreed' | 'implemented'
+type DiscussionItemState = 'agreed' | 'implemented' | `agreed:${string}` | `implemented:${string}`
 type DiscussionItemStates = Record<string, DiscussionItemState>
 
 interface DiscussionRevision {
@@ -63,6 +64,7 @@ interface DiscussionSection {
   label: string
   identity: string
   ownSignature: string
+  agreementSignature: string
   tokens: DiscussionToken[]
   itemKeys: string[]
   rows: DiscussionRowMeta[]
@@ -165,7 +167,7 @@ const parseDiscussion = (content: string): DiscussionSection[] => {
 
   const sections: DiscussionSection[] = []
   const occurrences = new Map<string, number>()
-  const createSection = (label: string, key: string, legacyKey: string): DiscussionSection => ({ key, legacyKey, label, identity: sectionIdentity(label), ownSignature: '', tokens: [], itemKeys: [], rows: [], codes: [] })
+  const createSection = (label: string, key: string, legacyKey: string): DiscussionSection => ({ key, legacyKey, label, identity: sectionIdentity(label), ownSignature: '', agreementSignature: '', tokens: [], itemKeys: [], rows: [], codes: [] })
   let current = createSection('', 'block-intro', 'block-intro')
   let lastRowKey: string | null = null
   sections.push(current)
@@ -204,6 +206,7 @@ const parseDiscussion = (content: string): DiscussionSection[] => {
     } else if (token.kind !== 'row') {
       const ownValue = token.kind === 'heading-2' ? sectionIdentity(token.value) : normalizeText(token.value)
       current.ownSignature += `${token.kind}:${ownValue}\n`
+      if (token.kind !== 'heading-2' && token.kind !== 'code') current.agreementSignature += `${token.kind}:${ownValue}\n`
       if (token.kind === 'heading-1' || token.kind === 'heading-3' || token.kind === 'heading-4' || token.kind === 'paragraph' || token.kind === 'quote') lastRowKey = null
     }
     current.tokens.push(token)
@@ -324,34 +327,65 @@ const normalizeItemStates = (content: string, itemStates: DiscussionItemStates |
   const normalized: DiscussionItemStates = {}
   parseDiscussion(content).forEach((section) => {
     section.rows.forEach((row) => {
-      if (source[row.key] === 'agreed' || source[row.legacyKey] === 'agreed') normalized[row.key] = 'agreed'
+      const rowState = source[row.key] ?? source[row.legacyKey]
+      if (rowState === 'agreed' || rowState === 'implemented') normalized[row.key] = rowState
     })
     const sectionState = source[section.key] ?? source[section.legacyKey]
-    if (sectionState === 'agreed' || sectionState?.startsWith('agreed:')) normalized[section.key] = `agreed:${stableKey(section.ownSignature)}`
+    const currentAgreementHash = stableKey(section.agreementSignature)
+    const legacyOwnHash = stableKey(section.ownSignature)
+    if (sectionState === 'implemented' || sectionState === `implemented:${currentAgreementHash}` || sectionState === `implemented:${legacyOwnHash}`) normalized[section.key] = `implemented:${currentAgreementHash}`
+    else if (sectionState === 'agreed' || sectionState === `agreed:${currentAgreementHash}` || sectionState === `agreed:${legacyOwnHash}`) normalized[section.key] = `agreed:${currentAgreementHash}`
   })
   return normalized
 }
 
 const getDiscussionNavigation = (content: string) => parseDiscussion(content).filter((item) => item.key !== 'block-intro')
 
-type DiscussionPointTone = 'agreed' | 'revised-agreed' | 'revised-discussion' | 'discussion'
+type DiscussionPointTone = 'implemented' | 'revised-implemented' | 'agreed' | 'revised-agreed' | 'revised-discussion' | 'discussion'
+
+const rowAgreement = (state: DiscussionItemState | undefined): DiscussionAgreement => {
+  if (state === 'implemented') return 'implemented'
+  if (state === 'agreed') return 'agreed'
+  return 'discussion'
+}
+
+const sectionOwnAgreement = (item: DiscussionSection, state: DiscussionItemState | undefined): DiscussionAgreement => {
+  const signature = stableKey(item.agreementSignature)
+  if (state === 'implemented' || state === `implemented:${signature}`) return 'implemented'
+  if (state === 'agreed' || state === `agreed:${signature}`) return 'agreed'
+  return 'discussion'
+}
+
+const sectionAgreement = (item: DiscussionSection, itemStates: DiscussionItemStates): DiscussionAgreement => {
+  if (item.itemKeys.length === 0) return sectionOwnAgreement(item, itemStates[item.key])
+  const rowStatuses = item.itemKeys.map((key) => rowAgreement(itemStates[key]))
+  if (rowStatuses.every((status) => status === 'implemented')) return 'implemented'
+  if (rowStatuses.every((status) => status !== 'discussion')) return 'agreed'
+  return 'discussion'
+}
+
+const agreementLabel = (agreement: DiscussionAgreement) => {
+  if (agreement === 'implemented') return 'Реализовано'
+  if (agreement === 'agreed') return 'Согласовано'
+  return 'В обсуждении'
+}
 
 const getDiscussionPointTone = (
   item: DiscussionSection,
   itemStates: DiscussionItemStates,
   origin: DiscussionOrigin,
 ): DiscussionPointTone => {
-  const state = itemStates[item.key]
-  const allRowsAgreed = item.itemKeys.every((key) => itemStates[key] === 'agreed')
-  const agreed = (state === `agreed:${stableKey(item.ownSignature)}` || state === 'agreed') && allRowsAgreed
+  const agreement = sectionAgreement(item, itemStates)
   const revised = origin !== 'unchanged'
-  if (agreed) return revised ? 'revised-agreed' : 'agreed'
+  if (agreement === 'implemented') return revised ? 'revised-implemented' : 'implemented'
+  if (agreement === 'agreed') return revised ? 'revised-agreed' : 'agreed'
   return revised ? 'revised-discussion' : 'discussion'
 }
 
-const toneFor = (origin: DiscussionOrigin, agreed: boolean): DiscussionPointTone => {
+const toneFor = (origin: DiscussionOrigin, agreement: DiscussionAgreement): DiscussionPointTone => {
   const revised = origin !== 'unchanged'
-  if (agreed) return revised ? 'revised-agreed' : 'agreed'
+  if (agreement === 'implemented') return revised ? 'revised-implemented' : 'implemented'
+  if (agreement === 'agreed') return revised ? 'revised-agreed' : 'agreed'
   return revised ? 'revised-discussion' : 'discussion'
 }
 
@@ -364,6 +398,12 @@ const originLabel = (origin: DiscussionOrigin, section = false) => {
 }
 
 const pointNavigationClass = (tone: DiscussionPointTone, active: boolean) => {
+  if (tone === 'implemented') return active
+    ? 'border-slate-700 bg-slate-700 text-white shadow-sm'
+    : 'border-slate-300 bg-slate-100 text-slate-700 hover:border-slate-500 hover:bg-slate-200'
+  if (tone === 'revised-implemented') return active
+    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+    : 'border-slate-400 bg-slate-200 text-slate-800 hover:border-slate-600 hover:bg-slate-300'
   if (tone === 'agreed') return active
     ? 'border-emerald-700 bg-emerald-700 text-white shadow-sm'
     : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
@@ -379,6 +419,8 @@ const pointNavigationClass = (tone: DiscussionPointTone, active: boolean) => {
 }
 
 const discussionSurfaceClass = (tone: DiscussionPointTone) => {
+  if (tone === 'implemented') return 'border-slate-300 bg-slate-100'
+  if (tone === 'revised-implemented') return 'border-slate-400 bg-slate-200/80'
   if (tone === 'agreed') return 'border-emerald-200 bg-emerald-50'
   if (tone === 'revised-agreed') return 'border-blue-200 bg-blue-50'
   if (tone === 'revised-discussion') return 'border-violet-200 bg-violet-50'
@@ -386,6 +428,8 @@ const discussionSurfaceClass = (tone: DiscussionPointTone) => {
 }
 
 const discussionRowClass = (tone: DiscussionPointTone) => {
+  if (tone === 'implemented') return 'bg-slate-200/80 text-slate-800'
+  if (tone === 'revised-implemented') return 'bg-slate-300/80 text-slate-900 ring-1 ring-inset ring-slate-400'
   if (tone === 'agreed') return 'bg-emerald-100/80 text-emerald-900'
   if (tone === 'revised-agreed') return 'bg-blue-100/80 text-blue-900'
   if (tone === 'revised-discussion') return 'bg-violet-100/70 text-violet-900 ring-1 ring-inset ring-violet-200'
@@ -393,6 +437,8 @@ const discussionRowClass = (tone: DiscussionPointTone) => {
 }
 
 const discussionBadgeClass = (tone: DiscussionPointTone) => {
+  if (tone === 'implemented') return 'bg-slate-200 text-slate-700'
+  if (tone === 'revised-implemented') return 'bg-slate-300 text-slate-900'
   if (tone === 'agreed') return 'bg-emerald-100 text-emerald-700'
   if (tone === 'revised-agreed') return 'bg-blue-100 text-blue-700'
   if (tone === 'revised-discussion') return 'bg-violet-100 text-violet-700'
@@ -400,6 +446,8 @@ const discussionBadgeClass = (tone: DiscussionPointTone) => {
 }
 
 const discussionCodeBorderClass = (tone: DiscussionPointTone) => {
+  if (tone === 'implemented') return 'border-l-slate-500'
+  if (tone === 'revised-implemented') return 'border-l-slate-700'
   if (tone === 'agreed') return 'border-l-emerald-500'
   if (tone === 'revised-agreed') return 'border-l-blue-500'
   if (tone === 'revised-discussion') return 'border-l-violet-500'
@@ -435,12 +483,22 @@ const reconcileItemStatesAfterEdit = (
     const previousSection = comparison.previousSectionByCurrent.get(section.key)
     section.rows.forEach((row) => {
       const previousRow = comparison.previousRowByCurrent.get(row.key)
-      if (previousRow && itemStates[previousRow.key] === 'agreed') nextStates[row.key] = 'agreed'
+      const previousRowState = previousRow ? itemStates[previousRow.key] : undefined
+      const origin = comparison.rowOrigins.get(row.key)
+      if ((origin === 'unchanged' || origin === 'moved') && (previousRowState === 'agreed' || previousRowState === 'implemented')) nextStates[row.key] = previousRowState
     })
-    const ownUnchanged = previousSection?.ownSignature === section.ownSignature
-    const previousSectionAgreed = previousSection && (itemStates[previousSection.key] === 'agreed' || itemStates[previousSection.key] === `agreed:${stableKey(previousSection.ownSignature)}`)
-    const allRowsAgreed = section.itemKeys.every((key) => nextStates[key] === 'agreed')
-    if (ownUnchanged && previousSectionAgreed && allRowsAgreed) nextStates[section.key] = `agreed:${stableKey(section.ownSignature)}`
+    const agreementHash = stableKey(section.agreementSignature)
+    if (section.itemKeys.length > 0) {
+      const rowStatuses = section.itemKeys.map((key) => rowAgreement(nextStates[key]))
+      if (rowStatuses.every((status) => status === 'implemented')) nextStates[section.key] = `implemented:${agreementHash}`
+      else if (rowStatuses.every((status) => status !== 'discussion')) nextStates[section.key] = `agreed:${agreementHash}`
+      return
+    }
+    const ownTextUnchanged = previousSection?.agreementSignature === section.agreementSignature
+    if (!previousSection || !ownTextUnchanged) return
+    const previousAgreement = sectionOwnAgreement(previousSection, itemStates[previousSection.key])
+    if (previousAgreement === 'implemented') nextStates[section.key] = `implemented:${agreementHash}`
+    else if (previousAgreement === 'agreed') nextStates[section.key] = `agreed:${agreementHash}`
   })
   return nextStates
 }
@@ -473,16 +531,16 @@ function DiscussionContent({
   const updateSection = (section: DiscussionSection) => {
     if (!onItemStatesChange || busy) return
     const currentSection = currentSectionsByKey.get(section.key)
-    const currentAgreement: DiscussionItemState = currentSection ? `agreed:${stableKey(currentSection.ownSignature)}` : 'agreed'
-    const allRowsAgreed = section.itemKeys.every((key) => itemStates[key] === 'agreed')
-    const isAgreed = (itemStates[section.key] === currentAgreement || itemStates[section.key] === 'agreed') && allRowsAgreed
+    if (!currentSection || sectionAgreement(currentSection, itemStates) === 'implemented') return
+    const currentAgreement = sectionAgreement(currentSection, itemStates)
+    const agreementState: DiscussionItemState = `agreed:${stableKey(currentSection.agreementSignature)}`
     const next = { ...itemStates }
-    if (isAgreed) {
+    if (currentAgreement === 'agreed') {
       delete next[section.key]
-      section.itemKeys.forEach((key) => delete next[key])
+      section.itemKeys.forEach((key) => { if (next[key] === 'agreed') delete next[key] })
     } else {
-      next[section.key] = currentAgreement
-      section.itemKeys.forEach((key) => { next[key] = 'agreed' })
+      next[section.key] = agreementState
+      section.itemKeys.forEach((key) => { if (next[key] !== 'implemented') next[key] = 'agreed' })
     }
     onItemStatesChange(next)
   }
@@ -490,11 +548,13 @@ function DiscussionContent({
   const updateRow = (section: DiscussionSection, itemKey: string) => {
     if (!onItemStatesChange || busy) return
     const next = { ...itemStates }
+    if (next[itemKey] === 'implemented') return
     if (next[itemKey] === 'agreed') delete next[itemKey]
     else next[itemKey] = 'agreed'
-    const allRowsAgreed = section.itemKeys.length > 0 && section.itemKeys.every((key) => next[key] === 'agreed')
     const currentSection = currentSectionsByKey.get(section.key)
-    if (allRowsAgreed) next[section.key] = currentSection ? `agreed:${stableKey(currentSection.ownSignature)}` : 'agreed'
+    const rowStatuses = section.itemKeys.map((key) => rowAgreement(next[key]))
+    if (currentSection && rowStatuses.every((status) => status === 'implemented')) next[section.key] = `implemented:${stableKey(currentSection.agreementSignature)}`
+    else if (currentSection && rowStatuses.every((status) => status !== 'discussion')) next[section.key] = `agreed:${stableKey(currentSection.agreementSignature)}`
     else delete next[section.key]
     onItemStatesChange(next)
   }
@@ -525,9 +585,8 @@ function DiscussionContent({
         const currentSection = currentSectionsByKey.get(section.key)
         const sectionOrigin = comparison.sectionOrigins.get(section.key) ?? 'new'
         const sectionOriginLabel = originLabel(sectionOrigin, true)
-        const allRowsAgreed = section.itemKeys.every((key) => itemStates[key] === 'agreed')
-        const agreed = (itemStates[section.key] === `agreed:${stableKey(currentSection?.ownSignature || '')}` || itemStates[section.key] === 'agreed') && allRowsAgreed
-        const sectionTone = toneFor(sectionOrigin, agreed)
+        const agreement = currentSection ? sectionAgreement(currentSection, itemStates) : 'discussion'
+        const sectionTone = toneFor(sectionOrigin, agreement)
         const sectionFullscreen = fullscreenSectionKey === section.key
         return (
           <section
@@ -549,12 +608,12 @@ function DiscussionContent({
                 </button>
               )}
               {sectionOriginLabel && <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${discussionBadgeClass(sectionTone)}`}>{sectionOriginLabel}</span>}
-              {onItemStatesChange ? (
+              {onItemStatesChange && agreement !== 'implemented' ? (
                 <button type="button" disabled={busy} onClick={() => updateSection(section)} className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase transition hover:brightness-95 disabled:cursor-wait disabled:opacity-50 ${discussionBadgeClass(sectionTone)}`}>
-                  {agreed ? 'Согласовано' : 'В обсуждении'}
+                  {agreementLabel(agreement)}
                 </button>
               ) : (
-                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${discussionBadgeClass(sectionTone)}`}>{agreed ? 'Согласовано' : 'В обсуждении'}</span>
+                <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${discussionBadgeClass(sectionTone)}`}>{agreementLabel(agreement)}</span>
               )}
             </div>
             <div className={`space-y-1.5 ${sectionFullscreen ? 'min-h-0 flex-1 overflow-y-auto scroll-smooth pr-2' : ''}`}>
@@ -564,16 +623,16 @@ function DiscussionContent({
                 if (block.kind === 'heading-3' || block.kind === 'heading-4') return <h4 key={block.index} className="pt-2 text-sm font-bold text-slate-800">{block.value}</h4>
                 if (block.kind === 'code' && block.codeKey) {
                   const codeOrigin = comparison.codeOrigins.get(block.codeKey) ?? 'new'
-                  const codeAgreed = block.parentKey === section.key ? agreed : itemStates[block.parentKey || ''] === 'agreed'
-                  return <pre key={block.index} className={`overflow-x-auto whitespace-pre-wrap rounded-2xl border-l-[12px] bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200 ${discussionCodeBorderClass(toneFor(codeOrigin, codeAgreed))}`}>{block.value}</pre>
+                  const codeAgreement = block.parentKey === section.key ? agreement : rowAgreement(itemStates[block.parentKey || ''])
+                  return <pre key={block.index} className={`overflow-x-auto whitespace-pre-wrap rounded-2xl border-l-[12px] bg-slate-950 px-4 py-3 font-mono text-xs leading-5 text-slate-200 ${discussionCodeBorderClass(toneFor(codeOrigin, codeAgreement))}`}>{block.value}</pre>
                 }
                 if (block.kind === 'row' && block.itemKey) {
-                  const rowAgreed = itemStates[block.itemKey] === 'agreed'
+                  const rowStatus = rowAgreement(itemStates[block.itemKey])
                   const rowOrigin = comparison.rowOrigins.get(block.itemKey) ?? 'new'
                   const rowOriginLabel = originLabel(rowOrigin)
-                  const rowTone = toneFor(rowOrigin, rowAgreed)
-                  const canToggle = Boolean(onItemStatesChange && !busy)
-                  return <div key={block.index} role={onItemStatesChange ? 'checkbox' : undefined} aria-checked={onItemStatesChange ? rowAgreed : undefined} aria-disabled={onItemStatesChange ? busy : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${discussionRowClass(rowTone)} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}><span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowAgreed ? rowTone === 'revised-agreed' ? 'border-blue-500 bg-blue-500 text-white' : 'border-emerald-500 bg-emerald-500 text-white' : rowTone === 'revised-discussion' ? 'border-violet-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span><button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, block.value) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? discussionBadgeClass(rowTone) : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="min-w-0 flex-1">{block.value}</span><span className="mt-0.5 flex shrink-0 flex-wrap justify-end gap-1">{rowOriginLabel && <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${discussionBadgeClass(rowTone)}`}>{rowOriginLabel}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${discussionBadgeClass(rowTone)}`}>{rowAgreed ? 'Согласовано' : 'В обсуждении'}</span></span></div>
+                  const rowTone = toneFor(rowOrigin, rowStatus)
+                  const canToggle = Boolean(onItemStatesChange && !busy && rowStatus !== 'implemented')
+                  return <div key={block.index} role={canToggle ? 'checkbox' : undefined} aria-checked={canToggle ? rowStatus === 'agreed' : undefined} aria-disabled={onItemStatesChange ? busy || rowStatus === 'implemented' : undefined} tabIndex={canToggle ? 0 : undefined} onClick={canToggle ? () => updateRow(section, block.itemKey!) : undefined} onKeyDown={canToggle ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateRow(section, block.itemKey!) } } : undefined} className={`flex w-full items-start gap-2 rounded-lg px-2 py-1 text-left transition ${discussionRowClass(rowTone)} ${canToggle ? 'cursor-pointer hover:brightness-[0.98]' : 'cursor-default'}`}>{rowStatus !== 'implemented' && <span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${rowStatus === 'agreed' ? rowTone === 'revised-agreed' ? 'border-blue-500 bg-blue-500 text-white' : 'border-emerald-500 bg-emerald-500 text-white' : rowTone === 'revised-discussion' ? 'border-violet-400 bg-white text-transparent' : 'border-amber-400 bg-white text-transparent'}`}>✓</span>}<button type="button" onClick={(event) => { event.stopPropagation(); void copyRowText(block.itemKey!, block.value) }} onKeyDown={(event) => event.stopPropagation()} title={copiedItemKey === block.itemKey ? 'Скопировано' : 'Скопировать текст подпункта'} aria-label={copiedItemKey === block.itemKey ? 'Текст скопирован' : 'Скопировать текст подпункта'} className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${copiedItemKey === block.itemKey ? discussionBadgeClass(rowTone) : 'text-current opacity-55 hover:bg-white/70 hover:opacity-100'}`}><CopyRowIcon copied={copiedItemKey === block.itemKey} /></button><span className="min-w-0 flex-1">{block.value}</span><span className="mt-0.5 flex shrink-0 flex-wrap justify-end gap-1">{rowOriginLabel && <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${discussionBadgeClass(rowTone)}`}>{rowOriginLabel}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase ${discussionBadgeClass(rowTone)}`}>{agreementLabel(rowStatus)}</span></span></div>
                 }
                 if (block.kind === 'quote') return <blockquote key={block.index} className="rounded-r-xl border-l-4 border-violet-300 bg-violet-50 px-4 py-2 text-slate-700">{block.value}</blockquote>
                 return <p key={block.index} className="whitespace-pre-wrap">{block.value}</p>

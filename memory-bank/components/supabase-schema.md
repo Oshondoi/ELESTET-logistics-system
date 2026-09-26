@@ -29,7 +29,7 @@
 - A partial unique index permits at most one row with `status='active'` across the service.
 - `tz_discussion_revisions` is the immutable history saved automatically before each material update. It keeps the previous revision number, title, content, status, completion time, saved time and exact agreement states.
 - The archive trigger increments `revision_no` and preserves changes caused by text edits, completion/restoration and agreement toggles. The frontend therefore finds the prior **different content**, not merely revision `N-1`, when calculating which blocks/rows are new.
-- `item_states` is constrained to a JSON object and maps deterministic UI keys to the value `agreed`; absence means `В обсуждении`.
+- `item_states` is constrained to a JSON object and maps deterministic UI keys to `agreed` or `implemented`; signed block values use `agreed:<hash>` / `implemented:<hash>`. Absence means `В обсуждении`. The database deliberately validates the container rather than a closed value enum so signature-bearing states remain possible.
 - RLS is enabled on both tables. Read/write access requires `profiles.platform_role='superadmin'` for `auth.uid()`.
 - Both patches were applied to production before the dependent frontend was pushed. The initial active architectural answer was seeded and later extended in revision 4 with the ready-box reception mode.
 
