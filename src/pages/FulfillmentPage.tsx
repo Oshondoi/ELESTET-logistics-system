@@ -11073,9 +11073,14 @@ const SettingsModal = ({ settings, accountId, accountShortId, accountName = '', 
 // ══════════════════════════════════════════════════════════════
 // FulfillmentPage
 // ══════════════════════════════════════════════════════════════
+const FULFILLMENT_WORKSPACE_TAB_STORAGE_KEY = 'elestet-fulfillment-workspace-tab'
+
 export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', stores, trips, warehouses, onEditTripLine, onAddTripLine, onTripCreated, onRefreshTrips, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
   const navigate = useNavigate()
-  const [workspaceTab, setWorkspaceTab] = useState<'requests' | 'batches'>('batches')
+  const [workspaceTab, setWorkspaceTab] = useState<'requests' | 'batches'>(() => {
+    const stored = localStorage.getItem(FULFILLMENT_WORKSPACE_TAB_STORAGE_KEY)
+    return stored === 'requests' || stored === 'batches' ? stored : 'batches'
+  })
   const [batches, setBatches] = useState<FulfillmentBatch[]>([])
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -11178,6 +11183,10 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
   }, [accountId])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    localStorage.setItem(FULFILLMENT_WORKSPACE_TAB_STORAGE_KEY, workspaceTab)
+  }, [workspaceTab])
 
   // Авто-открытие партии из URL (например /fulfillment/C-3/P-7)
   useEffect(() => {

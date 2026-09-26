@@ -65,6 +65,7 @@ export const ServiceRequestsPanel = ({ accountId, accountShortId, stores, userEm
   const [newStoreName, setNewStoreName] = useState('')
   const [newStoreMarketplace, setNewStoreMarketplace] = useState('wildberries')
   const [inviteUrl, setInviteUrl] = useState('')
+  const [inviteCopied, setInviteCopied] = useState(false)
   const [viewing, setViewing] = useState<ServiceRequest | null>(null)
 
   const load = async () => {
@@ -144,6 +145,32 @@ export const ServiceRequestsPanel = ({ accountId, accountShortId, stores, userEm
     finally { setSaving(false) }
   }
 
+  const copyInviteUrl = async () => {
+    if (!inviteUrl) return
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(inviteUrl)
+      else {
+        const textarea = document.createElement('textarea')
+        textarea.value = inviteUrl
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        textarea.remove()
+      }
+      setInviteCopied(true)
+    } catch {
+      setError('Не удалось скопировать ссылку')
+      setInviteCopied(false)
+    }
+  }
+
+  const closeInvite = () => {
+    setInviteUrl('')
+    setInviteCopied(false)
+  }
+
   const addStore = (storeId: string) => {
     if (!storeId || storeDrafts.some((row) => row.storeId === storeId)) return
     setStoreDrafts((current) => [...current, { storeId, deliveryMode: 'self_delivery', intakeMode: 'bulk', itemsText: '' }])
@@ -171,15 +198,25 @@ export const ServiceRequestsPanel = ({ accountId, accountShortId, stores, userEm
     <div className="flex items-center justify-between rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-100">
       <div><p className="font-semibold text-slate-800">Заявки клиентов</p><p className="text-xs text-slate-400">R — заявка, по одной P на каждый магазин</p></div>
       <div className="flex gap-2">
-        {canManage && <button type="button" onClick={() => void act(async () => {
+        {canManage && <button type="button" disabled={saving} onClick={() => void act(async () => {
           const invite = await createServiceRequestInvite(accountId)
           const url = `${window.location.origin}/request-invite/${invite.token}`
-          await navigator.clipboard.writeText(url); setInviteUrl(url)
-        })} className="rounded-2xl border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">Ссылка на 30 дней</button>}
+          setInviteCopied(false)
+          setInviteUrl(url)
+        })} className="rounded-2xl border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-50">Ссылка для клиента</button>}
         {canManage && <button type="button" onClick={() => void createDraft()} className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">+ Новая заявка</button>}
       </div>
     </div>
-    {inviteUrl && <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">Ссылка скопирована. Она действует 30 дней.</div>}
+    {inviteUrl && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-labelledby="service-request-invite-title" onMouseDown={(event) => { if (event.target === event.currentTarget) closeInvite() }}>
+      <div className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div><h2 id="service-request-invite-title" className="text-lg font-semibold text-slate-900">Ссылка для клиента</h2><p className="mt-1 text-sm text-slate-500">Ссылка действует 30 дней. Нажмите на неё, чтобы скопировать.</p></div>
+          <button type="button" onClick={closeInvite} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Закрыть окно">×</button>
+        </div>
+        <button type="button" onClick={() => void copyInviteUrl()} className="mt-5 block w-full break-all rounded-2xl border border-blue-200 bg-blue-50 px-4 py-4 text-left font-mono text-sm text-blue-700 transition hover:border-blue-400 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-300">{inviteUrl}</button>
+        <p className={`mt-3 text-sm font-medium ${inviteCopied ? 'text-emerald-600' : 'text-slate-400'}`}>{inviteCopied ? 'Ссылка скопирована' : 'Копирование произойдёт только после клика по ссылке'}</p>
+      </div>
+    </div>}
     {requests.length === 0 ? <div className="rounded-3xl bg-white py-16 text-center text-sm text-slate-400">Заявок пока нет</div> :
       <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-100"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-[11px] uppercase text-slate-500"><tr><th className="px-4 py-3">ID</th><th className="px-4 py-3">Заявка</th><th className="px-4 py-3">Магазины / партии</th><th className="px-4 py-3">Статус</th><th className="px-4 py-3">Дата</th><th className="px-4 py-3" /></tr></thead>
       <tbody className="divide-y divide-slate-100">{requests.map((request) => {
