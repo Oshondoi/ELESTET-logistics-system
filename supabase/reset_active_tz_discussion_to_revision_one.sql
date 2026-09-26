@@ -13,10 +13,15 @@ where status = 'active';
 do $$
 declare
   v_count integer;
+  v_key text;
 begin
   select count(*) into v_count from active_discussion_reset_snapshot;
   if v_count <> 1 then
     raise exception 'Ожидалось одно активное обсуждение, найдено: %', v_count;
+  end if;
+  select discussion_key into v_key from active_discussion_reset_snapshot;
+  if v_key <> 'public-request-invite-auth-20260926' then
+    raise exception 'Активное обсуждение изменилось, reset отменён: %', v_key;
   end if;
 end;
 $$;
