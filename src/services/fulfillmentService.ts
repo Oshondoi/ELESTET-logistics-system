@@ -97,11 +97,11 @@ export const fetchBatches = async (accountId: string): Promise<FulfillmentBatch[
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
     .select('*, batch_pipeline_stages(id, status, order_index), fulfillment_items(qty_declared, qty_received, qty_defect, qty_otk, qty_marked, qty_packed, is_excluded, pipeline_stage_id), fulfillment_otk_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_marking_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_packaging_logs(qty, qty_defect, deleted_at, pipeline_stage_id)')
-    .eq('account_id', accountId)
+    .or(`account_id.eq.${accountId},and(operator_account_id.eq.${accountId},request_acceptance_status.eq.accepted)`)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
   if (error) throw error
-  return (data ?? []).map(attachQtySums) as FulfillmentBatch[]
+  return (data ?? []).map(attachQtySums).map((batch: FulfillmentBatch) => batch.operator_account_id === accountId && batch.executor_store_id ? { ...batch, store_id: batch.executor_store_id } : batch) as FulfillmentBatch[]
 }
 
 // Полные данные партнёрских партий (для аутсорс-компании, видящей чужие партии)
@@ -122,11 +122,11 @@ export const fetchArchivedBatches = async (accountId: string): Promise<Fulfillme
   const { data, error } = await (supabase as any)
     .from('fulfillment_batches')
     .select('*, batch_pipeline_stages(id, status, order_index), fulfillment_items(qty_declared, qty_received, qty_defect, qty_otk, qty_marked, qty_packed, is_excluded, pipeline_stage_id), fulfillment_otk_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_marking_logs(qty, qty_defect, deleted_at, pipeline_stage_id), fulfillment_packaging_logs(qty, qty_defect, deleted_at, pipeline_stage_id)')
-    .eq('account_id', accountId)
+    .or(`account_id.eq.${accountId},and(operator_account_id.eq.${accountId},request_acceptance_status.eq.accepted)`)
     .not('deleted_at', 'is', null)
     .order('deleted_at', { ascending: false })
   if (error) throw error
-  return (data ?? []).map(attachQtySums) as FulfillmentBatch[]
+  return (data ?? []).map(attachQtySums).map((batch: FulfillmentBatch) => batch.operator_account_id === accountId && batch.executor_store_id ? { ...batch, store_id: batch.executor_store_id } : batch) as FulfillmentBatch[]
 }
 
 export const fetchBatchWithItems = async (batchId: string, pipelineStageId?: string | null): Promise<FulfillmentBatchWithItems> => {
@@ -462,6 +462,16 @@ export const findProductByBarcode = async (
     size,
     photo_url,
   }
+}
+
+export const issueReceptionDocuments = async (batchId: string, pipelineStageId?: string | null): Promise<{ act_id: string; invoice_id: string; revision: number }> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('issue_reception_documents', {
+    p_batch_id: batchId,
+    p_pipeline_stage_id: pipelineStageId ?? null,
+  })
+  if (error) throw error
+  return data as { act_id: string; invoice_id: string; revision: number }
 }
 
 export const fetchReceptionHistory = async (

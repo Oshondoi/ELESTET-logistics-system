@@ -105,9 +105,11 @@ export const deleteStoreInSupabase = async (storeId: string) => {
     throw new Error('Supabase client is not configured')
   }
 
-  const { error } = await supabase.rpc('archive_store', { p_store_id: storeId })
+  const { data, error } = await supabase.rpc('archive_store', { p_store_id: storeId })
 
   if (error) throw error
+  const result = data as unknown as { ok?: boolean; reason?: string } | null
+  if (result?.ok === false) throw new Error(result.reason || 'Удаление заблокировано активными связанными данными')
 }
 
 export const fetchArchivedStoresFromSupabase = async (accountId: string) => {

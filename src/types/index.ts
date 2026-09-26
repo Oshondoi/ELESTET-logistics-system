@@ -350,6 +350,11 @@ export interface Store {
   ai_prompt?: string | null
   teksher_login?: string | null
   created_at: string
+  /** Local A-N identifier inside the owning company. */
+  short_id?: number | null
+  /** Customer company represented by this card in an executor's client base. */
+  customer_account_id?: string | null
+  restored_at?: string | null
 }
 
 export interface Shipment {
@@ -861,6 +866,15 @@ export interface FulfillmentBatch {
   updated_at: string
   created_by: string | null
   deleted_at: string | null
+  source_request_id?: string | null
+  source_request_store_id?: string | null
+  operator_account_id?: string | null
+  applicant_store_id?: string | null
+  executor_store_id?: string | null
+  store_link_id?: string | null
+  request_acceptance_status?: 'not_required' | 'pending' | 'accepted' | 'rejected'
+  customer_company_short_id?: number | null
+  customer_company_name?: string | null
   // агрегированные суммы из fulfillment_items (заполняются при fetchBatches)
   qty_received_sum?: number
   qty_good_sum?: number
@@ -1050,6 +1064,70 @@ export interface FulfillmentSupply {
   pipeline_stage_id?: string | null
   kiz_enabled: boolean
   _local?: boolean
+}
+
+export type ServiceRequestStatus = 'draft' | 'submitted' | 'accepted' | 'rejected' | 'cancelled'
+export type RequestIntakeMode = 'bulk' | 'catalog' | 'barcodes' | 'boxes'
+export type RequestDeliveryMode = 'pickup' | 'self_delivery'
+
+export interface ServiceRequestItemDraft {
+  barcode: string
+  name?: string
+  article?: string
+  size?: string
+  color?: string
+  qty: number
+  notes?: string
+  position?: number
+}
+
+export interface ServiceRequestStore {
+  id: string
+  request_id: string
+  applicant_store_id: string
+  store_link_id: string | null
+  batch_id: string | null
+  position: number
+  delivery_mode: RequestDeliveryMode
+  intake_mode: RequestIntakeMode
+  payload: { items?: ServiceRequestItemDraft[]; boxes?: unknown[]; [key: string]: unknown }
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+}
+
+export interface ServiceRequest {
+  id: string
+  short_id: number
+  applicant_account_id: string
+  applicant_company_short_id: number | null
+  applicant_company_name: string | null
+  executor_account_id: string | null
+  executor_company_short_id: number | null
+  executor_company_name: string | null
+  invite_id: string | null
+  status: ServiceRequestStatus
+  title: string
+  applicant_name: string | null
+  applicant_email: string | null
+  comment: string | null
+  current_version: number
+  copied_from_request_id: string | null
+  submitted_at: string | null
+  accepted_at: string | null
+  rejected_at: string | null
+  rejection_comment: string | null
+  created_by: string
+  created_at: string
+  updated_at: string
+  deleted_at: string | null
+  stores?: ServiceRequestStore[]
+}
+
+export interface ExecutorAccountSearchResult {
+  id: string
+  short_id: number
+  name: string
 }
 
 export interface FulfillmentBox {

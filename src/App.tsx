@@ -27,6 +27,7 @@ import { activateGracePeriod } from './services/billingService'
 import { getActiveOverride } from './services/accessOverrideService'
 import { AuthPage } from './pages/AuthPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
+import { RequestInvitePage } from './pages/RequestInvitePage'
 import { HomePage } from './pages/HomePage'
 import { FulfillmentPage } from './pages/FulfillmentPage'
 import { ProductsPage } from './pages/ProductsPage'
@@ -295,6 +296,7 @@ function App() {
   const { session, isLoading: isAuthLoading, signIn, signOut, signUp, isPasswordRecovery, clearPasswordRecovery } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const requestInviteToken = location.pathname.match(/^\/request-invite\/([0-9a-f-]{36})$/i)?.[1] ?? null
 
   // Разбираем URL вида /fulfillment/C-{n}/P-{m} при первом рендере
   const parsedFulfillmentUrl = (() => {
@@ -649,6 +651,19 @@ function App() {
         Загрузка...
       </div>
     )
+  }
+
+  if (requestInviteToken) {
+    return <RequestInvitePage
+      token={requestInviteToken}
+      isSignedIn={Boolean(session)}
+      onSignUp={signUp}
+      onContinue={() => {
+        window.localStorage.setItem('elestet-pending-request-invite', requestInviteToken)
+        setActivePage('fulfillment')
+        navigate('/fulfillment', { replace: true })
+      }}
+    />
   }
 
   if (!session) {

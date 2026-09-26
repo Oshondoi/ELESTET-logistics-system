@@ -93,6 +93,7 @@ import {
   commitFulfillmentKizBox,
   setFulfillmentSupplyKizMode,
   hasFulfillmentKizDrafts,
+  issueReceptionDocuments,
 } from '../services/fulfillmentService'
 import type { OtkPerformer, ProductInfo, FulfillmentKizAuditContext } from '../services/fulfillmentService'
 import { fetchProducts } from '../services/productService'
@@ -117,6 +118,7 @@ import { showScanSuccess } from '../components/ui/ScanSuccessOverlay'
 import { FulfillmentKizPairsModal } from '../components/fulfillment/FulfillmentKizPairsModal'
 import { FulfillmentElestetScanner } from '../components/fulfillment/FulfillmentElestetScanner'
 import { FulfillmentBoxExcelDialog } from '../components/fulfillment/FulfillmentBoxExcelDialog'
+import { ServiceRequestsPanel } from '../components/fulfillment/ServiceRequestsPanel'
 import { FulfillmentSupplyExcelExport } from '../components/fulfillment/FulfillmentSupplyExcelExport'
 import { downloadBoxesTemplate } from '../lib/wbExcelExport'
 import {
@@ -719,6 +721,8 @@ const BatchDetailModal = ({
   const [items, setItems] = useState<FulfillmentItem[]>(initialBatch.items)
   const [isSavingStage, setIsSavingStage] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isIssuingReceptionDocuments, setIsIssuingReceptionDocuments] = useState(false)
+  const [receptionDocumentsMessage, setReceptionDocumentsMessage] = useState('')
   const [photoMap, setPhotoMap] = useState<Record<string, string | null>>({})
 
   // Приёмка: режим добавления
@@ -4813,6 +4817,26 @@ const BatchDetailModal = ({
                     Принять всё
                   </button>
                 )}
+                {receptionTab === 'actual' && initialBatch.source_request_id && (
+                  <button
+                    type="button"
+                    disabled={isIssuingReceptionDocuments || items.reduce((sum, item) => sum + (item.qty_received ?? 0) + (item.qty_defect ?? 0), 0) === 0}
+                    title={items.length === 0 ? 'Сначала сохраните фактическую приёмку' : 'Создать отдельные акт приёмки и счёт по этой партии'}
+                    onClick={async () => {
+                      setIsIssuingReceptionDocuments(true); setReceptionDocumentsMessage('')
+                      try {
+                        const result = await issueReceptionDocuments(batch.id, activePipelineStage?.id ?? null)
+                        setReceptionDocumentsMessage(`Акт и счёт созданы · ревизия ${result.revision}`)
+                      } catch (documentError) {
+                        setError(documentError instanceof Error ? documentError.message : 'Не удалось создать документы')
+                      } finally { setIsIssuingReceptionDocuments(false) }
+                    }}
+                    className="rounded-xl bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    {isIssuingReceptionDocuments ? 'Создание…' : 'Акт + счёт'}
+                  </button>
+                )}
+                {receptionDocumentsMessage && <span className="text-xs font-medium text-emerald-600">{receptionDocumentsMessage}</span>}
 
               {/* Режим: По баркоду */}
               {canEditReception && addMode === 'barcode' && (
@@ -11051,6 +11075,7 @@ const SettingsModal = ({ settings, accountId, accountShortId, accountName = '', 
 // ══════════════════════════════════════════════════════════════
 export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', stores, trips, warehouses, onEditTripLine, onAddTripLine, onTripCreated, onRefreshTrips, onStoreCreated, canManage = true, canOtkAssign = false, canStageJump = false, canPackingAutoAdd = false, canSupplyDeleteLocked = false, userId = '', userEmail = '', userName = '', initialBatchShortId, onBatchUrlConsumed }: FulfillmentPageProps) => {
   const navigate = useNavigate()
+  const [workspaceTab, setWorkspaceTab] = useState<'requests' | 'batches'>('batches')
   const [batches, setBatches] = useState<FulfillmentBatch[]>([])
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -11505,6 +11530,24 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
 
   return (
     <div className="space-y-4">
+      <Card className="rounded-3xl p-1.5">
+        <div className="flex w-fit items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
+          <button type="button" onClick={() => setWorkspaceTab('requests')} className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === 'requests' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Заявки</button>
+          <button type="button" onClick={() => setWorkspaceTab('batches')} className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === 'batches' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Партии</button>
+        </div>
+      </Card>
+      {workspaceTab === 'requests' ? (
+        <ServiceRequestsPanel
+          accountId={accountId}
+          accountShortId={accountShortId}
+          stores={stores}
+          userEmail={userEmail}
+          userName={userName}
+          canManage={canManage}
+          onStoreCreated={onStoreCreated}
+          onBatchesChanged={() => void load()}
+        />
+      ) : <>
       {/* Модалки */}
       {createOpen && <CreateBatchModal stores={stores} accountId={accountId} settings={settings} hasPipeline={hasPipeline} pipelineStages={accountPipelineStages} onClose={() => setCreateOpen(false)} onSubmit={handleCreate} onStoreCreated={(s) => onStoreCreated?.(s)} />}
       {editTarget && <EditBatchModal batch={editTarget} stores={stores} onClose={() => setEditTarget(null)} onSave={async (values) => { const updated = await updateBatch(editTarget.id, values); handleBatchUpdated(updated); setEditTarget(null) }} />}
@@ -12133,8 +12176,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                     <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1.5">
                         <div className="flex flex-col leading-tight">
-                          {accountShortId != null && (
-                            <span className="text-[10px] text-violet-400 font-semibold">C-{accountShortId}</span>
+                          {(b.customer_company_short_id ?? accountShortId) != null && (
+                            <span className="text-[10px] text-violet-400 font-semibold">C-{b.customer_company_short_id ?? accountShortId}</span>
                           )}
                           <span>{b.short_id != null ? `P-${b.short_id}` : '—'}</span>
                         </div>
@@ -12570,8 +12613,8 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
                         <td className="px-4 py-3 text-slate-400 text-xs font-mono" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-1.5">
                             <div className="flex flex-col leading-tight">
-                              {accountShortId != null && (
-                                <span className="text-[10px] text-violet-400 font-semibold">C-{accountShortId}</span>
+                              {(b.customer_company_short_id ?? accountShortId) != null && (
+                                <span className="text-[10px] text-violet-400 font-semibold">C-{b.customer_company_short_id ?? accountShortId}</span>
                               )}
                               <span>{b.short_id != null ? `P-${b.short_id}` : '—'}</span>
                             </div>
@@ -12809,7 +12852,7 @@ export const FulfillmentPage = ({ accountId, accountShortId, accountName = '', s
           </>
         )}
       </Card>
-
+      </>}
     </div>
   )
 }
