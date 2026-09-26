@@ -436,7 +436,9 @@ begin
       select b.id,b.account_id,v_request.executor_account_id,0,'Исполнитель','reception','active',
         b.stage_otk,b.stage_packaging,b.stage_marking,b.stage_packing,b.stage_logistics,now()
       from public.fulfillment_batches b where b.id=v_group.batch_id returning id into v_stage_id;
+      perform set_config('app.pipeline_internal','on',true);
       update public.fulfillment_items set pipeline_stage_id=v_stage_id where batch_id=v_group.batch_id and pipeline_stage_id is null;
+      perform set_config('app.pipeline_internal','off',true);
     end if;
   end loop;
   v_version := v_request.current_version + 1;

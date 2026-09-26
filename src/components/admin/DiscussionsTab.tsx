@@ -736,7 +736,7 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
       .update({ status: 'completed', completed_at: now, updated_at: now })
       .eq('id', discussion.id)
       .eq('status', 'active')
-    if (completeError) setError(completeError.message || 'Не удалось снять ответ')
+    if (completeError) setError(completeError.message || 'Не удалось завершить редакцию')
     else {
       await load()
       setView('completed')
@@ -937,7 +937,7 @@ export function DiscussionsTab({ toolbarTarget, onDirtyChange }: { toolbarTarget
                     {discussion.status === 'active' && (
                       <>
                         <button type="button" disabled={itemStatesDirty} title={itemStatesDirty ? 'Сначала сохраните или отмените отметки' : undefined} onClick={() => startEditing(discussion)} className="h-8 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-40">Редактировать</button>
-                        <button type="button" disabled={saving || itemStatesDirty} title={itemStatesDirty ? 'Сначала сохраните или отмените отметки' : undefined} onClick={() => void completeDiscussion(discussion)} className="h-8 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">Снять ответ</button>
+                        <button type="button" disabled={saving || itemStatesDirty} title={itemStatesDirty ? 'Сначала сохраните или отмените отметки' : undefined} onClick={() => void completeDiscussion(discussion)} className="h-8 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">Завершить редакцию</button>
                       </>
                     )}
                   </div>
