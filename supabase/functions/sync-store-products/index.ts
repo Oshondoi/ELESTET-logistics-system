@@ -191,20 +191,21 @@ Deno.serve(async (req: Request) => {
     // Получаем магазин через userClient — RLS гарантирует, что пользователь имеет доступ
     const { data: store, error: storeErr } = await userClient
       .from('stores')
-      .select('id, account_id, api_key, name')
+      .select('id, account_id, name')
       .eq('id', store_id)
       .single()
 
     if (storeErr || !store) return jsonResponse({ success: false, error: 'Магазин не найден или нет доступа' })
-    if (!store.api_key) return jsonResponse({ success: false, error: 'У магазина не задан API ключ' })
+    const { data: apiKey } = await adminClient.rpc('get_store_wb_api_key', { p_store_id: store_id })
+    if (!apiKey) return jsonResponse({ success: false, error: 'У магазина не задан API ключ' })
 
     // ── Загружаем товары из WB ────────────────────────────────────
     let cards: unknown[]
     let subjectMap: Map<string, SubjectInfo>
     try {
       ;[cards, subjectMap] = await Promise.all([
-        fetchAllWbCards(store.api_key as string),
-        fetchSubjectMap(store.api_key as string),
+        fetchAllWbCards(apiKey as string),
+        fetchSubjectMap(apiKey as string),
       ])
     } catch (wbErr: unknown) {
       const msg = errMsg(wbErr)

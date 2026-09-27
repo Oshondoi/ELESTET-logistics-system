@@ -474,11 +474,10 @@ Deno.serve(async (req) => {
     const { data: batch } = await db.from('fulfillment_batches')
       .select('store_id').eq('id', supply.batch_id).eq('account_id', account_id).maybeSingle()
     if (!batch?.store_id) return jsonError('У партии не выбран магазин WB')
-    const { data: batchStore } = await db.from('stores').select('api_key')
-      .eq('id', batch.store_id).eq('account_id', account_id).maybeSingle()
-    if (!batchStore?.api_key) return jsonError('У магазина не задан API-ключ WB')
+    const { data: batchApiKey } = await db.rpc('get_store_wb_api_key', { p_store_id: batch.store_id })
+    if (!batchApiKey) return jsonError('У магазина не задан API-ключ WB')
     try {
-      const details = await fetchSupplyDetails(batchStore.api_key, supply.wb_supply_id)
+      const details = await fetchSupplyDetails(batchApiKey, supply.wb_supply_id)
       const summary = supplySummary(details)
       await persistWbSummaryForFulfillment(
         db,
@@ -488,7 +487,7 @@ Deno.serve(async (req) => {
         summary,
       )
       if (action !== 'package_info') return jsonOk({ summary, cargo_type: summary.wb_cargo_type, package_sync: PACKAGE_SYNC_DISABLED })
-      const packages = await fetchPackages(batchStore.api_key, supply.wb_supply_id)
+      const packages = await fetchPackages(batchApiKey, supply.wb_supply_id)
       const packageSync = await syncPackagesToElestet(db, account_id, packages, supply.trip_line_id || undefined, fulfillment_supply_id)
       return jsonOk({ package_codes: packages.map((pkg) => pkg.packageCode), package_sync: packageSync, summary })
     } catch (e) {
@@ -498,16 +497,14 @@ Deno.serve(async (req) => {
 
   const { data: line, error: lineErr } = await db
     .from('trip_lines')
-    .select('id, account_id, wb_supply_id, stores(api_key)')
+    .select('id, account_id, wb_supply_id, store_id')
     .eq('id', line_id)
     .eq('account_id', account_id)
     .single()
 
   if (lineErr || !line) return jsonError('Строка поставки не найдена')
-  const store = line.stores as { api_key: string | null } | null
-  if (!store?.api_key) return jsonError('У магазина не задан API ключ WB.')
-
-  const apiKey = store.api_key
+  const { data: apiKey } = await db.rpc('get_store_wb_api_key', { p_store_id: line.store_id })
+  if (!apiKey) return jsonError('У магазина не задан API ключ WB.')
   const supplyId = wb_supply_id ?? (line.wb_supply_id as string | null)
   if (!supplyId) return jsonError('Не указан ID поставки WB.')
 

@@ -21,6 +21,7 @@ import type { StaffMember } from '../services/platformRoleService'
 import { adminGetPlanConfigs, adminUpsertPlanConfig } from '../services/planConfigService'
 import type { PlanConfig } from '../services/planConfigService'
 import { ScannerModelsAdminTab } from '../components/admin/ScannerModelsAdminTab'
+import { RequestLinksAdminTab } from '../components/admin/RequestLinksAdminTab'
 
 interface AdminUser {
   id: string
@@ -178,7 +179,7 @@ const SetPlanForm = ({ account, onDone, onCancel }: SetPlanFormProps) => {
 
 /* ─── AdminPage ─────────────────────────────────────────────────────── */
 const ADMIN_TAB_KEY = 'elestet-admin-tab'
-type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners'
+type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners' | 'request_links'
 
 export const AdminPage = ({
   platformRole = 'user',
@@ -266,7 +267,7 @@ export const AdminPage = ({
   const [overrides, setOverrides] = useState<AccessOverrideRow[]>([])
   const [overridesLoading, setOverridesLoading] = useState(false)
   const [overridesError, setOverridesError] = useState<string | null>(null)
-  const [trialDaysInput, setTrialDaysInput] = useState('14')
+  const [trialDaysInput, setTrialDaysInput] = useState('10')
   const [trialDaysSaving, setTrialDaysSaving] = useState(false)
   const [trialDaysSaved, setTrialDaysSaved] = useState(false)
   const [formScope, setFormScope] = useState<'global' | 'account' | 'user'>('account')
@@ -448,6 +449,7 @@ export const AdminPage = ({
     ...(canEdit ? [{ key: 'team' as const, label: 'Команда' }] : []),
     ...(canEdit ? [{ key: 'plans' as const, label: 'Тарифы' }] : []),
     ...(canEdit ? [{ key: 'scanners' as const, label: 'Сканеры' }] : []),
+    ...(isSuperAdmin ? [{ key: 'request_links' as const, label: 'Ссылки заявок' }] : []),
     ...(isSuperAdmin ? [{ key: 'payment' as const, label: 'Интеграция оплаты' }] : []),
   ]
 
@@ -1597,6 +1599,7 @@ export const AdminPage = ({
 
       {/* ═══ TAB: Сканеры ═══════════════════════════════════════ */}
       {activeTab === 'scanners' && canEdit && <ScannerModelsAdminTab />}
+      {activeTab === 'request_links' && isSuperAdmin && <RequestLinksAdminTab />}
     </div>
   )
 }

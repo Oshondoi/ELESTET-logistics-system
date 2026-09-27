@@ -32,6 +32,13 @@ const PERMISSION_GROUPS: PermGroup[] = [
     label: 'Фулфилмент',
     items: [
       { key: 'fulfillment_view', label: 'Просмотр фулфилмента' },
+      { key: 'request_view', label: 'Просмотр заявок' },
+      { key: 'request_create', label: 'Создание и редактирование заявок' },
+      { key: 'request_manage', label: 'Разбор, принятие и отклонение заявок' },
+      { key: 'request_assign', label: 'Назначение исполнителя заявки' },
+      { key: 'request_start_work', label: 'Начало работы по партии заявки' },
+      { key: 'request_history_view', label: 'Просмотр истории заявок' },
+      { key: 'client_portal_access_manage', label: 'Создание клиентской ссылки' },
       { key: 'fulfillment_manage', label: 'Управление партиями и этапами' },
     ],
     subItems: [

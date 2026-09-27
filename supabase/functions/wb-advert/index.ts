@@ -109,8 +109,7 @@ Deno.serve(async (req: Request) => {
 
   // Получаем API-ключ магазина
   const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-  const { data: storeRow } = await svc.from('stores').select('api_key').eq('id', store_id).single()
-  const apiKey = (storeRow as { api_key?: string | null } | null)?.api_key
+  const { data: apiKey } = await svc.rpc('get_store_wb_api_key', { p_store_id: store_id })
   if (!apiKey) return err('API-ключ не настроен для этого магазина')
 
   try {

@@ -10,6 +10,7 @@ interface StoreFormModalProps {
   open: boolean
   initialValues?: StoreFormValues
   hasApiKey?: boolean
+  hasCompanyLink?: boolean
   onClose: () => void
   onSubmit: (values: StoreFormValues) => Promise<unknown>
 }
@@ -27,14 +28,16 @@ const DEFAULT_VALUES: StoreFormValues = {
   phone: '',
 }
 
-export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubmit }: StoreFormModalProps) => {
+export const StoreFormModal = ({ open, initialValues, hasApiKey, hasCompanyLink, onClose, onSubmit }: StoreFormModalProps) => {
   const [values, setValues] = useState<StoreFormValues>(initialValues ?? DEFAULT_VALUES)
   const [changingKey, setChangingKey] = useState(false)
+  const [removingKey, setRemovingKey] = useState(false)
 
   useEffect(() => {
     if (open) {
       setValues(initialValues ?? DEFAULT_VALUES)
       setChangingKey(false)
+      setRemovingKey(false)
     }
   }, [open, initialValues])
 
@@ -44,7 +47,7 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
     event.preventDefault()
     const submitValues: StoreFormValues = {
       ...values,
-      api_key: (isEditing && !changingKey) ? undefined : (values.api_key?.trim() || undefined),
+      api_key: removingKey ? '' : (isEditing && !changingKey) ? undefined : (values.api_key?.trim() || undefined),
     }
     void onSubmit(submitValues).then(() => {
       onClose()
@@ -134,8 +137,22 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
                 >
                   Изменить
                 </button>
+                {hasApiKey && <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm('Отключить API-ключ WB от этого магазина?')) {
+                      setRemovingKey(true)
+                      setChangingKey(false)
+                      setValues((current) => ({ ...current, api_key: '' }))
+                    }
+                  }}
+                  className="whitespace-nowrap text-sm text-rose-500 transition hover:text-rose-700"
+                >
+                  Отключить
+                </button>}
               </div>
             )}
+            {removingKey && <p className="text-xs text-rose-600">API-ключ будет удалён после сохранения магазина.</p>}
           </div>
         ) : (
           <Input
@@ -150,6 +167,8 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, onClose, onSubm
             hint="Необязательно. После сохранения ключ нельзя будет прочитать."
           />
         )}
+
+        {isEditing && <div className="flex flex-col gap-2 text-sm text-slate-700"><span className="font-medium">Ссылка компании</span><div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono tracking-widest text-slate-300" style={{ userSelect: 'none' }} onCopy={(event)=>event.preventDefault()}>{hasCompanyLink?'••••••••••••••••••••••••':'Не привязана'}</div></div>}
 
         {/* Поставщик, ИНН и адрес */}
         <div className="grid gap-3">

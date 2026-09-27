@@ -194,7 +194,8 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
   let sent = 0
 
   // Загружаем AI настройки
-  const { data: aiData } = await db.from('account_ai_settings').select('*').eq('account_id', settings.account_id).single()
+  const { data: aiRows } = await db.rpc('get_server_account_ai_settings', { p_account_id: settings.account_id })
+  const aiData = Array.isArray(aiRows) ? aiRows[0] : aiRows
   if (!aiData) {
     log.push(`${ts()} ИИ не настроен для этого аккаунта.`)
     return 0
@@ -206,8 +207,8 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
   const extraSystem = (sysPrompts ?? []).map((p: { content: string }) => p.content).filter(Boolean)
 
   // Загружаем магазины
-  const { data: storesData } = await db.from('stores').select('id, name, api_key, ai_prompt').in('id', settings.store_ids)
-  const stores = (storesData ?? []) as { id: string; name: string | null; api_key: string | null; ai_prompt?: string | null }[]
+  const { data: storesData } = await db.from('stores').select('id, name, ai_prompt').in('id', settings.store_ids)
+  const stores = (storesData ?? []) as { id: string; name: string | null; ai_prompt?: string | null }[]
 
   const limit = settings.daily_limit === 0 ? Infinity : settings.daily_limit
   log.push(`${ts()} Магазинов: ${stores.length}. Лимит: ${limit === Infinity ? '∞' : limit}. Задержка: ${settings.delay_seconds}с`)
@@ -215,7 +216,8 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
   // Для каждого магазина
   for (const store of stores) {
     const storeName = store.name || store.id.slice(0, 8)
-    if (!store.api_key) {
+    const { data: apiKey } = await db.rpc('get_store_wb_api_key', { p_store_id: store.id })
+    if (!apiKey) {
       log.push(`${ts()} [${storeName}] нет API-ключа — пропуск`)
       continue
     }
@@ -223,15 +225,15 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
     // Загружаем store prompts
     const { data: storePromptsData } = await db.from('ai_prompts').select('content').eq('account_id', settings.account_id).eq('type', 'store').eq('store_id', store.id).order('sort_order')
     const extraStore = [
-      (store as { id: string; name: string | null; api_key: string | null; ai_prompt?: string | null }).ai_prompt,
+      store.ai_prompt,
       ...((storePromptsData ?? []).map((p: { content: string }) => p.content)),
     ].filter(Boolean) as string[]
 
     // Синхронизируем отзывы с WB
     try {
       log.push(`${ts()} [${storeName}] синхронизация...`)
-      const { feedbacks: unanswered } = await fetchWbFeedbacks(store.api_key, false)
-      const { feedbacks: answered } = await fetchWbFeedbacks(store.api_key, true)
+      const { feedbacks: unanswered } = await fetchWbFeedbacks(apiKey, false)
+      const { feedbacks: answered } = await fetchWbFeedbacks(apiKey, true)
 
       // Upsert в wb_feedbacks
       const allFeedbacks = [
@@ -352,7 +354,7 @@ async function runForAccount(settings: AutoSettings, log: string[]): Promise<num
         await sleep(settings.delay_seconds * 500)
 
         // Отправляем на WB
-        await sendWbReply(store.api_key, row.id, replyText)
+        await sendWbReply(apiKey, row.id, replyText)
 
         // Обновляем запись в DB
         await db.from('wb_feedbacks').update({

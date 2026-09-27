@@ -1539,11 +1539,7 @@ async function syncStore(
 }
 
 async function syncAllStores(mode: SyncMode, trigger: SyncTrigger) {
-  const stores = await sbGetAll(
-    'stores',
-    'api_key=not.is.null&deleted_at=is.null&select=id,account_id,api_key',
-    true,
-  )
+  const stores = await sbRpc<Array<Record<string, unknown>>>('list_server_wb_stores', {})
   const results: Array<Record<string, unknown>> = []
   let nextStore = 0
   const worker = async () => {
@@ -1555,7 +1551,7 @@ async function syncAllStores(mode: SyncMode, trigger: SyncTrigger) {
         const result = await syncStore(
           storeId,
           String(store.account_id),
-          String(store.api_key),
+          String(await sbRpc<string>('get_store_wb_api_key', { p_store_id: storeId })),
           mode,
           trigger,
           null,
@@ -1607,8 +1603,8 @@ Deno.serve(async (req) => {
     if (!store_id) return err('store_id обязателен')
 
     // Get api_key via service role
-    const storeRows = await sbGet(`stores`, `id=eq.${encodeURIComponent(store_id)}&select=api_key,account_id&limit=1`, true)
-    const apiKey = storeRows[0]?.api_key as string | undefined
+    const storeRows = await sbGet(`stores`, `id=eq.${encodeURIComponent(store_id)}&select=account_id&limit=1`, true)
+    const apiKey = await sbRpc<string | null>('get_store_wb_api_key', { p_store_id: store_id })
     const accountId = String(storeRows[0]?.account_id ?? '')
     if (!apiKey) return err('API ключ магазина не указан')
 

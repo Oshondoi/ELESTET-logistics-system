@@ -1,177 +1,184 @@
-export type MemberRole = 'owner' | 'admin' | 'manager' | 'operator' | 'viewer'
+export type MemberRole = "owner" | "admin" | "manager" | "operator" | "viewer";
 
 // ─── Товары ───────────────────────────────────────────────────
 
 export interface Product {
-  id: string
-  account_id: string
-  store_id: string
-  nm_id: number          // WB артикул (nmID)
-  cost_price: number | null
-  vendor_code: string | null
-  name: string | null
-  brand: string | null
-  category: string | null
-  color: string | null
-  composition: string | null
-  country: string | null
-  barcodes: string[]
-  photos: unknown | null
-  sizes: unknown | null
-  raw_data: unknown | null
-  synced_at: string
-  created_at: string
+  id: string;
+  account_id: string;
+  store_id: string;
+  nm_id: number; // WB артикул (nmID)
+  cost_price: number | null;
+  vendor_code: string | null;
+  name: string | null;
+  brand: string | null;
+  category: string | null;
+  color: string | null;
+  composition: string | null;
+  country: string | null;
+  barcodes: string[];
+  photos: unknown | null;
+  sizes: unknown | null;
+  raw_data: unknown | null;
+  synced_at: string;
+  created_at: string;
 }
 
 export interface StoreSyncLog {
-  id: string
-  store_id: string
-  synced_at: string
-  products_count: number | null
-  status: 'ok' | 'error'
-  error_message: string | null
+  id: string;
+  store_id: string;
+  synced_at: string;
+  products_count: number | null;
+  status: "ok" | "error";
+  error_message: string | null;
 }
 
 export interface SyncResult {
-  success: boolean
-  count: number
+  success: boolean;
+  count: number;
 }
 
 export interface ProductDefect {
-  id: string
-  account_id: string
-  store_id: string
-  barcode: string
-  nm_id: number | null
-  product_name: string | null
-  tech_size: string | null
-  quantity: number
-  reason: string | null
-  created_at: string
+  id: string;
+  account_id: string;
+  store_id: string;
+  barcode: string;
+  nm_id: number | null;
+  product_name: string | null;
+  tech_size: string | null;
+  quantity: number;
+  reason: string | null;
+  created_at: string;
 }
 
 export interface WbFinanceReportRow {
-  id: string
-  account_id: string
-  store_id: string
-  period_from: string
-  period_to: string
-  report_date: string | null
-  nm_id: number | null
-  barcode: string | null
-  vendor_code: string | null
+  id: string;
+  account_id: string;
+  store_id: string;
+  period_from: string;
+  period_to: string;
+  report_date: string | null;
+  nm_id: number | null;
+  barcode: string | null;
+  vendor_code: string | null;
   // doc_type_name из WB: «Продажа», «Возврат», «Штраф», «Хранение» и т.д.
-  doc_type: string | null
-  operation_name: string | null
-  quantity: number
+  doc_type: string | null;
+  operation_name: string | null;
+  quantity: number;
   // retail_amount: итоговая сумма строки (+продажа, -возврат). WB «Продажа» = SUM WHERE > 0
-  retail_amount: number
+  retail_amount: number;
   // for_pay = ppvz_for_pay: К перечислению за товар (net: +продажи, -возвраты)
-  for_pay: number
-  commission: number
-  logistics_cost: number
-  storage_cost: number
-  acceptance_cost: number
-  penalties: number
+  for_pay: number;
+  commission: number;
+  logistics_cost: number;
+  storage_cost: number;
+  acceptance_cost: number;
+  penalties: number;
   // deduction и additional_payment хранятся РАЗДЕЛЬНО для правильного знака
-  deduction: number
-  additional_payment: number
-  raw: Record<string, unknown>
-  synced_at: string
+  deduction: number;
+  additional_payment: number;
+  raw: Record<string, unknown>;
+  synced_at: string;
 }
 
 export interface WbFinanceSyncResult {
-  success: boolean
-  count: number
+  success: boolean;
+  count: number;
 }
 
 export interface WbFinanceWeeklyReport {
-  id: string
-  account_id: string
-  store_id: string
-  report_id: number
-  legal_entity: string | null
-  period_from: string | null
-  period_to: string | null
-  report_date: string | null
-  report_type: string | null
-  sale_amount: number
-  loyalty_compensation: number
-  for_pay: number
-  logistics_cost: number
-  storage_cost: number
-  acceptance_cost: number
-  other_amount: number
-  penalties: number
-  to_pay: number
-  currency_name: string | null
-  rows_count: number
-  raw: Record<string, unknown>
-  synced_at: string
+  id: string;
+  account_id: string;
+  store_id: string;
+  report_id: number;
+  legal_entity: string | null;
+  period_from: string | null;
+  period_to: string | null;
+  report_date: string | null;
+  report_type: string | null;
+  sale_amount: number;
+  loyalty_compensation: number;
+  for_pay: number;
+  logistics_cost: number;
+  storage_cost: number;
+  acceptance_cost: number;
+  other_amount: number;
+  penalties: number;
+  to_pay: number;
+  currency_name: string | null;
+  rows_count: number;
+  raw: Record<string, unknown>;
+  synced_at: string;
 }
 
 export interface WbFinanceWeeklyReportRow {
-  id: string
-  account_id: string
-  store_id: string
-  report_id: number
-  row_number: number
-  op_uid: string
-  raw: Record<string, unknown>
-  synced_at: string
+  id: string;
+  account_id: string;
+  store_id: string;
+  report_id: number;
+  row_number: number;
+  op_uid: string;
+  raw: Record<string, unknown>;
+  synced_at: string;
 }
 
 // ─── Роли / Доступы ───────────────────────────────────────────
 
 export interface RolePermissions {
   // Логистика
-  shipments_view: boolean
-  shipments_manage: boolean
-  shipments_delete_any: boolean
-  shipments_delete_trip: boolean
-  shipments_manage_payments: boolean
+  shipments_view: boolean;
+  shipments_manage: boolean;
+  shipments_delete_any: boolean;
+  shipments_delete_trip: boolean;
+  shipments_manage_payments: boolean;
   // Магазины
-  stores_view: boolean
-  stores_manage: boolean
-  stores_delete: boolean
-  stores_sync: boolean
+  stores_view: boolean;
+  stores_manage: boolean;
+  stores_delete: boolean;
+  stores_sync: boolean;
   // Справочники
-  directories_view: boolean
-  directories_manage: boolean
-  directories_delete: boolean
-  directories_tariff_manage: boolean
+  directories_view: boolean;
+  directories_manage: boolean;
+  directories_delete: boolean;
+  directories_tariff_manage: boolean;
   // Стикеры
-  stickers_view: boolean
-  stickers_manage: boolean
-  stickers_delete: boolean
-  stickers_import: boolean
+  stickers_view: boolean;
+  stickers_manage: boolean;
+  stickers_delete: boolean;
+  stickers_import: boolean;
   // Отзывы
-  reviews_view: boolean
-  reviews_manage: boolean
-  reviews_ai: boolean
-  reviews_automation: boolean
+  reviews_view: boolean;
+  reviews_manage: boolean;
+  reviews_ai: boolean;
+  reviews_automation: boolean;
   // Фулфилмент
-  fulfillment_view: boolean
-  fulfillment_manage: boolean
-  fulfillment_otk_assign: boolean
-  fulfillment_stage_jump: boolean
-  fulfillment_packing_autoadd: boolean
-  fulfillment_supply_delete_locked: boolean
+  fulfillment_view: boolean;
+  request_view: boolean;
+  request_create: boolean;
+  request_manage: boolean;
+  request_assign: boolean;
+  request_start_work: boolean;
+  request_history_view: boolean;
+  client_portal_access_manage: boolean;
+  fulfillment_manage: boolean;
+  fulfillment_otk_assign: boolean;
+  fulfillment_stage_jump: boolean;
+  fulfillment_packing_autoadd: boolean;
+  fulfillment_supply_delete_locked: boolean;
   // Склад / адресное хранение
-  wms_view: boolean
-  wms_manage: boolean
-  wms_history: boolean
-  wms_inventory: boolean
+  wms_view: boolean;
+  wms_manage: boolean;
+  wms_history: boolean;
+  wms_inventory: boolean;
   // FBS заказы
-  fbs_view: boolean
-  fbs_sync: boolean
-  fbs_full_sync: boolean
-  fbs_assembly: boolean
-  fbs_dispatch: boolean
-  fbs_stocks_manage: boolean
+  fbs_view: boolean;
+  fbs_sync: boolean;
+  fbs_full_sync: boolean;
+  fbs_assembly: boolean;
+  fbs_dispatch: boolean;
+  fbs_stocks_manage: boolean;
   // Администрирование
-  roles_manage: boolean
-  members_manage: boolean
+  roles_manage: boolean;
+  members_manage: boolean;
 }
 
 export const DEFAULT_PERMISSIONS: RolePermissions = {
@@ -197,6 +204,13 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   reviews_ai: false,
   reviews_automation: false,
   fulfillment_view: false,
+  request_view: false,
+  request_create: false,
+  request_manage: false,
+  request_assign: false,
+  request_start_work: false,
+  request_history_view: false,
+  client_portal_access_manage: false,
   fulfillment_manage: false,
   fulfillment_otk_assign: false,
   fulfillment_stage_jump: false,
@@ -214,7 +228,7 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   fbs_stocks_manage: false,
   roles_manage: false,
   members_manage: false,
-}
+};
 
 export const FULL_PERMISSIONS: RolePermissions = {
   shipments_view: true,
@@ -239,6 +253,13 @@ export const FULL_PERMISSIONS: RolePermissions = {
   reviews_ai: true,
   reviews_automation: true,
   fulfillment_view: true,
+  request_view: true,
+  request_create: true,
+  request_manage: true,
+  request_assign: true,
+  request_start_work: true,
+  request_history_view: true,
+  client_portal_access_manage: true,
   fulfillment_manage: true,
   fulfillment_otk_assign: true,
   fulfillment_stage_jump: true,
@@ -256,1072 +277,1096 @@ export const FULL_PERMISSIONS: RolePermissions = {
   fbs_stocks_manage: true,
   roles_manage: true,
   members_manage: true,
-}
+};
 
 export interface Role {
-  id: string
-  account_id: string
-  name: string
-  permissions: RolePermissions
-  fbs_store_ids: string[] | null
-  assigned_users: ResolvedUser[]
-  created_at: string
+  id: string;
+  account_id: string;
+  name: string;
+  permissions: RolePermissions;
+  fbs_store_ids: string[] | null;
+  assigned_users: ResolvedUser[];
+  created_at: string;
 }
 
 export interface RoleFormValues {
-  name: string
-  permissions: RolePermissions
-  fbs_store_ids?: string[] | null
-  assigned_user_ids?: string[]
+  name: string;
+  permissions: RolePermissions;
+  fbs_store_ids?: string[] | null;
+  assigned_user_ids?: string[];
 }
 
 export interface FbsOutsourceAccess {
-  client_account_id: string
-  executor_account_id: string
-  enabled: boolean
-  store_ids: string[]
-  permissions: Partial<RolePermissions>
-  stores: Array<Pick<Store, 'id' | 'name' | 'store_code' | 'supplier' | 'supplier_full'>>
+  client_account_id: string;
+  executor_account_id: string;
+  enabled: boolean;
+  store_ids: string[];
+  permissions: Partial<RolePermissions>;
+  stores: Array<
+    Pick<Store, "id" | "name" | "store_code" | "supplier" | "supplier_full">
+  >;
 }
 
 export interface ResolvedUser {
-  user_id: string
-  email: string
-  full_name: string
-  short_id: number | null
+  user_id: string;
+  email: string;
+  full_name: string;
+  short_id: number | null;
 }
 
 export type ShipmentStatus =
-  | 'Формируется'
-  | 'Ожидает отправки'
-  | 'В пути'
-  | 'Прибыл'
-  | 'Отгружен'
+  "Формируется" | "Ожидает отправки" | "В пути" | "Прибыл" | "Отгружен";
 
-export type PaymentStatus = 'Не оплачено' | 'Частично оплачено' | 'Оплачено'
+export type PaymentStatus = "Не оплачено" | "Частично оплачено" | "Оплачено";
 
 export interface Profile {
-  id: string
-  user_id: string
-  full_name: string
-  short_id: number
-  created_at: string
+  id: string;
+  user_id: string;
+  full_name: string;
+  short_id: number;
+  created_at: string;
 }
 
 export interface Account {
-  id: string
-  name: string
-  created_at: string
-  deleted_at?: string | null
-  my_role?: MemberRole
-  short_id?: number | null
-  logo_url?: string | null
-  logo_subscription_until?: string | null
+  id: string;
+  name: string;
+  created_at: string;
+  deleted_at?: string | null;
+  my_role?: MemberRole;
+  short_id?: number | null;
+  logo_url?: string | null;
+  logo_subscription_until?: string | null;
   // billing
-  plan?: string | null
-  plan_until?: string | null
-  trial_ends_at?: string | null
-  grace_until?: string | null
-  plan_features?: Record<string, unknown> | null
+  plan?: string | null;
+  plan_until?: string | null;
+  trial_ends_at?: string | null;
+  grace_until?: string | null;
+  plan_features?: Record<string, unknown> | null;
 }
 
 export interface AccountMember {
-  id: string
-  account_id: string
-  user_id: string
-  role: MemberRole
-  created_at: string
+  id: string;
+  account_id: string;
+  user_id: string;
+  role: MemberRole;
+  created_at: string;
 }
 
 export interface Store {
-  id: string
-  account_id: string
-  store_code: string
-  name: string
-  marketplace: string
-  api_key?: string | null
-  supplier?: string | null
-  supplier_full?: string | null
-  address?: string | null
-  country?: string | null
-  deleted_at?: string | null
-  inn?: string | null
-  phone?: string | null
-  ai_prompt?: string | null
-  teksher_login?: string | null
-  created_at: string
+  id: string;
+  account_id: string;
+  store_code: string;
+  name: string;
+  marketplace: string;
+  api_key?: string | null;
+  has_api_key?: boolean;
+  has_teksher_credentials?: boolean;
+  has_company_request_link?: boolean;
+  supplier?: string | null;
+  supplier_full?: string | null;
+  address?: string | null;
+  country?: string | null;
+  deleted_at?: string | null;
+  inn?: string | null;
+  phone?: string | null;
+  ai_prompt?: string | null;
+  teksher_login?: string | null;
+  created_at: string;
   /** Local A-N identifier inside the owning company. */
-  short_id?: number | null
+  short_id?: number | null;
   /** Customer company represented by this card in an executor's client base. */
-  customer_account_id?: string | null
-  restored_at?: string | null
+  customer_account_id?: string | null;
+  restored_at?: string | null;
 }
 
 export interface Shipment {
-  id: string
-  account_id: string
-  store_id: string
-  tracking_number: number
-  tracking_code: string
-  carrier: string
-  destination_warehouse: string
-  box_qty: number
-  units_qty: number
-  units_total: number
-  arrived_box_qty: number
-  planned_marketplace_delivery_date: string | null
-  arrival_date: string | null
-  status: ShipmentStatus
-  payment_status: PaymentStatus
-  comment: string
-  created_at: string
-  updated_at: string
+  id: string;
+  account_id: string;
+  store_id: string;
+  tracking_number: number;
+  tracking_code: string;
+  carrier: string;
+  destination_warehouse: string;
+  box_qty: number;
+  units_qty: number;
+  units_total: number;
+  arrived_box_qty: number;
+  planned_marketplace_delivery_date: string | null;
+  arrival_date: string | null;
+  status: ShipmentStatus;
+  payment_status: PaymentStatus;
+  comment: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ShipmentStatusHistory {
-  id: string
-  shipment_id: string
-  old_status: ShipmentStatus | null
-  new_status: ShipmentStatus
-  changed_at: string
-  changed_by: string | null
+  id: string;
+  shipment_id: string;
+  old_status: ShipmentStatus | null;
+  new_status: ShipmentStatus;
+  changed_at: string;
+  changed_by: string | null;
 }
 
 export interface ShipmentWithStore extends Shipment {
-  store?: Store
+  store?: Store;
 }
 
 export interface ShipmentFormValues {
-  store_id: string
-  carrier: string
-  destination_warehouse: string
-  box_qty: number
-  units_qty: number
-  units_total: number
-  arrived_box_qty: number
-  planned_marketplace_delivery_date: string
-  arrival_date?: string
-  status: ShipmentStatus
-  payment_status: PaymentStatus
-  comment: string
+  store_id: string;
+  carrier: string;
+  destination_warehouse: string;
+  box_qty: number;
+  units_qty: number;
+  units_total: number;
+  arrived_box_qty: number;
+  planned_marketplace_delivery_date: string;
+  arrival_date?: string;
+  status: ShipmentStatus;
+  payment_status: PaymentStatus;
+  comment: string;
 }
 
 export interface StoreFormValues {
-  name: string
-  marketplace: string
-  store_code?: string
-  api_key?: string
-  supplier?: string
-  supplier_full?: string
-  address?: string
-  country?: string
-  inn?: string
-  phone?: string
+  name: string;
+  marketplace: string;
+  store_code?: string;
+  api_key?: string;
+  supplier?: string;
+  supplier_full?: string;
+  address?: string;
+  country?: string;
+  inn?: string;
+  phone?: string;
 }
 
 export interface Carrier {
-  id: string
-  account_id: string
-  name: string
-  phone?: string | null
-  contact_person?: string | null
-  notes?: string | null
-  owner_user_id?: string | null
-  created_at: string
+  id: string;
+  account_id: string;
+  name: string;
+  phone?: string | null;
+  contact_person?: string | null;
+  notes?: string | null;
+  owner_user_id?: string | null;
+  created_at: string;
 }
 
 export interface Warehouse {
-  id: string
-  account_id: string | null
-  name: string
-  is_system: boolean
-  created_at: string
+  id: string;
+  account_id: string | null;
+  name: string;
+  is_system: boolean;
+  created_at: string;
 }
 
 export interface WmsWarehouse {
-  id: string
-  account_id: string
-  name: string
-  description: string
-  fbs_enabled: boolean
-  wb_warehouse_id: string
-  created_at: string
-  short_id: number
+  id: string;
+  account_id: string;
+  name: string;
+  description: string;
+  fbs_enabled: boolean;
+  wb_warehouse_id: string;
+  created_at: string;
+  short_id: number;
 }
 
 export interface CarrierTariff {
-  id: string
-  account_id: string
-  carrier_id: string
-  warehouse_id: string
-  price_per_box: number | null
-  price_per_kg: number | null
+  id: string;
+  account_id: string;
+  carrier_id: string;
+  warehouse_id: string;
+  price_per_box: number | null;
+  price_per_kg: number | null;
 }
 
 export interface WbUnloadTariff {
-  id: string
-  account_id: string
-  warehouse_id: string
-  price_per_box: number
+  id: string;
+  account_id: string;
+  warehouse_id: string;
+  price_per_box: number;
 }
 
 export interface FulfillmentWorkTariff {
-  id: string
-  account_id: string
-  stage: string
-  name: string
-  price_per_unit: number
-  price_per_kg: number
-  price_worker: number
-  price_senior: number
-  currency: string
-  created_at: string
+  id: string;
+  account_id: string;
+  stage: string;
+  name: string;
+  price_per_unit: number;
+  price_per_kg: number;
+  price_worker: number;
+  price_senior: number;
+  currency: string;
+  created_at: string;
 }
 
 export interface AccountCurrency {
-  id: string
-  account_id: string
-  code: string
-  is_primary: boolean
-  exchange_rate: number
-  created_at: string
+  id: string;
+  account_id: string;
+  code: string;
+  is_primary: boolean;
+  exchange_rate: number;
+  created_at: string;
 }
 
 export interface Consumable {
-  id: string
-  account_id: string
-  name: string
-  kind: string | null
-  size: string | null
-  price: number
-  cost: number
-  currency: string
-  created_at: string
+  id: string;
+  account_id: string;
+  name: string;
+  kind: string | null;
+  size: string | null;
+  price: number;
+  cost: number;
+  currency: string;
+  created_at: string;
 }
 
 export interface ConsumableCatalogItem {
-  id: string
-  account_id: string
-  kind: string
-  size: string
-  price: number
-  cost: number
-  currency: string
-  created_at: string
+  id: string;
+  account_id: string;
+  kind: string;
+  size: string;
+  price: number;
+  cost: number;
+  currency: string;
+  created_at: string;
 }
 
 export interface BatchConsumable {
-  id: string
-  batch_id: string
-  consumable_id: string
-  qty: number
-  created_at: string
-  consumable?: Consumable
+  id: string;
+  batch_id: string;
+  consumable_id: string;
+  qty: number;
+  created_at: string;
+  consumable?: Consumable;
 }
 
 // ─── Рейсы ───────────────────────────────────────────────────
 
-export type TripStatus = 'Формируется' | 'Отправлен' | 'Прибыл' | 'Завершён'
+export type TripStatus = "Формируется" | "Отправлен" | "Прибыл" | "Завершён";
 
 export interface Trip {
-  id: string
-  account_id: string
-  draft_number: number
-  trip_number: string | null
-  carrier: string
-  departure_date: string | null
-  arrived_at: string | null
-  finished_at: string | null
-  status: TripStatus
-  payment_status: PaymentStatus
-  comment: string
-  custom_fields: Record<string, unknown>
-  created_at: string
-  updated_at: string
+  id: string;
+  account_id: string;
+  draft_number: number;
+  trip_number: string | null;
+  carrier: string;
+  departure_date: string | null;
+  arrived_at: string | null;
+  finished_at: string | null;
+  status: TripStatus;
+  payment_status: PaymentStatus;
+  comment: string;
+  custom_fields: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface WbSupplyGoodSnapshot {
-  barcode?: string
-  vendorCode?: string
-  nmID?: number
-  needKiz?: boolean
-  tnved?: string
-  techSize?: string
-  color?: string
-  supplierBoxAmount?: number
-  quantity?: number
-  readyForSaleQuantity?: number
-  unloadingQuantity?: number
-  acceptedQuantity?: number
+  barcode?: string;
+  vendorCode?: string;
+  nmID?: number;
+  needKiz?: boolean;
+  tnved?: string;
+  techSize?: string;
+  color?: string;
+  supplierBoxAmount?: number;
+  quantity?: number;
+  readyForSaleQuantity?: number;
+  unloadingQuantity?: number;
+  acceptedQuantity?: number;
 }
 
 export interface WbSupplyPackageSnapshot {
-  packageCode: string
-  quantity: number
-  barcodes: Array<{ barcode: string; quantity: number }>
+  packageCode: string;
+  quantity: number;
+  barcodes: Array<{ barcode: string; quantity: number }>;
 }
 
 export interface TripLine {
-  id: string
-  trip_id: string
-  account_id: string
-  store_id: string
-  shipment_number: number
-  destination_warehouse: string
-  transfer_to_account_id: string | null
-  transfer_created_at: string | null
-  box_qty: number
-  units_qty: number
-  units_total: number
-  arrived_box_qty: number
-  weight: number | null
-  planned_marketplace_delivery_date: string | null
-  arrival_date: string | null
-  reception_date: string | null
-  shipped_date: string | null
-  waiting_at: string | null
-  transit_at: string | null
-  status: ShipmentStatus
-  payment_status: PaymentStatus
-  invoice_photo_urls: string[]
-  sticker_file_urls: string[]
-  combined_sticker_urls: string[]
-  wb_supply_id: string | null
-  wb_cargo_type: number | null
-  wb_status_id: number | null
-  wb_created_at: string | null
-  wb_updated_at: string | null
-  wb_acceptance_coefficient: number | null
-  wb_acceptance_cost: number | null
-  wb_reject_reason: string | null
-  wb_quantity: number | null
-  wb_ready_for_sale_quantity: number | null
-  wb_accepted_quantity: number | null
-  wb_unloading_quantity: number | null
-  wb_depersonalized_quantity: number | null
-  wb_warehouse_id: number | null
-  wb_warehouse_name: string | null
-  wb_actual_warehouse_id: number | null
-  wb_actual_warehouse_name: string | null
-  wb_transit_warehouse_id: number | null
-  wb_transit_warehouse_name: string | null
-  wb_acceptance_date: string | null
-  wb_package_codes: string[]
-  wb_goods_snapshot: WbSupplyGoodSnapshot[]
-  wb_packages_snapshot: WbSupplyPackageSnapshot[]
-  wb_synced_at: string | null
-  wb_pass_url: string | null
-  wb_pass_urls: string[]
-  comment: string
-  custom_fields: Record<string, unknown>
-  created_at: string
-  updated_at: string
-  deleted_at?: string | null
-  fulfillment_batch_id?: string | null
-  fulfillment_supply_id?: string | null
+  id: string;
+  trip_id: string;
+  account_id: string;
+  store_id: string;
+  shipment_number: number;
+  destination_warehouse: string;
+  transfer_to_account_id: string | null;
+  transfer_created_at: string | null;
+  box_qty: number;
+  units_qty: number;
+  units_total: number;
+  arrived_box_qty: number;
+  weight: number | null;
+  planned_marketplace_delivery_date: string | null;
+  arrival_date: string | null;
+  reception_date: string | null;
+  shipped_date: string | null;
+  waiting_at: string | null;
+  transit_at: string | null;
+  status: ShipmentStatus;
+  payment_status: PaymentStatus;
+  invoice_photo_urls: string[];
+  sticker_file_urls: string[];
+  combined_sticker_urls: string[];
+  wb_supply_id: string | null;
+  wb_cargo_type: number | null;
+  wb_status_id: number | null;
+  wb_created_at: string | null;
+  wb_updated_at: string | null;
+  wb_acceptance_coefficient: number | null;
+  wb_acceptance_cost: number | null;
+  wb_reject_reason: string | null;
+  wb_quantity: number | null;
+  wb_ready_for_sale_quantity: number | null;
+  wb_accepted_quantity: number | null;
+  wb_unloading_quantity: number | null;
+  wb_depersonalized_quantity: number | null;
+  wb_warehouse_id: number | null;
+  wb_warehouse_name: string | null;
+  wb_actual_warehouse_id: number | null;
+  wb_actual_warehouse_name: string | null;
+  wb_transit_warehouse_id: number | null;
+  wb_transit_warehouse_name: string | null;
+  wb_acceptance_date: string | null;
+  wb_package_codes: string[];
+  wb_goods_snapshot: WbSupplyGoodSnapshot[];
+  wb_packages_snapshot: WbSupplyPackageSnapshot[];
+  wb_synced_at: string | null;
+  wb_pass_url: string | null;
+  wb_pass_urls: string[];
+  comment: string;
+  custom_fields: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+  fulfillment_batch_id?: string | null;
+  fulfillment_supply_id?: string | null;
 }
 
 export interface TripLineWithStore extends TripLine {
-  store?: Store
+  store?: Store;
 }
 
 export interface TripWithLines extends Trip {
-  lines: TripLineWithStore[]
+  lines: TripLineWithStore[];
 }
 
 export interface TripFormValues {
-  carrier: string
-  comment: string
-  departure_date?: string
+  carrier: string;
+  comment: string;
+  departure_date?: string;
 }
 
 export interface TripLineFormValues {
-  store_id: string
-  destination_warehouse: string
-  transfer_to_account_id?: string | null
-  box_qty: number
-  units_qty: number
-  units_total: number
-  arrived_box_qty: number
-  weight: number
-  planned_marketplace_delivery_date: string
-  arrival_date: string
-  reception_date: string
-  shipped_date: string
-  status: ShipmentStatus
-  payment_status: PaymentStatus
-  comment: string
+  store_id: string;
+  destination_warehouse: string;
+  transfer_to_account_id?: string | null;
+  box_qty: number;
+  units_qty: number;
+  units_total: number;
+  arrived_box_qty: number;
+  weight: number;
+  planned_marketplace_delivery_date: string;
+  arrival_date: string;
+  reception_date: string;
+  shipped_date: string;
+  status: ShipmentStatus;
+  payment_status: PaymentStatus;
+  comment: string;
 }
 
 export interface IncomingTripLineTransfer {
-  line_id: string
-  sender_account_id: string
-  sender_account_name: string
-  sender_account_short_id: number | null
-  trip_id: string
-  trip_label: string
-  store_name: string
-  store_code: string | null
-  shipment_number: number
-  box_qty: number
-  units_qty: number
-  weight: number | null
-  reception_date: string | null
-  comment: string
-  transfer_created_at: string
+  line_id: string;
+  sender_account_id: string;
+  sender_account_name: string;
+  sender_account_short_id: number | null;
+  trip_id: string;
+  trip_label: string;
+  store_name: string;
+  store_code: string | null;
+  shipment_number: number;
+  box_qty: number;
+  units_qty: number;
+  weight: number | null;
+  reception_date: string | null;
+  comment: string;
+  transfer_created_at: string;
 }
 
 // ─── Стикеры ─────────────────────────────────────────────────
 
 export interface StickerTemplate {
-  id: string
-  account_id: string
-  barcode: string
-  name: string
-  composition: string | null
-  article: string | null
-  seller_article?: string | null
-  brand: string | null
-  size: string | null
-  color: string | null
-  supplier: string | null
-  supplier_address: string | null
-  production_date: string | null
-  country: string
-  copies: number
-  icon_wash: boolean
-  icon_iron: boolean
-  icon_no_bleach: boolean
-  icon_no_tumble_dry: boolean
-  icon_eac: boolean
-  created_at: string
-  store_id?: string | null
-  product_id?: string | null
-  nm_id?: number | null
-  available_colors?: string[]
-  show_wb_article?: boolean
-  show_seller_article?: boolean
+  id: string;
+  account_id: string;
+  barcode: string;
+  name: string;
+  composition: string | null;
+  article: string | null;
+  seller_article?: string | null;
+  brand: string | null;
+  size: string | null;
+  color: string | null;
+  supplier: string | null;
+  supplier_address: string | null;
+  production_date: string | null;
+  country: string;
+  copies: number;
+  icon_wash: boolean;
+  icon_iron: boolean;
+  icon_no_bleach: boolean;
+  icon_no_tumble_dry: boolean;
+  icon_eac: boolean;
+  created_at: string;
+  store_id?: string | null;
+  product_id?: string | null;
+  nm_id?: number | null;
+  available_colors?: string[];
+  show_wb_article?: boolean;
+  show_seller_article?: boolean;
 }
 
 export interface StickerBundleItem {
-  sticker_id: string
-  copies: number
+  sticker_id: string;
+  copies: number;
 }
 
 export interface StickerBundle {
-  id: string
-  account_id: string
-  name: string
-  items: StickerBundleItem[]
-  created_at: string
+  id: string;
+  account_id: string;
+  name: string;
+  items: StickerBundleItem[];
+  created_at: string;
 }
 
 export interface StickerFormValues {
-  barcode: string
-  name: string
-  composition: string
-  article: string
-  seller_article?: string
-  brand: string
-  size: string
-  color: string
-  supplier: string
-  supplier_address: string
-  production_date: string
-  country: string
-  copies: number
-  icon_wash: boolean
-  icon_iron: boolean
-  icon_no_bleach: boolean
-  icon_no_tumble_dry: boolean
-  icon_eac: boolean
-  store_id?: string
-  product_id?: string
-  nm_id?: number
+  barcode: string;
+  name: string;
+  composition: string;
+  article: string;
+  seller_article?: string;
+  brand: string;
+  size: string;
+  color: string;
+  supplier: string;
+  supplier_address: string;
+  production_date: string;
+  country: string;
+  copies: number;
+  icon_wash: boolean;
+  icon_iron: boolean;
+  icon_no_bleach: boolean;
+  icon_no_tumble_dry: boolean;
+  icon_eac: boolean;
+  store_id?: string;
+  product_id?: string;
+  nm_id?: number;
 }
 
 // ─── Отзывы WB ────────────────────────────────────────────────
 
-export type AiReplyStatus = 'none' | 'generated' | 'sent'
-export type AiTone = 'polite' | 'neutral' | 'friendly' | 'professional'
-export type AiProvider = 'openai' | 'claude'
-export type AiModel = 'gpt-4o-mini' | 'gpt-4o' | 'gpt-3.5-turbo'
-export type ClaudeModel = 'claude-sonnet-4-6' | 'claude-haiku-4-5-20251001' | 'claude-opus-4-7' | 'claude-3-7-sonnet-20250219' | 'claude-3-5-sonnet-20241022' | 'claude-3-5-haiku-20241022'
+export type AiReplyStatus = "none" | "generated" | "sent";
+export type AiTone = "polite" | "neutral" | "friendly" | "professional";
+export type AiProvider = "openai" | "claude";
+export type AiModel = "gpt-4o-mini" | "gpt-4o" | "gpt-3.5-turbo";
+export type ClaudeModel =
+  | "claude-sonnet-4-6"
+  | "claude-haiku-4-5-20251001"
+  | "claude-opus-4-7"
+  | "claude-3-7-sonnet-20250219"
+  | "claude-3-5-sonnet-20241022"
+  | "claude-3-5-haiku-20241022";
 
 export interface AiSettings {
-  account_id: string
-  provider: AiProvider
-  openai_key: string
-  model: AiModel
-  claude_key: string
-  claude_model: ClaudeModel
-  tone: AiTone
-  system_prompt: string | null
-  updated_at: string
+  account_id: string;
+  provider: AiProvider;
+  openai_key: string;
+  model: AiModel;
+  claude_key: string;
+  claude_model: ClaudeModel;
+  tone: AiTone;
+  system_prompt: string | null;
+  updated_at: string;
 }
 
 export interface AiSettingsFormValues {
-  provider: AiProvider
-  openai_key: string
-  model: AiModel
-  claude_key: string
-  claude_model: ClaudeModel
-  tone: AiTone
-  system_prompt: string
+  provider: AiProvider;
+  openai_key: string;
+  model: AiModel;
+  claude_key: string;
+  claude_model: ClaudeModel;
+  tone: AiTone;
+  system_prompt: string;
 }
 
 export interface WbFeedbackRow {
-  id: string
-  store_id: string
-  account_id: string
-  data: WbFeedback
-  is_answered: boolean
-  ai_reply: string | null
-  ai_reply_status: AiReplyStatus
-  reply_sent_at: string | null
-  reply_source: 'manual' | 'auto' | null
-  synced_at: string
+  id: string;
+  store_id: string;
+  account_id: string;
+  data: WbFeedback;
+  is_answered: boolean;
+  ai_reply: string | null;
+  ai_reply_status: AiReplyStatus;
+  reply_sent_at: string | null;
+  reply_source: "manual" | "auto" | null;
+  synced_at: string;
 }
 
 export interface WbFeedback {
-  id: string
-  text: string
-  pros?: string | null
-  cons?: string | null
-  productValuation: number // 1–5
-  createdDate: string
-  userName: string | null
-  isAnswered: boolean
-  answer?: { text: string } | null
+  id: string;
+  text: string;
+  pros?: string | null;
+  cons?: string | null;
+  productValuation: number; // 1–5
+  createdDate: string;
+  userName: string | null;
+  isAnswered: boolean;
+  answer?: { text: string } | null;
   productDetails?: {
-    nmId: number
-    productName: string
-    imtId?: number
-    supplierArticle?: string
-    brandName?: string
-    category?: string
-    color?: string
-  } | null
-  photoLinks?: { fullSize: string; miniSize: string }[] | null
+    nmId: number;
+    productName: string;
+    imtId?: number;
+    supplierArticle?: string;
+    brandName?: string;
+    category?: string;
+    color?: string;
+  } | null;
+  photoLinks?: { fullSize: string; miniSize: string }[] | null;
 }
 
 export interface AiPrompt {
-  id: string
-  account_id: string
-  store_id: string | null
-  type: 'system' | 'store'
-  title: string
-  content: string
-  sort_order: number
-  created_at: string
+  id: string;
+  account_id: string;
+  store_id: string | null;
+  type: "system" | "store";
+  title: string;
+  content: string;
+  sort_order: number;
+  created_at: string;
 }
 
 export interface AiPromptFormValues {
-  title: string
-  content: string
+  title: string;
+  content: string;
 }
 
 // ─── Фулфилмент ───────────────────────────────────────────────
 
-export type FulfillmentStage = 'reception' | 'otk' | 'packaging' | 'marking' | 'packing' | 'logistics' | 'done'
-export type FulfillmentBatchStatus = 'active' | 'done' | 'cancelled'
+export type FulfillmentStage =
+  | "reception"
+  | "otk"
+  | "packaging"
+  | "marking"
+  | "packing"
+  | "logistics"
+  | "done";
+export type FulfillmentBatchStatus = "active" | "done" | "cancelled";
 
 export interface FulfillmentSettings {
-  id: string
-  account_id: string
-  stage_otk: boolean
-  stage_packaging: boolean
-  stage_marking: boolean
-  stage_packing: boolean
-  stage_logistics: boolean
-  created_at: string
-  updated_at: string
+  id: string;
+  account_id: string;
+  stage_otk: boolean;
+  stage_packaging: boolean;
+  stage_marking: boolean;
+  stage_packing: boolean;
+  stage_logistics: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface FulfillmentBatch {
-  id: string
-  account_id: string
-  store_id: string | null
-  name: string
-  short_id: number | null
-  status: FulfillmentBatchStatus
-  current_stage: FulfillmentStage
-  stage_otk: boolean
-  stage_packaging: boolean
-  packaging_qty: number | null
-  boxes_qty: number | null
-  box_catalog_consumable_id?: string | null
-  stage_marking: boolean
-  stage_packing: boolean
-  stage_logistics: boolean
-  trip_id: string | null
-  trip_line_id: string | null
-  comment: string | null
-  otk_discrepancy: number | null
-  logistics_tariff_type: 'per_box' | 'per_kg' | null
-  wms_warehouse_id?: string | null
-  wms_warehouse_name?: string | null
-  warehouse_corrected_at?: string | null
-  created_at: string
-  updated_at: string
-  created_by: string | null
-  deleted_at: string | null
-  source_request_id?: string | null
-  source_request_store_id?: string | null
-  operator_account_id?: string | null
-  applicant_store_id?: string | null
-  executor_store_id?: string | null
-  store_link_id?: string | null
-  request_acceptance_status?: 'not_required' | 'pending' | 'accepted' | 'rejected'
-  customer_company_short_id?: number | null
-  customer_company_name?: string | null
+  id: string;
+  account_id: string;
+  store_id: string | null;
+  name: string;
+  short_id: number | null;
+  status: FulfillmentBatchStatus;
+  current_stage: FulfillmentStage;
+  stage_otk: boolean;
+  stage_packaging: boolean;
+  packaging_qty: number | null;
+  boxes_qty: number | null;
+  box_catalog_consumable_id?: string | null;
+  stage_marking: boolean;
+  stage_packing: boolean;
+  stage_logistics: boolean;
+  trip_id: string | null;
+  trip_line_id: string | null;
+  comment: string | null;
+  otk_discrepancy: number | null;
+  logistics_tariff_type: "per_box" | "per_kg" | null;
+  wms_warehouse_id?: string | null;
+  wms_warehouse_name?: string | null;
+  warehouse_corrected_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  deleted_at: string | null;
+  source_request_id?: string | null;
+  source_request_store_id?: string | null;
+  operator_account_id?: string | null;
+  applicant_store_id?: string | null;
+  executor_store_id?: string | null;
+  store_link_id?: string | null;
+  request_acceptance_status?:
+    "not_required" | "pending" | "accepted" | "rejected";
+  customer_company_short_id?: number | null;
+  customer_company_name?: string | null;
   // агрегированные суммы из fulfillment_items (заполняются при fetchBatches)
-  qty_received_sum?: number
-  qty_good_sum?: number
-  qty_defect_sum?: number
-  qty_declared_sum?: number
-  qty_otk_sum?: number
-  qty_marked_sum?: number
-  qty_packaging_sum?: number
-  qty_packed_sum?: number
+  qty_received_sum?: number;
+  qty_good_sum?: number;
+  qty_defect_sum?: number;
+  qty_declared_sum?: number;
+  qty_otk_sum?: number;
+  qty_marked_sum?: number;
+  qty_packaging_sum?: number;
+  qty_packed_sum?: number;
 }
 
 export interface FulfillmentItem {
-  id: string
-  batch_id: string
-  barcode: string
-  product_name: string | null
-  size: string | null
-  color: string | null
-  article: string | null
-  qty_declared: number
+  id: string;
+  batch_id: string;
+  barcode: string;
+  product_name: string | null;
+  size: string | null;
+  color: string | null;
+  article: string | null;
+  qty_declared: number;
   /** Годное количество фактической приёмки. Legacy name kept for compatibility. */
-  qty_received: number
-  qty_defect?: number
-  qty_otk: number | null
-  qty_marked: number | null
-  qty_packed: number | null
-  boxes: number | null
-  notes: string | null
-  sort_order: number
-  created_at: string
-  pipeline_stage_id?: string | null
-  lineage_id?: string
-  source_item_id?: string | null
-  is_excluded?: boolean
-  corrected_at?: string | null
+  qty_received: number;
+  qty_defect?: number;
+  qty_otk: number | null;
+  qty_marked: number | null;
+  qty_packed: number | null;
+  boxes: number | null;
+  notes: string | null;
+  sort_order: number;
+  created_at: string;
+  pipeline_stage_id?: string | null;
+  lineage_id?: string;
+  source_item_id?: string | null;
+  is_excluded?: boolean;
+  corrected_at?: string | null;
 }
 
 export interface FulfillmentReceptionHistory {
-  id: string
-  batch_id: string
-  pipeline_stage_id: string | null
-  item_id: string | null
-  lineage_id: string
-  action: 'created' | 'updated' | 'excluded' | 'restored' | 'declared_from_previous'
-  old_values: Record<string, unknown> | null
-  new_values: Record<string, unknown>
-  reason: string | null
-  is_correction?: boolean
-  changed_by: string | null
-  changed_at: string
+  id: string;
+  batch_id: string;
+  pipeline_stage_id: string | null;
+  item_id: string | null;
+  lineage_id: string;
+  action:
+    "created" | "updated" | "excluded" | "restored" | "declared_from_previous";
+  old_values: Record<string, unknown> | null;
+  new_values: Record<string, unknown>;
+  reason: string | null;
+  is_correction?: boolean;
+  changed_by: string | null;
+  changed_at: string;
 }
 
 export interface FulfillmentStageWarehouseHistory {
-  id: string
-  batch_id: string
-  pipeline_stage_id: string | null
-  old_warehouse_id: string | null
-  old_warehouse_name: string | null
-  new_warehouse_id: string | null
-  new_warehouse_name: string | null
-  is_correction: boolean
-  changed_by: string | null
-  changed_at: string
+  id: string;
+  batch_id: string;
+  pipeline_stage_id: string | null;
+  old_warehouse_id: string | null;
+  old_warehouse_name: string | null;
+  new_warehouse_id: string | null;
+  new_warehouse_name: string | null;
+  is_correction: boolean;
+  changed_by: string | null;
+  changed_at: string;
 }
 
 export interface PipelineStageDiscrepancy {
-  lineage_id: string
-  barcode: string
-  product_name: string | null
-  sent_good: number
-  next_good: number
-  next_defect: number
-  difference: number
+  lineage_id: string;
+  barcode: string;
+  product_name: string | null;
+  sent_good: number;
+  next_good: number;
+  next_defect: number;
+  difference: number;
 }
 
 export interface FulfillmentStageLog {
-  id: string
-  batch_id: string
-  stage: FulfillmentStage
-  completed_at: string
-  completed_by: string | null
-  notes: string | null
+  id: string;
+  batch_id: string;
+  stage: FulfillmentStage;
+  completed_at: string;
+  completed_by: string | null;
+  notes: string | null;
 }
 
 export interface FulfillmentBatchWithItems extends FulfillmentBatch {
-  items: FulfillmentItem[]
+  items: FulfillmentItem[];
 }
 
 export interface FulfillmentOtkLog {
-  id: string
-  batch_id: string
-  user_id: string
-  user_email: string
-  user_name: string | null
-  performer_user_id: string | null
-  performer_name: string
-  tariff: string
-  qty: number
-  qty_defect: number
-  notes: string | null
-  photo_urls: string[]
-  created_at: string
-  updated_at: string | null
-  deleted_at: string | null
-  pipeline_stage_id?: string | null
+  id: string;
+  batch_id: string;
+  user_id: string;
+  user_email: string;
+  user_name: string | null;
+  performer_user_id: string | null;
+  performer_name: string;
+  tariff: string;
+  qty: number;
+  qty_defect: number;
+  notes: string | null;
+  photo_urls: string[];
+  created_at: string;
+  updated_at: string | null;
+  deleted_at: string | null;
+  pipeline_stage_id?: string | null;
 }
 
 export interface FulfillmentMarkingLog extends FulfillmentOtkLog {
-  barcode: string | null
-  item_id: string | null
-  consumable_id: string | null
-  labels_qty?: number | null
+  barcode: string | null;
+  item_id: string | null;
+  consumable_id: string | null;
+  labels_qty?: number | null;
 }
 
 // Аналог OtkLog для этапа Упаковки (без barcode/item_id)
 export interface FulfillmentPackagingLog extends FulfillmentOtkLog {
-  consumable_id: string | null
-  catalog_consumable_id?: string | null
-  zip_bags_qty?: number | null
+  consumable_id: string | null;
+  catalog_consumable_id?: string | null;
+  zip_bags_qty?: number | null;
 }
 
 export interface FulfillmentPackingLog {
-  id: string
-  batch_id: string
-  account_id: string
-  user_id: string
-  user_email: string
-  user_name: string | null
-  performer_user_id: string | null
-  performer_name: string
-  boxes_used: number
-  notes: string | null
-  created_at: string
-  updated_at: string | null
-  deleted_at: string | null
+  id: string;
+  batch_id: string;
+  account_id: string;
+  user_id: string;
+  user_email: string;
+  user_name: string | null;
+  performer_user_id: string | null;
+  performer_name: string;
+  boxes_used: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string | null;
+  deleted_at: string | null;
 }
 
 export interface FulfillmentOtkLogHistory {
-  id: string
-  log_id: string
-  user_id: string
-  user_email: string
-  user_name?: string | null
-  action: 'created' | 'updated' | 'deleted'
-  old_values: Record<string, unknown> | null
-  new_values: Record<string, unknown>
-  created_at: string
+  id: string;
+  log_id: string;
+  user_id: string;
+  user_email: string;
+  user_name?: string | null;
+  action: "created" | "updated" | "deleted";
+  old_values: Record<string, unknown> | null;
+  new_values: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface FulfillmentMarkingLogHistory {
-  id: string
-  log_id: string
-  user_id: string
-  user_email: string
-  user_name?: string | null
-  action: 'created' | 'updated' | 'deleted'
-  old_values: Record<string, unknown> | null
-  new_values: Record<string, unknown>
-  created_at: string
+  id: string;
+  log_id: string;
+  user_id: string;
+  user_email: string;
+  user_name?: string | null;
+  action: "created" | "updated" | "deleted";
+  old_values: Record<string, unknown> | null;
+  new_values: Record<string, unknown>;
+  created_at: string;
 }
 
 // ─── Формирование коробов ─────────────────────────────────────
 
 export interface FulfillmentSupply {
-  id: string
-  batch_id: string
-  account_id: string
-  supply_number: number
-  next_box_number: number
-  warehouse_id: string | null
-  warehouse_name: string
-  destination_type: 'fbo' | 'fbs'
-  destination_wms_warehouse_id: string | null
-  trip_id: string | null
-  trip_line_id: string | null
-  wb_supply_id?: string | null
-  wb_warehouse_id?: number | null
-  wb_warehouse_name?: string | null
-  wb_planned_delivery_date?: string | null
-  wb_cargo_type?: number | null
-  wb_synced_at?: string | null
-  weight: number | null
-  logistics_tariff_type: 'per_box' | 'per_kg' | null
-  source_item_id: string | null
-  created_by: string | null
-  created_at: string
-  pipeline_stage_id?: string | null
-  kiz_enabled: boolean
-  _local?: boolean
+  id: string;
+  batch_id: string;
+  account_id: string;
+  supply_number: number;
+  next_box_number: number;
+  warehouse_id: string | null;
+  warehouse_name: string;
+  destination_type: "fbo" | "fbs";
+  destination_wms_warehouse_id: string | null;
+  trip_id: string | null;
+  trip_line_id: string | null;
+  wb_supply_id?: string | null;
+  wb_warehouse_id?: number | null;
+  wb_warehouse_name?: string | null;
+  wb_planned_delivery_date?: string | null;
+  wb_cargo_type?: number | null;
+  wb_synced_at?: string | null;
+  weight: number | null;
+  logistics_tariff_type: "per_box" | "per_kg" | null;
+  source_item_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  pipeline_stage_id?: string | null;
+  kiz_enabled: boolean;
+  _local?: boolean;
 }
 
-export type ServiceRequestStatus = 'draft' | 'submitted' | 'accepted' | 'rejected' | 'cancelled'
-export type RequestIntakeMode = 'bulk' | 'catalog' | 'barcodes' | 'boxes'
-export type RequestDeliveryMode = 'pickup' | 'self_delivery'
+export type ServiceRequestStatus =
+  "draft" | "submitted" | "accepted" | "rejected" | "cancelled";
+export type RequestIntakeMode = "bulk" | "catalog" | "barcodes" | "boxes";
+export type RequestDeliveryMode = "pickup" | "self_delivery";
 
 export interface ServiceRequestItemDraft {
-  barcode: string
-  name?: string
-  article?: string
-  size?: string
-  color?: string
-  qty: number
-  notes?: string
-  position?: number
+  barcode: string;
+  name?: string;
+  article?: string;
+  size?: string;
+  color?: string;
+  qty: number;
+  notes?: string;
+  position?: number;
 }
 
 export interface ServiceRequestStore {
-  id: string
-  request_id: string
-  applicant_store_id: string
-  store_link_id: string | null
-  batch_id: string | null
-  position: number
-  delivery_mode: RequestDeliveryMode
-  intake_mode: RequestIntakeMode
-  payload: { items?: ServiceRequestItemDraft[]; boxes?: unknown[]; [key: string]: unknown }
-  created_at: string
-  updated_at: string
-  deleted_at: string | null
+  id: string;
+  request_id: string;
+  applicant_store_id: string;
+  store_link_id: string | null;
+  batch_id: string | null;
+  position: number;
+  delivery_mode: RequestDeliveryMode;
+  intake_mode: RequestIntakeMode;
+  payload: {
+    items?: ServiceRequestItemDraft[];
+    boxes?: unknown[];
+    [key: string]: unknown;
+  };
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 }
 
 export interface ServiceRequest {
-  id: string
-  short_id: number
-  applicant_account_id: string
-  applicant_company_short_id: number | null
-  applicant_company_name: string | null
-  executor_account_id: string | null
-  executor_company_short_id: number | null
-  executor_company_name: string | null
-  invite_id: string | null
-  status: ServiceRequestStatus
-  title: string
-  applicant_name: string | null
-  applicant_email: string | null
-  comment: string | null
-  current_version: number
-  copied_from_request_id: string | null
-  submitted_at: string | null
-  accepted_at: string | null
-  rejected_at: string | null
-  rejection_comment: string | null
-  created_by: string
-  created_at: string
-  updated_at: string
-  deleted_at: string | null
-  stores?: ServiceRequestStore[]
+  id: string;
+  short_id: number;
+  applicant_account_id: string;
+  applicant_company_short_id: number | null;
+  applicant_company_name: string | null;
+  executor_account_id: string | null;
+  executor_company_short_id: number | null;
+  executor_company_name: string | null;
+  invite_id: string | null;
+  status: ServiceRequestStatus;
+  title: string;
+  applicant_name: string | null;
+  applicant_email: string | null;
+  comment: string | null;
+  current_version: number;
+  copied_from_request_id: string | null;
+  submitted_at: string | null;
+  accepted_at: string | null;
+  rejected_at: string | null;
+  rejection_comment: string | null;
+  responsible_user_id: string | null;
+  work_started_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  stores?: ServiceRequestStore[];
 }
 
 export interface ExecutorAccountSearchResult {
-  id: string
-  short_id: number
-  name: string
+  id: string;
+  short_id: number;
+  name: string;
 }
 
 export interface FulfillmentBox {
-  id: string
-  supply_id: string
-  account_id: string
-  box_number: number
-  barcode: string
-  wb_barcode?: string | null
-  wb_external_barcode?: string | null
-  status: 'open' | 'closed'
-  created_at: string
-  _local?: boolean
+  id: string;
+  supply_id: string;
+  account_id: string;
+  box_number: number;
+  barcode: string;
+  wb_barcode?: string | null;
+  wb_external_barcode?: string | null;
+  status: "open" | "closed";
+  created_at: string;
+  _local?: boolean;
 }
 
 export interface FulfillmentBoxItem {
-  id: string
-  box_id: string
-  account_id: string
-  barcode: string
-  item_id: string | null
-  product_name: string | null
-  qty: number
-  created_at: string
-  _local?: boolean
+  id: string;
+  box_id: string;
+  account_id: string;
+  barcode: string;
+  item_id: string | null;
+  product_name: string | null;
+  qty: number;
+  created_at: string;
+  _local?: boolean;
   _info?: {
-    nm_id: number | null
-    name: string | null
-    vendor_code: string | null
-    category: string | null
-    color: string | null
-    brand: string | null
-    size: string | null
-  }
+    nm_id: number | null;
+    name: string | null;
+    vendor_code: string | null;
+    category: string | null;
+    color: string | null;
+    brand: string | null;
+    size: string | null;
+  };
 }
 
 export interface FulfillmentBoxWithItems extends FulfillmentBox {
-  items: FulfillmentBoxItem[]
+  items: FulfillmentBoxItem[];
 }
 
 export interface FulfillmentSupplyWithBoxes extends FulfillmentSupply {
-  boxes: FulfillmentBoxWithItems[]
+  boxes: FulfillmentBoxWithItems[];
 }
 
-export type FulfillmentKizPairStatus = 'draft' | 'committed' | 'deleted' | 'replaced'
+export type FulfillmentKizPairStatus =
+  "draft" | "committed" | "deleted" | "replaced";
 
 export interface FulfillmentKizPair {
-  id: string
-  account_id: string
-  store_id: string | null
-  batch_id: string | null
-  supply_id: string | null
-  box_id: string | null
-  box_item_id: string | null
-  item_id: string | null
-  barcode: string
-  kiz_raw: string
-  kiz_normalized: string
-  gtin: string
-  serial_number: string
-  status: FulfillmentKizPairStatus
+  id: string;
+  account_id: string;
+  store_id: string | null;
+  batch_id: string | null;
+  supply_id: string | null;
+  box_id: string | null;
+  box_item_id: string | null;
+  item_id: string | null;
+  barcode: string;
+  kiz_raw: string;
+  kiz_normalized: string;
+  gtin: string;
+  serial_number: string;
+  status: FulfillmentKizPairStatus;
   product_snapshot: {
-    product_name?: string | null
-    size?: string | null
-    color?: string | null
-    barcode?: string
-    honest_sign_article?: string | null
-    honest_sign_name?: string | null
-    honest_sign_full_name?: string | null
-    [key: string]: unknown
-  }
+    product_name?: string | null;
+    size?: string | null;
+    color?: string | null;
+    barcode?: string;
+    honest_sign_article?: string | null;
+    honest_sign_name?: string | null;
+    honest_sign_full_name?: string | null;
+    [key: string]: unknown;
+  };
   hierarchy_snapshot: {
-    batch_id?: string
-    batch_short_id?: number | null
-    batch_name?: string | null
-    supply_id?: string
-    supply_number?: number | null
-    box_id?: string
-    box_number?: number | null
-    box_barcode?: string | null
-    [key: string]: unknown
-  }
-  created_by: string | null
-  actor_name: string | null
-  actor_email: string | null
-  device_id: string
-  device_name: string
-  scanner_model: string | null
-  created_at: string
-  committed_at: string | null
-  updated_at: string
-  deleted_at: string | null
+    batch_id?: string;
+    batch_short_id?: number | null;
+    batch_name?: string | null;
+    supply_id?: string;
+    supply_number?: number | null;
+    box_id?: string;
+    box_number?: number | null;
+    box_barcode?: string | null;
+    [key: string]: unknown;
+  };
+  created_by: string | null;
+  actor_name: string | null;
+  actor_email: string | null;
+  device_id: string;
+  device_name: string;
+  scanner_model: string | null;
+  created_at: string;
+  committed_at: string | null;
+  updated_at: string;
+  deleted_at: string | null;
 }
 
 export interface FulfillmentKizCommitResult {
-  committed_count: number
-  items: FulfillmentBoxItem[]
-  pairs: FulfillmentKizPair[]
+  committed_count: number;
+  items: FulfillmentBoxItem[];
+  pairs: FulfillmentKizPair[];
 }
 
 // ─── Уведомления ─────────────────────────────────────────────
 
 export interface BatchNotification {
-  id: string
-  account_id: string
-  batch_id: string | null
-  stage_id: string | null
-  type: string
-  title: string
-  body: string | null
-  is_read: boolean
-  created_at: string
+  id: string;
+  account_id: string;
+  batch_id: string | null;
+  stage_id: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  is_read: boolean;
+  created_at: string;
 }
 
 // ── Исполнители пайплайна ───────────────────────────────────
 export interface ExecutorOption {
-  account_id: string
-  account_name: string
-  account_short_id: number
-  option_type: 'own' | 'partner'
+  account_id: string;
+  account_name: string;
+  account_short_id: number;
+  option_type: "own" | "partner";
 }
 
 // ── Pipeline: конфиг аккаунта (шаблон стадий) ───────────────
 export interface AccountPipelineStage {
-  id: string
-  account_id: string
-  order_index: number
-  name: string
-  partner_account_id: string | null
+  id: string;
+  account_id: string;
+  order_index: number;
+  name: string;
+  partner_account_id: string | null;
   // enriched from get_account_pipeline RPC
-  partner_name: string | null
-  partner_short_id: number | null
-  stage_otk: boolean
-  stage_packaging: boolean
-  stage_marking: boolean
-  stage_packing: boolean
-  stage_logistics: boolean
-  created_at: string
+  partner_name: string | null;
+  partner_short_id: number | null;
+  stage_otk: boolean;
+  stage_packaging: boolean;
+  stage_marking: boolean;
+  stage_packing: boolean;
+  stage_logistics: boolean;
+  created_at: string;
 }
 
 // ── Pipeline: снапшот стадии для конкретной партии ───────────
 export interface BatchPipelineStage {
-  id: string
-  batch_id: string
-  owner_account_id: string
-  partner_account_id: string | null
-  order_index: number
-  name: string
-  current_stage: FulfillmentStage
-  status: 'pending' | 'active' | 'done'
-  stage_otk: boolean
-  stage_packaging: boolean
-  stage_marking: boolean
-  stage_packing: boolean
-  stage_logistics: boolean
-  activated_at: string | null
-  completed_at: string | null
-  created_at: string
-  updated_at: string
-  otk_discrepancy?: number
-  wms_warehouse_id?: string | null
-  wms_warehouse_name?: string | null
-  warehouse_corrected_at?: string | null
+  id: string;
+  batch_id: string;
+  owner_account_id: string;
+  partner_account_id: string | null;
+  order_index: number;
+  name: string;
+  current_stage: FulfillmentStage;
+  status: "pending" | "active" | "done";
+  stage_otk: boolean;
+  stage_packaging: boolean;
+  stage_marking: boolean;
+  stage_packing: boolean;
+  stage_logistics: boolean;
+  activated_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  otk_discrepancy?: number;
+  wms_warehouse_id?: string | null;
+  wms_warehouse_name?: string | null;
+  warehouse_corrected_at?: string | null;
 }
 
 // ── Outsource: партнёрская связь ────────────────────────────
 export interface OutsourcePartner {
-  connection_id: string
-  partner_id: string
-  partner_name: string
-  partner_short_id: number
-  status: 'pending' | 'accepted' | 'declined'
-  is_requester: boolean
-  created_at: string
+  connection_id: string;
+  partner_id: string;
+  partner_name: string;
+  partner_short_id: number;
+  status: "pending" | "accepted" | "declined";
+  is_requester: boolean;
+  created_at: string;
 }
 
 // ── Pipeline: партнёрская партия (результат get_partner_batches) ─
 export interface PartnerBatchInfo {
-  batch_id: string
-  my_stage_id: string
-  my_stage_order: number
-  my_stage_name: string
-  my_stage_status: 'pending' | 'active' | 'done'
-  my_current_stage: FulfillmentStage
-  my_stage_otk: boolean
-  my_stage_packaging: boolean
-  my_stage_marking: boolean
-  my_stage_packing: boolean
-  my_stage_logistics: boolean
-  batch_name: string
-  batch_short_id: number | null
-  batch_status: string
-  batch_created_at: string
-  owner_account_id: string
-  owner_name: string
-  owner_short_id: number | null
+  batch_id: string;
+  my_stage_id: string;
+  my_stage_order: number;
+  my_stage_name: string;
+  my_stage_status: "pending" | "active" | "done";
+  my_current_stage: FulfillmentStage;
+  my_stage_otk: boolean;
+  my_stage_packaging: boolean;
+  my_stage_marking: boolean;
+  my_stage_packing: boolean;
+  my_stage_logistics: boolean;
+  batch_name: string;
+  batch_short_id: number | null;
+  batch_status: string;
+  batch_created_at: string;
+  owner_account_id: string;
+  owner_name: string;
+  owner_short_id: number | null;
 }

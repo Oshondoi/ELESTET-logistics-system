@@ -12,7 +12,6 @@ import type {
 
 // ─── WB Feedbacks API ─────────────────────────────────────────
 
-const WB_FB_BASE = 'https://feedbacks-api.wildberries.ru'
 // WB не возвращает заголовки Retry-After при 429 — реальный лимит неизвестен.
 // Используем exponential backoff: базовый 60с, максимум 10 минут.
 const WB_COOLDOWN_BASE = 4
@@ -51,87 +50,40 @@ export interface FeedbacksData {
 }
 
 export async function fetchWbFeedbacks(
-  apiKey: string,
+  storeId: string,
   isAnswered: boolean,
 ): Promise<FeedbacksData> {
-  const resp = await fetch(
-    `${WB_FB_BASE}/api/v1/feedbacks?isAnswered=${isAnswered}&take=100&skip=0`,
-    { headers: { Authorization: apiKey } },
-  )
-
-  // Логируем ВСЕ rate-limit заголовки — чтобы знать реальные лимиты WB
-  const rlHeaders = {
-    'X-Ratelimit-Limit':     resp.headers.get('X-Ratelimit-Limit'),
-    'X-Ratelimit-Remaining': resp.headers.get('X-Ratelimit-Remaining'),
-    'X-Ratelimit-Reset':     resp.headers.get('X-Ratelimit-Reset'),
-    'Retry-After':           resp.headers.get('Retry-After'),
-    'RateLimit-Limit':       resp.headers.get('RateLimit-Limit'),
-    'RateLimit-Remaining':   resp.headers.get('RateLimit-Remaining'),
-    'RateLimit-Reset':       resp.headers.get('RateLimit-Reset'),
+  if (!supabase) throw new Error('Supabase not configured')
+  const { data: proxy, error } = await supabase.functions.invoke('wb-store-proxy', { body: { action: 'feedbacks_list', store_id: storeId, is_answered: isAnswered } })
+  if (error || proxy?.error) {
+    const message=proxy?.error||error?.message||'Ошибка WB API'
+    if (/лимит/i.test(message)) { const wait=getBackoffSec(); incrementFailCount(); throw new WbRateLimitError(wait,`Лимит WB API: подождите ${wait} секунд.`) }
+    throw new Error(message)
   }
-  console.log(`[WB Feedbacks] status=${resp.status} isAnswered=${isAnswered}`, rlHeaders)
-
-  if (!resp.ok) {
-    if (resp.status === 401 || resp.status === 403) {
-      throw new Error(
-        'Нет доступа к отзывам. Убедитесь, что API-ключ WB имеет разрешение «Вопросы и отзывы».',
-      )
-    }
-    if (resp.status === 429) {
-      const headerVal = parseInt(resp.headers.get('Retry-After') ?? resp.headers.get('RateLimit-Reset') ?? '', 10)
-      // WB не присылает заголовки — считаем backoff сами
-      const wait = headerVal > 0 ? headerVal : getBackoffSec()
-      incrementFailCount()
-      console.warn(`[WB Feedbacks] 429 — wait=${wait}s (failCount теперь: ${localStorage.getItem(WB_LS_FAIL_COUNT)})`)
-      throw new WbRateLimitError(wait, `Лимит WB API: подождите ${wait} секунд.`)
-    }
-    throw new Error(`Ошибка WB API: ${resp.status} ${resp.statusText}`)
-  }
-  // Читаем X-Ratelimit-Reset — через сколько секунд лимит восстановится
-  const rlReset = parseInt(resp.headers.get('X-Ratelimit-Reset') ?? resp.headers.get('RateLimit-Reset') ?? '', 10)
   type Resp = {
     data?: { feedbacks?: WbFeedback[]; countUnanswered?: number }
     error?: boolean
     errorText?: string
   }
-  const json = (await resp.json()) as Resp
+  const json = proxy.data as Resp
   if (json.error) throw new Error(json.errorText || 'Ошибка WB API')
   // Успех — сбрасываем счётчик ошибок
   resetFailCount()
   return {
     feedbacks: json?.data?.feedbacks ?? [],
     countUnanswered: json?.data?.countUnanswered ?? 0,
-    retryAfterSec: rlReset > 0 ? rlReset : WB_COOLDOWN_BASE,
+    retryAfterSec: Number(proxy.retry_after) || WB_COOLDOWN_BASE,
   }
 }
 
 export async function sendWbReply(
-  apiKey: string,
+  storeId: string,
   feedbackId: string,
   text: string,
 ): Promise<void> {
-  // WB changed the endpoint: old PATCH /api/v1/feedbacks now returns 405 (GET/HEAD only)
-  // New endpoint: PATCH /api/v1/feedbacks/answer
-  const endpoints = [
-    { url: `${WB_FB_BASE}/api/v1/feedbacks/answer`, method: 'PATCH', body: JSON.stringify({ id: feedbackId, text }) },
-    { url: `${WB_FB_BASE}/api/v1/feedbacks`,        method: 'PATCH', body: JSON.stringify({ id: feedbackId, text }) },
-  ]
-
-  for (const ep of endpoints) {
-    const resp = await fetch(ep.url, {
-      method: ep.method,
-      headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
-      body: ep.body,
-    })
-    if (resp.ok) return
-    if (resp.status === 405) continue // try next endpoint
-    if (resp.status === 401) throw new Error('Неверный API-ключ WB')
-    let detail = ''
-    try { detail = await resp.text() } catch { /* ignore */ }
-    throw new Error(`Ошибка отправки ответа: ${resp.status}${detail ? ` — ${detail}` : ''}`)
-  }
-
-  throw new Error('WB API: не удалось найти рабочий endpoint для отправки ответа (405 на всех попытках). Возможно, WB ограничил вызовы из браузера (CORS).')
+  if (!supabase) throw new Error('Supabase not configured')
+  const { data, error } = await supabase.functions.invoke('wb-store-proxy', { body: { action:'feedbacks_reply',store_id:storeId,feedback_id:feedbackId,text } })
+  if (error || data?.error) throw new Error(data?.error||error?.message||'Ошибка отправки ответа')
 }
 
 // ─── Supabase — кэш отзывов wb_feedbacks ─────────────────────
@@ -157,14 +109,13 @@ export async function loadFeedbacksFromDb(
  * Удаляет старые строки (store + is_answered) и вставляет свежие.
  */
 export async function syncFeedbacksFromWb(
-  apiKey: string,
   storeId: string,
   accountId: string,
   isAnswered: boolean,
 ): Promise<FeedbacksData> {
   // Сначала получаем данные от WB. Если WB вернул ошибку (429 и т.д.) —
   // DB вообще не трогаем, старые данные остаются.
-  const result = await fetchWbFeedbacks(apiKey, isAnswered)
+  const result = await fetchWbFeedbacks(storeId, isAnswered)
 
   if (supabase && result.feedbacks.length > 0) {
     // Upsert: обновляем существующие записи или добавляем новые.
@@ -344,16 +295,13 @@ export async function markReplySent(
 export async function getAiSettings(accountId: string): Promise<AiSettings | null> {
   if (!supabase) throw new Error('Supabase not configured')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase as any)
-    .from('account_ai_settings')
-    .select('*')
-    .eq('account_id', accountId)
-    .single()
+  const { data, error } = await (supabase as any).rpc('get_account_ai_settings_safe', { p_account_id: accountId })
   if (error) {
     if (error.code === 'PGRST116') return null
     throw error
   }
-  return data as AiSettings
+  const row = Array.isArray(data) ? data[0] : data
+  return (row ?? null) as AiSettings | null
 }
 
 export async function saveAiSettings(
@@ -362,19 +310,16 @@ export async function saveAiSettings(
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any)
-    .from('account_ai_settings')
-    .upsert({
-      account_id: accountId,
-      provider: values.provider,
-      openai_key: values.openai_key,
-      model: values.model,
-      claude_key: values.claude_key,
-      claude_model: values.claude_model,
-      tone: values.tone,
-      system_prompt: values.system_prompt.trim() || null,
-      updated_at: new Date().toISOString(),
-    })
+  const { error } = await (supabase as any).rpc('save_account_ai_settings_secure', {
+    p_account_id: accountId,
+    p_provider: values.provider,
+    p_openai_key: values.openai_key,
+    p_model: values.model,
+    p_claude_key: values.claude_key,
+    p_claude_model: values.claude_model,
+    p_tone: values.tone,
+    p_system_prompt: values.system_prompt.trim(),
+  })
   if (error) throw error
 }
 
@@ -475,30 +420,11 @@ async function callOpenAiDirect(settings: AiSettings, feedback: AiFeedbackInput)
     userMessage = { role: 'user', content: textContent }
   }
 
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${settings.openai_key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      messages: [{ role: 'system', content: systemContent }, userMessage],
-      max_tokens: 400,
-      temperature: 0.7,
-    }),
-  })
-
-  if (!resp.ok) {
-    const errData = await resp.json().catch(() => ({})) as { error?: { message?: string } }
-    if (resp.status === 401) throw new Error('Неверный OpenAI API-ключ. Проверьте настройки.')
-    if (resp.status === 429) throw new Error('Превышен лимит OpenAI. Попробуйте позже.')
-    throw new Error(errData.error?.message || `OpenAI API error: ${resp.status}`)
-  }
-
-  type OAIResponse = { choices: Array<{ message: { content: string } }> }
-  const json = (await resp.json()) as OAIResponse
-  return json.choices[0]?.message?.content?.trim() ?? ''
+  if (!supabase) throw new Error('Supabase not configured')
+  const { data, error } = await supabase.functions.invoke('reviews-ai', { body: { accountId: settings.account_id, provider: 'openai', systemContent, userContent: userMessage } })
+  if (error) throw error
+  if (data?.error) throw new Error(String(data.error))
+  return String(data?.text ?? '')
 }
 
 async function callClaudeDirect(settings: AiSettings, feedback: AiFeedbackInput): Promise<string> {
@@ -529,33 +455,11 @@ async function callClaudeDirect(settings: AiSettings, feedback: AiFeedbackInput)
     userContent = textContent
   }
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': settings.claude_key,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: settings.claude_model,
-      max_tokens: 400,
-      system: systemContent,
-      messages: [{ role: 'user', content: userContent }],
-    }),
-  })
-
-  if (!resp.ok) {
-    const errData = await resp.json().catch(() => ({})) as { error?: { type?: string; message?: string } }
-    if (resp.status === 401) throw new Error('Неверный Claude API-ключ. Проверьте настройки.')
-    if (resp.status === 429) throw new Error('Превышен лимит Claude. Попробуйте позже.')
-    const detail = errData.error?.message ?? errData.error?.type ?? ''
-    throw new Error(`Claude API error ${resp.status}${detail ? ': ' + detail : ''}`)
-  }
-
-  type ClaudeResponse = { content: Array<{ type: string; text: string }> }
-  const json = (await resp.json()) as ClaudeResponse
-  return json.content.find((b) => b.type === 'text')?.text?.trim() ?? ''
+  if (!supabase) throw new Error('Supabase not configured')
+  const { data, error } = await supabase.functions.invoke('reviews-ai', { body: { accountId: settings.account_id, provider: 'claude', systemContent, userContent } })
+  if (error) throw error
+  if (data?.error) throw new Error(String(data.error))
+  return String(data?.text ?? '')
 }
 
 export async function callOpenAi(

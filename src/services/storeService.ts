@@ -33,15 +33,14 @@ export const fetchStoresFromSupabase = async (accountId: string) => {
     throw new Error('Supabase client is not configured')
   }
 
-  const { data, error } = await supabase
-    .from('stores')
-    .select('*')
-    .eq('account_id', accountId)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false })
+  const { data, error } = await (supabase as any).rpc('get_account_stores_safe', { p_account_id: accountId })
 
   if (error) throw error
-  return (data ?? []) as Store[]
+  return (data ?? []).filter((row: any)=>!row.deleted_at).map((row: any)=>({
+    ...row,
+    api_key: row.has_api_key ? '__configured__' : null,
+    teksher_login: row.has_teksher_credentials ? '__configured__' : null,
+  })) as Store[]
 }
 
 export const createStoreInSupabase = async (values: StoreFormValues, accountId: string) => {
@@ -54,7 +53,6 @@ export const createStoreInSupabase = async (values: StoreFormValues, accountId: 
     name: values.name.trim(),
     marketplace: values.marketplace,
     store_code: values.store_code?.trim() || undefined,
-    ...(values.api_key?.trim() ? { api_key: values.api_key.trim() } : {}),
     supplier: values.supplier?.trim() || null,
     supplier_full: values.supplier_full?.trim() || null,
     address: values.address?.trim() || null,
@@ -64,9 +62,13 @@ export const createStoreInSupabase = async (values: StoreFormValues, accountId: 
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await supabase.from('stores').insert(payload as any).select().single()
+  const { data, error } = await (supabase as any).from('stores').insert(payload).select('id,account_id,store_code,name,marketplace,created_at,supplier,supplier_full,address,country,inn,phone,deleted_at,short_id,customer_account_id').single()
 
   if (error) throw error
+  if (values.api_key?.trim()) {
+    const { error: secretError } = await (supabase as any).rpc('save_store_wb_api_key', { p_store_id: data.id, p_api_key: values.api_key.trim() })
+    if (secretError) throw secretError
+  }
   return data as Store
 }
 
@@ -79,7 +81,6 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
     name: values.name.trim(),
     marketplace: values.marketplace,
     store_code: values.store_code?.trim() || undefined,
-    ...(values.api_key !== undefined ? { api_key: values.api_key.trim() || null } : {}),
     supplier: values.supplier?.trim() || null,
     ...(values.supplier_full !== undefined ? { supplier_full: values.supplier_full.trim() || null } : {}),
     address: values.address?.trim() || null,
@@ -89,14 +90,18 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await supabase
+  const { data, error } = await (supabase as any)
     .from('stores')
     .update(payload as any)
     .eq('id', storeId)
-    .select()
+    .select('id,account_id,store_code,name,marketplace,created_at,supplier,supplier_full,address,country,inn,phone,deleted_at,short_id,customer_account_id')
     .single()
 
   if (error) throw error
+  if (values.api_key !== undefined) {
+    const { error: secretError } = await (supabase as any).rpc('save_store_wb_api_key', { p_store_id: storeId, p_api_key: values.api_key.trim() })
+    if (secretError) throw secretError
+  }
   return data as Store
 }
 

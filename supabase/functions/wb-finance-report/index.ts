@@ -396,17 +396,17 @@ Deno.serve(async (req) => {
 
   const { data: store, error: storeErr } = await userClient
     .from('stores')
-    .select('id, account_id, api_key')
+    .select('id, account_id')
     .eq('id', storeId)
     .eq('account_id', accountId)
     .single()
 
   if (storeErr || !store) return fail('Магазин не найден или нет доступа')
-  if (!store.api_key) return fail('У магазина не задан API-ключ WB')
-
   const adminDb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   })
+  const { data: apiKey } = await adminDb.rpc('get_store_wb_api_key', { p_store_id: storeId })
+  if (!apiKey) return fail('У магазина не задан API-ключ WB')
 
   if (mode === 'weekly_list') {
     const weeklyRanges = buildWeeklyRanges(dateFrom, dateTo)
@@ -420,14 +420,14 @@ Deno.serve(async (req) => {
       let list: Array<Record<string, unknown>> = []
       let usedFallback = false
       try {
-        list = await fetchSalesReportsList(store.api_key as string, expandedFrom, expandedTo)
+        list = await fetchSalesReportsList(apiKey as string, expandedFrom, expandedTo)
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e)
         if (!isFinanceEndpointUnavailable(message)) throw e
 
         // Fallback: строим weekly list из проверенного statistics-api.
         usedFallback = true
-        const legacyRows = await fetchReportRows(store.api_key as string, expandedFrom, expandedTo)
+        const legacyRows = await fetchReportRows(apiKey as string, expandedFrom, expandedTo)
         const byReport = new Map<number, Record<string, unknown>>()
         legacyRows.forEach((raw) => {
           const row = asRecord(raw)
@@ -531,7 +531,7 @@ Deno.serve(async (req) => {
       let details: Array<Record<string, unknown>> = []
       let usedFallback = false
       try {
-        details = await fetchSalesReportDetailsByReportId(store.api_key as string, reportId)
+        details = await fetchSalesReportDetailsByReportId(apiKey as string, reportId)
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e)
         if (!isFinanceEndpointUnavailable(message)) throw e
@@ -548,7 +548,7 @@ Deno.serve(async (req) => {
 
         const from = String(header.period_from)
         const to = String(header.period_to)
-        const legacyRows = await fetchReportRows(store.api_key as string, from, to)
+        const legacyRows = await fetchReportRows(apiKey as string, from, to)
         details = legacyRows
           .map((raw) => asRecord(raw))
           .filter((row): row is Record<string, unknown> => row !== null)
@@ -655,7 +655,7 @@ Deno.serve(async (req) => {
   try {
     // Важно для UX: один запрос за диапазон, расширенный до полных недель,
     // чтобы не висела кнопка синхронизации на длинных периодах.
-    rows = await fetchReportRows(store.api_key as string, expandedFrom, expandedTo)
+    rows = await fetchReportRows(apiKey as string, expandedFrom, expandedTo)
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e))
   }

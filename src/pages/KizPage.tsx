@@ -879,11 +879,15 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                     <p className="text-xs text-slate-500">Данные от аккаунта на label.teksher.kg</p>
                   </div>
                 </div>
-                <form onSubmit={(e) => void handleConnect(e)} className="space-y-3 max-w-sm">
+                <form onSubmit={(e) => void handleConnect(e)} className="space-y-3 max-w-sm" autoComplete="off" data-lpignore="true" data-1p-ignore>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-600">Логин</label>
                     <input
                       type="text"
+                      name="teksher-account-reference"
+                      autoComplete="off"
+                      data-lpignore="true"
+                      data-1p-ignore
                       value={connectForm.login}
                       onChange={(e) => setConnectForm((f) => ({ ...f, login: e.target.value }))}
                       placeholder="Логин в Teksher"
@@ -896,6 +900,10 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                     <div className="relative">
                       <input
                         type={showPassword ? 'text' : 'password'}
+                        name="teksher-integration-secret"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore
                         value={connectForm.password}
                         onChange={(e) => setConnectForm((f) => ({ ...f, password: e.target.value }))}
                         placeholder="Пароль в Teksher"

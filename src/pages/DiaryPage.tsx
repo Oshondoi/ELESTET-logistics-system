@@ -61,38 +61,19 @@ function getDayOfWeekRu(iso: string): string {
 // ─── Claude API call ──────────────────────────────────────────────────────────
 
 async function callClaude(
-  apiKey: string,
-  model: string,
+  _apiKey: string,
+  _model: string,
   systemPrompt: string,
   messages: ChatMessage[],
   maxTokens = 1000,
 ): Promise<string> {
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages,
-    }),
+  if (!supabase) throw new Error('Supabase client is not configured')
+  const { data, error } = await supabase.functions.invoke('diary-ai', {
+    body: { systemPrompt, messages, maxTokens },
   })
-
-  if (!resp.ok) {
-    const errData = await resp.json().catch(() => ({})) as { error?: { message?: string } }
-    if (resp.status === 401) throw new Error('Неверный Claude API-ключ')
-    if (resp.status === 429) throw new Error('Превышен лимит Claude. Попробуйте позже.')
-    throw new Error(`Claude API error ${resp.status}: ${errData.error?.message ?? ''}`)
-  }
-
-  type ClaudeResp = { content: Array<{ type: string; text: string }> }
-  const json = (await resp.json()) as ClaudeResp
-  return json.content.find((b) => b.type === 'text')?.text?.trim() ?? ''
+  if (error) throw error
+  if (data?.error) throw new Error(String(data.error))
+  return String(data?.text ?? '')
 }
 
 // ─── TaskList sub-component ───────────────────────────────────────────────────
@@ -181,16 +162,12 @@ export const DiaryPage = ({ userId, userEmail: _userEmail, userName }: DiaryPage
   const [entries, setEntries] = useState<DiaryEntry[]>([])
   const [isLoadingEntries, setIsLoadingEntries] = useState(true)
 
-  // ── AI Settings (diary-specific, stored in localStorage) ───────────────────
-  const [aiSettings, setAiSettings] = useState<AiSettings | null>(() => {
-    const key = window.localStorage.getItem('elestet-diary-claude-key') ?? ''
-    const model = window.localStorage.getItem('elestet-diary-claude-model') ?? 'claude-sonnet-4-6'
-    return key ? { claude_key: key, claude_model: model } : null
-  })
+  // ── AI Settings (the secret is encrypted server-side and never returned) ──
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null)
   const [showAiSettings, setShowAiSettings] = useState(false)
   const [activeAiTab, setActiveAiTab] = useState<'model' | 'pricing' | 'photo'>('model')
-  const [draftKey, setDraftKey] = useState(() => window.localStorage.getItem('elestet-diary-claude-key') ?? '')
-  const [draftModel, setDraftModel] = useState(() => window.localStorage.getItem('elestet-diary-claude-model') ?? 'claude-sonnet-4-6')
+  const [draftKey, setDraftKey] = useState('')
+  const [draftModel, setDraftModel] = useState('claude-sonnet-4-6')
 
   // ── Form ────────────────────────────────────────────────────────────────────
   const [summary, setSummary] = useState('')
@@ -238,24 +215,40 @@ export const DiaryPage = ({ userId, userEmail: _userEmail, userName }: DiaryPage
     }
   }, [userId])
 
-  const saveAiKey = () => {
+  const saveAiKey = async () => {
     const key = draftKey.trim()
     const model = draftModel.trim() || 'claude-sonnet-4-6'
-    if (key) {
-      window.localStorage.setItem('elestet-diary-claude-key', key)
-      window.localStorage.setItem('elestet-diary-claude-model', model)
-      setAiSettings({ claude_key: key, claude_model: model })
-    } else {
-      window.localStorage.removeItem('elestet-diary-claude-key')
-      window.localStorage.removeItem('elestet-diary-claude-model')
-      setAiSettings(null)
-    }
+    if (!supabase || !key) return
+    const { error } = await (supabase as any).rpc('save_my_diary_ai_secret', { p_api_key: key, p_model: model })
+    if (error) throw error
+    setAiSettings({ claude_key: '__configured__', claude_model: model })
+    setDraftKey('')
+    setShowAiSettings(false)
+  }
+
+  const deleteAiKey = async () => {
+    if (!supabase) return
+    const { error } = await (supabase as any).rpc('delete_my_diary_ai_secret')
+    if (error) throw error
+    setAiSettings(null)
+    setDraftKey('')
     setShowAiSettings(false)
   }
 
   useEffect(() => {
     void loadEntries()
   }, [loadEntries])
+
+  useEffect(() => {
+    if (!supabase) return
+    void (supabase as any).rpc('get_my_diary_ai_settings').then(({ data }: { data: any }) => {
+      const row = Array.isArray(data) ? data[0] : data
+      if (row?.configured) {
+        setAiSettings({ claude_key: '__configured__', claude_model: row.claude_model || 'claude-sonnet-4-6' })
+        setDraftModel(row.claude_model || 'claude-sonnet-4-6')
+      }
+    })
+  }, [userId])
 
   // ─── Populate form when selectedDate changes ────────────────────────────────
   useEffect(() => {
@@ -536,7 +529,7 @@ ${contextBlock}`
         {/* AI settings button */}
         <button
           type="button"
-          onClick={() => { setDraftKey(aiSettings?.claude_key ?? ''); setDraftModel(aiSettings?.claude_model ?? 'claude-sonnet-4-6'); setShowAiSettings((s) => !s) }}
+          onClick={() => { setDraftKey(''); setDraftModel(aiSettings?.claude_model ?? 'claude-sonnet-4-6'); setShowAiSettings((s) => !s) }}
           title="Настройки Claude AI для Дневника"
           className={cn(
             'flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition',
@@ -604,17 +597,11 @@ ${contextBlock}`
         footer={
           activeAiTab === 'model' ? (
             <div className="flex items-center gap-2">
-              <Button onClick={saveAiKey}>Сохранить</Button>
+              <Button onClick={() => void saveAiKey()}>Сохранить</Button>
               {aiSettings?.claude_key && (
                 <button
                   type="button"
-                  onClick={() => {
-                    window.localStorage.removeItem('elestet-diary-claude-key')
-                    window.localStorage.removeItem('elestet-diary-claude-model')
-                    setAiSettings(null)
-                    setDraftKey('')
-                    setShowAiSettings(false)
-                  }}
+                  onClick={() => void deleteAiKey()}
                   className="rounded-xl border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 transition"
                 >
                   Удалить ключ
@@ -641,7 +628,7 @@ ${contextBlock}`
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
               />
               <p className="mt-1.5 text-[11px] text-slate-400">
-                Ключ хранится только в браузере. Получить ключ:{' '}
+                После сохранения ключ шифруется на сервере и больше не возвращается в браузер. Получить ключ:{' '}
                 <a
                   href="https://console.anthropic.com/settings/keys"
                   target="_blank"

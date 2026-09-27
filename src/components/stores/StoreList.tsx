@@ -24,6 +24,8 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
   const [deletePassword, setDeletePassword] = useState('')
   const [syncingId, setSyncingId] = useState<string | null>(null)
   const [syncError, setSyncError] = useState<{ id: string; msg: string } | null>(null)
+  const [companyLinks, setCompanyLinks] = useState<Record<string, string>>({})
+  const [copiedCompanyId, setCopiedCompanyId] = useState<string | null>(null)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
   const selectedStores = useMemo(
@@ -36,6 +38,14 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
   useEffect(() => {
     const availableIds = new Set(stores.map((store) => store.id))
     setSelectedIds((current) => current.filter((id) => availableIds.has(id)))
+  }, [stores])
+
+  useEffect(() => {
+    const accountId = stores[0]?.account_id
+    if (!supabase || !accountId) { setCompanyLinks({}); return }
+    void (supabase as any).rpc('get_customer_company_request_links', { p_executor_account_id: accountId }).then(({ data }: { data: Array<{ customer_account_id: string; token: string }> | null }) => {
+      setCompanyLinks(Object.fromEntries((data ?? []).map((row) => [row.customer_account_id, `${window.location.origin}/request-invite/${row.token}`])))
+    })
   }, [stores])
 
   useEffect(() => {
@@ -143,6 +153,7 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
                 <th className="px-3 py-2.5">Store Code</th>
                 <th className="px-3 py-2.5">API ключ</th>
                 <th className="px-3 py-2.5">Teksher</th>
+                <th className="px-3 py-2.5">Ссылка компании</th>
                 <th className="px-3 py-2.5">Поставщик</th>
                 <th className="px-3 py-2.5">Наим. для стикера</th>
                 <th className="px-3 py-2.5">Адрес</th>
@@ -212,6 +223,9 @@ export const StoreList = ({ stores, onEdit, onDelete, onSync, canManage = true, 
                       ) : (
                         <span className="text-xs text-slate-300">—</span>
                       )}
+                    </td>
+                    <td className="px-3 py-3.5">
+                      {store.customer_account_id && companyLinks[store.customer_account_id] ? <button type="button" onClick={() => { const companyId=store.customer_account_id!; void navigator.clipboard.writeText(companyLinks[companyId]).then(()=>{setCopiedCompanyId(companyId);window.setTimeout(()=>setCopiedCompanyId(null),900)}) }} className={`inline-flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-xs ${copiedCompanyId===store.customer_account_id?'bg-emerald-50 text-emerald-700':'text-blue-600 hover:bg-blue-50'}`}>Привязана <span aria-hidden>⧉</span></button> : <span className="text-xs text-slate-300">—</span>}
                     </td>
                     <td className="px-3 py-3.5 text-slate-600">
                       {store.supplier || <span className="text-slate-300">—</span>}

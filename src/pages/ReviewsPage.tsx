@@ -490,7 +490,6 @@ export const ReviewsPage = ({
     setFetchError(null)
     try {
       const result = await syncFeedbacksFromWb(
-        activeStore.api_key,
         activeStore.id,
         activeAccountId,
         isAnswered,
@@ -521,11 +520,11 @@ export const ReviewsPage = ({
     setIsFetching(true)
     setFetchError(null)
     try {
-      const r1 = await syncFeedbacksFromWb(activeStore.api_key, activeStore.id, activeAccountId, false)
+      const r1 = await syncFeedbacksFromWb(activeStore.id, activeAccountId, false)
       const qRows = await loadFeedbackRowsFromDb(activeStore.id, false)
       setQueueRows(qRows)
       setCountUnanswered(r1.countUnanswered)
-      const r2 = await syncFeedbacksFromWb(activeStore.api_key, activeStore.id, activeAccountId, true)
+      const r2 = await syncFeedbacksFromWb(activeStore.id, activeAccountId, true)
       const aRows = await loadFeedbackRowsFromDb(activeStore.id, true)
       setAnsweredRows(aRows)
       const retryAfter = Math.max(r1.retryAfterSec, r2.retryAfterSec)
@@ -603,7 +602,7 @@ export const ReviewsPage = ({
     setSendingIds((prev) => new Set(prev).add(row.id))
     setSendErrors((prev) => { const n = { ...prev }; delete n[row.id]; return n })
     try {
-      await sendWbReply(activeStore.api_key, row.id, text)
+      await sendWbReply(activeStore.id, row.id, text)
       await markReplySent(row.id, text, row.data as unknown as Record<string, unknown>, 'manual')
       setQueueRows((prev) => (prev ? prev.filter((r) => r.id !== row.id) : prev))
       setOpenReplyIds((prev) => { const n = new Set(prev); n.delete(row.id); return n })
@@ -742,7 +741,7 @@ export const ReviewsPage = ({
         const halfDelayMs = Math.max(15000, (autoSettings.delaySeconds / 2) * 1000)
         await new Promise((res) => setTimeout(res, halfDelayMs))
 
-        await sendWbReply(activeStore.api_key, row.id, text)
+        await sendWbReply(activeStore.id, row.id, text)
         await markReplySent(row.id, text, undefined, 'manual')
         setQueueRows((prev) => prev ? prev.filter((r) => r.id !== row.id) : prev)
         sent++

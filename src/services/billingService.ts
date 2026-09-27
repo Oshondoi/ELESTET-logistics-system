@@ -3,6 +3,12 @@ import { supabase } from '../lib/supabase'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabase as any
 
+export async function activateMyTrial(accountId: string): Promise<string> {
+  const { data, error } = await db.rpc('activate_my_trial', { p_account_id: accountId })
+  if (error) throw new Error(error.message)
+  return data as string
+}
+
 /** Активировать grace period (3 дня в долг) */
 export async function activateGracePeriod(accountId: string): Promise<{ ok?: boolean; error?: string }> {
   const { data, error } = await db.rpc('activate_grace_period', { p_account_id: accountId })
