@@ -62,7 +62,7 @@ The product is being created to manage logistics operations for shipments going 
 - The client request `R` is separate from a fulfillment batch. Confirming recorded goods creates one durable `P` per store before executor acceptance. Applicant declaration becomes `Заявлено`; the executor's later physical reception independently records `Принято` and may take place at pickup or warehouse.
 - The same party can continue through several company stages without a new `P-N`. Loose goods and goods already distributed into concrete boxes are input modes; an empty supply or box cannot be confirmed.
 - The request and its confirmed versions remain auditable. Auth identity is not owned by one public link: replacement or expiry does not erase that user's independent drafts. An email OTP verifies link binding; public `C/R/P` identifiers are never authorization secrets.
-- The v41 server migration is applied, but the new frontend remains local and still needs user end-to-end testing and publication. Current rules, statuses, permissions boundaries and open questions are in `memory-bank/components/intake-requests.md` and the live discussion.
+- Server migrations v41/v42 are applied; confirmation journals, rejection/reassignment and notification recipients passed rollback tests. The frontend passed a mocked-API browser test and remains local. Real email delivery is blocked by missing custom SMTP/Send Email Hook; hardware acceptance and publication remain. Current rules and status are in `memory-bank/components/intake-requests.md` and live discussion revision 67.
 
 ## Target Users
 - Logistics operators

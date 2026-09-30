@@ -297,27 +297,12 @@ export const deleteItem = async (itemId: string): Promise<void> => {
 
 /** Переходит к следующему этапу, пропуская отключённые */
 export const advanceStage = async (batch: FulfillmentBatch): Promise<FulfillmentBatch> => {
-  const order: FulfillmentStage[] = ['reception', 'otk', 'packaging', 'marking', 'packing', 'logistics', 'done']
-  const current = order.indexOf(batch.current_stage)
-  const skip: Record<string, boolean> = {
-    otk: !batch.stage_otk,
-    packaging: !batch.stage_packaging,
-    marking: !batch.stage_marking,
-    packing: !batch.stage_packing,
-    logistics: !batch.stage_logistics,
-  }
-  let next = current + 1
-  while (next < order.length - 1 && skip[order[next]]) next++
-
-  const nextStage = order[next] ?? 'done'
-  const newStatus = nextStage === 'done' ? 'done' : 'active'
-
-  // Log stage completion
-  if (supabase) {
-    await (supabase as any).from('fulfillment_stage_logs').insert({ batch_id: batch.id, stage: batch.current_stage })
-  }
-
-  return updateBatch(batch.id, { current_stage: nextStage, status: newStatus as FulfillmentBatch['status'] })
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await (supabase as any).rpc('advance_fulfillment_batch', {
+    p_batch_id: batch.id, p_expected_step: batch.current_stage,
+  })
+  if (error) throw error
+  return data as FulfillmentBatch
 }
 
 // ── Stage log helpers ─────────────────────────────────────────
@@ -489,6 +474,14 @@ export const fetchReceptionHistory = async (
   const { data, error } = await query
   if (error) throw error
   return (data ?? []) as FulfillmentReceptionHistory[]
+}
+
+export const confirmStepCorrection = async (batchId: string, stageId: string | null, step: string): Promise<void> => {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await (supabase as any).rpc('confirm_fulfillment_step_correction', {
+    p_batch_id: batchId, p_pipeline_stage_id: stageId, p_step: step,
+  })
+  if (error) throw error
 }
 
 export const fetchStageWarehouseHistory = async (
@@ -709,7 +702,9 @@ export const addOtkLogHistory = async (entry: {
   new_values: Record<string, unknown>
 }): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  await (supabase as any).from('fulfillment_otk_log_history').insert(entry)
+  // Working edits are not confirmations. The server journals the complete
+  // result on step completion or confirm_fulfillment_step_correction.
+  void entry
 }
 
 export const patchOtkLogHistoryUserName = async (id: string, user_name: string): Promise<void> => {
@@ -839,7 +834,7 @@ export const addMarkingLogHistory = async (entry: {
   new_values: Record<string, unknown>
 }): Promise<void> => {
   if (!supabase) throw new Error('Supabase is not configured')
-  await (supabase as any).from('fulfillment_marking_log_history').insert(entry)
+  void entry // Confirmed versions are recorded by the server, not per-row edits.
 }
 
 export const patchMarkingLogHistoryUserName = async (id: string, user_name: string): Promise<void> => {

@@ -1,0 +1,23 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Request workflow test fixture</title></head><body><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { ServiceRequestsPanel } from '/src/components/fulfillment/ServiceRequestsPanel.tsx';
+import { RequestInvitePage } from '/src/pages/RequestInvitePage.tsx';
+import { RequestIntakeEditor } from '/src/components/fulfillment/RequestIntakeEditor.tsx';
+import { ConfirmedStepHistory } from '/src/components/fulfillment/ConfirmedStepHistory.tsx';
+import '/src/styles.css';
+const account = '11111111-1111-4111-8111-111111111111';
+const store = '22222222-2222-4222-8222-222222222222';
+const scenario = new URLSearchParams(location.search).get('scenario');
+function Intake() {
+  const [text, setText] = React.useState('');
+  const [supplies, setSupplies] = React.useState([]);
+  return React.createElement(RequestIntakeEditor, {itemsText:text,onItemsTextChange:setText,supplies,onSuppliesChange:setSupplies,boxesMode:false,serialScannerEnabled:false,catalogMode:true,accountId:account,storeId:store});
+}
+const node = scenario === 'intake' ? React.createElement(Intake)
+  : scenario === 'invite' ? React.createElement(RequestInvitePage, {token:'44444444-4444-4444-8444-444444444444',isSignedIn:false,accounts:[],accountsLoading:false,onSignIn:async()=>{},onSignUp:async()=>{},onContinue:()=>{},onMaterialized:()=>{}})
+  : scenario === 'history' ? React.createElement(ConfirmedStepHistory,{batchId:account,step:'reception'})
+  : React.createElement(ServiceRequestsPanel,{accountId:account,accountShortId:1,accountName:'Applicant',stores:[{id:store,account_id:account,name:'Store',marketplace:'wildberries'}],userEmail:'fixture@example.invalid',userName:'Tester',canCreate:true,canManage:true,canCreateLink:true});
+createRoot(document.getElementById('root')).render(node);
+</script></body></html>

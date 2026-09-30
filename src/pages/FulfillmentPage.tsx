@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import { BoxBarcodePrintDialog } from "../components/ui/BoxBarcodePrintDialog";
 import { PhotoThumb } from "../components/ui/PhotoThumb";
+import { ConfirmedStepHistory } from "../components/fulfillment/ConfirmedStepHistory";
+import { confirmStepCorrection } from "../services/fulfillmentService";
 import type {
   FulfillmentBatch,
   FulfillmentBatchWithItems,
@@ -1590,6 +1592,8 @@ const BatchDetailModal = ({
     initialBatch.wms_warehouse_id ?? "",
   );
   const [receptionCorrectionMode, setReceptionCorrectionMode] = useState(false);
+  const [legacyHistory, setLegacyHistory] = useState(false);
+  const [correctionStep, setCorrectionStep] = useState<FulfillmentStage | null>(null);
 
   const store = stores.find((s) => s.id === batch.store_id);
   const transferTrips = useMemo(() => {
@@ -1830,7 +1834,7 @@ const BatchDetailModal = ({
     displayPipelineStage.owner_account_id === accountId;
   // Право на редактирование данных этапа (приёмка, ОТК, маркировка, упаковка, паллеты)
   // Во время загрузки пайплайна — блокируем, чтобы не было временного доступа до получения данных
-  const canManageStageData = isPipelineLoading
+  const canModifyStageData = isPipelineLoading
     ? false
     : batch.status === "cancelled"
       ? false
@@ -1840,6 +1844,12 @@ const BatchDetailModal = ({
         ? displayPipelineStage.status !== "pending" &&
           (isPartnerExecutorOfActiveStage || isOwnerExecutorOfDisplayedStage)
         : canManage;
+
+  const displayedStepCompleted = displayPipelineStage?.status === "done" ||
+    STAGE_ORDER.indexOf(activeSubStage) > STAGE_ORDER.indexOf(viewStage);
+  const canManageStageData = canModifyStageData && (!displayedStepCompleted ||
+    (viewStage === "reception" ? receptionCorrectionMode : correctionStep === viewStage));
+  useEffect(() => { setCorrectionStep(null); }, [viewStage, displayPipelineStage?.id]);
 
   const stageExecutorAccountId = displayPipelineStage
     ? (displayPipelineStage.partner_account_id ??
@@ -2140,6 +2150,13 @@ const BatchDetailModal = ({
     setPipelineStgs(updatedStages);
     setViewStage(nextStep);
     return batch;
+  };
+
+  const confirmSavedStep = async (step: FulfillmentStage) => {
+    if (STAGE_ORDER.indexOf(activeSubStage) > STAGE_ORDER.indexOf(step) || displayPipelineStage?.status === "done") {
+      await confirmStepCorrection(batch.id, displayPipelineStage?.id ?? null, step);
+      setCorrectionStep(null);
+    }
   };
 
   const activePackingBoxId = (() => {
@@ -3910,6 +3927,7 @@ const BatchDetailModal = ({
         ),
       );
       await recalcOtkDiscrepancy(finalItemsAfterDelete, otkLogs);
+      await confirmSavedStep("reception");
       setIsDirty(false);
       if (receptionIsCompleted) setReceptionCorrectionMode(false);
     } catch (err) {
@@ -4864,6 +4882,7 @@ const BatchDetailModal = ({
         ),
       );
       onItemsChanged(refreshed.items);
+      await confirmSavedStep(viewStage);
       setIsDirty(false);
     } catch (err) {
       setError(
@@ -5582,6 +5601,7 @@ const BatchDetailModal = ({
       setOtkDeletedIds([]);
       setOtkEditingId(null);
       setOtkLogHistories({});
+      await confirmSavedStep("otk");
       setIsDirty(false);
     } catch (err) {
       setError(
@@ -5944,6 +5964,7 @@ const BatchDetailModal = ({
       setMarkingEdits({});
       setMarkingDeletedIds([]);
       setMarkingEditingId(null);
+      await confirmSavedStep("marking");
       setIsDirty(false);
     } catch (err) {
       setError(
@@ -6063,6 +6084,7 @@ const BatchDetailModal = ({
       setPackagingEdits({});
       setPackagingDeletedIds([]);
       setPackagingEditingId(null);
+      await confirmSavedStep("packaging");
       setIsDirty(false);
     } catch (err) {
       setError(
@@ -6692,7 +6714,7 @@ const BatchDetailModal = ({
               const canReviewCompletedStage =
                 displayPipelineStage?.status === "done";
               const canReviewReceptionCorrection =
-                s === "reception" && isDone && canManageStageData;
+                isDone && canModifyStageData;
 
               const isClickable =
                 isPast &&
@@ -7306,7 +7328,7 @@ const BatchDetailModal = ({
                     ))}
                   </select>
                   {receptionIsCompleted &&
-                    canManageStageData &&
+                    canModifyStageData &&
                     !receptionCorrectionMode && (
                       <button
                         type="button"
@@ -15734,7 +15756,7 @@ const BatchDetailModal = ({
         </div>
 
         {/* Footer */}
-        {(canManageStageData ||
+        {(canModifyStageData ||
           (batch.current_stage !== "done" &&
             batch.current_stage === "otk")) && (
           <div className="flex items-center justify-between border-t border-slate-100 px-5 py-2.5">
@@ -15743,6 +15765,9 @@ const BatchDetailModal = ({
               {enabledStages.filter((s) => s !== "done").length}
             </span>
             <div className="flex items-center gap-3">
+              {canModifyStageData && displayedStepCompleted && viewStage !== "reception" && correctionStep !== viewStage && (
+                <button type="button" onClick={() => setCorrectionStep(viewStage)} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">Корректировать</button>
+              )}
               {/* Кнопка Сохранить — всегда видна, заглушена когда нет изменений */}
               {canManageStageData && (
                 <button
@@ -15900,6 +15925,7 @@ const BatchDetailModal = ({
                             setSupplies(refreshed);
                             rebuildSlotsFromSupplies(refreshed);
                           }
+                          await confirmSavedStep("logistics");
                           setIsDirty(false);
                         } catch (err) {
                           setError(
@@ -15928,7 +15954,7 @@ const BatchDetailModal = ({
                     <polyline points="17 21 17 13 7 13 7 21" />
                     <polyline points="7 3 7 8 15 8" />
                   </svg>
-                  {isSavingDraft ? "Сохранение…" : "Сохранить"}
+                  {isSavingDraft ? "Сохранение…" : STAGE_ORDER.indexOf(activeSubStage) > STAGE_ORDER.indexOf(viewStage) ? "Подтвердить корректировку" : "Сохранить"}
                 </button>
               )}
 
@@ -16667,6 +16693,9 @@ const BatchDetailModal = ({
                   <p className="font-semibold text-slate-800">
                     История изменений
                   </p>
+                  <button type="button" onClick={() => setLegacyHistory((value) => !value)} className="text-xs text-slate-500">
+                    {legacyHistory ? "Подтверждённые результаты" : "Прежний журнал"}
+                  </button>
                   <button
                     type="button"
                     onClick={closeHistory}
@@ -16755,7 +16784,9 @@ const BatchDetailModal = ({
                 </div>
 
                 {/* ── ОТК: мини-табы + журнал ── */}
+                {!legacyHistory && <ConfirmedStepHistory batchId={batch.id} stageId={displayPipelineStage?.id} step={otkHistoryStageTab} />}
                 {otkHistoryStageTab === "otk" &&
+                  legacyHistory &&
                   (() => {
                     const pristineLogs = otkLogs.filter(
                       (l) =>
@@ -17116,7 +17147,7 @@ const BatchDetailModal = ({
                   })()}
 
                 {/* ── Маркировка: журнал работ (точная копия ОТК) ── */}
-                {otkHistoryStageTab === "marking" &&
+                {legacyHistory && otkHistoryStageTab === "marking" &&
                   (() => {
                     // --- локальные переменные (shadowing внешнего скоупа, как у ОТК) ---
                     // Логи с ожидающим (ещё не сохранённым) удалением показываем как красные табы
@@ -17598,7 +17629,7 @@ const BatchDetailModal = ({
                   })()}
 
                 {/* ── Не-ОТК этапы: позиции ── */}
-                {otkHistoryStageTab !== "otk" &&
+                {legacyHistory && otkHistoryStageTab !== "otk" &&
                   otkHistoryStageTab !== "marking" &&
                   (() => {
                     const qKey = stageQtyKey[otkHistoryStageTab];

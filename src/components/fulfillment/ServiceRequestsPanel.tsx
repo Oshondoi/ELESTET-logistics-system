@@ -14,7 +14,6 @@ import {
   createServiceRequestFromForm,
   createServiceRequestInvite,
   fetchRecentExecutorAccounts,
-  fetchServiceRequestCorrectionDraft,
   fetchServiceRequestVersions,
   getRequestDraftDeviceId,
   heartbeatServiceRequestWorkDraft,
@@ -23,7 +22,6 @@ import {
   openServiceRequestWorkDraft,
   rejectServiceRequest,
   removeServiceRequests,
-  saveServiceRequestDraft,
   saveServiceRequestWorkDraft,
   searchExecutorAccounts,
   startServiceRequestWork,
@@ -33,6 +31,7 @@ import {
 } from "../../services/requestService";
 import { createStoreInSupabase } from "../../services/storeService";
 import { RequestIntakeEditor } from "./RequestIntakeEditor";
+import { reassignRejectedServiceRequest } from "../../services/requestService";
 import {
   fetchOtkPerformers,
   type OtkPerformer,
@@ -125,6 +124,7 @@ export const ServiceRequestsPanel = ({
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<ServiceRequest | null>(null);
   const [creating, setCreating] = useState(false);
+  const [reassigning, setReassigning] = useState<ServiceRequest | null>(null);
   const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(null);
   const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([]);
   const [requestFilter, setRequestFilter] = useState<"active" | "cancelled">("active");
@@ -159,6 +159,7 @@ export const ServiceRequestsPanel = ({
   const [deviceId] = useState(getRequestDraftDeviceId);
   const lastActivityRef = useRef(Date.now());
   const editorHydratingRef = useRef(false);
+  const workSaveQueue = useRef<Promise<void>>(Promise.resolve());
 
   const load = async () => {
     setLoading(true);
@@ -233,11 +234,7 @@ export const ServiceRequestsPanel = ({
     setError("");
     editorHydratingRef.current = true;
     try {
-      const work = request.status === "draft"
-        ? await openServiceRequestWorkDraft(request.id, deviceId)
-        : request.status === "submitted" || request.status === "accepted"
-          ? await fetchServiceRequestCorrectionDraft(request.id)
-          : {};
+      const work = await openServiceRequestWorkDraft(request.id, deviceId);
       setCreating(false);
       setTitle(work.title ?? request.title);
       setName(work.applicantName ?? request.applicant_name ?? userName);
@@ -289,7 +286,11 @@ export const ServiceRequestsPanel = ({
     setError("");
   };
 
-  const closeEditor = () => {
+  const closeEditor = async (persist = true) => {
+    if (persist && editing) {
+      try { await persistWorkDraft(editing.id, payload()); }
+      catch (e) { setError(e instanceof Error ? e.message : "Не удалось сохранить черновик"); return; }
+    }
     setCreating(false);
     setEditing(null);
     setPendingInviteToken(null);
@@ -347,18 +348,13 @@ export const ServiceRequestsPanel = ({
   });
 
   const persistWorkDraft = async (requestId: string, value: ReturnType<typeof payload>) => {
-    try {
-      await saveServiceRequestWorkDraft(requestId, deviceId, value);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      if (!message.includes("истекло")) throw error;
-      await openServiceRequestWorkDraft(requestId, deviceId);
-      await saveServiceRequestWorkDraft(requestId, deviceId, value);
-    }
+    const pending = workSaveQueue.current.then(() => saveServiceRequestWorkDraft(requestId, deviceId, value)).then(() => undefined);
+    workSaveQueue.current = pending.catch(() => undefined);
+    await pending;
   };
 
   useEffect(() => {
-    if (!editing || editing.status !== "draft" || saving || editorHydratingRef.current) return;
+    if (!editing || saving || editorHydratingRef.current) return;
     const timer = window.setTimeout(() => {
       void persistWorkDraft(editing.id, payload())
         .catch((e) => setError(e instanceof Error ? e.message : "Не удалось автоматически сохранить черновик"));
@@ -367,7 +363,7 @@ export const ServiceRequestsPanel = ({
   }, [editing?.id, editing?.status, deviceId, title, name, email, comment, executor, storeDrafts, saving]);
 
   useEffect(() => {
-    if (!editing || editing.status !== "draft") return;
+    if (!editing) return;
     const timer = window.setInterval(() => {
       if (Date.now() - lastActivityRef.current < 120_000) {
         void heartbeatServiceRequestWorkDraft(editing.id, deviceId)
@@ -390,13 +386,10 @@ export const ServiceRequestsPanel = ({
       if (creating) {
         await createServiceRequestFromForm(accountId, payload(), pendingInviteToken);
       } else if (editing) {
-        if (editing.status === "draft")
-          await persistWorkDraft(editing.id, payload());
-        else
-          await saveServiceRequestDraft(editing.id, payload());
+        await persistWorkDraft(editing.id, payload());
         if (submit) await submitServiceRequest(editing.id);
       }
-      closeEditor();
+      await closeEditor(false);
       await load();
       if (submit) onBatchesChanged?.();
     } catch (e) {
@@ -711,6 +704,11 @@ export const ServiceRequestsPanel = ({
                     </td>
                     <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}>
                       <div className="flex flex-wrap justify-end gap-1">
+                        {canCreate && isApplicant && request.status === "rejected" && (
+                          <button type="button" onClick={() => { setReassigning(request); setExecutor(null); setExecutorQuery(""); setError(""); }} className="rounded-xl border px-2.5 py-1.5 text-xs">
+                            Другой исполнитель
+                          </button>
+                        )}
                         {canCreate &&
                           isApplicant &&
                           ["draft", "submitted", "accepted"].includes(
@@ -834,6 +832,26 @@ export const ServiceRequestsPanel = ({
         </div>
       )}
 
+      {reassigning && <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 p-4">
+        <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+          <h2 className="text-lg font-semibold">Исполнитель заявки R-{reassigning.short_id}</h2>
+          <p className="mt-2 text-sm text-slate-500">Заявка и партии сохранят свои номера. Новый исполнитель получит заявку после отправки.</p>
+          <input value={executor ? `C-${executor.short_id} · ${executor.name}` : executorQuery} onChange={(event) => { setExecutor(null); setExecutorQuery(event.target.value); }} placeholder="Название компании или C-ID" className="mt-4 w-full rounded-xl border px-3 py-2" />
+          {!executor && suggestedExecutors.filter((row) => row.id !== reassigning.executor_account_id).map((row) => <button key={row.id} type="button" onClick={() => setExecutor(row)} className="block w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-blue-50">C-{row.short_id} · {row.name}</button>)}
+          {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" disabled={saving} onClick={() => setReassigning(null)} className="rounded-xl border px-4 py-2">Отмена</button>
+            <button type="button" disabled={saving || !executor} onClick={async () => {
+              if (!executor) return;
+              setSaving(true); setError("");
+              try { await reassignRejectedServiceRequest(reassigning.id, executor.id); setReassigning(null); await load(); onBatchesChanged?.(); }
+              catch (e) { setError(e instanceof Error ? e.message : "Не удалось отправить заявку"); }
+              finally { setSaving(false); }
+            }} className="rounded-xl bg-blue-600 px-4 py-2 text-white disabled:opacity-50">Подтвердить и отправить</button>
+          </div>
+        </div>
+      </div>}
+
       {(editing || creating) && (
         <div
           className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 p-4"
@@ -858,7 +876,7 @@ export const ServiceRequestsPanel = ({
                 </p>
               </div>
               <button
-                onClick={closeEditor}
+                onClick={() => void closeEditor()}
                 className="h-8 w-8 rounded-xl text-slate-400 hover:bg-slate-100"
               >
                 ×
@@ -1073,6 +1091,7 @@ export const ServiceRequestsPanel = ({
                     </label>
                   </div>
                   <RequestIntakeEditor
+                    catalogMode={currentStoreDraft.intakeMode === "catalog"} accountId={accountId} storeId={currentStoreDraft.storeId}
                     itemsText={currentStoreDraft.itemsText}
                     onItemsTextChange={(value) => { lastActivityRef.current = Date.now(); setStoreDrafts((rows) => rows.map((row, index) => index === activeStore ? { ...row, itemsText: value } : row)); }}
                     supplies={currentStoreDraft.supplies}

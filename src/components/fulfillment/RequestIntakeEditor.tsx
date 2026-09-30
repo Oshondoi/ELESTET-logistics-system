@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RequestSupplyDraft } from "../../types";
 import { FulfillmentElestetScanner } from "./FulfillmentElestetScanner";
+import { searchProducts, type CatalogProduct } from "../../services/fulfillmentService";
 
 type Props = {
   itemsText: string;
@@ -9,6 +10,9 @@ type Props = {
   onSuppliesChange: (value: RequestSupplyDraft[]) => void;
   boxesMode: boolean;
   serialScannerEnabled?: boolean;
+  catalogMode?: boolean;
+  accountId?: string;
+  storeId?: string;
 };
 
 const parsedItem = (line: string) => {
@@ -16,11 +20,13 @@ const parsedItem = (line: string) => {
   return { barcode, name, qty: Number.parseInt(quantity, 10) || 0, article };
 };
 
-export function RequestIntakeEditor({ itemsText, onItemsTextChange, supplies, onSuppliesChange, boxesMode, serialScannerEnabled = true }: Props) {
+export function RequestIntakeEditor({ itemsText, onItemsTextChange, supplies, onSuppliesChange, boxesMode, serialScannerEnabled = true, catalogMode, accountId, storeId }: Props) {
   const [scanValue, setScanValue] = useState("");
   const [scanError, setScanError] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [activeBoxKey, setActiveBoxKey] = useState("");
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastScanRef = useRef<{ value: string; at: number }>({ value: "", at: 0 });
   const cameraScannedRef = useRef(false);
@@ -78,6 +84,26 @@ export function RequestIntakeEditor({ itemsText, onItemsTextChange, supplies, on
   scanHandlerRef.current = scan;
 
   useEffect(() => {
+    let cancelled = false;
+    if (!catalogMode || !accountId || !storeId) { setCatalogProducts([]); return; }
+    const timer = window.setTimeout(() => {
+      void searchProducts(accountId, storeId, catalogQuery.replace(/[,()%]/g, " "))
+        .then((rows) => { if (!cancelled) setCatalogProducts(rows); })
+        .catch(() => { if (!cancelled) setScanError("Не удалось загрузить каталог"); });
+    }, 250);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [catalogMode, accountId, storeId, catalogQuery]);
+
+  const addCatalogProduct = (product: CatalogProduct, barcode: string) => {
+    const lines = itemsText.split("\n").filter((line) => line.trim());
+    const index = lines.findIndex((line) => parsedItem(line).barcode === barcode);
+    const safe = (text: string | null) => (text ?? "").replace(/[;\r\n]/g, " ");
+    if (index < 0) lines.push([barcode, safe(product.name), 1, safe(product.vendor_code)].join("; "));
+    else { const row = parsedItem(lines[index]); lines[index] = [barcode, row.name || safe(product.name), row.qty + 1, row.article || safe(product.vendor_code)].join("; "); }
+    onItemsTextChange(lines.join("\n"));
+  };
+
+  useEffect(() => {
     if (!cameraOpen || !videoRef.current) return;
     let cancelled = false;
     let controls: { stop: () => void } | null = null;
@@ -100,6 +126,12 @@ export function RequestIntakeEditor({ itemsText, onItemsTextChange, supplies, on
   }, [cameraOpen]);
 
   return <div className="mt-3 space-y-3">
+    {catalogMode && <div className="rounded-xl border p-3">
+      {accountId && storeId ? <>
+        <input value={catalogQuery} onChange={(event) => setCatalogQuery(event.target.value)} placeholder="Поиск товара по названию или артикулу" className="w-full rounded-xl border px-3 py-2 text-sm" />
+        <div className="mt-2 max-h-52 overflow-auto">{catalogProducts.map((product) => <div key={product.id} className="border-b py-2 text-xs"><p>{product.name} · {product.vendor_code}</p><div className="mt-1 flex flex-wrap gap-1">{Array.from(new Set([...(product.barcodes ?? []), ...(product.sizes ?? []).flatMap((size) => size.skus ?? [])])).map((barcode) => <button key={barcode} type="button" onClick={() => addCatalogProduct(product, barcode)} className="rounded-lg bg-blue-50 px-2 py-1 text-blue-700">+ {barcode}</button>)}</div></div>)}</div>
+      </> : <p className="text-xs text-slate-500">У нового магазина каталог пока пуст. Товары можно внести вручную или сканером ниже.</p>}
+    </div>}
     <div className="flex flex-wrap items-center gap-2 rounded-xl bg-blue-50 p-3">
       <input value={scanValue} onChange={(event) => setScanValue(event.target.value)}
         onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); scan(scanValue); } }}

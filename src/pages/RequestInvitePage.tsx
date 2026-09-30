@@ -141,7 +141,7 @@ export const RequestInvitePage = ({
   const [passwordAgain, setPasswordAgain] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpStep, setOtpStep] = useState<"idle" | "code" | "password" | "conflict" | "done">("idle");
-  const [otpPurpose, setOtpPurpose] = useState<"bind" | "replace">("bind");
+  const [otpPurpose, setOtpPurpose] = useState<"bind" | "replace" | "recover">("bind");
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [existingAccount, setExistingAccount] = useState(false);
   const [hasExistingLink, setHasExistingLink] = useState(false);
@@ -162,7 +162,6 @@ export const RequestInvitePage = ({
   }, [activeScannerStore, stores.length]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [resetSent, setResetSent] = useState(false);
   const [conflictToken, setConflictToken] = useState("");
   const [conflictCopied, setConflictCopied] = useState(false);
   const [bindableAccountIds, setBindableAccountIds] = useState<string[] | null>(
@@ -334,29 +333,7 @@ export const RequestInvitePage = ({
     [invite],
   );
   const requestPasswordReset = async () => {
-    if (!supabase || !email.trim()) {
-      setError("Укажите почту");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      const redirectTo = `${window.location.origin}/reset-password?invite=${encodeURIComponent(token)}`;
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        email.trim(),
-        { redirectTo },
-      );
-      if (resetError) throw resetError;
-      setResetSent(true);
-    } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "Не удалось отправить письмо для восстановления",
-      );
-    } finally {
-      setBusy(false);
-    }
+    await sendEmailCode("recover");
   };
   const copyConflictLink = async () => {
     if (!conflictToken) return;
@@ -377,7 +354,7 @@ export const RequestInvitePage = ({
       setBusy(false);
     }
   };
-  const sendEmailCode = async (purpose: "bind" | "replace") => {
+  const sendEmailCode = async (purpose: "bind" | "replace" | "recover") => {
     if (!supabase) return;
     let targetEmail = email.trim();
     if (purpose === "replace" && !targetEmail) {
@@ -394,9 +371,11 @@ export const RequestInvitePage = ({
     try {
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: targetEmail,
-        options: { shouldCreateUser: true, data: { full_name: name.trim() } },
+        options: { shouldCreateUser: purpose === "bind", ...(purpose === "bind" ? { data: { full_name: name.trim() } } : {}) },
       });
       if (otpError) throw otpError;
+      setEmail(targetEmail);
+      setOtpCode("");
       setOtpPurpose(purpose);
       setOtpStep("code");
     } catch (e) {
@@ -434,7 +413,12 @@ export const RequestInvitePage = ({
     try {
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) throw updateError;
-      if (otpPurpose === "replace") {
+      if (otpPurpose === "recover") {
+        setPassword("");
+        setPasswordAgain("");
+        setOtpStep("done");
+        window.location.assign(`/request-invite/${token}`);
+      } else if (otpPurpose === "replace") {
         setOtpStep("done");
         continueToRequest();
       } else {
@@ -768,6 +752,7 @@ export const RequestInvitePage = ({
                 </select>
               </div>
               <RequestIntakeEditor itemsText={store.itemsText} onItemsTextChange={(value) => updateStore(index,{itemsText:value})}
+                catalogMode={store.intake_mode === "catalog"}
                 supplies={store.supplies ?? []} onSuppliesChange={(value) => updateStore(index,{supplies:value})}
                 boxesMode={store.intake_mode === "boxes"} serialScannerEnabled={activeScannerStore === index} />
             </div>
@@ -915,11 +900,6 @@ export const RequestInvitePage = ({
         {error && (
           <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">
             {error}
-          </p>
-        )}
-        {resetSent && (
-          <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-            Письмо отправлено. После смены пароля вы вернётесь к этой ссылке.
           </p>
         )}
         {conflictToken && (

@@ -216,6 +216,7 @@ export const MyRequestDraftsPage = ({ onMaterialized, onSignOut, onCreateCompany
                   <button type="button" disabled={stores.length === 1} onClick={() => setStores((current) => current.filter((_,i) => i !== index))} className="text-xs text-rose-500 disabled:opacity-40">Убрать</button></div>
                 <select value={store.intake_mode} onChange={(e) => updateStore(index,{intake_mode:e.target.value as StoreForm["intake_mode"]})} className="mt-3 rounded-xl border px-3 py-2 text-sm"><option value="bulk">Навалом</option><option value="catalog">По каталогу</option><option value="barcodes">По баркодам</option><option value="boxes">Готовые короба</option></select>
                 <RequestIntakeEditor itemsText={store.itemsText} onItemsTextChange={(value) => updateStore(index,{itemsText:value})}
+                  catalogMode={store.intake_mode === "catalog"} accountId={applicantAccountId} storeId={store.store_id}
                   supplies={store.supplies ?? []} onSuppliesChange={(value) => updateStore(index,{supplies:value})}
                   boxesMode={store.intake_mode === "boxes"} serialScannerEnabled={activeScannerStore === index} />
               </div>)}

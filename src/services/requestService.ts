@@ -106,6 +106,13 @@ export const removeServiceRequests = async (requestIds: string[]) => {
   return data as { deleted: number; cancelled: number };
 };
 
+export const reassignRejectedServiceRequest = async (requestId: string, executorAccountId: string) => {
+  const { error } = await client().rpc("reassign_rejected_service_request", {
+    p_request_id: requestId, p_executor_account_id: executorAccountId,
+  });
+  throwRpc(error);
+};
+
 export const fetchRecentExecutorAccounts = async (
   applicantAccountId: string,
 ): Promise<ExecutorAccountSearchResult[]> => {

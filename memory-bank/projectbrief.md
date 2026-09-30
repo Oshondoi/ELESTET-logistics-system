@@ -26,7 +26,7 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 
 - A request `R` and a fulfillment batch `P` are separate entities. Explicit initial Save creates `R` for an existing company; confirming its recorded goods creates one lasting `P` per store, before the executor accepts the request. Reception later records `Принято` without replacing the request's `Заявлено`.
 - A `P` can continue through multiple company-owned stages without receiving another `P-N`. Self-orders use one company stage. Loose goods and goods already distributed into boxes are supported input modes.
-- The v41 SQL is applied to production; the matching frontend is currently local and awaits user end-to-end testing and publication. Current rules and remaining gaps are in `memory-bank/components/intake-requests.md`; older planned wording is historical.
+- v41/v42 SQL is applied to production; confirmed step versions, rejection/reassignment, correction leases and notifications passed SQL regression tests. The local frontend passed mocked browser tests. Missing custom SMTP/Send Email Hook blocks real customer email delivery; hardware testing and frontend publication remain. Current rules and remaining work are in `memory-bank/components/intake-requests.md`; older wording is historical.
 
 ## Current operational rule — FBS
 - FBS order is the child unit for selection, printing and movement between supplies.

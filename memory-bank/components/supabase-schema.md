@@ -1,6 +1,11 @@
 # Supabase Schema
 
-## Client request v41 (applied to production Supabase 30.09.2026)
+## Client request v42 (applied to production Supabase 30.09.2026)
+
+- Layer `supabase/patch_request_completion_v42.sql` follows v41. `fulfillment_step_versions` records immutable confirmed results by batch/stage/step/version. RLS scopes private work snapshots to the stage company; application roles cannot insert/update/delete journal rows. Old row history is retained, new per-row reception auditing removed.
+- `reassign_rejected_service_request` locks and verifies rejected R, keeps original R/P, clears executor responsibility and sends one notification per recipient. New executor stage appears on acceptance. Self reassignment reuses the same stage and starts actual reception at zero.
+- `notify_request_executor` selects distinct owner/admin, responsible and request_manage members; request_view alone is excluded. `confirm_fulfillment_step_correction` validates completed step access, snapshots the confirmed result, publishes downstream declared data and records requester corrections in R versions. `advance_fulfillment_batch` makes legacy completion/logging atomic.
+- Work-draft lease APIs now support submitted/accepted correction drafts too. Old device saves cannot silently reacquire a lease lost to a different device. Regression coverage: `request_invite_v41_smoke.sql` and `request_completion_v42_smoke.sql`, both transactionally rolled back after live application.
 
 - Patch: `supabase/patch_request_invite_portal_v41.sql`, layered on the older request schema/v40. Transactional regression: `supabase/tests/request_invite_v41_smoke.sql` (`request_invite_v41_smoke_ok` after live application, test writes rolled back). This records backend deployment only; matching frontend is not yet published.
 - `service_requests` is the canonical `R` only after explicit initial Save for an existing company, or first atomic confirmation for a link user without a business company. `service_request_stores` binds each selected applicant store to one permanent `fulfillment_batches` row; `source_request_id`/`source_request_store_id` preserve lineage. A confirmed request correction updates the same linked batch instead of allocating a fresh `P-N`.
@@ -8,7 +13,7 @@
 - `batch_pipeline_stages` holds the applicant's completed first stage and the executor's later stage of **the same batch**; self-orders hold one active stage. `stage_company_short_id` supports immediate `C-ID` orientation. Steps are flags within each stage, not batches. `validate_service_request_intake` rejects empty item sets, empty supplies/boxes in box mode and quantity mismatches; box mode materializes `fulfillment_supplies`/`fulfillment_boxes`/`fulfillment_box_items` only on confirmation.
 - `service_request_versions` stores confirmed request snapshots; `service_request_supply_archives` stores the prior confirmed supply/box graph during correction. Confirmed correction updates next-stage declared quantities without overwriting its actual received quantities. `remove_service_requests` physically removes only unconfirmed `R`; a confirmed request is cancelled together with linked batches, preserving completed work.
 - Link reserve RPCs verify confirmed Supabase Auth identity; expiry invalidates the URL but retains the Auth user and independent reserve drafts. First confirmed `R` makes the active link infinite; another link does not create a second company for an existing owner. `list_recent_request_executors` derives candidates from existing confirmed requests, with no duplicate company table.
-- Known gap: legacy `fulfillment_reception_history` still writes row-level mutations before an entire stage result is confirmed. Do not describe this table as a confirmed-results-only business journal. The future stage-journal migration must be designed and tested separately.
+- `fulfillment_reception_history` now contains only retained legacy row history; v42 removed its per-item trigger. New business confirmations use `fulfillment_step_versions`; never reinterpret old row entries as confirmed snapshots.
 
 ## Main File
 - `supabase/schema.sql`

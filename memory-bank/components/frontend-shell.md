@@ -1,5 +1,12 @@
 # Frontend Shell
 
+## Request workflow update — 30.09.2026
+
+- Local request UI adds rejected-request reassignment, single-device correction drafts and flush-on-close. Intake catalog now searches actual selected-store products; HID/barcode entry and the camera/serial paths remain available.
+- Invite password recovery uses an email OTP with `shouldCreateUser:false`, then changes the password of that same Auth account. SMTP remains an external deployment blocker; do not equate the mocked browser test with real email delivery.
+- Party history defaults to `ConfirmedStepHistory` (confirmed snapshots); the pre-v42 row log remains available separately. Completed steps require explicit correction mode. Disabled steps stay hidden and future steps cannot be toggled via the progress bar.
+- `tests/request-workflow.browser.mjs` passed with intercepted API responses. New frontend has not been published; current discussion is revision 67.
+
 ## Purpose
 Defines the application frame:
 - top header

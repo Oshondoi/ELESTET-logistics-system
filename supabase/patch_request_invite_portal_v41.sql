@@ -691,9 +691,8 @@ begin
           case when v_self then v_batch.stage_otk else false end,
           case when v_self then v_batch.stage_packaging else false end,
           case when v_self then v_batch.stage_marking else false end,
-          case when v_self then v_batch.stage_packing else
-            jsonb_typeof(v_batch.payload->'supplies')='array' and
-            jsonb_array_length(v_batch.payload->'supplies')>0 end,
+          coalesce(jsonb_typeof(v_batch.payload->'supplies')='array' and
+            jsonb_array_length(v_batch.payload->'supplies')>0,false),
           case when v_self then v_batch.stage_logistics else false end,
           now(),case when v_self then null else now() end
         ) returning id into v_stage_id;
@@ -1209,6 +1208,10 @@ begin
     );
   end if;
   if v.status not in ('submitted','accepted') then raise exception 'Заявку нельзя корректировать'; end if;
+  if exists(select 1 from public.service_request_work_drafts where request_id=p_request_id and lease_last_seen>now()-interval '2 minutes')
+     and current_setting('app.request_work_lease_verified',true) is distinct from 'on' then
+    raise exception 'Черновик открыт в новом интерфейсе; обновите страницу';
+  end if;
   if p_executor_account_id is distinct from v.executor_account_id then
     raise exception 'После подтверждения нельзя менять исполнителя';
   end if;
@@ -1314,7 +1317,8 @@ begin
         set barcode=coalesce(v_line->>'barcode',''),
             product_name=nullif(v_line->>'name',''),article=nullif(v_line->>'article',''),
             qty_declared=(v_line->>'qty')::integer,
-            qty_received=(v_line->>'qty')::integer,
+            qty_received=case when v_request.applicant_account_id=v_request.executor_account_id
+              then qty_received else (v_line->>'qty')::integer end,
             sort_order=coalesce((v_line->>'position')::integer,0),
             is_excluded=false,corrected_at=now()
         where id=v_item.id;
@@ -1325,13 +1329,13 @@ begin
         ) values(
           v_store_row.batch_id,v_stage_id,coalesce(v_line->>'barcode',''),
           nullif(v_line->>'name',''),nullif(v_line->>'article',''),
-          (v_line->>'qty')::integer,(v_line->>'qty')::integer,
+          (v_line->>'qty')::integer,case when v_request.applicant_account_id=v_request.executor_account_id then 0 else (v_line->>'qty')::integer end,
           coalesce((v_line->>'position')::integer,0)
         );
       end if;
     end loop;
     update public.fulfillment_items item
-    set qty_declared=0,qty_received=0,is_excluded=true,corrected_at=now()
+    set qty_declared=0,qty_received=case when v_request.applicant_account_id=v_request.executor_account_id then qty_received else 0 end,is_excluded=true,corrected_at=now()
     where item.batch_id=v_store_row.batch_id and item.pipeline_stage_id=v_stage_id
       and not exists(
         select 1 from jsonb_array_elements(v_store->'payload'->'items') line
