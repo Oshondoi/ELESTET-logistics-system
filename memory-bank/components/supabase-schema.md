@@ -1,5 +1,15 @@
 # Supabase Schema
 
+## Client request v41 (applied to production Supabase 30.09.2026)
+
+- Patch: `supabase/patch_request_invite_portal_v41.sql`, layered on the older request schema/v40. Transactional regression: `supabase/tests/request_invite_v41_smoke.sql` (`request_invite_v41_smoke_ok` after live application, test writes rolled back). This records backend deployment only; matching frontend is not yet published.
+- `service_requests` is the canonical `R` only after explicit initial Save for an existing company, or first atomic confirmation for a link user without a business company. `service_request_stores` binds each selected applicant store to one permanent `fulfillment_batches` row; `source_request_id`/`source_request_store_id` preserve lineage. A confirmed request correction updates the same linked batch instead of allocating a fresh `P-N`.
+- `service_request_work_drafts` stores unpublished FF content separately from canonical store rows; `service_request_invite_reserves.draft` stores the pre-company link content. Both have `lease_device`/`lease_last_seen` and a two-minute inactivity takeover. Device-aware open/save/heartbeat/submit RPCs enforce the active writer; legacy submit/save RPCs cannot bypass a current new lease. Unsaved drafts are not automatically purged just because a lease expires.
+- `batch_pipeline_stages` holds the applicant's completed first stage and the executor's later stage of **the same batch**; self-orders hold one active stage. `stage_company_short_id` supports immediate `C-ID` orientation. Steps are flags within each stage, not batches. `validate_service_request_intake` rejects empty item sets, empty supplies/boxes in box mode and quantity mismatches; box mode materializes `fulfillment_supplies`/`fulfillment_boxes`/`fulfillment_box_items` only on confirmation.
+- `service_request_versions` stores confirmed request snapshots; `service_request_supply_archives` stores the prior confirmed supply/box graph during correction. Confirmed correction updates next-stage declared quantities without overwriting its actual received quantities. `remove_service_requests` physically removes only unconfirmed `R`; a confirmed request is cancelled together with linked batches, preserving completed work.
+- Link reserve RPCs verify confirmed Supabase Auth identity; expiry invalidates the URL but retains the Auth user and independent reserve drafts. First confirmed `R` makes the active link infinite; another link does not create a second company for an existing owner. `list_recent_request_executors` derives candidates from existing confirmed requests, with no duplicate company table.
+- Known gap: legacy `fulfillment_reception_history` still writes row-level mutations before an entire stage result is confirmed. Do not describe this table as a confirmed-results-only business journal. The future stage-journal migration must be designed and tested separately.
+
 ## Main File
 - `supabase/schema.sql`
 

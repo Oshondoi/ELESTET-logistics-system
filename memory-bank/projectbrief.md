@@ -22,11 +22,11 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - WMS Lite: warehouses, configurable one/two-sided racks, pallet positions, visual box slots, QR-addressed physical boxes and their contents
 - Internal superadmin tools: finance, diary, glossary, administration, versioned architectural discussions, prompts and tasks
 
-## Planned direction — client intake requests
+## Client intake requests — current boundary
 
-- A client request will be a preliminary, auditable entity separate from the fulfillment batch. Starting actual reception creates the linked batch and preserves `Заявлено` separately from `Принято`.
-- The same reception stage must support pickup and warehouse contexts, loose goods and goods already distributed into scanned physical boxes.
-- This direction is not yet a production capability. The canonical target model and unresolved decisions are documented in `memory-bank/components/intake-requests.md`.
+- A request `R` and a fulfillment batch `P` are separate entities. Explicit initial Save creates `R` for an existing company; confirming its recorded goods creates one lasting `P` per store, before the executor accepts the request. Reception later records `Принято` without replacing the request's `Заявлено`.
+- A `P` can continue through multiple company-owned stages without receiving another `P-N`. Self-orders use one company stage. Loose goods and goods already distributed into boxes are supported input modes.
+- The v41 SQL is applied to production; the matching frontend is currently local and awaits user end-to-end testing and publication. Current rules and remaining gaps are in `memory-bank/components/intake-requests.md`; older planned wording is historical.
 
 ## Current operational rule — FBS
 - FBS order is the child unit for selection, printing and movement between supplies.

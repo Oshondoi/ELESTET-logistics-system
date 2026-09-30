@@ -11,9 +11,10 @@ Defines the application frame:
 - `src/App.tsx`
 
 ## Current Behavior
-- local state chooses active page
-- sidebar switches between `shipments` and `stores`
-- modal visibility is controlled at app shell level
+- React Router paths coexist with local active-page state; new request paths must not be redirected by general page synchronization.
+- Sidebar switches among the application's current operational pages; it is not limited to `shipments` and `stores`.
+- Main shell controls page selection and some modal mounting; request creation/editing belongs to the fulfillment panel.
+- Local request routes: `/request-invite/:token` for the public link, `/my-requests` for independent pre-company reserves, and `/client-request` for the limited client mode. `App.tsx` holds pending-invite navigation across Auth/account loading. These local changes are not yet published to `elestet.net` (30.09.2026).
 - layout includes:
   - left brand/sidebar area
   - company switcher block
@@ -51,4 +52,4 @@ This shell is the UX backbone. If it becomes bloated or presentation-heavy, the 
 - preserve the desktop sidebar and its collapsed mode
 - avoid reintroducing giant page hero headers
 - keep top bar flat, not card-like
-- if routing is added later, keep visual shell stable
+- preserve the existing routing and visual shell when adding a page

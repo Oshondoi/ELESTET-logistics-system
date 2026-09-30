@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   Account,
   ExecutorAccountSearchResult,
@@ -9,6 +9,8 @@ import {
   getAdminInvitePreview,
   getPublicServiceRequestInvite,
   listRequestInviteBindableAccountIds,
+  openMyRequestReserve,
+  heartbeatMyRequestReserve,
   replaceServiceRequestInviteReserve,
   reserveServiceRequestInvite,
   saveServiceRequestInviteReserve,
@@ -20,6 +22,7 @@ import {
 } from "../services/requestService";
 import { validatePassword } from "../lib/passwordUtils";
 import { supabase } from "../lib/supabase";
+import { RequestIntakeEditor } from "../components/fulfillment/RequestIntakeEditor";
 
 interface Props {
   token: string;
@@ -42,10 +45,11 @@ type StoreForm = Omit<ReservedInviteStore, "items" | "position"> & {
 };
 const emptyStore = (): StoreForm => ({
   name: "",
-  marketplace: "Wildberries",
+  marketplace: "wildberries",
   delivery_mode: "self_delivery",
   intake_mode: "bulk",
   itemsText: "",
+  supplies: [],
 });
 const linesToItems = (value: string): ServiceRequestItemDraft[] =>
   value
@@ -126,7 +130,6 @@ export const RequestInvitePage = ({
   accounts,
   accountsLoading,
   onSignIn,
-  onSignUp,
   onContinue,
   onMaterialized,
 }: Props) => {
@@ -136,6 +139,9 @@ export const RequestInvitePage = ({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordAgain, setPasswordAgain] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpStep, setOtpStep] = useState<"idle" | "code" | "password" | "conflict" | "done">("idle");
+  const [otpPurpose, setOtpPurpose] = useState<"bind" | "replace">("bind");
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [existingAccount, setExistingAccount] = useState(false);
   const [hasExistingLink, setHasExistingLink] = useState(false);
@@ -150,6 +156,10 @@ export const RequestInvitePage = ({
     ExecutorAccountSearchResult[]
   >([]);
   const [stores, setStores] = useState<StoreForm[]>([emptyStore()]);
+  const [activeScannerStore, setActiveScannerStore] = useState(0);
+  useEffect(() => {
+    if (activeScannerStore >= stores.length) setActiveScannerStore(0);
+  }, [activeScannerStore, stores.length]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [resetSent, setResetSent] = useState(false);
@@ -158,6 +168,10 @@ export const RequestInvitePage = ({
   const [bindableAccountIds, setBindableAccountIds] = useState<string[] | null>(
     null,
   );
+  const [reserveLeaseReady, setReserveLeaseReady] = useState(false);
+  const [reserveOpenAttempt, setReserveOpenAttempt] = useState(0);
+  const lastActivityRef = useRef(Date.now());
+  useEffect(() => { lastActivityRef.current = Date.now(); }, [stores]);
 
   useEffect(() => {
     setInvite(null);
@@ -252,11 +266,42 @@ export const RequestInvitePage = ({
     return () => window.clearTimeout(timer);
   }, [executor, executorQuery, isSignedIn]);
   useEffect(() => {
+    setReserveLeaseReady(false);
+    if (!isSignedIn || accounts.length || isAdminPreview || !invite?.reserved_email || !invite.invite_id) return;
+    let cancelled = false;
+    void openMyRequestReserve(invite.invite_id)
+      .then((draft) => {
+        if (cancelled) return;
+        if (draft && typeof draft === "object" && Object.keys(draft).length) {
+          setCompanyName(typeof draft.companyName === "string" ? draft.companyName : "Основная компания");
+          setTitle(typeof draft.title === "string" ? draft.title : "");
+          setComment(typeof draft.comment === "string" ? draft.comment : "");
+          if (Array.isArray(draft.stores) && draft.stores.length) setStores(draft.stores as StoreForm[]);
+          if (draft.executor && typeof draft.executor === "object") setExecutor(draft.executor as ExecutorAccountSearchResult);
+        }
+        setReserveLeaseReady(true);
+        setError("");
+      })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Черновик сейчас открыт на другом устройстве"); });
+    return () => { cancelled = true; };
+  }, [isSignedIn, accounts.length, isAdminPreview, invite?.reserved_email, invite?.invite_id, reserveOpenAttempt]);
+  useEffect(() => {
+    if (!reserveLeaseReady || !invite?.invite_id) return;
+    const timer = window.setInterval(() => {
+      if (Date.now() - lastActivityRef.current > 120_000) return;
+      void heartbeatMyRequestReserve(invite.invite_id).then((ok) => {
+        if (!ok) { setReserveLeaseReady(false); setError("Право записи черновика истекло. Обновите страницу, чтобы продолжить."); }
+      }).catch(() => setReserveLeaseReady(false));
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [reserveLeaseReady, invite?.invite_id]);
+  useEffect(() => {
     if (
       !isSignedIn ||
       accounts.length ||
       isAdminPreview ||
-      !invite?.reserved_email
+      !invite?.reserved_email ||
+      !reserveLeaseReady
     )
       return;
     const timer = window.setTimeout(() => {
@@ -266,7 +311,7 @@ export const RequestInvitePage = ({
         comment,
         stores,
         executor,
-      }).catch(() => undefined);
+      }).catch((e) => setError(e instanceof Error ? e.message : "Не удалось сохранить черновик на сервере"));
     }, 500);
     return () => window.clearTimeout(timer);
   }, [
@@ -274,6 +319,7 @@ export const RequestInvitePage = ({
     accounts.length,
     isAdminPreview,
     invite?.reserved_email,
+    reserveLeaseReady,
     token,
     companyName,
     title,
@@ -331,6 +377,82 @@ export const RequestInvitePage = ({
       setBusy(false);
     }
   };
+  const sendEmailCode = async (purpose: "bind" | "replace") => {
+    if (!supabase) return;
+    let targetEmail = email.trim();
+    if (purpose === "replace" && !targetEmail) {
+      const { data } = await supabase.auth.getUser();
+      targetEmail = data.user?.email ?? "";
+      setEmail(targetEmail);
+    }
+    if (!targetEmail) {
+      setError("Укажите почту");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        email: targetEmail,
+        options: { shouldCreateUser: true, data: { full_name: name.trim() } },
+      });
+      if (otpError) throw otpError;
+      setOtpPurpose(purpose);
+      setOtpStep("code");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось отправить код");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const verifyEmailCode = async () => {
+    if (!supabase || !/^\d{6}$/.test(otpCode.trim())) {
+      setError("Введите шестизначный код из письма");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const { error: verifyError } = await supabase.auth.verifyOtp({
+        email: email.trim(), token: otpCode.trim(), type: "email",
+      });
+      if (verifyError) throw verifyError;
+      setOtpStep("password");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Код не подошёл");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const finishEmailCode = async () => {
+    if (!supabase) return;
+    const passwordError = validatePassword(password);
+    if (passwordError) { setError(passwordError); return; }
+    if (password !== passwordAgain) { setError("Пароли не совпадают"); return; }
+    setBusy(true);
+    setError("");
+    try {
+      const { error: updateError } = await supabase.auth.updateUser({ password });
+      if (updateError) throw updateError;
+      if (otpPurpose === "replace") {
+        setOtpStep("done");
+        continueToRequest();
+      } else {
+        const reservation = await reserveServiceRequestInvite(token, name.trim(), email.trim());
+        if (!reservation.ok && reservation.code === "EMAIL_RESERVED") {
+          setConflictToken(reservation.token ?? "");
+          setOtpStep("conflict");
+        } else {
+          setInvite((current) => current ? { ...current, reserved_email: email.trim(), reserved_name: name.trim() } : current);
+          setOtpStep("done");
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось завершить подтверждение");
+    } finally {
+      setBusy(false);
+    }
+  };
   const continueToRequest = () => {
     if (
       hasExistingLink &&
@@ -381,6 +503,35 @@ export const RequestInvitePage = ({
           >
             Вернуться в ELESTET
           </a>
+        </div>
+      </div>
+    );
+
+  if (otpStep === "code" || otpStep === "password" || otpStep === "conflict")
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
+        <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">Ссылка от {executorLabel}</p>
+          <h1 className="mt-2 text-xl font-semibold">
+            {otpStep === "code" ? "Подтвердите почту" : otpStep === "password" ? "Создайте пароль" : "Подтвердите замену ссылки"}
+          </h1>
+          <p className="mt-2 text-sm text-slate-500">{email}</p>
+          {error && <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}
+          {otpStep === "code" && <>
+            <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g,""))} placeholder="Шестизначный код" className="mt-5 w-full rounded-xl border px-3 py-2.5" />
+            <button type="button" disabled={busy || otpCode.length !== 6} onClick={() => void verifyEmailCode()} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Проверить код</button>
+            <button type="button" disabled={busy} onClick={() => void sendEmailCode(otpPurpose)} className="mt-3 w-full text-sm text-blue-600 disabled:opacity-50">Отправить код повторно</button>
+          </>}
+          {otpStep === "password" && <>
+            <input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Новый пароль аккаунта" className="mt-5 w-full rounded-xl border px-3 py-2.5" />
+            <input type="password" autoComplete="new-password" value={passwordAgain} onChange={(event) => setPasswordAgain(event.target.value)} placeholder="Повторите пароль" className="mt-3 w-full rounded-xl border px-3 py-2.5" />
+            <button type="button" disabled={busy} onClick={() => void finishEmailCode()} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Сохранить пароль и продолжить</button>
+          </>}
+          {otpStep === "conflict" && <>
+            <p className="mt-4 text-sm text-slate-600">У этой почты уже есть действующая ссылка. Старые заявки сохранятся отдельно. Использовать текущую ссылку вместо прежней?</p>
+            {conflictToken && <button type="button" onClick={() => void copyConflictLink()} className={`mt-3 w-full rounded-xl border px-3 py-2 text-sm ${conflictCopied ? "border-emerald-300 bg-emerald-50" : "border-slate-200"}`}>Скопировать прежнюю ссылку</button>}
+            <button type="button" disabled={busy} onClick={() => void replaceConflictLink()} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Использовать текущую ссылку</button>
+          </>}
         </div>
       </div>
     );
@@ -456,6 +607,7 @@ export const RequestInvitePage = ({
         current.map((row, i) => (i === index ? { ...row, ...values } : row)),
       );
     const confirm = async () => {
+      if (!reserveLeaseReady) { setError("Черновик ещё не открыт для записи. Обновите страницу и повторите."); return; }
       setBusy(true);
       setError("");
       try {
@@ -482,7 +634,7 @@ export const RequestInvitePage = ({
       }
     };
     return (
-      <div className="min-h-screen bg-slate-50 p-4 sm:p-8">
+      <div className="min-h-screen bg-slate-50 p-4 sm:p-8" onChangeCapture={() => { lastActivityRef.current = Date.now(); }} onKeyDown={() => { lastActivityRef.current = Date.now(); }}>
         <div className="mx-auto max-w-4xl rounded-3xl bg-white p-6 shadow-xl">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
             Ссылка от {executorLabel}
@@ -497,6 +649,7 @@ export const RequestInvitePage = ({
               {error}
             </p>
           )}
+          {!reserveLeaseReady && error && <button type="button" onClick={() => { setError(""); setReserveOpenAttempt((value) => value + 1); }} className="mt-3 rounded-xl border px-3 py-2 text-sm">Попробовать открыть черновик снова</button>}
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <label className="text-sm">
               Компания
@@ -551,6 +704,9 @@ export const RequestInvitePage = ({
           </div>
           {stores.map((store, index) => (
             <div key={index} className="mt-4 rounded-2xl border p-4">
+              <button type="button" onClick={() => setActiveScannerStore(index)} className={`mb-3 rounded-lg px-3 py-1.5 text-xs ${activeScannerStore === index ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"}`}>
+                {activeScannerStore === index ? "Сканер подключён к этому магазину" : "Подключить сканер к этому магазину"}
+              </button>
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold">Магазин {index + 1}</h2>
                 {stores.length > 1 && (
@@ -572,14 +728,14 @@ export const RequestInvitePage = ({
                   className="rounded-xl border px-3 py-2.5"
                 />
                 <select
-                  value={store.marketplace}
+                  value={store.marketplace.toLowerCase()}
                   onChange={(e) =>
                     updateStore(index, { marketplace: e.target.value })
                   }
                   className="rounded-xl border px-3 py-2.5"
                 >
-                  <option>Wildberries</option>
-                  <option>Ozon</option>
+                  <option value="wildberries">Wildberries</option>
+                  <option value="ozon">Ozon</option>
                 </select>
                 <select
                   value={store.delivery_mode}
@@ -611,15 +767,9 @@ export const RequestInvitePage = ({
                   <option value="boxes">По коробам</option>
                 </select>
               </div>
-              <textarea
-                value={store.itemsText}
-                onChange={(e) =>
-                  updateStore(index, { itemsText: e.target.value })
-                }
-                rows={4}
-                placeholder="Товар: штрихкод; название; количество; артикул — по одному в строке"
-                className="mt-3 w-full rounded-xl border px-3 py-2.5"
-              />
+              <RequestIntakeEditor itemsText={store.itemsText} onItemsTextChange={(value) => updateStore(index,{itemsText:value})}
+                supplies={store.supplies ?? []} onSuppliesChange={(value) => updateStore(index,{supplies:value})}
+                boxesMode={store.intake_mode === "boxes"} serialScannerEnabled={activeScannerStore === index} />
             </div>
           ))}
           <button
@@ -636,7 +786,7 @@ export const RequestInvitePage = ({
             className="mt-4 w-full rounded-xl border px-3 py-2.5"
           />
           <button
-            disabled={busy || !executor}
+            disabled={busy || !executor || !reserveLeaseReady}
             onClick={() => void confirm()}
             className="mt-5 w-full rounded-2xl bg-blue-600 py-3 font-medium text-white disabled:opacity-50"
           >
@@ -691,7 +841,7 @@ export const RequestInvitePage = ({
               bindableAccounts.length > 1 &&
               !selectedAccountId
             }
-            onClick={continueToRequest}
+            onClick={() => hasExistingLink ? void sendEmailCode("replace") : continueToRequest()}
             className="mt-5 w-full rounded-2xl bg-blue-600 py-2.5 text-sm font-medium text-white disabled:opacity-40"
           >
             Перейти к заявке
@@ -703,6 +853,10 @@ export const RequestInvitePage = ({
   const submit = async () => {
     if (!email.trim() || (!existingAccount && !name.trim())) {
       setError("Укажите имя и почту");
+      return;
+    }
+    if (!existingAccount) {
+      await sendEmailCode("bind");
       return;
     }
     const passwordError = validatePassword(password);
@@ -722,13 +876,7 @@ export const RequestInvitePage = ({
         "elestet-pending-request-profile",
         JSON.stringify({ name: name.trim(), email: email.trim() }),
       );
-      if (existingAccount) await onSignIn({ email: email.trim(), password });
-      else
-        await onSignUp({
-          fullName: name.trim(),
-          email: email.trim(),
-          password,
-        });
+      await onSignIn({ email: email.trim(), password });
       const reservation = await reserveServiceRequestInvite(
         token,
         name.trim(),
@@ -762,8 +910,7 @@ export const RequestInvitePage = ({
           {existingAccount ? "Вход в ELESTET" : "Данные заявителя"}
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Для продолжения установите пароль. Работа по клиентской ссылке
-          бесплатна.
+          {existingAccount ? "Введите пароль своей учётной записи." : "Подтвердите почту шестизначным кодом. Работа по клиентской ссылке бесплатна."}
         </p>
         {error && (
           <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">
@@ -821,7 +968,7 @@ export const RequestInvitePage = ({
               {name}
             </div>
           )}
-          <input
+          {existingAccount && <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -830,17 +977,7 @@ export const RequestInvitePage = ({
             }
             autoComplete={existingAccount ? "current-password" : "new-password"}
             className="w-full rounded-xl border px-3 py-2.5"
-          />
-          {!existingAccount && (
-            <input
-              type="password"
-              value={passwordAgain}
-              onChange={(e) => setPasswordAgain(e.target.value)}
-              placeholder="Повторите пароль"
-              autoComplete="new-password"
-              className="w-full rounded-xl border px-3 py-2.5"
-            />
-          )}
+          />}
           <button
             disabled={busy}
             onClick={() => void submit()}
@@ -850,7 +987,7 @@ export const RequestInvitePage = ({
               ? "Проверка…"
               : existingAccount
                 ? "Войти и открыть заявку"
-                : "Создать резерв и открыть заявку"}
+                : "Получить код на почту"}
           </button>
           {existingAccount && (
             <button

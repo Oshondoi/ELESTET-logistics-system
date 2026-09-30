@@ -1,5 +1,14 @@
 # Tech Context
 
+## Request invite and fulfillment v41 — 30.09.2026
+
+- Production Supabase contains `supabase/patch_request_invite_portal_v41.sql`; the post-apply `supabase/tests/request_invite_v41_smoke.sql` passed with a rollback of test data. The new frontend is local only; `npm run build` passed, but no deployment or manual OTP/device/hardware test is evidenced.
+- `src/services/requestService.ts` coordinates explicit `create_service_request_from_form`, work-draft open/save/heartbeat, invite reserve open/save/heartbeat, final submit/correction, recent executors, bulk delete/cancel, and version history. Stable request-draft device UUID is local to the browser device. FF drafts live in `service_request_work_drafts`; link reserves live in `service_request_invite_reserves.draft`, with `lease_device`/`lease_last_seen`. New RPC overloads require `p_device_id`; old overloads cannot overwrite or submit a currently leased draft.
+- `src/components/fulfillment/ServiceRequestsPanel.tsx` creates `R` only after Save and uses `RequestIntakeEditor.tsx` for manual/HID/serial/camera product-barcode input and concrete supplies/boxes. `FulfillmentElestetScanner.tsx` retains its KIZ mode and adds a separate barcode mode. `PipelineStageFloors.tsx` shows one floor per company stage and only enabled stages' steps; `FulfillmentPage.tsx` hides disabled steps in the opened batch.
+- `src/pages/RequestInvitePage.tsx` and `MyRequestDraftsPage.tsx` use the same intake editor; the link path verifies Supabase email OTP, creates a reserve after Auth verification, and keeps old drafts independent of later links. Existing-company link entry routes into FF without consuming `R-N` until Save. App routes `/request-invite/:token`, `/my-requests`, and `/client-request` are wired in `src/App.tsx`.
+- Server confirmation creates one `P` per store; the applicant stage of an external request is immediately done, executor stage follows acceptance, self-order has one active stage. `service_request_supply_archives` and `service_request_versions` retain prior confirmed content; correction updates declared next-stage data and keeps the same `P`. The present `fulfillment_reception_history` remains row-level and does **not** yet satisfy the agreed confirmed-result-only business journal.
+- Discussion `public-request-invite-auth-20260926` is active at revision 66. Earlier revision 64 was an encoding-damaged intermediate write and was repaired from the correct revision 65 content; revision 66 only removes orphan states of deleted rows, and revision 63 remains intact. No Supabase token, password or other secret is stored in repository files or Memory Bank.
+
 ## Discussion structural status engine — 26.09.2026
 
 - `src/components/admin/DiscussionsTab.tsx` разбирает содержимое в три независимых уровня: блок `##`, строки с чекбоксами и code-блоки, привязанные к блоку либо вложенной строке.
@@ -23,8 +32,8 @@
 - Production DB patches: `supabase/patch_tz_discussions.sql`, `supabase/patch_tz_discussion_item_states.sql`. Both are applied.
 - Production frontend discussion sequence continues through `14c47a7`, `b93c225`, `01906f3` and `31f8106`; the deployed asset containing the compact review UI was verified on `elestet.net`.
 - No Supabase personal access token is stored in repository files. Any token pasted into chat must be rotated by the owner when practical and must never be copied into Memory Bank, code, scripts or commits.
-- Product specification discussed in the initial active answer is documented separately in `memory-bank/components/intake-requests.md`; it is target design, not current fulfillment production behavior.
-- Revision workflow must treat the active discussion as one coherent snapshot: compute dependency impact, update every affected section in the same content save, scan for stale/conflicting terminology, then create one revision. Revision 9 currently contains 38 sections and the permanent rule in section 23.
+- The current request model, the applied SQL, local-only frontend and unresolved tests are distinguished in `memory-bank/components/intake-requests.md`; older initial answers are historical design, not current production behavior.
+- Revision workflow treats the active discussion as one coherent snapshot: compute dependency impact, update affected sections together and scan for stale/conflicting terminology. The former revision-9/38-section note is historical; the request discussion is at revision 66 with 17 sections on 30.09.2026.
 
 ## Current FBO Excel and WB box barcode work — 24.09.2026
 

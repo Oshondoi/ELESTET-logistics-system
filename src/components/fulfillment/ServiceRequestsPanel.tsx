@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ExecutorAccountSearchResult,
   ServiceRequest,
   ServiceRequestItemDraft,
+  RequestSupplyDraft,
   Store,
 } from "../../types";
 import {
@@ -10,18 +11,28 @@ import {
   assignServiceRequestResponsible,
   claimServiceRequestInvite,
   copyServiceRequest,
-  createServiceRequestDraft,
+  createServiceRequestFromForm,
   createServiceRequestInvite,
+  fetchRecentExecutorAccounts,
+  fetchServiceRequestCorrectionDraft,
+  fetchServiceRequestVersions,
+  getRequestDraftDeviceId,
+  heartbeatServiceRequestWorkDraft,
   fetchRequestBatchSummaries,
   fetchServiceRequests,
+  openServiceRequestWorkDraft,
   rejectServiceRequest,
+  removeServiceRequests,
   saveServiceRequestDraft,
+  saveServiceRequestWorkDraft,
   searchExecutorAccounts,
   startServiceRequestWork,
   submitServiceRequest,
   type RequestBatchSummary,
+  type ServiceRequestVersion,
 } from "../../services/requestService";
 import { createStoreInSupabase } from "../../services/storeService";
+import { RequestIntakeEditor } from "./RequestIntakeEditor";
 import {
   fetchOtkPerformers,
   type OtkPerformer,
@@ -30,6 +41,7 @@ import {
 interface Props {
   accountId: string;
   accountShortId: number | null;
+  accountName: string;
   stores: Store[];
   userEmail: string;
   userName: string;
@@ -41,6 +53,7 @@ interface Props {
   clientMode?: boolean;
   onStoreCreated?: (store: Store) => void;
   onBatchesChanged?: () => void;
+  onMyDrafts?: () => void;
 }
 
 type StoreDraft = {
@@ -48,6 +61,7 @@ type StoreDraft = {
   deliveryMode: "pickup" | "self_delivery";
   intakeMode: "bulk" | "catalog" | "barcodes" | "boxes";
   itemsText: string;
+  supplies: RequestSupplyDraft[];
 };
 
 const labels: Record<ServiceRequest["status"], string> = {
@@ -92,6 +106,7 @@ const itemsToLines = (items: ServiceRequestItemDraft[] | undefined) =>
 export const ServiceRequestsPanel = ({
   accountId,
   accountShortId,
+  accountName,
   stores,
   userEmail,
   userName,
@@ -103,11 +118,18 @@ export const ServiceRequestsPanel = ({
   clientMode = false,
   onStoreCreated,
   onBatchesChanged,
+  onMyDrafts,
 }: Props) => {
   const [requests, setRequests] = useState<ServiceRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<ServiceRequest | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(null);
+  const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([]);
+  const [requestFilter, setRequestFilter] = useState<"active" | "cancelled">("active");
+  const [directionFilter, setDirectionFilter] = useState<"all" | "incoming" | "outgoing">("all");
+  const [recentExecutors, setRecentExecutors] = useState<ExecutorAccountSearchResult[]>([]);
   const [title, setTitle] = useState("");
   const [name, setName] = useState(userName);
   const [email, setEmail] = useState(userEmail);
@@ -131,7 +153,12 @@ export const ServiceRequestsPanel = ({
     [],
   );
   const [viewingBatchesLoading, setViewingBatchesLoading] = useState(false);
+  const [viewingVersions, setViewingVersions] = useState<ServiceRequestVersion[]>([]);
+  const [viewingVersionsLoading, setViewingVersionsLoading] = useState(false);
   const [performers, setPerformers] = useState<OtkPerformer[]>([]);
+  const [deviceId] = useState(getRequestDraftDeviceId);
+  const lastActivityRef = useRef(Date.now());
+  const editorHydratingRef = useRef(false);
 
   const load = async () => {
     setLoading(true);
@@ -146,6 +173,12 @@ export const ServiceRequestsPanel = ({
   };
   useEffect(() => {
     void load();
+  }, [accountId]);
+
+  useEffect(() => {
+    void fetchRecentExecutorAccounts(accountId)
+      .then(setRecentExecutors)
+      .catch(() => setRecentExecutors([]));
   }, [accountId]);
 
   useEffect(() => {
@@ -175,6 +208,17 @@ export const ServiceRequestsPanel = ({
   }, [viewing]);
 
   useEffect(() => {
+    if (!viewing) { setViewingVersions([]); return; }
+    let active = true;
+    setViewingVersionsLoading(true);
+    void fetchServiceRequestVersions(viewing.id)
+      .then((rows) => { if (active) setViewingVersions(rows); })
+      .catch((e) => { if (active) setError(e instanceof Error ? e.message : "Не удалось загрузить историю заявки"); })
+      .finally(() => { if (active) setViewingVersionsLoading(false); });
+    return () => { active = false; };
+  }, [viewing?.id]);
+
+  useEffect(() => {
     const timer = window.setTimeout(async () => {
       try {
         setExecutorResults(await searchExecutorAccounts(executorQuery));
@@ -185,32 +229,70 @@ export const ServiceRequestsPanel = ({
     return () => window.clearTimeout(timer);
   }, [executorQuery]);
 
-  const openEditor = (request: ServiceRequest) => {
-    setEditing(request);
-    setTitle(request.title);
-    setName(request.applicant_name || userName);
-    setEmail(request.applicant_email || userEmail);
-    setComment(request.comment || "");
-    setExecutor(
-      request.executor_account_id
-        ? {
-            id: request.executor_account_id,
-            short_id: request.executor_company_short_id ?? 0,
-            name: request.executor_company_name ?? "",
-          }
-        : null,
-    );
-    setExecutorQuery("");
-    setInviteUrl("");
-    setStoreDrafts(
-      (request.stores ?? []).map((row) => ({
+  const openEditor = async (request: ServiceRequest) => {
+    setError("");
+    editorHydratingRef.current = true;
+    try {
+      const work = request.status === "draft"
+        ? await openServiceRequestWorkDraft(request.id, deviceId)
+        : request.status === "submitted" || request.status === "accepted"
+          ? await fetchServiceRequestCorrectionDraft(request.id)
+          : {};
+      setCreating(false);
+      setTitle(work.title ?? request.title);
+      setName(work.applicantName ?? request.applicant_name ?? userName);
+      setEmail(work.applicantEmail ?? request.applicant_email ?? userEmail);
+      setComment(work.comment ?? request.comment ?? "");
+      const executorId = work.executorAccountId ?? request.executor_account_id;
+      setExecutor(work.executor ?? (executorId ? {
+        id: executorId,
+        short_id: request.executor_company_short_id ?? 0,
+        name: request.executor_company_name ?? "",
+      } : null));
+      setExecutorQuery("");
+      setInviteUrl("");
+      setStoreDrafts(work.stores ? work.stores.map((row) => ({
+        storeId: row.store_id,
+        deliveryMode: row.delivery_mode,
+        intakeMode: row.intake_mode,
+        itemsText: itemsToLines((row.payload.items ?? []) as ServiceRequestItemDraft[]),
+        supplies: (row.payload.supplies ?? []) as RequestSupplyDraft[],
+      })) : (request.stores ?? []).map((row) => ({
         storeId: row.applicant_store_id,
         deliveryMode: row.delivery_mode,
         intakeMode: row.intake_mode,
         itemsText: itemsToLines(row.payload.items),
-      })),
-    );
+        supplies: row.payload.supplies ?? [],
+      })));
+      setActiveStore(0);
+      lastActivityRef.current = Date.now();
+      setEditing(request);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось открыть черновик");
+    } finally {
+      window.setTimeout(() => { editorHydratingRef.current = false; }, 0);
+    }
+  };
+
+  const openNew = (defaultExecutor?: ExecutorAccountSearchResult, inviteToken?: string) => {
+    setEditing(null);
+    setCreating(true);
+    setTitle("");
+    setName(userName);
+    setEmail(userEmail);
+    setComment("");
+    setExecutor(defaultExecutor ?? null);
+    setPendingInviteToken(inviteToken ?? null);
+    setExecutorQuery("");
+    setStoreDrafts([]);
     setActiveStore(0);
+    setError("");
+  };
+
+  const closeEditor = () => {
+    setCreating(false);
+    setEditing(null);
+    setPendingInviteToken(null);
   };
 
   useEffect(() => {
@@ -229,18 +311,10 @@ export const ServiceRequestsPanel = ({
           accountId,
           replaceExisting,
         );
-        const draft = await createServiceRequestDraft(
-          accountId,
-          invitedExecutor.id,
-        );
         localStorage.removeItem("elestet-pending-request-invite");
         localStorage.removeItem("elestet-pending-request-account");
         localStorage.removeItem("elestet-pending-request-replace");
-        openEditor(draft);
-        setExecutor(invitedExecutor);
-        setExecutorQuery(
-          `C-${invitedExecutor.short_id} · ${invitedExecutor.name}`,
-        );
+        openNew(invitedExecutor, token);
       } catch (inviteError) {
         setError(
           inviteError instanceof Error
@@ -253,19 +327,13 @@ export const ServiceRequestsPanel = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId]);
 
-  const createDraft = async () => {
-    setError("");
-    try {
-      openEditor(await createServiceRequestDraft(accountId));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Не удалось создать заявку");
-    }
-  };
+  const createDraft = () => openNew();
 
   const resolvedExecutorId = executor?.id ?? editing?.executor_account_id ?? "";
   const payload = () => ({
     title,
     executorAccountId: resolvedExecutorId,
+    executor,
     applicantName: name,
     applicantEmail: email,
     comment,
@@ -274,22 +342,85 @@ export const ServiceRequestsPanel = ({
       position,
       delivery_mode: store.deliveryMode,
       intake_mode: store.intakeMode,
-      payload: { items: linesToItems(store.itemsText) },
+      payload: { items: linesToItems(store.itemsText), supplies: store.supplies },
     })),
   });
 
+  const persistWorkDraft = async (requestId: string, value: ReturnType<typeof payload>) => {
+    try {
+      await saveServiceRequestWorkDraft(requestId, deviceId, value);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (!message.includes("истекло")) throw error;
+      await openServiceRequestWorkDraft(requestId, deviceId);
+      await saveServiceRequestWorkDraft(requestId, deviceId, value);
+    }
+  };
+
+  useEffect(() => {
+    if (!editing || editing.status !== "draft" || saving || editorHydratingRef.current) return;
+    const timer = window.setTimeout(() => {
+      void persistWorkDraft(editing.id, payload())
+        .catch((e) => setError(e instanceof Error ? e.message : "Не удалось автоматически сохранить черновик"));
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [editing?.id, editing?.status, deviceId, title, name, email, comment, executor, storeDrafts, saving]);
+
+  useEffect(() => {
+    if (!editing || editing.status !== "draft") return;
+    const timer = window.setInterval(() => {
+      if (Date.now() - lastActivityRef.current < 120_000) {
+        void heartbeatServiceRequestWorkDraft(editing.id, deviceId)
+          .then((active) => { if (!active) setError("Право редактирования передано другому устройству. Откройте заявку заново."); })
+          .catch(() => setError("Не удалось продлить право редактирования черновика"));
+      }
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [editing?.id, editing?.status, deviceId]);
+
   const save = async (submit: boolean) => {
-    if (!editing) return;
+    if (!editing && !creating) return;
+    if (!resolvedExecutorId) {
+      setError("Выберите исполнителя");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
-      await saveServiceRequestDraft(editing.id, payload());
-      if (submit) await submitServiceRequest(editing.id);
-      setEditing(null);
+      if (creating) {
+        await createServiceRequestFromForm(accountId, payload(), pendingInviteToken);
+      } else if (editing) {
+        if (editing.status === "draft")
+          await persistWorkDraft(editing.id, payload());
+        else
+          await saveServiceRequestDraft(editing.id, payload());
+        if (submit) await submitServiceRequest(editing.id);
+      }
+      closeEditor();
       await load();
       if (submit) onBatchesChanged?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось сохранить заявку");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeRequests = async (ids: string[]) => {
+    if (!ids.length) return;
+    const selected = requests.filter((request) => ids.includes(request.id));
+    const deleting = selected.filter((request) => request.current_version === 0).length;
+    const cancelling = selected.length - deleting;
+    if (!window.confirm(`Удалить черновиков: ${deleting}. Отменить подтверждённых заявок: ${cancelling}. Продолжить?`)) return;
+    setSaving(true);
+    setError("");
+    try {
+      await removeServiceRequests(ids);
+      setSelectedRequestIds([]);
+      await load();
+      onBatchesChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось удалить заявки");
     } finally {
       setSaving(false);
     }
@@ -348,6 +479,7 @@ export const ServiceRequestsPanel = ({
         deliveryMode: "self_delivery",
         intakeMode: "bulk",
         itemsText: "",
+        supplies: [],
       },
     ]);
     setActiveStore(storeDrafts.length);
@@ -380,6 +512,13 @@ export const ServiceRequestsPanel = ({
       ),
     [stores, storeDrafts],
   );
+  const visibleRequests = useMemo(() => requests.filter((request) =>
+    (requestFilter === "cancelled" ? request.status === "cancelled" : request.status !== "cancelled") &&
+    (directionFilter === "all" || (directionFilter === "incoming"
+      ? request.executor_account_id === accountId
+      : request.applicant_account_id === accountId))
+  ), [requests, requestFilter, directionFilter, accountId]);
+  const suggestedExecutors = executorQuery.trim() ? executorResults : recentExecutors;
   const currentStoreDraft = storeDrafts[activeStore];
   const currentStore = currentStoreDraft
     ? stores.find((store) => store.id === currentStoreDraft.storeId)
@@ -407,6 +546,7 @@ export const ServiceRequestsPanel = ({
           </p>
         </div>
         <div className="flex gap-2">
+          {onMyDrafts && <button type="button" onClick={onMyDrafts} className="rounded-2xl border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">Мои сохранённые черновики</button>}
           {canCreateLink && !clientMode && (
             <button
               type="button"
@@ -427,7 +567,7 @@ export const ServiceRequestsPanel = ({
           {canCreate && (
             <button
               type="button"
-              onClick={() => void createDraft()}
+              onClick={createDraft}
               className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
               + Новая заявка
@@ -477,15 +617,33 @@ export const ServiceRequestsPanel = ({
           </div>
         </div>
       )}
-      {requests.length === 0 ? (
+      <div className="flex w-fit gap-1 rounded-2xl bg-slate-100 p-1 text-sm">
+        <button type="button" onClick={() => { setRequestFilter("active"); setSelectedRequestIds([]); }} className={`rounded-xl px-3 py-1.5 ${requestFilter === "active" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>Активные</button>
+        <button type="button" onClick={() => { setRequestFilter("cancelled"); setSelectedRequestIds([]); }} className={`rounded-xl px-3 py-1.5 ${requestFilter === "cancelled" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"}`}>Отменённые</button>
+      </div>
+      <div className="flex w-fit gap-1 rounded-2xl bg-white p-1 text-sm ring-1 ring-slate-100">
+        {(["all", "outgoing", "incoming"] as const).map((value) => <button key={value} type="button" onClick={() => { setDirectionFilter(value); setSelectedRequestIds([]); }} className={`rounded-xl px-3 py-1.5 ${directionFilter === value ? "bg-blue-50 text-blue-700" : "text-slate-500"}`}>{value === "all" ? "Все" : value === "outgoing" ? "Исходящие" : "Входящие"}</button>)}
+      </div>
+      {visibleRequests.length === 0 ? (
         <div className="rounded-3xl bg-white py-16 text-center text-sm text-slate-400">
           Заявок пока нет
         </div>
       ) : (
         <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-100">
+          {selectedRequestIds.length > 0 && canCreate && (
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2 text-sm">
+              <span>Выбрано: {selectedRequestIds.length}</span>
+              <button type="button" disabled={saving} onClick={() => void removeRequests(selectedRequestIds)} className="rounded-xl bg-rose-50 px-3 py-1.5 text-rose-600 disabled:opacity-50">
+                Удалить выбранные
+              </button>
+            </div>
+          )}
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-[11px] uppercase text-slate-500">
               <tr>
+                <th className="px-4 py-3">
+                  <input type="checkbox" aria-label="Выбрать все заявки" checked={visibleRequests.filter((request) => request.applicant_account_id === accountId && request.status !== "cancelled").length > 0 && visibleRequests.filter((request) => request.applicant_account_id === accountId && request.status !== "cancelled").every((request) => selectedRequestIds.includes(request.id))} onChange={(event) => setSelectedRequestIds(event.target.checked ? visibleRequests.filter((request) => request.applicant_account_id === accountId && request.status !== "cancelled").map((request) => request.id) : [])} disabled={!canCreate} />
+                </th>
                 <th className="px-4 py-3">ID</th>
                 <th className="px-4 py-3">Заявка</th>
                 <th className="px-4 py-3">Магазины / партии</th>
@@ -495,10 +653,13 @@ export const ServiceRequestsPanel = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {requests.map((request) => {
+              {visibleRequests.map((request) => {
                 const isApplicant = request.applicant_account_id === accountId;
                 return (
-                  <tr key={request.id} className="hover:bg-slate-50/70">
+                  <tr key={request.id} className="cursor-pointer hover:bg-slate-50/70" onClick={() => setViewing(request)}>
+                    <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}>
+                      {canCreate && isApplicant && request.status !== "cancelled" && <input type="checkbox" aria-label={`Выбрать заявку R-${request.short_id}`} checked={selectedRequestIds.includes(request.id)} onChange={(event) => setSelectedRequestIds((current) => event.target.checked ? [...current, request.id] : current.filter((id) => id !== request.id))} />}
+                    </td>
                     <td className="px-4 py-3 font-mono text-xs">
                       <span className="text-violet-500">
                         C-
@@ -513,9 +674,9 @@ export const ServiceRequestsPanel = ({
                         {request.title || `Заявка R-${request.short_id}`}
                       </p>
                       <p className="text-xs text-slate-400">
-                        {isApplicant
-                          ? "Исходящая"
-                          : `Заказчик: ${request.applicant_name || "—"}`}
+                        {isApplicant && request.executor_account_id === accountId
+                          ? "Исходящая · Входящая"
+                          : isApplicant ? "Исходящая" : `Заказчик: ${request.applicant_name || "—"}`}
                       </p>
                     </td>
                     <td className="px-4 py-3">
@@ -543,18 +704,13 @@ export const ServiceRequestsPanel = ({
                           {request.rejection_comment}
                         </p>
                       )}
+                      {request.status === "cancelled" && <p className="mt-1 text-xs text-rose-500">Отменено заказчиком</p>}
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-400">
                       {new Date(request.created_at).toLocaleDateString("ru-RU")}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}>
                       <div className="flex flex-wrap justify-end gap-1">
-                        <button
-                          onClick={() => setViewing(request)}
-                          className="rounded-xl border px-2.5 py-1.5 text-xs"
-                        >
-                          Просмотр
-                        </button>
                         {canCreate &&
                           isApplicant &&
                           ["draft", "submitted", "accepted"].includes(
@@ -565,10 +721,15 @@ export const ServiceRequestsPanel = ({
                               className="rounded-xl border px-2.5 py-1.5 text-xs"
                             >
                               {request.status === "draft"
-                                ? "Открыть"
+                                ? "Редактировать"
                                 : "Корректировка"}
                             </button>
                           )}
+                        {canCreate && isApplicant && request.status !== "cancelled" && (
+                          <button type="button" disabled={saving} onClick={() => void removeRequests([request.id])} className="rounded-xl border border-rose-200 px-2.5 py-1.5 text-xs text-rose-600 disabled:opacity-50">
+                            Удалить
+                          </button>
+                        )}
                         {canCreate &&
                           isApplicant &&
                           request.status !== "draft" && (
@@ -673,34 +834,41 @@ export const ServiceRequestsPanel = ({
         </div>
       )}
 
-      {editing && (
+      {(editing || creating) && (
         <div
           className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 p-4"
-          onMouseDown={() => !saving && setEditing(null)}
+          onMouseDown={() => !saving && closeEditor()}
         >
           <div
-            className="max-h-[94vh] w-full max-w-4xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl"
+            className="max-h-[94vh] w-full max-w-4xl overflow-y-auto rounded-3xl bg-white shadow-2xl"
             onMouseDown={(e) => e.stopPropagation()}
+            onChangeCapture={() => { lastActivityRef.current = Date.now(); }}
+            onKeyDown={() => { lastActivityRef.current = Date.now(); }}
           >
-            <div className="flex justify-between">
+            <div className="flex justify-between border-b border-slate-100 px-6 py-5">
               <div>
-                <h2 className="text-lg font-semibold">
-                  R-{editing.short_id} ·{" "}
-                  {editing.current_version ? "Корректировка" : "Новая заявка"}
+                <h2 className="flex items-center gap-3 text-lg font-semibold text-slate-800">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-blue-600">+</span>
+                  {creating ? "Новая заявка" : `R-${editing?.short_id} · ${editing?.current_version ? "Корректировка" : "Редактирование заявки"}`}
                 </h2>
                 <p className="text-xs text-slate-400">
-                  Черновик сохраняется в БД, в журнал попадёт только
-                  подтверждение
+                  {creating
+                    ? "Номер R появится только после сохранения. Товары добавляются внутри заявки."
+                    : "Наполнение сохраняется в отдельном черновике БД; в журнал попадает подтверждение."}
                 </p>
               </div>
               <button
-                onClick={() => setEditing(null)}
+                onClick={closeEditor}
                 className="h-8 w-8 rounded-xl text-slate-400 hover:bg-slate-100"
               >
                 ×
               </button>
             </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 px-6 pt-5 sm:grid-cols-2">
+              <label className="text-xs text-slate-500">
+                Отправитель
+                <input value={`C-${accountShortId ?? "—"} · ${editing?.applicant_company_name ?? accountName}`} readOnly className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500" />
+              </label>
               <label className="text-xs text-slate-500">
                 Название
                 <input
@@ -712,7 +880,7 @@ export const ServiceRequestsPanel = ({
               <label className="text-xs text-slate-500">
                 Исполнитель: C-ID или название
                 <input
-                  disabled={editing.current_version > 0}
+                  disabled={(editing?.current_version ?? 0) > 0}
                   value={
                     executor
                       ? `C-${executor.short_id} · ${executor.name}`
@@ -724,10 +892,11 @@ export const ServiceRequestsPanel = ({
                   }}
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm disabled:bg-slate-50"
                 />
-                {!executor && executorResults.length > 0 && (
+                {!executor && suggestedExecutors.length > 0 && (
                   <div className="relative">
                     <div className="absolute z-10 mt-1 w-full rounded-xl border bg-white p-1 shadow-xl">
-                      {executorResults.map((result) => (
+                      {!executorQuery.trim() && <p className="px-3 py-1 text-xs text-slate-400">Работали вместе</p>}
+                      {suggestedExecutors.map((result) => (
                         <button
                           key={result.id}
                           onClick={() => {
@@ -746,9 +915,9 @@ export const ServiceRequestsPanel = ({
               <label className="text-xs text-slate-500">
                 Имя заявителя
                 <input
-                  disabled={editing.current_version > 0}
+                  disabled={(editing?.current_version ?? 0) > 0}
                   title={
-                    editing.current_version > 0
+                    (editing?.current_version ?? 0) > 0
                       ? "Меняется отдельным подтверждаемым действием"
                       : undefined
                   }
@@ -760,9 +929,9 @@ export const ServiceRequestsPanel = ({
               <label className="text-xs text-slate-500">
                 Почта
                 <input
-                  disabled={editing.current_version > 0}
+                  disabled={(editing?.current_version ?? 0) > 0}
                   title={
-                    editing.current_version > 0
+                    (editing?.current_version ?? 0) > 0
                       ? "Меняется отдельным подтверждаемым действием"
                       : undefined
                   }
@@ -773,7 +942,7 @@ export const ServiceRequestsPanel = ({
                 />
               </label>
             </div>
-            <label className="mt-3 block text-xs text-slate-500">
+            <label className="mt-3 block px-6 text-xs text-slate-500">
               Комментарий
               <textarea
                 value={comment}
@@ -782,7 +951,7 @@ export const ServiceRequestsPanel = ({
                 className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
               />
             </label>
-            <div className="mt-4 rounded-2xl border border-slate-200 p-3">
+            {!creating && <div className="mx-6 mt-4 rounded-2xl border border-slate-200 p-3">
               <div className="flex flex-wrap items-center gap-2">
                 {storeDrafts.map((draft, index) => {
                   const store = stores.find(
@@ -799,6 +968,7 @@ export const ServiceRequestsPanel = ({
                   );
                 })}
                 <select
+                  disabled={(editing?.current_version ?? 0) > 0}
                   value=""
                   onChange={(e) => addStore(e.target.value)}
                   className="rounded-xl border px-2 py-2 text-xs"
@@ -828,6 +998,7 @@ export const ServiceRequestsPanel = ({
                   <option value="other">Другое</option>
                 </select>
                 <button
+                  disabled={(editing?.current_version ?? 0) > 0}
                   onClick={() => void createStore()}
                   className="rounded-xl border px-3 text-sm"
                 >
@@ -839,6 +1010,7 @@ export const ServiceRequestsPanel = ({
                   <div className="flex items-center justify-between">
                     <p className="font-medium">{currentStore?.name}</p>
                     <button
+                      disabled={(editing?.current_version ?? 0) > 0}
                       onClick={() => {
                         setStoreDrafts((rows) =>
                           rows.filter((_, index) => index !== activeStore),
@@ -900,36 +1072,25 @@ export const ServiceRequestsPanel = ({
                       </select>
                     </label>
                   </div>
-                  <label className="block text-xs text-slate-500">
-                    Товары: баркод; название; количество; артикул
-                    <textarea
-                      rows={7}
-                      value={currentStoreDraft.itemsText}
-                      onChange={(e) =>
-                        setStoreDrafts((rows) =>
-                          rows.map((row, index) =>
-                            index === activeStore
-                              ? { ...row, itemsText: e.target.value }
-                              : row,
-                          ),
-                        )
-                      }
-                      className="mt-1 w-full rounded-xl border px-3 py-2 font-mono text-xs"
-                      placeholder="4601234567890; Футболка; 25; ART-1"
-                    />
-                  </label>
+                  <RequestIntakeEditor
+                    itemsText={currentStoreDraft.itemsText}
+                    onItemsTextChange={(value) => { lastActivityRef.current = Date.now(); setStoreDrafts((rows) => rows.map((row, index) => index === activeStore ? { ...row, itemsText: value } : row)); }}
+                    supplies={currentStoreDraft.supplies}
+                    onSuppliesChange={(value) => { lastActivityRef.current = Date.now(); setStoreDrafts((rows) => rows.map((row, index) => index === activeStore ? { ...row, supplies: value } : row)); }}
+                    boxesMode={currentStoreDraft.intakeMode === "boxes"}
+                  />
                 </div>
               )}
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
+            </div>}
+            <div className="mt-5 flex justify-end gap-2 border-t border-slate-100 px-6 py-5">
               <button
-                disabled={saving}
+                disabled={saving || !resolvedExecutorId}
                 onClick={() => void save(false)}
                 className="rounded-2xl border px-4 py-2 text-sm"
               >
-                Сохранить черновик
+                {creating ? "Сохранить заявку" : "Сохранить черновик"}
               </button>
-              <button
+              {!creating && <button
                 disabled={
                   saving || !resolvedExecutorId || storeDrafts.length === 0
                 }
@@ -943,8 +1104,8 @@ export const ServiceRequestsPanel = ({
                 }
                 className="rounded-2xl bg-blue-600 px-5 py-2 text-sm font-medium text-white disabled:bg-slate-300"
               >
-                Подтвердить и отправить
-              </button>
+                {(editing?.current_version ?? 0) > 0 ? "Подтвердить корректировку" : "Подтвердить и отправить"}
+              </button>}
             </div>
           </div>
         </div>
@@ -1019,6 +1180,22 @@ export const ServiceRequestsPanel = ({
                   </div>
                 );
               })}
+            </div>
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Журнал подтверждений</p>
+              {viewingVersionsLoading ? <p className="mt-2 text-xs text-slate-400">Загрузка истории…</p>
+                : viewingVersions.length === 0 ? <p className="mt-2 text-xs text-slate-400">Подтверждений ещё нет</p>
+                : <div className="mt-2 space-y-2">{viewingVersions.map((version) => <details key={version.id} className="rounded-xl border border-slate-200 px-3 py-2 text-xs">
+                  <summary className="cursor-pointer font-medium text-slate-700">Версия {version.version} · {version.event_type} · {new Date(version.confirmed_at).toLocaleString("ru-RU")}</summary>
+                  <div className="mt-2 space-y-2 text-slate-600">{(version.snapshot.stores ?? []).map((store) => <div key={store.id} className="rounded-lg bg-slate-50 p-2">
+                    <p className="font-medium">Магазин · {store.id.slice(0, 8)}</p>
+                    {(store.payload?.items ?? []).map((item, index) => <p key={`${item.barcode}-${index}`} className="mt-1 font-mono">{item.barcode || item.name || "Товар"} · {item.qty} шт.</p>)}
+                    {(store.payload?.supplies ?? []).map((supply) => <div key={supply.key} className="mt-2 border-t pt-2">
+                      <p>Поставка: {supply.warehouse_name}</p>
+                      {supply.boxes.map((box, index) => <p key={box.key} className="font-mono">Короб №{index + 1}: {box.items.map((item) => `${item.barcode} × ${item.qty}`).join(", ")}</p>)}
+                    </div>)}
+                  </div>)}</div>
+                </details>)}</div>}
             </div>
             <div className="mt-4 border-t border-slate-100 pt-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">

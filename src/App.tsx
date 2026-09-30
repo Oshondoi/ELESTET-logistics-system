@@ -39,6 +39,7 @@ import { getActiveOverride } from "./services/accessOverrideService";
 import { AuthPage } from "./pages/AuthPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { RequestInvitePage } from "./pages/RequestInvitePage";
+import { MyRequestDraftsPage } from "./pages/MyRequestDraftsPage";
 import { HomePage } from "./pages/HomePage";
 import { FulfillmentPage } from "./pages/FulfillmentPage";
 import { ProductsPage } from "./pages/ProductsPage";
@@ -800,6 +801,7 @@ function App() {
 
   useEffect(() => {
     window.localStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, activePage);
+    if (location.pathname === "/my-requests" || location.pathname === "/client-request") return;
     const route = PAGE_ROUTES[activePage];
     // Не сбрасываем URL партии если уже на /fulfillment/*
     if (
@@ -938,6 +940,39 @@ function App() {
         Загрузка компании...
       </div>
     );
+  }
+
+  if (accounts.length === 0) {
+    return <MyRequestDraftsPage
+      onMaterialized={(accountId) => {
+        window.localStorage.setItem(ACTIVE_ACCOUNT_STORAGE_KEY, accountId);
+        window.location.assign("/client-request");
+      }}
+      onSignOut={() => { void signOut(); }}
+      onCreateCompany={() => {
+        const name = window.prompt("Название компании");
+        if (!name?.trim()) return;
+        void createAccount(name.trim())
+          .then((account) => {
+            window.localStorage.setItem(ACTIVE_ACCOUNT_STORAGE_KEY, account.id);
+            window.location.assign("/");
+          })
+          .catch((error) => window.alert(error instanceof Error ? error.message : "Не удалось создать компанию"));
+      }}
+    />;
+  }
+
+  if (location.pathname === "/my-requests" && session) {
+    return <MyRequestDraftsPage
+      accounts={accounts.map(({ id, short_id, name }) => ({ id, short_id: short_id ?? null, name }))}
+      onMaterialized={(accountId) => {
+        window.localStorage.setItem(ACTIVE_ACCOUNT_STORAGE_KEY, accountId);
+        window.location.assign("/client-request");
+      }}
+      onSignOut={() => { void signOut(); }}
+      onCreateCompany={() => {}}
+      onBack={() => navigate("/client-request")}
+    />;
   }
 
   const handleCreateAccount = async (name: string) => {
@@ -1082,6 +1117,7 @@ function App() {
             <ServiceRequestsPanel
               accountId={activeAccount.id}
               accountShortId={activeAccount.short_id ?? null}
+              accountName={activeAccount.name}
               stores={stores}
               userEmail={session.user.email ?? ""}
               userName={profileUserName || session.user.email || ""}
@@ -1093,6 +1129,7 @@ function App() {
               }
               canCreateLink={false}
               clientMode
+              onMyDrafts={() => navigate("/my-requests")}
               onStoreCreated={appendStore}
             />
           )}

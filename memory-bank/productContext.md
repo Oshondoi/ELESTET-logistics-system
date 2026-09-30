@@ -57,13 +57,12 @@ The product is being created to manage logistics operations for shipments going 
 - Numeric sticky navigation is required because an active architectural answer can contain more than twenty blocks. The same interaction exists in the live answer and its history.
 - Agreement colors have distinct meanings: amber is unresolved, green is agreed, light blue is content newly introduced by the current textual revision.
 
-## Planned client intake workflow
+## Client intake workflow — implementation boundary
 
-- The planned client-facing flow introduces a separate request entity before a fulfillment batch. Starting actual reception creates one linked batch, copies the client's declaration into `Заявлено`, and records scans/counts separately in `Принято`.
-- Actual reception is location-independent and supports both loose goods and goods already distributed into ready boxes. In the ready-box mode the operator scans a physical box and then every product barcode directly into it.
-- The source request, all revisions and the client/recipient snapshots remain auditable after conversion. A completed batch may also be transferred to another company as a new incoming request without destroying the sender's batch.
-- Client access combines short routes with secure authentication/invitation tokens; public company/request IDs are never authorization secrets. One client identity covers multiple request links instead of one password per request.
-- Full target rules, statuses, permissions boundaries, documents, signatures, payments and unresolved decisions are in `memory-bank/components/intake-requests.md`. This workflow is design-only until its schema/API/UI are implemented and deployed.
+- The client request `R` is separate from a fulfillment batch. Confirming recorded goods creates one durable `P` per store before executor acceptance. Applicant declaration becomes `Заявлено`; the executor's later physical reception independently records `Принято` and may take place at pickup or warehouse.
+- The same party can continue through several company stages without a new `P-N`. Loose goods and goods already distributed into concrete boxes are input modes; an empty supply or box cannot be confirmed.
+- The request and its confirmed versions remain auditable. Auth identity is not owned by one public link: replacement or expiry does not erase that user's independent drafts. An email OTP verifies link binding; public `C/R/P` identifiers are never authorization secrets.
+- The v41 server migration is applied, but the new frontend remains local and still needs user end-to-end testing and publication. Current rules, statuses, permissions boundaries and open questions are in `memory-bank/components/intake-requests.md` and the live discussion.
 
 ## Target Users
 - Logistics operators
@@ -129,7 +128,7 @@ The product is being created to manage logistics operations for shipments going 
 - Клиент является первым реальным production-клиентом ELESTET и использует тариф `Операционный` по индивидуальной цене `12 000 сом` в месяц вместо стандартных `17 000 сом`.
 - Текущая скидка действует по `31.12.2026` включительно. Если до этой даты клиент приведёт ELESTET хотя бы одного реального платящего клиента/подписчика, цена `12 000 сом` для тарифа `Операционный` закрепляется за ним бессрочно. Если условие не выполнено, индивидуальная скидка заканчивается с `01.01.2027`.
 - Это индивидуальное коммерческое условие конкретной компании, а не новый глобальный тариф и не изменение `plan_configs`. При будущей автоматизации его нужно хранить как account-level договорное условие с датой, критерием, подтверждением выполнения и аудитом, а не зашивать в frontend.
-- Ключевой операционный сценарий клиента: при заборе товара сотрудник может провести полную фактическую приёмку на месте — сканировать товары внутри коробов и сами короба, зафиксировать фактические количества и тем самым перевести согласованную заявку в рабочую партию. Если клиент отправил товар самостоятельно, та же единая фактическая приёмка выполняется при встрече товара на складе. Отдельная обязательная «вторая складская приёмка» после уже завершённой выездной приёмки не требуется; место выполнения выбирает компания по своему процессу.
+- Ключевой операционный сценарий клиента: заявитель подтверждает внесённые в `R` товары, что создаёт одну постоянную `P` на магазин и завершённую первую стадию заявителя; после принятия заявки исполнитель продолжает ту же `P` в своей стадии. Фактическую приёмку исполнитель может провести при заборе товара на месте либо после прибытия на склад: сканирует товары и короба и отдельно фиксирует `Принято`. При завершённой выездной приёмке не нужна обязательная повторная товарная приёмка на складе; новый интерфейс и оборудование пока ждут пользовательского теста.
 
 ### Платёжный поток (инфраструктура готова, MBusiness интеграция pending)
 1. SubscriptionPage → выбор тарифа (seller/operational/premium) + периода → «Оплатить»

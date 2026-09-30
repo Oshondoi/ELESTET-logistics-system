@@ -44,47 +44,48 @@ type Props = {
   disabled?: boolean
   onScan: (value: string) => void | Promise<void>
   onScannerModelChanged?: () => void
+  testMode?: 'kiz' | 'barcode'
 }
 
 function browserSerialApi(): BrowserSerialApi | null {
   return ((navigator as Navigator & { serial?: BrowserSerialApi }).serial ?? null)
 }
 
-function readSelectedScannerModel(): string {
+function readSelectedScannerModel(storageKey = DEVICE_PROFILE_KEY): string {
   try {
-    const saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
+    const saved = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as Record<string, unknown>
     return typeof saved.scannerModel === 'string' ? saved.scannerModel : ''
   } catch {
     return ''
   }
 }
 
-function readScannerTestStatus(): 'untested' | 'passed' | 'failed' {
+function readScannerTestStatus(storageKey = DEVICE_PROFILE_KEY): 'untested' | 'passed' | 'failed' {
   try {
-    const saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
+    const saved = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as Record<string, unknown>
     return saved.scannerTestStatus === 'passed' || saved.scannerTestStatus === 'failed' ? saved.scannerTestStatus : 'untested'
   } catch {
     return 'untested'
   }
 }
 
-function readScannerProfileKey(): string {
+function readScannerProfileKey(storageKey = DEVICE_PROFILE_KEY): string {
   try {
-    const saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
+    const saved = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as Record<string, unknown>
     return typeof saved.scannerProfileKey === 'string' ? saved.scannerProfileKey : ''
   } catch {
     return ''
   }
 }
 
-function saveSelectedScannerModel(scannerModel: string, scannerProfileKey: string) {
+function saveSelectedScannerModel(scannerModel: string, scannerProfileKey: string, storageKey = DEVICE_PROFILE_KEY) {
   let saved: Record<string, unknown> = {}
   try {
-    saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
+    saved = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as Record<string, unknown>
   } catch {
     saved = {}
   }
-  localStorage.setItem(DEVICE_PROFILE_KEY, JSON.stringify({
+  localStorage.setItem(storageKey, JSON.stringify({
     ...saved,
     scannerModel: scannerModel || null,
     scannerProfileKey: scannerProfileKey || null,
@@ -92,27 +93,28 @@ function saveSelectedScannerModel(scannerModel: string, scannerProfileKey: strin
   }))
 }
 
-function saveScannerTestStatus(status: 'untested' | 'passed' | 'failed', scannerProfileKey: string) {
+function saveScannerTestStatus(status: 'untested' | 'passed' | 'failed', scannerProfileKey: string, storageKey = DEVICE_PROFILE_KEY) {
   let saved: Record<string, unknown> = {}
   try {
-    saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) ?? '{}') as Record<string, unknown>
+    saved = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as Record<string, unknown>
   } catch {
     saved = {}
   }
-  localStorage.setItem(DEVICE_PROFILE_KEY, JSON.stringify({ ...saved, scannerProfileKey, scannerTestStatus: status }))
+  localStorage.setItem(storageKey, JSON.stringify({ ...saved, scannerProfileKey, scannerTestStatus: status }))
 }
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error || 'Неизвестная ошибка сканера')
 }
 
-export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerModelChanged }: Props) {
+export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerModelChanged, testMode = 'kiz' }: Props) {
+  const storageKey = testMode === 'barcode' ? 'elestet_request_barcode_scanner_profile_v1' : DEVICE_PROFILE_KEY
   const [models, setModels] = useState<ScannerModelProfile[]>(readCachedActiveScannerModels)
-  const [selectedName, setSelectedName] = useState(readSelectedScannerModel)
+  const [selectedName, setSelectedName] = useState(() => readSelectedScannerModel(storageKey))
   const [status, setStatus] = useState<SerialConnectionStatus>(() => browserSerialApi() ? 'disconnected' : 'unsupported')
   const [message, setMessage] = useState('')
-  const [testStatus, setTestStatus] = useState<'untested' | 'passed' | 'failed'>(readScannerTestStatus)
-  const [testedProfileKey, setTestedProfileKey] = useState(readScannerProfileKey)
+  const [testStatus, setTestStatus] = useState<'untested' | 'passed' | 'failed'>(() => readScannerTestStatus(storageKey))
+  const [testedProfileKey, setTestedProfileKey] = useState(() => readScannerProfileKey(storageKey))
   const [testArmed, setTestArmed] = useState(false)
   const [testMessage, setTestMessage] = useState('')
   const portRef = useRef<BrowserSerialPort | null>(null)
@@ -199,16 +201,18 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
               setTestArmed(false)
               const rawKiz = value.replace(/[\r\n\t]+$/g, '')
               const normalized = normalizeKizCode(rawKiz)
-              const validationError = kizValidationError(normalized)
+              const validationError = testMode === 'kiz'
+                ? kizValidationError(normalized)
+                : rawKiz.trim().length < 4 ? 'Штрихкод слишком короткий.' : null
               const unsupportedCharacter = /[^\x21-\x7E\x1D]/.test(normalized)
               const gsCount = Math.max(0, normalized.split('\u001d').length - 1)
               const nextStatus = validationError || unsupportedCharacter ? 'failed' : 'passed'
               const profileKey = `${profile.id}:${profile.profileVersion}`
-              saveScannerTestStatus(nextStatus, profileKey)
+              saveScannerTestStatus(nextStatus, profileKey, storageKey)
               setTestStatus(nextStatus)
               setTestedProfileKey(profileKey)
               setTestMessage(nextStatus === 'passed'
-                ? `Проверка пройдена: ${normalized.length} симв.; GS/FNC1: ${gsCount}.`
+                ? testMode === 'kiz' ? `Проверка пройдена: ${normalized.length} симв.; GS/FNC1: ${gsCount}.` : `Штрихкод принят: ${rawKiz.trim()}.`
                 : `${validationError || 'Сканер передал недопустимые символы.'} Получено: ${normalized.length} симв.; GS/FNC1: ${gsCount}.`)
             } else {
               await scanHandlerRef.current(value)
@@ -350,7 +354,7 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
           const nextProfile = models.find((model) => model.displayName === next) ?? null
           const nextProfileKey = nextProfile?.connectionType === 'web_serial' ? `${nextProfile.id}:${nextProfile.profileVersion}` : ''
           setSelectedName(next)
-          saveSelectedScannerModel(next, nextProfileKey)
+          saveSelectedScannerModel(next, nextProfileKey, storageKey)
           setTestStatus('untested')
           setTestedProfileKey(nextProfileKey)
           setTestMessage('')
@@ -383,7 +387,7 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
             }}
             className="rounded-lg bg-slate-900 px-3 py-1 text-xs font-bold text-white disabled:opacity-40"
           >
-            {testArmed ? 'Ожидаем КИЗ…' : effectiveTestStatus === 'passed' ? 'Проверить повторно' : 'Проверить чтение КИЗ'}
+            {testArmed ? (testMode === 'kiz' ? 'Ожидаем КИЗ…' : 'Ожидаем штрихкод…') : effectiveTestStatus === 'passed' ? 'Проверить повторно' : (testMode === 'kiz' ? 'Проверить чтение КИЗ' : 'Проверить штрихкод')}
           </button>
           <span className={`text-[11px] font-semibold ${effectiveTestStatus === 'passed' ? 'text-emerald-700' : effectiveTestStatus === 'failed' ? 'text-red-600' : 'text-slate-500'}`}>
             {effectiveTestStatus === 'passed' ? 'Настройки применены на этом устройстве' : effectiveTestStatus === 'failed' ? 'Проверка не пройдена' : 'Профиль выбран, проверка не выполнена'}

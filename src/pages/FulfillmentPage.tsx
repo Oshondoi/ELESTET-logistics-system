@@ -161,6 +161,7 @@ import { FulfillmentKizPairsModal } from "../components/fulfillment/FulfillmentK
 import { FulfillmentElestetScanner } from "../components/fulfillment/FulfillmentElestetScanner";
 import { FulfillmentBoxExcelDialog } from "../components/fulfillment/FulfillmentBoxExcelDialog";
 import { ServiceRequestsPanel } from "../components/fulfillment/ServiceRequestsPanel";
+import { PipelineStageFloors } from "../components/fulfillment/PipelineStageFloors";
 import { FulfillmentSupplyExcelExport } from "../components/fulfillment/FulfillmentSupplyExcelExport";
 import { downloadBoxesTemplate } from "../lib/wbExcelExport";
 import {
@@ -1024,7 +1025,6 @@ const BatchDetailModal = ({
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
 
   // Редактирование этапов партии
-  const [isSavingBatchStages, setIsSavingBatchStages] = useState(false);
 
   // Черновики для Маркировки/Коробов (ОТК теперь через журнал логов)
   const [stageDraft, setStageDraft] = useState<
@@ -1804,6 +1804,7 @@ const BatchDetailModal = ({
   // Только тот, кто является исполнителем активной стадии, может её завершить:
   // - если партнёр назначен — только партнёр; - если нет — только владелец
   const canCompletePipelineStage =
+    batch.status !== "cancelled" &&
     !isPipelineLoading &&
     activePipelineStage !== null &&
     (activePipelineStage.partner_account_id !== null
@@ -1831,6 +1832,8 @@ const BatchDetailModal = ({
   // Во время загрузки пайплайна — блокируем, чтобы не было временного доступа до получения данных
   const canManageStageData = isPipelineLoading
     ? false
+    : batch.status === "cancelled"
+      ? false
     : stagePartnerLocked
       ? false
       : displayPipelineStage
@@ -5083,27 +5086,6 @@ const BatchDetailModal = ({
     }
   };
 
-  // Изменить этапы партии (только будущие этапы)
-  const handleToggleBatchStage = async (
-    stage:
-      | "stage_otk"
-      | "stage_packaging"
-      | "stage_marking"
-      | "stage_packing"
-      | "stage_logistics",
-    value: boolean,
-  ) => {
-    setIsSavingBatchStages(true);
-    try {
-      const updated = await updateBatch(batch.id, { [stage]: value });
-      const newBatch = { ...batch, ...updated };
-      setBatch(newBatch);
-      onBatchUpdated(updated);
-    } finally {
-      setIsSavingBatchStages(false);
-    }
-  };
-
   // Сохранить черновик и перейти к следующему этапу
   const handleSaveStageAndAdvance = async () => {
     setIsSavingStage(true);
@@ -6700,81 +6682,34 @@ const BatchDetailModal = ({
         {/* Stage progress */}
         <div className="border-b border-slate-100 px-6 py-2">
           <div className="flex items-center overflow-x-auto [scrollbar-width:thin]">
-            {(
-              [
-                "reception",
-                "otk",
-                "packaging",
-                "marking",
-                "packing",
-                "logistics",
-              ] as FulfillmentStage[]
-            ).map((s, idx, arr) => {
+            {enabledStages.filter((stage) => stage !== "done").map((s, idx, arr) => {
               const stageIdx = STAGE_ORDER.indexOf(s);
               const currentStageIdx = STAGE_ORDER.indexOf(activeSubStage);
               const isDone = currentStageIdx > stageIdx;
               const isCurrent = activeSubStage === s;
               const isPast = stageIdx <= currentStageIdx;
               const isLast = idx === arr.length - 1;
-              // этап включён?
-              const keyMap: Record<string, keyof typeof batch> = {
-                otk: "stage_otk",
-                packaging: "stage_packaging",
-                marking: "stage_marking",
-                packing: "stage_packing",
-                logistics: "stage_logistics",
-              };
-              const stageKey = keyMap[s];
-              const isEnabled =
-                s === "reception" ||
-                !stageKey ||
-                (effectiveStageSource[stageKey] as boolean);
-              const canToggle =
-                !isPipelineLoading &&
-                pipelineStgs.length === 0 &&
-                canManage &&
-                batch.status === "active" &&
-                !isPast &&
-                !!stageKey &&
-                !isSavingBatchStages;
               const canReviewCompletedStage =
                 displayPipelineStage?.status === "done";
               const canReviewReceptionCorrection =
                 s === "reception" && isDone && canManageStageData;
 
+              const isClickable =
+                isPast &&
+                (canStageJump ||
+                  canReviewCompletedStage ||
+                  canReviewReceptionCorrection);
+
               const handleClick = () => {
-                if (
-                  isPast &&
-                  (canStageJump ||
-                    canReviewCompletedStage ||
-                    canReviewReceptionCorrection) &&
-                  isEnabled
-                ) {
+                if (isClickable) {
                   if (isDirty) {
                     setPendingSwitchStage(s);
                     return;
                   }
                   setViewStage(s);
-                } else if (canToggle) {
-                  void handleToggleBatchStage(
-                    stageKey as
-                      | "stage_otk"
-                      | "stage_packaging"
-                      | "stage_marking"
-                      | "stage_packing"
-                      | "stage_logistics",
-                    !isEnabled,
-                  );
                 }
               };
 
-              const isClickable =
-                (isPast &&
-                  (canStageJump ||
-                    canReviewCompletedStage ||
-                    canReviewReceptionCorrection) &&
-                  isEnabled) ||
-                canToggle;
               const isSelected = viewStage === s;
 
               return (
@@ -6786,54 +6721,24 @@ const BatchDetailModal = ({
                     type="button"
                     onClick={handleClick}
                     disabled={!isClickable}
-                    title={
-                      isPast &&
-                      (canStageJump ||
-                        canReviewCompletedStage ||
-                        canReviewReceptionCorrection) &&
-                      isEnabled
-                        ? `Перейти: ${STAGE_LABELS[s]}`
-                        : canToggle
-                          ? isEnabled
-                            ? "Отключить этап"
-                            : "Включить этап"
-                          : undefined
-                    }
+                    title={isClickable ? `Перейти: ${STAGE_LABELS[s]}` : undefined}
                     className={`flex h-9 shrink-0 items-center gap-2 rounded-xl px-2.5 text-xs font-medium transition
                       ${isClickable ? "cursor-pointer" : "cursor-default"}
-                      ${
-                        !isEnabled
-                          ? "border border-dashed border-slate-200 bg-white text-slate-300 line-through"
-                          : isDone
-                            ? `bg-emerald-50 text-emerald-700 ${isSelected ? "ring-2 ring-emerald-200" : "hover:bg-emerald-100"}`
-                            : isCurrent
-                              ? `bg-blue-50 text-blue-700 ${isSelected ? "ring-2 ring-blue-200" : "hover:bg-blue-100"}`
-                              : `bg-slate-50 text-slate-400 ${isSelected ? "ring-2 ring-slate-200" : canToggle ? "hover:bg-slate-100" : ""}`
-                      }`}
+                      ${isDone
+                        ? `bg-emerald-50 text-emerald-700 ${isSelected ? "ring-2 ring-emerald-200" : "hover:bg-emerald-100"}`
+                        : isCurrent
+                          ? `bg-blue-50 text-blue-700 ${isSelected ? "ring-2 ring-blue-200" : "hover:bg-blue-100"}`
+                          : `bg-slate-50 text-slate-400 ${isSelected ? "ring-2 ring-slate-200" : ""}`}`}
                   >
                     <span
                       className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold
-                      ${
-                        !isEnabled
-                          ? "border border-dashed border-slate-200 bg-white text-slate-300"
-                          : isDone
-                            ? "bg-emerald-500 text-white"
-                            : isCurrent
-                              ? "bg-blue-600 text-white"
-                              : "bg-slate-200 text-slate-500"
-                      }`}
+                      ${isDone
+                        ? "bg-emerald-500 text-white"
+                        : isCurrent
+                          ? "bg-blue-600 text-white"
+                          : "bg-slate-200 text-slate-500"}`}
                     >
-                      {!isEnabled ? (
-                        <svg
-                          viewBox="0 0 24 24"
-                          className="h-3.5 w-3.5"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                        >
-                          <line x1="5" y1="12" x2="19" y2="12" />
-                        </svg>
-                      ) : isDone ? (
+                      {isDone ? (
                         <svg
                           viewBox="0 0 24 24"
                           className="h-3.5 w-3.5"
@@ -6912,7 +6817,7 @@ const BatchDetailModal = ({
                       {s.status === "pending" && (
                         <span className="h-2 w-2 shrink-0 rounded-full bg-slate-300" />
                       )}
-                      <span className="max-w-[100px] truncate">{s.name}</span>
+                      <span className="max-w-[100px] truncate">{s.name} · C-{s.stage_company_short_id ?? "—"}</span>
                     </button>
                     {idx < pipelineStgs.length - 1 && (
                       <svg
@@ -16780,39 +16685,8 @@ const BatchDetailModal = ({
                 </div>
                 {/* Табы этапов */}
                 <div className="flex shrink-0 gap-1 border-b border-slate-100 px-4 py-2">
-                  {(
-                    [
-                      "reception",
-                      "otk",
-                      "packaging",
-                      "marking",
-                      "packing",
-                      "logistics",
-                    ] as FulfillmentStage[]
-                  ).map((key) => {
+                  {enabledStages.filter((stage) => stage !== "done").map((key) => {
                     const isActive = otkHistoryStageTab === key;
-                    const isEnabled =
-                      key === "reception" ||
-                      (effectiveStageSource[
-                        (
-                          {
-                            otk: "stage_otk",
-                            packaging: "stage_packaging",
-                            marking: "stage_marking",
-                            packing: "stage_packing",
-                            logistics: "stage_logistics",
-                          } as Record<string, keyof typeof batch>
-                        )[key] as keyof typeof batch
-                      ] as boolean);
-                    if (!isEnabled)
-                      return (
-                        <div
-                          key={key}
-                          className="flex shrink-0 items-center rounded-xl px-3 py-1.5 text-xs text-slate-300 cursor-not-allowed select-none"
-                        >
-                          {stageLabels[key]}
-                        </div>
-                      );
                     return (
                       <button
                         key={key}
@@ -21574,6 +21448,7 @@ export const FulfillmentPage = ({
         <ServiceRequestsPanel
           accountId={accountId}
           accountShortId={accountShortId}
+          accountName={accountName}
           stores={stores}
           userEmail={userEmail}
           userName={userName}
@@ -21582,6 +21457,7 @@ export const FulfillmentPage = ({
           canAssign={canAssignRequests}
           canStartWork={canStartRequestWork}
           canCreateLink={canCreateClientLink}
+          onMyDrafts={() => navigate("/my-requests")}
           onStoreCreated={onStoreCreated}
           onBatchesChanged={() => void load()}
         />
@@ -23066,6 +22942,7 @@ export const FulfillmentPage = ({
                                     : visibleStages.indexOf(currentSubStage);
                                 return (
                                   <div className="flex flex-col gap-2">
+                                    {pipelineStgs && pipelineStgs.length > 0 && <PipelineStageFloors stages={pipelineStgs} />}
                                     {pipelineStgs &&
                                       pipelineStgs.length > 0 &&
                                       (() => {
@@ -23074,7 +22951,7 @@ export const FulfillmentPage = ({
                                             (ps) => ps.status === "active",
                                           );
                                         return (
-                                          <div className="flex items-start">
+                                          <div className="hidden">
                                             {pipelineStgs.map((ps, pi) => (
                                               <div
                                                 key={ps.id}
@@ -23120,7 +22997,7 @@ export const FulfillmentPage = ({
                                           </div>
                                         );
                                       })()}
-                                    <div className="flex items-start">
+                                    <div className={pipelineStgs?.length ? "hidden" : "flex items-start"}>
                                       {visibleStages.map((st, i) => {
                                         const isPast = i < visibleCurrentIdx;
                                         const isCurrent =
@@ -24199,6 +24076,7 @@ export const FulfillmentPage = ({
                                             );
                                       return (
                                         <div className="flex flex-col gap-2">
+                                          {pipelineStgs && pipelineStgs.length > 0 && <PipelineStageFloors stages={pipelineStgs} />}
                                           {pipelineStgs &&
                                             pipelineStgs.length > 0 &&
                                             (() => {
@@ -24208,7 +24086,7 @@ export const FulfillmentPage = ({
                                                     ps.status === "active",
                                                 );
                                               return (
-                                                <div className="flex items-start">
+                                                <div className="hidden">
                                                   {pipelineStgs.map(
                                                     (ps, pi) => (
                                                       <div
@@ -24259,7 +24137,7 @@ export const FulfillmentPage = ({
                                                 </div>
                                               );
                                             })()}
-                                          <div className="flex items-start">
+                                          <div className={pipelineStgs?.length ? "hidden" : "flex items-start"}>
                                             {visibleStages.map((st, i) => {
                                               const isPast =
                                                 i < visibleCurrentIdx;

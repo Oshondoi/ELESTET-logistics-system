@@ -1130,12 +1130,21 @@ export interface ServiceRequestStore {
   intake_mode: RequestIntakeMode;
   payload: {
     items?: ServiceRequestItemDraft[];
-    boxes?: unknown[];
+    supplies?: RequestSupplyDraft[];
     [key: string]: unknown;
   };
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+}
+
+export interface RequestSupplyDraft {
+  key: string;
+  warehouse_name: string;
+  boxes: Array<{
+    key: string;
+    items: Array<{ barcode: string; qty: number }>;
+  }>;
 }
 
 export interface ServiceRequest {
@@ -1319,6 +1328,7 @@ export interface BatchPipelineStage {
   batch_id: string;
   owner_account_id: string;
   partner_account_id: string | null;
+  stage_company_short_id?: number | null;
   order_index: number;
   name: string;
   current_stage: FulfillmentStage;
