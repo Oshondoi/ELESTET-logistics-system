@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
-import { supabase } from '../lib/supabase'
+import { PasswordRecoveryForm } from '../components/auth/PasswordRecoveryForm'
+import { SignupConfirmationForm } from '../components/auth/SignupConfirmationForm'
 import { passwordsMatch, validatePassword } from '../lib/passwordUtils'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 
@@ -11,7 +12,7 @@ interface AuthPageProps {
   onSignUp: (values: { fullName: string; email: string; password: string }) => Promise<unknown>
 }
 
-type AuthMode = 'sign-in' | 'sign-up' | 'forgot'
+type AuthMode = 'sign-in' | 'sign-up' | 'forgot' | 'confirm'
 
 const validatePasswordLocal = (password: string) => validatePassword(password)
 
@@ -30,9 +31,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
-  const [forgotEmail, setForgotEmail] = useState('')
-  const [forgotSent, setForgotSent] = useState(false)
-  const [isForgotSubmitting, setIsForgotSubmitting] = useState(false)
+  const [confirmationJustSent, setConfirmationJustSent] = useState(false)
   const [visualViewport, setVisualViewport] = useState(() => ({
     height: typeof window === 'undefined' ? 0 : window.visualViewport?.height ?? window.innerHeight,
     offsetTop: typeof window === 'undefined' ? 0 : window.visualViewport?.offsetTop ?? 0,
@@ -117,30 +116,19 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         password: values.password,
       })
 
-      setSuccess('Регистрация выполнена. Если включено email confirmation, подтверди почту и затем войди.')
-      setMode('sign-in')
-      setValues((current) => ({ ...current, password: '' }))
+      setConfirmationJustSent(true)
+      setMode('confirm')
+      setValues((current) => ({ ...current, password: '', confirmPassword: '' }))
     } catch (submitError) {
+      if (mode === 'sign-in' && typeof submitError === 'object' && submitError !== null && 'code' in submitError && submitError.code === 'email_not_confirmed') {
+        setConfirmationJustSent(false)
+        setMode('confirm')
+        setValues((current) => ({ ...current, password: '', confirmPassword: '' }))
+        return
+      }
       setError(submitError instanceof Error ? submitError.message : 'Ошибка авторизации')
     } finally {
       setIsSubmitting(false)
-    }
-  }
-
-  const handleForgotSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!supabase) return
-    setIsForgotSubmitting(true)
-    setError(null)
-    try {
-      const redirectTo = `${window.location.origin}/reset-password`
-      const { error: forgotErr } = await supabase.auth.resetPasswordForEmail(forgotEmail.trim(), { redirectTo })
-      if (forgotErr) throw forgotErr
-      setForgotSent(true)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка отправки')
-    } finally {
-      setIsForgotSubmitting(false)
     }
   }
 
@@ -174,40 +162,12 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
 
         {/* ── Режим: Забыли пароль ── */}
         {mode === 'forgot' && (
-          <div className="flex flex-1 flex-col">
-            <h2 className="mb-1 text-lg font-semibold text-slate-800">Восстановление пароля</h2>
-            <p className="mb-5 text-sm text-slate-400 [@media(max-height:700px)]:mb-3">Введите email — отправим ссылку для сброса</p>
-            {forgotSent ? (
-              <div className="rounded-2xl bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-800">
-                Письмо отправлено на <strong>{forgotEmail}</strong>. Проверьте почту и перейдите по ссылке.
-              </div>
-            ) : (
-              <form className="grid gap-4" onSubmit={handleForgotSubmit}>
-                <Input
-                  label="Email"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={forgotEmail}
-                  onChange={(e) => setForgotEmail(e.target.value)}
-                  required
-                />
-                <Button type="submit" className="w-full" disabled={isForgotSubmitting}>
-                  {isForgotSubmitting ? 'Отправка...' : 'Отправить ссылку'}
-                </Button>
-              </form>
-            )}
-            <button
-              type="button"
-              onClick={() => { setMode('sign-in'); setForgotSent(false); setForgotEmail(''); setError(null) }}
-              className="mt-4 text-sm text-slate-400 hover:text-slate-600"
-            >
-              ← Назад к входу
-            </button>
-          </div>
+          <PasswordRecoveryForm initialEmail={values.email} onBack={() => { setMode('sign-in'); setError(null) }} />
         )}
+        {mode === 'confirm' && <SignupConfirmationForm email={values.email.trim()} justSent={confirmationJustSent} onBack={() => { setMode('sign-in'); setError(null) }} />}
 
         {/* ── Режим: Вход / Регистрация ── */}
-        {mode !== 'forgot' && (<>
+        {(mode === 'sign-in' || mode === 'sign-up') && (<>
 
         <div className="mb-5 flex rounded-2xl bg-slate-100 p-1 [@media(max-height:700px)]:mb-3">
           <button

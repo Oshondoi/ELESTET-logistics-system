@@ -20,9 +20,10 @@ import {
   type PublicRequestInvite,
   type ReservedInviteStore,
 } from "../services/requestService";
-import { validatePassword } from "../lib/passwordUtils";
+import { normalizePassword, passwordsMatch, validatePassword } from "../lib/passwordUtils";
 import { supabase } from "../lib/supabase";
 import { RequestIntakeEditor } from "../components/fulfillment/RequestIntakeEditor";
+import { PasswordRecoveryForm } from "../components/auth/PasswordRecoveryForm";
 
 interface Props {
   token: string;
@@ -141,7 +142,16 @@ export const RequestInvitePage = ({
   const [passwordAgain, setPasswordAgain] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpStep, setOtpStep] = useState<"idle" | "code" | "password" | "conflict" | "done">("idle");
-  const [otpPurpose, setOtpPurpose] = useState<"bind" | "replace" | "recover">("bind");
+  const [otpPurpose, setOtpPurpose] = useState<"bind" | "replace">("bind");
+  const [recoverPassword, setRecoverPassword] = useState(false);
+  const [otpRetryAt, setOtpRetryAt] = useState(0);
+  const [otpNow, setOtpNow] = useState(Date.now());
+  const otpRemaining = Math.max(0, Math.ceil((otpRetryAt - otpNow) / 1000));
+  useEffect(() => {
+    if (!otpRetryAt) return;
+    const timer = window.setInterval(() => setOtpNow(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, [otpRetryAt]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [existingAccount, setExistingAccount] = useState(false);
   const [hasExistingLink, setHasExistingLink] = useState(false);
@@ -333,7 +343,7 @@ export const RequestInvitePage = ({
     [invite],
   );
   const requestPasswordReset = async () => {
-    await sendEmailCode("recover");
+    setRecoverPassword(true);
   };
   const copyConflictLink = async () => {
     if (!conflictToken) return;
@@ -354,8 +364,9 @@ export const RequestInvitePage = ({
       setBusy(false);
     }
   };
-  const sendEmailCode = async (purpose: "bind" | "replace" | "recover") => {
-    if (!supabase) return;
+  const sendEmailCode = async (purpose: "bind" | "replace") => {
+    if (!supabase || busy) return;
+    if (Date.now() < otpRetryAt) { setError("Подождите минуту перед повторной отправкой кода."); return; }
     let targetEmail = email.trim();
     if (purpose === "replace" && !targetEmail) {
       const { data } = await supabase.auth.getUser();
@@ -374,6 +385,8 @@ export const RequestInvitePage = ({
         options: { shouldCreateUser: purpose === "bind", ...(purpose === "bind" ? { data: { full_name: name.trim() } } : {}) },
       });
       if (otpError) throw otpError;
+      setOtpRetryAt(Date.now() + 60_000);
+      setOtpNow(Date.now());
       setEmail(targetEmail);
       setOtpCode("");
       setOtpPurpose(purpose);
@@ -407,18 +420,13 @@ export const RequestInvitePage = ({
     if (!supabase) return;
     const passwordError = validatePassword(password);
     if (passwordError) { setError(passwordError); return; }
-    if (password !== passwordAgain) { setError("Пароли не совпадают"); return; }
+    if (!passwordsMatch(password, passwordAgain)) { setError("Пароли не совпадают"); return; }
     setBusy(true);
     setError("");
     try {
-      const { error: updateError } = await supabase.auth.updateUser({ password });
+      const { error: updateError } = await supabase.auth.updateUser({ password: normalizePassword(password) });
       if (updateError) throw updateError;
-      if (otpPurpose === "recover") {
-        setPassword("");
-        setPasswordAgain("");
-        setOtpStep("done");
-        window.location.assign(`/request-invite/${token}`);
-      } else if (otpPurpose === "replace") {
+      if (otpPurpose === "replace") {
         setOtpStep("done");
         continueToRequest();
       } else {
@@ -491,6 +499,13 @@ export const RequestInvitePage = ({
       </div>
     );
 
+  if (recoverPassword)
+    return <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
+      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+        <PasswordRecoveryForm initialEmail={email} onBack={() => { setRecoverPassword(false); setPassword(""); setPasswordAgain(""); setError(""); }} />
+      </div>
+    </div>;
+
   if (otpStep === "code" || otpStep === "password" || otpStep === "conflict")
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
@@ -504,7 +519,8 @@ export const RequestInvitePage = ({
           {otpStep === "code" && <>
             <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g,""))} placeholder="Шестизначный код" className="mt-5 w-full rounded-xl border px-3 py-2.5" />
             <button type="button" disabled={busy || otpCode.length !== 6} onClick={() => void verifyEmailCode()} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Проверить код</button>
-            <button type="button" disabled={busy} onClick={() => void sendEmailCode(otpPurpose)} className="mt-3 w-full text-sm text-blue-600 disabled:opacity-50">Отправить код повторно</button>
+            <button type="button" disabled={busy || otpRemaining > 0} onClick={() => void sendEmailCode(otpPurpose)} className="mt-3 w-full text-sm text-blue-600 disabled:opacity-50">{otpRemaining > 0 ? `Отправить повторно через ${otpRemaining} с` : "Отправить код повторно"}</button>
+            <button type="button" disabled={busy} onClick={() => { setOtpStep("idle"); setOtpCode(""); setError(""); }} className="mt-3 w-full text-sm text-slate-500">Изменить адрес / вернуться назад</button>
           </>}
           {otpStep === "password" && <>
             <input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Новый пароль аккаунта" className="mt-5 w-full rounded-xl border px-3 py-2.5" />

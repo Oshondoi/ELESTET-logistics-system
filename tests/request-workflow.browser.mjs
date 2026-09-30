@@ -62,9 +62,10 @@ try {
   assert.match(await page.locator('textarea').inputValue(),/12345678; Test shirt; 2; ART-1/);
   await page.goto('http://localhost:5173/tests/fixtures/request-workflow.html?scenario=invite');
   await page.getByRole('button',{name:'Забыли пароль',exact:false}).click();
+  await page.getByRole('button',{name:'Отправить код',exact:true}).click();
   await page.getByPlaceholder('Шестизначный код').waitFor();
-  assert.equal(calls.filter(c=>c.path.endsWith('/recover')).length,0);
-  assert.equal(calls.findLast(c=>c.path.endsWith('/otp')).body.create_user,false);
+  assert.equal(calls.filter(c=>c.path.endsWith('/recover')).length,1);
+  assert.equal(calls.filter(c=>c.path.endsWith('/otp')).length,0);
   await page.goto('http://localhost:5173/tests/fixtures/request-workflow.html?scenario=history');
   await page.getByText('Версия 2',{exact:false}).waitFor();
   assert.match(await page.locator('body').innerText(),/Confirmed shirt/);
