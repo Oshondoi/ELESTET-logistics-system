@@ -1,5 +1,7 @@
 <h2>Подтверждение почты ELESTET</h2>
+{{ if and (eq (len .RedirectTo) 51) (eq (slice .RedirectTo 0 31) "https://elestet.net/auth-email/") }}<p>Код запрошен: <strong>{{ slice .RedirectTo 39 41 }}.{{ slice .RedirectTo 36 38 }}.{{ slice .RedirectTo 31 35 }}, {{ slice .RedirectTo 42 50 }} UTC</strong>.</p>{{ end }}
 <p>Введите этот одноразовый код на открытой странице ELESTET:</p>
 <p style="font-size:28px;font-weight:bold;letter-spacing:5px">{{ .Token }}</p>
+<p>Если вы запросили несколько писем, выберите последнее с отметкой времени, указанной на странице ELESTET.</p>
 <p>Никому не сообщайте код. Он подтверждает вашу почту и не заменяет постоянный пароль.</p>
 <p>Если вы не запрашивали код, проигнорируйте письмо.</p>

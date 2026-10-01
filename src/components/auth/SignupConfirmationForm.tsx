@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { Input } from '../ui/Input'
 import { Button } from '../ui/Button'
+import { createEmailCodeRequest } from '../../lib/emailCodeRequest'
+import { EmailCodeRequestHint } from './EmailCodeRequestHint'
 
-export function SignupConfirmationForm({ email, justSent, onBack }: { email: string; justSent: boolean; onBack: () => void }) {
+export function SignupConfirmationForm({ email, justSent, initialRequestedAt, onBack }: { email: string; justSent: boolean; initialRequestedAt?: string | null; onBack: () => void }) {
+  const [requestedAt, setRequestedAt] = useState(initialRequestedAt)
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -22,8 +25,9 @@ export function SignupConfirmationForm({ email, justSent, onBack }: { email: str
     setBusy(true)
     setError('')
     try {
+      const request = createEmailCodeRequest()
       const result = resend
-        ? await supabase.auth.resend({ type: 'signup', email })
+        ? await supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: request.redirectTo } })
         : await supabase.auth.verifyOtp({ type: 'signup', email, token: code })
       if (result.error) {
         if (result.error.status === 429) {
@@ -34,7 +38,7 @@ export function SignupConfirmationForm({ email, justSent, onBack }: { email: str
         }
         return
       }
-      if (resend) { setRetryAt(Date.now() + 60_000); setNow(Date.now()); setCode('') }
+      if (resend) { setRequestedAt(request.requestedAt); setRetryAt(Date.now() + 60_000); setNow(Date.now()); setCode('') }
       // Successful signup verification establishes the main Auth session.
     } catch {
       setError('Не удалось выполнить запрос. Проверьте соединение и повторите попытку.')
@@ -43,6 +47,7 @@ export function SignupConfirmationForm({ email, justSent, onBack }: { email: str
 
   return <div className="grid gap-4">
     <h2 className="text-lg font-semibold text-slate-800">Подтвердите почту</h2>
+    <EmailCodeRequestHint requestedAt={requestedAt} />
     <p className="text-sm text-slate-600">Введите шестизначный код из письма на <strong className="break-all">{email}</strong>, чтобы завершить регистрацию.</p>
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
     <form className="grid gap-4" onSubmit={e => { e.preventDefault(); void submit(false) }}>

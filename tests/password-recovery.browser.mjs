@@ -1,5 +1,6 @@
 // All Auth traffic mocked; no emails sent or real accounts changed.
 import assert from 'node:assert/strict';
+import { assertEmailRequestTime } from './email-code-request-assertions.mjs';
 import { pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
 const browser = await chromium.launch({channel:'chrome',headless:true});
@@ -14,7 +15,7 @@ try {
   await page.route('**/*.supabase.co/**', async route => {
     const path = new URL(route.request().url()).pathname;
     const body = route.request().postDataJSON();
-    calls.push({path,body});
+    calls.push({path,body,url:route.request().url()});
     let result = {}, status = 200;
     if(path.endsWith('/verify')) {
       if(body.token === '123456' && body.email === user.email) result={access_token:access,refresh_token:'fixture-refresh',token_type:'bearer',expires_in:3600,user};
@@ -32,6 +33,7 @@ try {
     return page.getByText('Если аккаунт с этой почтой существует, мы отправили код.',{exact:false}).innerText();
   }
   const unknown = await open('unknown@example.invalid');
+  const initialRequest = await assertEmailRequestTime(page, calls.find(c=>c.path.endsWith('/recover')));
   assert.equal(await page.getByLabel('Новый пароль',{exact:true}).count(),0);
   await page.getByPlaceholder('Шестизначный код').fill('999999');
   await page.getByRole('button',{name:'Подтвердить код'}).click();
@@ -44,6 +46,7 @@ try {
   await page.clock.fastForward(61_000);
   await page.getByRole('button',{name:'Отправить код',exact:true}).click();
   assert.equal(await page.getByText('Если аккаунт с этой почтой существует, мы отправили код.',{exact:false}).innerText(),unknown);
+  assert.notEqual(await assertEmailRequestTime(page, calls.filter(c=>c.path.endsWith('/recover')).at(-1)), initialRequest);
   await page.getByPlaceholder('Шестизначный код').fill('123456');
   await page.getByRole('button',{name:'Подтвердить код'}).click();
   await page.getByLabel('Новый пароль',{exact:true}).waitFor();

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createEmailCodeRequest } from "../lib/emailCodeRequest";
+import { EmailCodeRequestHint } from "../components/auth/EmailCodeRequestHint";
 import type {
   Account,
   ExecutorAccountSearchResult,
@@ -145,6 +147,7 @@ export const RequestInvitePage = ({
   const [otpPurpose, setOtpPurpose] = useState<"bind" | "replace">("bind");
   const [recoverPassword, setRecoverPassword] = useState(false);
   const [otpRetryAt, setOtpRetryAt] = useState(0);
+  const [emailRequestAt, setEmailRequestAt] = useState<string | null>(null);
   const [otpNow, setOtpNow] = useState(Date.now());
   const otpRemaining = Math.max(0, Math.ceil((otpRetryAt - otpNow) / 1000));
   useEffect(() => {
@@ -380,11 +383,13 @@ export const RequestInvitePage = ({
     setBusy(true);
     setError("");
     try {
+      const request = createEmailCodeRequest();
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: targetEmail,
-        options: { shouldCreateUser: purpose === "bind", ...(purpose === "bind" ? { data: { full_name: name.trim() } } : {}) },
+        options: { emailRedirectTo: request.redirectTo, shouldCreateUser: purpose === "bind", ...(purpose === "bind" ? { data: { full_name: name.trim() } } : {}) },
       });
       if (otpError) throw otpError;
+      setEmailRequestAt(request.requestedAt);
       setOtpRetryAt(Date.now() + 60_000);
       setOtpNow(Date.now());
       setEmail(targetEmail);
@@ -517,6 +522,7 @@ export const RequestInvitePage = ({
           <p className="mt-2 text-sm text-slate-500">{email}</p>
           {error && <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}
           {otpStep === "code" && <>
+            <EmailCodeRequestHint requestedAt={emailRequestAt} />
             <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g,""))} placeholder="Шестизначный код" className="mt-5 w-full rounded-xl border px-3 py-2.5" />
             <button type="button" disabled={busy || otpCode.length !== 6} onClick={() => void verifyEmailCode()} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Проверить код</button>
             <button type="button" disabled={busy || otpRemaining > 0} onClick={() => void sendEmailCode(otpPurpose)} className="mt-3 w-full text-sm text-blue-600 disabled:opacity-50">{otpRemaining > 0 ? `Отправить повторно через ${otpRemaining} с` : "Отправить код повторно"}</button>

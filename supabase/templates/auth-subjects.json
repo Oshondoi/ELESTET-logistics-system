@@ -1,0 +1,5 @@
+{
+  "mailer_subjects_confirmation": "ELESTET — подтверждение почты{{ if and (eq (len .RedirectTo) 51) (eq (slice .RedirectTo 0 31) \"https://elestet.net/auth-email/\") }} · {{ slice .RedirectTo 39 41 }}.{{ slice .RedirectTo 36 38 }}.{{ slice .RedirectTo 31 35 }}, {{ slice .RedirectTo 42 50 }} UTC{{ end }}",
+  "mailer_subjects_magic_link": "ELESTET — подтверждение почты{{ if and (eq (len .RedirectTo) 51) (eq (slice .RedirectTo 0 31) \"https://elestet.net/auth-email/\") }} · {{ slice .RedirectTo 39 41 }}.{{ slice .RedirectTo 36 38 }}.{{ slice .RedirectTo 31 35 }}, {{ slice .RedirectTo 42 50 }} UTC{{ end }}",
+  "mailer_subjects_recovery": "ELESTET — восстановление пароля{{ if and (eq (len .RedirectTo) 51) (eq (slice .RedirectTo 0 31) \"https://elestet.net/auth-email/\") }} · {{ slice .RedirectTo 39 41 }}.{{ slice .RedirectTo 36 38 }}.{{ slice .RedirectTo 31 35 }}, {{ slice .RedirectTo 42 50 }} UTC{{ end }}"
+}

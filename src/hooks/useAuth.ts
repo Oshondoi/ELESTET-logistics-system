@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { ensureAuthenticatedSession, SessionExpiredError } from '../lib/authSession'
 import { normalizePassword } from '../lib/passwordUtils'
+import { EMAIL_REQUEST_PREFIX, createEmailCodeRequest } from '../lib/emailCodeRequest'
 
 interface AuthCredentials {
   email: string
@@ -11,6 +12,7 @@ interface AuthCredentials {
 
 interface SignUpCredentials extends AuthCredentials {
   fullName: string
+  emailRequestAt?: string
 }
 
 export const useAuth = () => {
@@ -72,7 +74,7 @@ export const useAuth = () => {
     }
   }
 
-  const signUp = async ({ email, password, fullName }: SignUpCredentials) => {
+  const signUp = async ({ email, password, fullName, emailRequestAt }: SignUpCredentials) => {
     if (!supabase) {
       throw new Error('Supabase не настроен')
     }
@@ -81,6 +83,7 @@ export const useAuth = () => {
       email,
       password: normalizePassword(password),
       options: {
+        emailRedirectTo: emailRequestAt ? EMAIL_REQUEST_PREFIX + emailRequestAt : createEmailCodeRequest().redirectTo,
         data: {
           full_name: fullName,
         },

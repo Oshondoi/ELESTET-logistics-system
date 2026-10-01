@@ -1,6 +1,7 @@
 // Exercise the real App/router, not the isolated invitation component.
 // All Supabase calls are mocked; no emails or live data changes.
 import assert from 'node:assert/strict';
+import { assertEmailRequestTime } from './email-code-request-assertions.mjs';
 import { pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -13,10 +14,11 @@ const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 let available = true;
 let otpRequests = 0;
+let lastOtpRequest;
 await context.route('**/*.supabase.co/**', async route => {
   const path = new URL(route.request().url()).pathname;
   let result = [];
-  if (path.endsWith('/otp')) { otpRequests += 1; result = {}; }
+  if (path.endsWith('/otp')) { otpRequests += 1; result = {}; lastOtpRequest = { url: route.request().url(), body: route.request().postDataJSON() }; }
   if (path.endsWith('/get_service_request_invite')) result = available
     ? { is_available: true, state: 'available', token, executor_account_id: token, executor_short_id: 3, executor_name: 'Executor', expires_at: '2099-01-01T00:00:00Z' }
     : { is_available: false, state: 'expired', unavailable_reason: 'Срок действия ссылки истёк' };
@@ -51,6 +53,7 @@ try {
     await email.press('Enter');
     await page.getByPlaceholder('Шестизначный код').waitFor();
     assert.equal(otpRequests, previousRequests + 1, 'Enter sends exactly one OTP request');
+    await assertEmailRequestTime(page, lastOtpRequest);
   }
   available = false;
   await page.reload({ waitUntil: 'domcontentloaded' });

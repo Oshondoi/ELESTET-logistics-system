@@ -3,13 +3,14 @@ import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { PasswordRecoveryForm } from '../components/auth/PasswordRecoveryForm'
 import { SignupConfirmationForm } from '../components/auth/SignupConfirmationForm'
+import { createEmailCodeRequest } from '../lib/emailCodeRequest'
 import { passwordsMatch, validatePassword } from '../lib/passwordUtils'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 
 interface AuthPageProps {
   isSupabaseConfigured: boolean
   onSignIn: (values: { email: string; password: string }) => Promise<void>
-  onSignUp: (values: { fullName: string; email: string; password: string }) => Promise<unknown>
+  onSignUp: (values: { fullName: string; email: string; password: string; emailRequestAt?: string }) => Promise<unknown>
 }
 
 type AuthMode = 'sign-in' | 'sign-up' | 'forgot' | 'confirm'
@@ -24,6 +25,7 @@ const initialValues = {
 }
 
 export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageProps) => {
+  const [emailRequestAt, setEmailRequestAt] = useState<string | null>(null)
   const [mode, setMode] = useState<AuthMode>('sign-in')
   const [values, setValues] = useState(initialValues)
   const [showPassword, setShowPassword] = useState(false)
@@ -110,18 +112,22 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         return
       }
 
+      const request = createEmailCodeRequest()
       await onSignUp({
+        emailRequestAt: request.requestedAt,
         fullName: values.fullName.trim(),
         email: values.email.trim(),
         password: values.password,
       })
 
       setConfirmationJustSent(true)
+      setEmailRequestAt(request.requestedAt)
       setMode('confirm')
       setValues((current) => ({ ...current, password: '', confirmPassword: '' }))
     } catch (submitError) {
       if (mode === 'sign-in' && typeof submitError === 'object' && submitError !== null && 'code' in submitError && submitError.code === 'email_not_confirmed') {
         setConfirmationJustSent(false)
+        setEmailRequestAt(null)
         setMode('confirm')
         setValues((current) => ({ ...current, password: '', confirmPassword: '' }))
         return
@@ -164,7 +170,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         {mode === 'forgot' && (
           <PasswordRecoveryForm initialEmail={values.email} onBack={() => { setMode('sign-in'); setError(null) }} />
         )}
-        {mode === 'confirm' && <SignupConfirmationForm email={values.email.trim()} justSent={confirmationJustSent} onBack={() => { setMode('sign-in'); setError(null) }} />}
+        {mode === 'confirm' && <SignupConfirmationForm email={values.email.trim()} justSent={confirmationJustSent} initialRequestedAt={emailRequestAt} onBack={() => { setMode('sign-in'); setError(null) }} />}
 
         {/* ── Режим: Вход / Регистрация ── */}
         {(mode === 'sign-in' || mode === 'sign-up') && (<>
