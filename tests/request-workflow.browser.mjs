@@ -8,6 +8,15 @@ const page = await browser.newPage();
 page.setDefaultTimeout(8000);
 page.setDefaultNavigationTimeout(15000);
 const errors=[];
+await page.addInitScript(() => {
+  window.copiedInviteUrls = [];
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    writeText: async value => {
+      if (window.rejectClipboard) throw new Error('Clipboard denied');
+      window.copiedInviteUrls.push(value);
+    },
+  } });
+});
 page.on('pageerror',error=>errors.push(error.message));
 const account='11111111-1111-4111-8111-111111111111';
 const executor='33333333-3333-4333-8333-333333333333';
@@ -18,6 +27,7 @@ await page.route('**/*.supabase.co/**',async route=>{
   calls.push({path:url.pathname,body});
   let result=[];
   if(url.pathname.endsWith('/service_requests')) result=rows;
+  else if(url.pathname.endsWith('/create_service_request_invite')) result={token:'44444444-4444-4444-8444-444444444444'};
   else if(url.pathname.endsWith('/list_recent_request_executors')||url.pathname.endsWith('/search_executor_accounts')) result=[{id:executor,short_id:3,name:'Executor'}];
   else if(url.pathname.endsWith('/create_service_request_from_form')) { rows=[{id:account,short_id:91,status:'draft',current_version:0,title:body.p_title,applicant_account_id:account,executor_account_id:executor,executor_company_name:'Executor',executor_company_short_id:3,applicant_name:'Tester',applicant_email:'fixture@example.invalid',stores:[],created_at:new Date().toISOString()}]; result=rows[0]; }
   else if(url.pathname.endsWith('/open_service_request_work_draft')) result=saved;
@@ -31,6 +41,22 @@ await page.route('**/*.supabase.co/**',async route=>{
 });
 try {
   await page.goto('http://localhost:5173/tests/fixtures/request-workflow.html');
+  await page.getByRole('button',{name:'Ссылка для клиента',exact:true}).click();
+  const inviteDialog=page.getByRole('dialog',{name:'Ссылка для клиента'});
+  await inviteDialog.getByText('Скопируйте ссылку',{exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.copiedInviteUrls),[],'Opening must not copy');
+  await inviteDialog.getByRole('button',{name:/http.*request-invite/}).click();
+  await inviteDialog.getByText('Ссылка скопирована',{exact:true}).waitFor();
+  assert.match(await inviteDialog.getByRole('status').getAttribute('class'),/text-emerald-600/);
+  assert.equal((await page.evaluate(()=>window.copiedInviteUrls)).length,1);
+  await inviteDialog.getByRole('button',{name:'Закрыть окно'}).click();
+  await page.getByRole('button',{name:'Ссылка для клиента',exact:true}).click();
+  await inviteDialog.getByText('Скопируйте ссылку',{exact:true}).waitFor();
+  await page.evaluate(()=>{window.rejectClipboard=true;});
+  await inviteDialog.getByRole('button',{name:/http.*request-invite/}).click();
+  await page.getByText('Не удалось скопировать ссылку',{exact:true}).waitFor();
+  assert.equal(await inviteDialog.getByText('Ссылка скопирована',{exact:true}).count(),0);
+  await inviteDialog.getByRole('button',{name:'Закрыть окно'}).click();
   await page.getByRole('button',{name:'+ Новая заявка',exact:true}).click();
   assert.equal(calls.filter(c=>c.path.endsWith('/create_service_request_from_form')).length,0,'Opening modal must not create R');
   assert.match(await page.getByLabel('Отправитель',{exact:true}).inputValue(),/C-1/);

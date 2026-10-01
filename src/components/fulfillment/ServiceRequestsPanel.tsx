@@ -447,11 +447,13 @@ export const ServiceRequestsPanel = ({
         textarea.style.opacity = "0";
         document.body.appendChild(textarea);
         textarea.select();
-        document.execCommand("copy");
-        textarea.remove();
+        try {
+          if (!document.execCommand("copy")) throw new Error("Copy failed");
+        } finally {
+          textarea.remove();
+        }
       }
       setInviteCopied(true);
-      window.setTimeout(() => setInviteCopied(false), 900);
     } catch {
       setError("Не удалось скопировать ссылку");
       setInviteCopied(false);
@@ -607,6 +609,12 @@ export const ServiceRequestsPanel = ({
             >
               {inviteUrl}
             </button>
+            <p
+              role="status"
+              className={`mt-3 text-center text-sm ${inviteCopied ? "text-emerald-600" : "text-slate-500"}`}
+            >
+              {inviteCopied ? "Ссылка скопирована" : "Скопируйте ссылку"}
+            </p>
           </div>
         </div>
       )}
