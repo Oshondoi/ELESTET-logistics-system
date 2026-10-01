@@ -12,9 +12,11 @@ page.setDefaultTimeout(8000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 let available = true;
+let otpRequests = 0;
 await context.route('**/*.supabase.co/**', async route => {
   const path = new URL(route.request().url()).pathname;
   let result = [];
+  if (path.endsWith('/otp')) { otpRequests += 1; result = {}; }
   if (path.endsWith('/get_service_request_invite')) result = available
     ? { is_available: true, state: 'available', token, executor_account_id: token, executor_short_id: 3, executor_name: 'Executor', expires_at: '2099-01-01T00:00:00Z' }
     : { is_available: false, state: 'expired', unavailable_reason: 'Срок действия ссылки истёк' };
@@ -31,6 +33,24 @@ try {
     assert.ok(new URL(page.url()).pathname.startsWith(`/request-invite/${token}`));
     // A previously selected protected page must not take over the invite URL.
     await page.evaluate(() => localStorage.setItem('elestet-active-page', 'fulfillment'));
+  }
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 850 });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const name = page.getByPlaceholder('Имя', { exact: true });
+    const email = page.getByPlaceholder('Почта', { exact: true });
+    await name.waitFor();
+    const before = await name.boundingBox();
+    await email.press('Enter');
+    await page.getByText('Укажите имя и почту', { exact: true }).waitFor();
+    const after = await name.boundingBox();
+    assert.equal(after.y, before.y, 'Error must not move inputs');
+    const previousRequests = otpRequests;
+    await name.fill('Tester');
+    await email.fill('fixture@example.invalid');
+    await email.press('Enter');
+    await page.getByPlaceholder('Шестизначный код').waitFor();
+    assert.equal(otpRequests, previousRequests + 1, 'Enter sends exactly one OTP request');
   }
   available = false;
   await page.reload({ waitUntil: 'domcontentloaded' });

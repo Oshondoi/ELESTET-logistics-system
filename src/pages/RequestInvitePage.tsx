@@ -852,6 +852,7 @@ export const RequestInvitePage = ({
     );
 
   const submit = async () => {
+    if (busy) return;
     if (!email.trim() || (!existingAccount && !name.trim())) {
       setError("Укажите имя и почту");
       return;
@@ -913,11 +914,13 @@ export const RequestInvitePage = ({
         <p className="mt-1 text-sm text-slate-500">
           {existingAccount ? "Введите пароль своей учётной записи." : "Подтвердите почту шестизначным кодом. Работа по клиентской ссылке бесплатна."}
         </p>
-        {error && (
-          <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">
-            {error}
-          </p>
-        )}
+        <div className="mt-3 h-14" aria-live="polite" aria-atomic="true">
+          {error && (
+            <p className="max-h-full overflow-y-auto break-words rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">
+              {error}
+            </p>
+          )}
+        </div>
         {conflictToken && (
           <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-3">
             <p className="text-sm font-medium text-amber-900">
@@ -940,7 +943,7 @@ export const RequestInvitePage = ({
             </button>
           </div>
         )}
-        <div className="mt-5 space-y-3">
+        <form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
           {!existingAccount && (
             <input
               value={name}
@@ -975,8 +978,8 @@ export const RequestInvitePage = ({
             className="w-full rounded-xl border px-3 py-2.5"
           />}
           <button
+            type="submit"
             disabled={busy}
-            onClick={() => void submit()}
             className="w-full rounded-2xl bg-blue-600 py-2.5 text-sm font-medium text-white disabled:opacity-50"
           >
             {busy
@@ -995,7 +998,7 @@ export const RequestInvitePage = ({
               Забыли пароль?
             </button>
           )}
-        </div>
+        </form>
       </div>
     </div>
   );
