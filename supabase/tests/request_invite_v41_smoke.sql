@@ -1,4 +1,6 @@
--- Run after patch_request_invite_portal_v41.sql inside BEGIN/ROLLBACK only.
+-- Run after patch_request_invite_portal_v41.sql. The inner exception block
+-- ALWAYS rolls back fixture writes, even if the caller omits BEGIN/ROLLBACK.
+-- PostgreSQL sequences can still advance; never rewind production sequences.
 do $$
 declare
   v_user_id uuid;
@@ -27,6 +29,7 @@ declare
   v_account_count integer;
   v_store_count integer;
 begin
+  begin -- rollback-only fixture subtransaction
   select id,email into v_user_id,v_email from auth.users
   where email_confirmed_at is not null order by created_at limit 1;
   if v_user_id is null then raise exception 'No verified Auth user for smoke test'; end if;
@@ -238,5 +241,9 @@ begin
                 where id=v_invite_id and expires_at='infinity'::timestamptz) then
     raise exception 'First confirmation did not make the link permanent';
   end if;
+    raise exception using errcode='ZX041', message='rollback_request_v41_fixtures';
+  exception when sqlstate 'ZX041' then
+    if sqlerrm <> 'rollback_request_v41_fixtures' then raise; end if;
+  end;
 end $$;
 select 'request_invite_v41_smoke_ok' as result;

@@ -1,4 +1,5 @@
--- Run inside BEGIN/ROLLBACK; creates only transaction-local fixtures, no emails.
+-- Fixture writes always roll back in the inner exception block, even if the
+-- caller omits BEGIN/ROLLBACK. No emails. Sequences may advance (not rolled back).
 do $$
 declare
   u uuid; mail text; a uuid; e uuid; e2 uuid; st uuid; r public.service_requests%rowtype;
@@ -6,6 +7,7 @@ declare
   warehouse uuid; payload jsonb; draft jsonb; n integer; version_before integer;
   manager uuid:=gen_random_uuid(); viewer uuid:=gen_random_uuid(); responsible uuid:=gen_random_uuid(); role_id uuid;
 begin
+  begin -- rollback-only fixture subtransaction
   select id,email into u,mail from auth.users where email_confirmed_at is not null order by created_at limit 1;
   perform set_config('request.jwt.claim.sub',u::text,true);
   insert into public.accounts(name) values('v42 applicant') returning id into a;
@@ -97,5 +99,9 @@ begin
   if (select count(*) from public.batch_pipeline_stages where batch_id=p)<>1 then raise exception 'Self-order duplicated stage'; end if;
   if exists(select 1 from public.batch_pipeline_stages where batch_id=p and stage_packing) then raise exception 'Bulk self-order enabled empty boxes'; end if;
   if exists(select 1 from public.fulfillment_items where batch_id=p and qty_received<>0) then raise exception 'Self-order falsely accepted actual'; end if;
+    raise exception using errcode='ZX042', message='rollback_request_v42_fixtures';
+  exception when sqlstate 'ZX042' then
+    if sqlerrm <> 'rollback_request_v42_fixtures' then raise; end if;
+  end;
 end $$;
 select 'request_completion_v42_smoke_ok' as result;
