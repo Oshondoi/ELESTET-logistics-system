@@ -388,7 +388,7 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const requestInviteToken =
-    location.pathname.match(/^\/request-invite\/([0-9a-f-]{36})$/i)?.[1] ??
+    location.pathname.match(/^\/request-invite\/([0-9a-f-]{36})\/?$/i)?.[1] ??
     null;
 
   // Разбираем URL вида /fulfillment/C-{n}/P-{m} при первом рендере
@@ -800,6 +800,10 @@ function App() {
   const rawShipments = useMemo(() => toRawShipments(shipments), [shipments]);
 
   useEffect(() => {
+    // Public invitation owns its URL throughout authentication and OTP steps.
+    // This effect also runs before Auth finishes loading; never replace it
+    // with the last internal page (or the default home page).
+    if (requestInviteToken) return;
     window.localStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, activePage);
     if (location.pathname === "/my-requests" || location.pathname === "/client-request") return;
     const route = PAGE_ROUTES[activePage];
