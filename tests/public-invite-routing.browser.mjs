@@ -18,6 +18,7 @@ let lastOtpRequest;
 await context.route('**/*.supabase.co/**', async route => {
   const path = new URL(route.request().url()).pathname;
   let result = [];
+  if (path.endsWith('/reserve_email_delivery_number') || path.endsWith('/reserve_invite_email_number')) result = { number: '1', requested_at: '2026-10-06T00:00:00Z' };
   if (path.endsWith('/otp')) { otpRequests += 1; result = {}; lastOtpRequest = { url: route.request().url(), body: route.request().postDataJSON() }; }
   if (path.endsWith('/get_service_request_invite')) result = available
     ? { is_available: true, state: 'available', token, executor_account_id: token, executor_short_id: 3, executor_name: 'Executor', expires_at: '2099-01-01T00:00:00Z' }
