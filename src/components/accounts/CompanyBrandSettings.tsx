@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
-import { normalizeLogoCrop, squareCrop, rectangleCrop, validateLogoFile } from '../../lib/logoCrop'
+import { normalizeLogoCrop, squareCrop, rectangleCrop, validateLogoFile, renderLogoCrop } from '../../lib/logoCrop'
 import { LogoCropEditor } from './LogoCropEditor'
 
 export function CompanyBrandSettings({ accountId }: { accountId: string }) {
@@ -58,8 +58,19 @@ export function CompanyBrandSettings({ accountId }: { accountId: string }) {
         // A failed metadata save can retry without uploading the original again.
         setOriginal(path);setFile(null)
       }
-      const {error}=await supabase.from('company_brand_assets' as never).upsert({account_id:accountId,brand_name:name.trim(),tab_title:title.trim(),original_path:path,square_crop:square,rectangle_crop:rectangle,updated_at:new Date().toISOString()} as never)
+      const renders:{square_path?:string;rectangle_path?:string}={}
+      if(src) {
+        for(const [key,crop] of [['square_path',square],['rectangle_path',rectangle]] as const){
+          const renderPath=`${accountId}/${crypto.randomUUID()}.png`
+          const png=await renderLogoCrop(src,crop)
+          const uploaded=await supabase.storage.from('brand-renders').upload(renderPath,png,{contentType:'image/png',upsert:false})
+          if(uploaded.error)throw uploaded.error
+          renders[key]=renderPath
+        }
+      }
+      const {error}=await supabase.from('company_brand_assets' as never).upsert({account_id:accountId,brand_name:name.trim(),tab_title:title.trim(),original_path:path,square_crop:square,rectangle_crop:rectangle,...renders,updated_at:new Date().toISOString()} as never)
       if(error)throw error
+      window.dispatchEvent(new Event('company-brand-saved'))
       setMessage('Оригинал и настройки сохранены. Обрезки можно менять без повторной загрузки.')
     }catch{setFailed(true);setMessage('Не удалось сохранить настройки. Попробуйте ещё раз.')}
     finally{lock.current=false;setBusy(false)}

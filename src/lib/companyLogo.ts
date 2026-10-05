@@ -5,20 +5,8 @@ export function getLogoUrl(account: {
   return account.logo_url ?? null
 }
 
-/** Возвращает URL логотипа ТОЛЬКО если подписка активна (ПЛАТНО — только для white-label мест:
- *  верхний угол сайдбара, title/favicon вкладки) */
-export function getWhitelabelLogoUrl(account: {
-  logo_url?: string | null
-  logo_subscription_until?: string | null
-  plan?: string | null
-}): string | null {
-  if (!account.logo_url) return null
-  // Тариф premium включает white-label автоматически
-  if (account.plan === 'premium') return account.logo_url
-  if (!account.logo_subscription_until) return null
-  if (new Date(account.logo_subscription_until) < new Date()) return null
-  return account.logo_url
-}
+// Paid presentation is resolved server-side by resolve_company_brand.
+// A free company logo or the premium plan alone must not enable branding.
 
 const MAX_SIZE_BYTES = 2 * 1024 * 1024 // 2 MB
 

@@ -1,0 +1,9 @@
+<!doctype html><html><head><title>ELESTET Logistics</title><link rel="icon" href="/favicon.svg"></head><body><div id="root"></div>
+<script type="module">
+import React,{useState} from 'react';import{createRoot}from'react-dom/client';
+import {BrandContext,BrandLogo,useResolvedBrand}from'/src/components/accounts/BrandContext.tsx';
+function Fixture(){const[id,setId]=useState('a');const {brand}=useResolvedBrand(id,null,false);return React.createElement(BrandContext.Provider,{value:brand},
+React.createElement('button',{onClick:()=>setId('a')},'A'),React.createElement('button',{onClick:()=>setId('b')},'B'),React.createElement('button',{onClick:()=>setId(null)},'General'),
+React.createElement(BrandLogo),React.createElement('span',{'data-testid':'brand'},brand.name))}
+createRoot(document.getElementById('root')).render(React.createElement(Fixture));
+</script></body></html>

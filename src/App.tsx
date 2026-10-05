@@ -15,6 +15,7 @@ import { ToastContainer } from "./components/ui/Toast";
 import { ScanSuccessOverlayHost } from "./components/ui/ScanSuccessOverlay";
 import { ServiceRequestsPanel } from "./components/fulfillment/ServiceRequestsPanel";
 import { useAccounts } from "./hooks/useAccounts";
+import { BrandContext, BrandLogo, useResolvedBrand } from "./components/accounts/BrandContext";
 import { useAppData } from "./hooks/useAppData";
 import { useAuth } from "./hooks/useAuth";
 import { useMyPermissions } from "./hooks/useMyPermissions";
@@ -870,6 +871,12 @@ function App() {
     }
   }, [activeAccountId]);
 
+  const {brand,loading:brandLoading,error:brandError} = useResolvedBrand(session ? activeAccount?.id ?? null : null, requestInviteToken,
+    location.pathname === "/client-request" || location.pathname === "/my-requests");
+  const renderApp = () => {
+  if (brandLoading) return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
+    {brandError ? <button onClick={() => window.dispatchEvent(new Event('company-brand-saved'))}>Не удалось загрузить оформление. Повторить</button> : "Загрузка…"}
+  </div>;
   if (isAuthLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
@@ -1105,6 +1112,7 @@ function App() {
           <div className="mb-4 flex items-center justify-between rounded-3xl bg-white px-5 py-4 shadow-sm">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
+                <BrandLogo />
                 Клиентская ссылка
               </p>
               <h1 className="mt-1 text-lg font-semibold">
@@ -1116,7 +1124,7 @@ function App() {
               onClick={() => navigate("/")}
               className="rounded-xl border px-3 py-2 text-sm"
             >
-              Вернуться в ELESTET
+              В основной кабинет
             </button>
           </div>
           {isLoading ? (
@@ -1880,6 +1888,8 @@ function App() {
       />
     </div>
   );
+  };
+  return <BrandContext.Provider value={brand}>{renderApp()}</BrandContext.Provider>;
 }
 
 export default App;

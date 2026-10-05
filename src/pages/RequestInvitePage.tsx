@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { BrandLogo, useBrand } from "../components/accounts/BrandContext";
 import { createEmailCodeRequest } from "../lib/emailCodeRequest";
 import { EmailCodeRequestHint } from "../components/auth/EmailCodeRequestHint";
 import type {
@@ -136,6 +137,7 @@ export const RequestInvitePage = ({
   onContinue,
   onMaterialized,
 }: Props) => {
+  const brand = useBrand();
   const [invite, setInvite] = useState<PublicRequestInvite | null>(null);
   const [preview, setPreview] = useState<AdminInvitePreview | null>(null);
   const [name, setName] = useState("");
@@ -507,7 +509,7 @@ export const RequestInvitePage = ({
             href="/"
             className="mt-5 inline-flex rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white"
           >
-            Вернуться в ELESTET
+            В основной кабинет
           </a>
         </div>
       </div>
@@ -516,6 +518,7 @@ export const RequestInvitePage = ({
   if (recoverPassword)
     return <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
       <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+        <BrandLogo />
         <PasswordRecoveryForm initialEmail={email} onBack={() => { setRecoverPassword(false); setPassword(""); setPasswordAgain(""); setError(""); }} />
       </div>
     </div>;
@@ -530,6 +533,7 @@ export const RequestInvitePage = ({
           else if (otpStep === "password") void finishEmailCode();
           else if (otpStep === "conflict") void replaceConflictLink();
         }}>
+          <BrandLogo />
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">Ссылка от {executorLabel}</p>
           <h1 className="mt-2 text-xl font-semibold">
             {otpStep === "code" ? "Подтвердите почту" : otpStep === "password" ? "Создайте пароль" : "Подтвердите замену ссылки"}
@@ -595,7 +599,7 @@ export const RequestInvitePage = ({
             href="/"
             className="mt-5 inline-flex rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white"
           >
-            Вернуться в ELESTET
+            В основной кабинет
           </a>
         </div>
       </div>
@@ -616,7 +620,7 @@ export const RequestInvitePage = ({
             href="/"
             className="mt-5 inline-flex rounded-2xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white"
           >
-            Вернуться в ELESTET
+            В основной кабинет
           </a>
         </div>
       </div>
@@ -658,7 +662,7 @@ export const RequestInvitePage = ({
       <div className="min-h-screen bg-slate-50 p-4 sm:p-8" onChangeCapture={() => { lastActivityRef.current = Date.now(); }} onKeyDown={() => { lastActivityRef.current = Date.now(); }}>
         <div className="mx-auto max-w-4xl rounded-3xl bg-white p-6 shadow-xl">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
-            Ссылка от {executorLabel}
+            <BrandLogo />Ссылка от {executorLabel}
           </p>
           <h1 className="mt-2 text-xl font-semibold">Новая заявка</h1>
           <p className="mt-1 text-sm text-slate-500">
@@ -824,7 +828,7 @@ export const RequestInvitePage = ({
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
         <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-xl">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
-            Ссылка от {executorLabel}
+            <BrandLogo />Ссылка от {executorLabel}
           </p>
           <h1 className="mt-2 text-xl font-semibold">
             Открыть клиентскую ссылку
@@ -927,10 +931,10 @@ export const RequestInvitePage = ({
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
       <div data-testid="invite-auth-card" className="h-[640px] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-6 shadow-xl">
         <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
-          Ссылка от {executorLabel}
+          <BrandLogo />Ссылка от {executorLabel}
         </p>
         <h1 className="mt-2 text-xl font-semibold">
-          {existingAccount ? "Вход в ELESTET" : "Данные заявителя"}
+          {existingAccount ? `Вход в ${brand.name}` : "Данные заявителя"}
         </h1>
         <p className="mt-1 text-sm text-slate-500">
           {existingAccount ? "Введите пароль своей учётной записи." : "Подтвердите почту шестизначным кодом. Работа по клиентской ссылке бесплатна."}

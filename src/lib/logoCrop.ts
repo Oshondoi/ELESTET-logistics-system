@@ -1,6 +1,17 @@
 export interface LogoCrop { x: number; y: number; zoom: number; aspect: number }
 export const squareCrop: LogoCrop = { x: 50, y: 50, zoom: 1, aspect: 1 }
 export const rectangleCrop: LogoCrop = { x: 50, y: 50, zoom: 1, aspect: 3 }
+export async function renderLogoCrop(src: string, crop: LogoCrop): Promise<Blob> {
+  const img=new Image();img.src=src;await img.decode()
+  const canvas=document.createElement('canvas')
+  canvas.width=512;canvas.height=Math.round(512/crop.aspect)
+  const ctx=canvas.getContext('2d')
+  if(!ctx)throw new Error('Не удалось подготовить логотип')
+  const scale=Math.max(canvas.width/img.naturalWidth,canvas.height/img.naturalHeight)*crop.zoom
+  const width=img.naturalWidth*scale,height=img.naturalHeight*scale
+  ctx.drawImage(img,(canvas.width-width)*crop.x/100,(canvas.height-height)*crop.y/100,width,height)
+  return new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('Не удалось сохранить обрезку')),'image/png'))
+}
 export function normalizeLogoCrop(value: Partial<LogoCrop> | null, square: boolean): LogoCrop {
   const bound = (v: unknown, min: number, max: number, fallback: number) => typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback
   return { x: bound(value?.x,0,100,50), y: bound(value?.y,0,100,50), zoom: bound(value?.zoom,1,5,1), aspect: square ? 1 : bound(value?.aspect,1.5,5,3) }

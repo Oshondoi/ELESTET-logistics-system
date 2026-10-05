@@ -172,7 +172,7 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
   }, [disconnect, selectedProfileKey])
 
   const readPort = async (port: BrowserSerialPort, profile: ScannerModelProfile) => {
-    if (!port.readable) throw new Error('Режим ELESTET подключён без канала чтения')
+    if (!port.readable) throw new Error('Прямое подключение подключён без канала чтения')
     const reader = port.readable.getReader()
     readerRef.current = reader
     const terminator = serialPacketTerminator(profile.scanOptions.packetTerminator)
@@ -246,7 +246,7 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
     automatically: boolean,
   ) => {
     await port.open(profile.serialOptions)
-    if (!port.readable) throw new Error('Режим ELESTET подключён без канала чтения')
+    if (!port.readable) throw new Error('Прямое подключение подключён без канала чтения')
     portRef.current = port
     connectedProfileKeyRef.current = profileKey
     readingRef.current = true
@@ -274,7 +274,7 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
     const serial = browserSerialApi()
     if (!serial || typeof serial.requestPort !== 'function') {
       setStatus('unsupported')
-      setMessage('Режим ELESTET доступен в Chrome или Edge на компьютере')
+      setMessage('Прямое подключение доступен в Chrome или Edge на компьютере')
       return
     }
     setStatus('connecting')
@@ -345,7 +345,7 @@ export function FulfillmentElestetScanner({ disabled = false, onScan, onScannerM
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-100 bg-violet-50/70 px-3 py-2">
-      <span className="text-xs font-bold text-violet-800">Режим ELESTET</span>
+      <span className="text-xs font-bold text-violet-800">Прямое подключение</span>
       <select
         value={selectedName}
         disabled={disabled || status === 'connected' || status === 'connecting'}

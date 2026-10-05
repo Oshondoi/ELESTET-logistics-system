@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../../lib/utils'
-import { getWhitelabelLogoUrl } from '../../lib/companyLogo'
+import { BrandLogo } from '../accounts/BrandContext'
 import type { Account, RolePermissions } from '../../types'
 
 interface SidebarProps {
@@ -212,7 +212,6 @@ export const Sidebar = ({
   const companyIdLabel = activeAccount ? (activeAccount.short_id != null ? `ID: C-${activeAccount.short_id}` : `ID: ${activeAccount.id.slice(0, 8)}`) : 'Создайте компанию'
   const compactCompanyIdLabel = activeAccount ? (activeAccount.short_id != null ? `C-${activeAccount.short_id}` : activeAccount.id.slice(0, 6)) : '—'
   const isCompact = collapsed && !mobile
-  const whitelabelUrl = activeAccount ? getWhitelabelLogoUrl(activeAccount) : null
   const labelTransitionClass = cn(
     'min-w-0 overflow-hidden whitespace-nowrap transition-[opacity,transform] ease-out motion-reduce:transition-none',
     isCompact
@@ -276,32 +275,7 @@ export const Sidebar = ({
       )}
       <div className={cn('relative shrink-0 overflow-hidden border-b border-slate-200', mobile ? 'h-16' : 'h-[76px]')}>
         <button type="button" className="absolute inset-y-0 left-4 flex w-[168px] items-center text-left">
-          <span className="relative h-9 w-9 shrink-0">
-            <span className={cn(
-              'absolute inset-0 flex items-center justify-center rounded-xl bg-slate-900 text-xs font-bold text-white transition-opacity duration-150',
-              whitelabelUrl && !isCompact ? 'opacity-0' : 'opacity-100 delay-100',
-            )}>
-              E
-            </span>
-            {whitelabelUrl && (
-              <img
-                src={whitelabelUrl}
-                alt={activeAccount?.name ?? ''}
-                className={cn(
-                  'absolute inset-0 h-9 w-9 rounded-xl object-cover transition-opacity duration-150',
-                  isCompact ? 'opacity-0' : 'opacity-100 delay-150',
-                )}
-              />
-            )}
-          </span>
-          <span className={cn('ml-3 block text-slate-900', labelTransitionClass)}>
-            <span className={cn(
-              'block truncate font-black leading-none tracking-tight',
-              whitelabelUrl ? 'max-w-[110px] text-[15px]' : 'text-[28px] uppercase',
-            )}>
-              {whitelabelUrl ? (activeAccount?.name ?? 'ELESTET') : 'ELESTET'}
-            </span>
-          </span>
+          <BrandLogo compact={isCompact} />
         </button>
       </div>
 
