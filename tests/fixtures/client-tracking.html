@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Тест отслеживания</title></head><body><div id="root"></div><script type="module">
+import React,{useState} from 'react';import{createRoot}from'react-dom/client';
+import '/src/styles.css';
+import{ClientRequestTracking}from'/src/components/fulfillment/ClientRequestTracking.tsx';
+function Fixture(){const[a,setA]=useState('a');return React.createElement(React.Fragment,null,React.createElement('button',{onClick:()=>setA(a==='a'?'b':'a')},'Сменить компанию'),React.createElement(ClientRequestTracking,{key:a,accountId:a}))}
+createRoot(document.getElementById('root')).render(React.createElement(Fixture));
+</script></body></html>

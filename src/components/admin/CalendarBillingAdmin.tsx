@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react'
 import {supabase} from '../../lib/supabase'
+import {formatBillingDate} from '../../lib/calendarBilling'
 type Company={id:string;short_id:number;name:string;balance_som:number}
 type Order={id:string;account_id:string;short_id:number;name:string;status:string;kind:string;due_som:number;wallet_som:number;external_som:number;payment_reference:string|null}
 type Snapshot={companies:Company[];orders:Order[];config:{checkout_enabled:boolean;provider_enabled:boolean;timezone:string|null}}
@@ -46,6 +47,6 @@ export function CalendarBillingAdmin(){
   </div>
   <div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Компания / заказ</th><th>Статус</th><th>С баланса</th><th>Доплата</th><th>Платёж</th></tr></thead><tbody>{data?.orders.map(o=><tr key={o.id} className="border-t"><td className="p-2">C-{o.short_id} · {o.name}<button className="block text-xs text-blue-600" onClick={()=>setOrder(o.id)}>{o.id}</button></td><td>{o.status}</td><td>{o.wallet_som}</td><td>{o.external_som}</td><td>{o.payment_reference??'—'}</td></tr>)}</tbody></table></div>
   <div className="flex gap-3"><button disabled={!offset} onClick={()=>setOffset(Math.max(0,offset-50))}>Назад</button><span>Страница {offset/50+1}</span><button disabled={!data||(data.orders.length<50&&data.companies.length<50)} onClick={()=>setOffset(offset+50)}>Далее</button></div>
-  {detail&&<div className="rounded-xl bg-slate-50 p-4"><h3 className="font-semibold">Журнал: последние 100 записей</h3>{detail.entries.map(e=><p key={e.operation_id} className="mt-2 text-sm">{e.created_at} · {e.delta_som>0?'+':''}{e.delta_som} сом · остаток {e.balance_after_som} · {e.reason}</p>)}{detail.audit.map(a=><p key={a.id} className="mt-2 text-sm">{a.created_at} · {a.note}</p>)}</div>}
+  {detail&&<div className="rounded-xl bg-slate-50 p-4"><h3 className="font-semibold">Журнал: последние 100 записей · время Бишкека</h3>{detail.entries.map(e=><p key={e.operation_id} className="mt-2 text-sm">{formatBillingDate(e.created_at)} · {e.delta_som>0?'+':''}{e.delta_som} сом · остаток {e.balance_after_som} · {e.reason}</p>)}{detail.audit.map(a=><p key={a.id} className="mt-2 text-sm">{formatBillingDate(a.created_at)} · {a.note}</p>)}</div>}
  </section>
 }

@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
-import { quoteCalendarMonth as quote, quotePlanReplacement as replace, quoteBalanceContribution } from '../src/lib/calendarBilling'
+import { quoteCalendarMonth as quote, quotePlanReplacement as replace, quoteBalanceContribution, billingCalendarDay, formatBillingDate } from '../src/lib/calendarBilling'
+assert.equal(billingCalendarDay('2026-10-15T17:59:59Z'),15)
+assert.equal(billingCalendarDay('2026-10-15T18:00:00Z'),16)
+assert.equal(billingCalendarDay('2026-10-31T18:00:00Z'),1)
+assert.equal(formatBillingDate('2026-10-31T18:00:00Z'),'01.11.2026, 00:00')
 assert.deepEqual(quoteBalanceContribution(3000,1000),{fromBalanceSom:0,remainingSom:3000})
 assert.deepEqual(quoteBalanceContribution(3000,1000,true),{fromBalanceSom:1000,remainingSom:2000})
 assert.deepEqual(quoteBalanceContribution(3000,5000,true),{fromBalanceSom:3000,remainingSom:0})

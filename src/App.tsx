@@ -13,7 +13,7 @@ import { Input } from "./components/ui/Input";
 import { Modal } from "./components/ui/Modal";
 import { ToastContainer } from "./components/ui/Toast";
 import { ScanSuccessOverlayHost } from "./components/ui/ScanSuccessOverlay";
-import { ServiceRequestsPanel } from "./components/fulfillment/ServiceRequestsPanel";
+import { ClientRequestWorkspace } from "./components/fulfillment/ClientRequestWorkspace";
 import { useAccounts } from "./hooks/useAccounts";
 import { BrandContext, BrandLogo, useResolvedBrand } from "./components/accounts/BrandContext";
 import { useAppData } from "./hooks/useAppData";
@@ -1132,7 +1132,7 @@ function App() {
               Загрузка заявки…
             </div>
           ) : (
-            <ServiceRequestsPanel
+            <ClientRequestWorkspace
               accountId={activeAccount.id}
               accountShortId={activeAccount.short_id ?? null}
               accountName={activeAccount.name}

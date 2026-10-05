@@ -1,5 +1,12 @@
 // Pure quotation only. It neither authorizes access nor changes billing records.
 // Caller supplies the business calendar date, never the payer's guessed timezone.
+export const BILLING_TIME_ZONE = 'Asia/Bishkek'
+export function billingCalendarDay(instant: number | string | Date): number {
+  return Number(new Intl.DateTimeFormat('en-US', { timeZone: BILLING_TIME_ZONE, day: 'numeric' }).format(new Date(instant)))
+}
+export function formatBillingDate(instant: number | string | Date): string {
+  return new Intl.DateTimeFormat('ru-RU', { timeZone: BILLING_TIME_ZONE, dateStyle: 'short', timeStyle: 'short' }).format(new Date(instant))
+}
 export interface CalendarQuote { startDate: string; endDateExclusive: string; chargedDays: number; amountSom: number }
 function parseDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('Некорректная дата')

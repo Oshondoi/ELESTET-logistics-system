@@ -1,8 +1,9 @@
 import {useEffect,useState} from 'react'
 import {supabase} from '../../lib/supabase'
+import {billingCalendarDay,formatBillingDate} from '../../lib/calendarBilling'
 type Quote={available:boolean;reason?:string;due_som?:number;credit_som?:number;balance_som?:number;wallet_som?:number;external_som?:number;starts_at?:string;ends_at?:string}
 type Order={id:string;target_plan:string;status:string;wallet_som:number;external_som:number;due_som:number;credit_som:number}
-type State={balance_som:number;cycle:{changes:number;original_paid_at:string}|null;orders:Order[]}
+type State={server_now?:string;balance_som:number;cycle:{changes:number;original_paid_at:string}|null;orders:Order[]}
 async function rpc<T>(name:string,args:Record<string,unknown>):Promise<T>{
  if(!supabase)throw new Error('Сервис недоступен')
  const{data,error}=await supabase.rpc(name as never,args as never)
@@ -13,11 +14,25 @@ export function CalendarCheckout({accountId,onRefresh}:{accountId:string;onRefre
  const[state,setState]=useState<State|null>(null),[plan,setPlan]=useState('seller'),[kind,setKind]=useState('main')
  const[tomorrow,setTomorrow]=useState(false),[useBalance,setUseBalance]=useState(false)
  const[quote,setQuote]=useState<Quote|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false)
+ const[clock,setClock]=useState<{instant:number;received:number}|null>(null),[tick,setTick]=useState(0)
+ useEffect(()=>{if(state?.server_now)setClock({instant:Date.parse(state.server_now),received:performance.now()})},[state])
+ useEffect(()=>{const id=window.setInterval(()=>setTick(n=>n+1),1000);return()=>window.clearInterval(id)},[])
+ const calendarNow=clock?clock.instant+performance.now()-clock.received:null
+ const canStartTomorrow=calendarNow!==null&&billingCalendarDay(calendarNow)>15
+ useEffect(()=>{if(!canStartTomorrow)setTomorrow(false)},[canStartTomorrow,tick])
  const reload=async()=>setState(await rpc<State>('get_company_checkout_state',{p_account:accountId}))
- useEffect(()=>{let current=true;rpc<State>('get_company_checkout_state',{p_account:accountId}).then(s=>{if(current)setState(s)}).catch(e=>{if(current)setError(e.message)});return()=>{current=false}},[accountId])
- useEffect(()=>{setQuote(null)},[plan,kind,tomorrow,useBalance])
+ useEffect(()=>{
+  let current=true,inFlight=false
+  setState(null);setClock(null);setQuote(null);setUseBalance(false);setTomorrow(false);setError('')
+  const sync=async()=>{if(inFlight)return;inFlight=true;try{const s=await rpc<State>('get_company_checkout_state',{p_account:accountId});if(current)setState(s)}catch(e){if(current)setError(e instanceof Error?e.message:'Не удалось обновить данные оплаты')}finally{inFlight=false}}
+  const wake=()=>{if(document.visibilityState==='visible')void sync()}
+  void sync();const timer=window.setInterval(wake,60_000)
+  window.addEventListener('focus',wake);document.addEventListener('visibilitychange',wake)
+  return()=>{current=false;window.clearInterval(timer);window.removeEventListener('focus',wake);document.removeEventListener('visibilitychange',wake)}
+ },[accountId])
+ useEffect(()=>{setQuote(null)},[plan,kind,tomorrow,useBalance,canStartTomorrow])
  async function run(task:()=>Promise<void>){if(busy)return;setBusy(true);setError('');try{await task()}catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить действие')}finally{setBusy(false)}}
- const args={p_account:accountId,p_plan:kind.startsWith('brand')?'brand':plan,p_kind:kind,p_tomorrow:['main','brand'].includes(kind)?tomorrow:false,p_use_balance:useBalance}
+ const args={p_account:accountId,p_plan:kind.startsWith('brand')?'brand':plan,p_kind:kind,p_tomorrow:['main','brand'].includes(kind)&&canStartTomorrow?tomorrow:false,p_use_balance:useBalance}
  async function create(){
   // Reconfirm the server quotation before reserving any wallet funds.
   const fresh=await rpc<Quote>('quote_company_checkout',args)
@@ -29,21 +44,22 @@ export function CalendarCheckout({accountId,onRefresh}:{accountId:string;onRefre
   <h2 className="text-lg font-semibold">Оплата и смена тарифа</h2>
   <p className="mt-2 text-sm text-slate-500">Расчёт до первого числа. Внешняя оплата появится после подключения платёжного сервиса.</p>
   {state&&<p className="mt-3">Баланс компании: {state.balance_som.toLocaleString('ru-RU')} сом</p>}
-  {state?.cycle&&<p className="mt-2 text-sm">Использовано смен: {state.cycle.changes} из 3. Окно смены заканчивается {new Date(Date.parse(state.cycle.original_paid_at)+48*3600000).toLocaleString('ru-RU')}.</p>}
+  <p className="mt-1 text-xs text-slate-500">Все даты оплаты — по времени Бишкека (UTC+6).</p>
+  {state?.cycle&&<p className="mt-2 text-sm">Использовано смен: {state.cycle.changes} из 3. Окно смены заканчивается {formatBillingDate(Date.parse(state.cycle.original_paid_at)+48*3600000)} (Бишкек).</p>}
   <div className="mt-4 grid gap-3 sm:grid-cols-2">
    <label>Действие<select aria-label="Действие оплаты" disabled={busy} className="mt-1 w-full rounded-xl border p-3" value={kind} onChange={e=>{setKind(e.target.value);setTomorrow(false)}}>
     <option value="main">Подключить основной тариф</option><option value="renew">Продлить основной тариф на месяц</option><option value="change">Сменить основной тариф</option><option value="brand">Подключить «Свой бренд»</option><option value="brand_renew">Продлить «Свой бренд» на месяц</option>
    </select></label>
    {!kind.startsWith('brand')&&<label>Тариф<select aria-label="Тариф оплаты" disabled={busy} className="mt-1 w-full rounded-xl border p-3" value={plan} onChange={e=>setPlan(e.target.value)}><option value="seller">Селлер</option><option value="operational">Операционный</option></select></label>}
   </div>
-  {['main','brand'].includes(kind)&&<label className="mt-3 block text-sm"><input type="checkbox" checked={tomorrow} disabled={busy} onChange={e=>setTomorrow(e.target.checked)}/> Начать завтра (доступно после 15-го числа)</label>}
+  {['main','brand'].includes(kind)&&canStartTomorrow&&<label className="mt-3 block text-sm"><input type="checkbox" checked={tomorrow} disabled={busy} onChange={e=>setTomorrow(e.target.checked)}/> Начать завтра (по времени Бишкека)</label>}
   {(state?.balance_som??0)>0&&<label className="mt-3 block text-sm"><input type="checkbox" checked={useBalance} disabled={busy} onChange={e=>setUseBalance(e.target.checked)}/> Использовать баланс для полной или частичной оплаты</label>}
   <button disabled={busy||!state} onClick={()=>void run(async()=>setQuote(await rpc<Quote>('quote_company_checkout',args)))} className="mt-4 rounded-xl border px-4 py-2">Рассчитать на сервере</button>
   {quote&&<div className="mt-4 rounded-xl bg-slate-50 p-4">
    {quote.due_som!==undefined&&<>
     <p>К оплате: {quote.due_som} сом</p><p>С баланса: {quote.wallet_som} сом · Доплата: {quote.external_som} сом</p>
     {!!quote.credit_som&&<p>Зачислим на баланс: {quote.credit_som} сом</p>}
-    <p className="mt-2 text-sm">Период: {quote.starts_at?new Date(quote.starts_at).toLocaleString('ru-RU'):'—'} — {quote.ends_at?new Date(quote.ends_at).toLocaleString('ru-RU'):'—'} (конец не включён; время вашего устройства)</p>
+    <p className="mt-2 text-sm">Период: {quote.starts_at?formatBillingDate(quote.starts_at):'—'} — {quote.ends_at?formatBillingDate(quote.ends_at):'—'} (конец не включён; Бишкек)</p>
    </>}
    {quote.reason&&<p className="mt-2 text-sm">{quote.reason}</p>}
    {quote.available&&<button disabled={busy} onClick={()=>void run(create)} className="mt-3 rounded-xl bg-blue-600 px-4 py-2 text-white">Создать заказ{quote.wallet_som?' и зарезервировать баланс':''}</button>}
