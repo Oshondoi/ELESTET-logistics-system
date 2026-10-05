@@ -485,6 +485,7 @@ function App() {
     archivedAccounts,
     isLoading: isAccountsLoading,
     hasFetched: hasAccountsFetched,
+    error: accountsError,
     createAccount,
     deleteAccount,
     restoreAccount,
@@ -624,8 +625,13 @@ function App() {
     );
     if (
       hasAccountsFetched &&
+      !isAccountsLoading &&
+      !accountsError &&
       session &&
       accounts.length === 0 &&
+      !requestInviteToken &&
+      !["/client-request", "/my-requests"].includes(location.pathname) &&
+      session.user.user_metadata?.registration_source !== "request_invite" &&
       !hasPendingRequestInvite &&
       !autoCreatingCompanyRef.current
     ) {
@@ -634,7 +640,7 @@ function App() {
         setActiveAccountId(account.id);
       });
     }
-  }, [hasAccountsFetched, session, accounts.length]);
+  }, [hasAccountsFetched, isAccountsLoading, accountsError, session, accounts.length, requestInviteToken, location.pathname]);
 
   const {
     shipments,
@@ -882,7 +888,7 @@ function App() {
           new URLSearchParams(location.search).get("admin-preview") === "1"
         }
         accounts={accounts}
-        accountsLoading={isAccountsLoading}
+        accountsLoading={isAccountsLoading || (Boolean(session) && !hasAccountsFetched && !accountsError)}
         onSignIn={signIn}
         onSignUp={signUp}
         onContinue={(accountId) => {

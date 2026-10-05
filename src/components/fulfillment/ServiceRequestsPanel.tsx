@@ -627,7 +627,7 @@ export const ServiceRequestsPanel = ({
       </div>
       {visibleRequests.length === 0 ? (
         <div className="rounded-3xl bg-white py-16 text-center text-sm text-slate-400">
-          Заявок пока нет
+          {error ? "Не удалось завершить операцию. Подробности указаны выше." : "Заявок пока нет"}
         </div>
       ) : (
         <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-100">

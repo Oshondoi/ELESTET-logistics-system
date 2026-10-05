@@ -23,20 +23,22 @@ export const useAccounts = (enabled: boolean) => {
       setArchivedAccounts([])
       setError(null)
       setIsLoading(false)
+      setHasFetched(false)
       return
     }
 
     setIsLoading(true)
+    setHasFetched(false)
     setError(null)
 
     try {
       const nextAccounts = await fetchAccountsFromSupabase()
       setAccounts(nextAccounts)
+      setHasFetched(true)
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Ошибка загрузки компаний')
     } finally {
       setIsLoading(false)
-      setHasFetched(true)
     }
     // Архив загружаем отдельно — ошибка (RPC не применена) не блокирует активные компании
     try {

@@ -242,12 +242,16 @@ export const RequestInvitePage = ({
       accounts.filter((account) => bindableAccountIds?.includes(account.id)),
     [accounts, bindableAccountIds],
   );
+  const accountIdsKey = accounts.map((account) => account.id).sort().join(",");
   useEffect(() => {
-    if (!isSignedIn || invite?.applicant_account_id) return;
+    if (!isSignedIn || accountsLoading || invite?.applicant_account_id) return;
+    let cancelled = false;
+    setBindableAccountIds(null);
     void listRequestInviteBindableAccountIds()
-      .then(setBindableAccountIds)
-      .catch(() => setBindableAccountIds([]));
-  }, [isSignedIn, invite?.applicant_account_id]);
+      .then((ids) => { if (!cancelled) setBindableAccountIds(ids); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Не удалось проверить права компании"); });
+    return () => { cancelled = true; };
+  }, [isSignedIn, accountsLoading, accountIdsKey, invite?.applicant_account_id]);
   useEffect(() => {
     if (
       invite?.applicant_account_id &&
@@ -388,7 +392,7 @@ export const RequestInvitePage = ({
       const request = await createEmailCodeRequest(targetEmail, 'invite');
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: targetEmail,
-        options: { emailRedirectTo: request.redirectTo, shouldCreateUser: purpose === "bind", ...(purpose === "bind" ? { data: { full_name: name.trim() } } : {}) },
+        options: { emailRedirectTo: request.redirectTo, shouldCreateUser: purpose === "bind", ...(purpose === "bind" ? { data: { full_name: name.trim(), registration_source: "request_invite" } } : {}) },
       });
       if (otpError) throw otpError;
       setEmailRequestAt(request.requestedAt);
@@ -413,6 +417,8 @@ export const RequestInvitePage = ({
     setBusy(true);
     setError("");
     try {
+      // Auth listeners run before verifyOtp resolves. Preserve the client route first.
+      window.localStorage.setItem("elestet-pending-request-invite", token);
       const { error: verifyError } = await supabase.auth.verifyOtp({
         email: email.trim(), token: otpCode.trim(), type: "email",
       });
@@ -566,7 +572,7 @@ export const RequestInvitePage = ({
   )
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
-        Проверка прав компании…
+        {error || "Проверка прав компании…"}
       </div>
     );
 
