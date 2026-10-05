@@ -1,6 +1,14 @@
 # Active Context
 
-## CURRENT FOCUS — 05.10.2026: продолжение редакции 85, ещё без публикации
+## CURRENT FOCUS — 05.10.2026: первый production-выпуск писем и настроек
+
+- На production применены email_delivery_numbers, email_delivery_dispatch, company_brand_assets, implementation_inquiries, calendar_billing_core. SQL-проверки после применения прошли в ROLLBACK; реальные балансы не изменялись. Оплата/смена тарифов ещё не подключены к новым примитивам.
+- `send-auth-email` развёрнут через актуальный Supabase CLI (`npx supabase@latest`, установленный 2.95.4 не принимает новый формат PAT). RESEND_API_KEY и SEND_EMAIL_HOOK_SECRET установлены в Edge secrets; Auth Send Email Hook включён. Значения новых секретов в файлы и коммиты не записывались. SMTP-настройки и старый ключ сохранены, но при включённом hook SMTP не используется.
+- В uri_allow_list добавлен `https://elestet.net/auth-email/**`: старый `*` не покрывал второй разделитель новой отметки. Подписанная тестовая отправка на официальный симулятор `delivered+elestet-release-20261005@resend.dev` принята Resend; повтор вернул 200 без новой записи/письма. Анонимный прямой hook-запрос получил 401.
+- `d4cb6d5` и `3bcc6b0` отправлены в origin/main; elestet.net отдаёт `/assets/index-CoQRySE_.js` с RPC нумерации, fixed invite card и brand settings. Реальный browser-check неизвестного адреса показывает «Откройте письмо №1 от ELESTET», нейтральный ответ; тестовые Auth-пользователи и компании не создавались. Проверка живого signup/recovery-кода в почте владельца ещё нужна.
+- Текущие HTML Go SMTP-шаблоны не менялись: Auth Hook использует свой общий renderLetter. Откат hook возвращает прежнюю отправку SMTP; для совпадения формы и старого письма нужен также откат frontend к прежнему deployment либо отдельный проверенный выпуск fallback templates. Не удалять старый SMTP key до завершения приёмки. Полное применение бренда, workers уведомлений/рассылок и серверная смена тарифа остаются незавершёнными.
+
+## HISTORICAL SNAPSHOT — 05.10.2026: продолжение редакции 85 до публикации
 
 - Подготовлен `send-auth-email`: Standard Webhooks, серверная привязка номера, Resend idempotency, shared sender для будущих workers. `patch_email_delivery_dispatch.sql` идёт после `patch_email_delivery_numbers.sql`. Обработчик НЕ включён: `RESEND_API_KEY` отсутствует в Edge secrets, SMTP password через Management API недоступен. Запрошено добавление ключа пользователем; до него рабочий SMTP не переключать. Затем нужны `SEND_EMAIL_HOOK_SECRET`, deployment функции и включение Auth Hook. Брендированный sender не подключён.
 - `patch_calendar_billing_core.sql`: серверная котировка, закрытый баланс и журнал операций; checkout-списание требует выбора клиента, повтор operation_id не меняет деньги. НЕ подключены к заказу, смене тарифа, settlement и paid-access. Это не полноценный биллинг; Finik отложен. `quoteBalanceContribution` только отображает разбиение суммы.
