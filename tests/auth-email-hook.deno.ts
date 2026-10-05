@@ -9,7 +9,7 @@ Deno.test('Auth hook verifies signature and timestamp before any database/provid
   Deno.env.set('SUPABASE_URL', 'https://database.invalid')
   Deno.env.set('SUPABASE_SERVICE_ROLE_KEY', 'test-only')
   const original = globalThis.fetch
-  let providerCalls = 0, databaseCalls = 0
+  let providerCalls = 0, databaseCalls = 0, routeAllowed = true
   globalThis.fetch = async (input, init) => {
     const url = String(input)
     if (url === 'https://api.resend.com/emails') {
@@ -21,12 +21,12 @@ Deno.test('Auth hook verifies signature and timestamp before any database/provid
     }
     if (url.includes('database.invalid/rest/v1/rpc/')) {
       databaseCalls++
-      return Response.json(url.endsWith('prepare_email_dispatch') ? { number: '1', requested_at: '2026-10-05T12:00:00Z', sent: false } : null)
+      return Response.json(url.endsWith('resolve_auth_mail_route') ? {allowed:routeAllowed} : url.endsWith('prepare_email_dispatch') ? { number: '1', requested_at: '2026-10-05T12:00:00Z', sent: false } : null)
     }
     throw new Error('Unexpected network request')
   }
   try {
-    const payload = JSON.stringify({ user: { id: 'user1', email: 'test@example.invalid' }, email_data: { email_action_type: 'signup', token: '123456', token_hash: 'hash1' } })
+    const payload = JSON.stringify({ user: { id: 'user1', email: 'test@example.invalid' }, email_data: { email_action_type: 'signup', token: '123456', token_hash: 'hash1', redirect_to:'https://elestet.net/auth-email/2026-10-05T12:00:00Z/1' } })
     const req = (body: string, date = new Date()) => new Request('https://hook.invalid', { method: 'POST', body, headers: {
       'webhook-id': 'event-1', 'webhook-timestamp': String(Math.floor(date.getTime()/1000)),
       'webhook-signature': new Webhook(secret).sign('event-1', date, payload),
@@ -37,6 +37,9 @@ Deno.test('Auth hook verifies signature and timestamp before any database/provid
     assert(providerCalls===0 && databaseCalls===0,'untrusted request reached sender')
     const result=await handleAuthEmail(req(payload))
     assert(result.status===200,`signed request failed: ${await result.text()}`)
-    assert(providerCalls===1 && databaseCalls===2,'signed dispatch path missing')
+    assert(providerCalls===1 && databaseCalls===3,'signed dispatch path missing')
+    routeAllowed=false
+    assert((await handleAuthEmail(req(payload))).status===503,'brand failure must block')
+    assert(providerCalls===1,'fallback sent without permission')
   } finally { globalThis.fetch = original }
 })

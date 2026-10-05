@@ -3,6 +3,7 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Modal } from '../ui/Modal'
 import { supabase } from '../../lib/supabase'
+import { MailPreferences } from './MailPreferences'
 import { validatePassword, normalizePassword, passwordsMatch } from '../../lib/passwordUtils'
 
 interface ProfileModalProps {
@@ -114,6 +115,7 @@ export const ProfileModal = ({
           </p>
         </div>
 
+        {open&&<MailPreferences key={userId}/>}
         {/* Имя */}
         <form className="grid gap-3" onSubmit={(e) => void handleSaveName(e)}>
           <Input

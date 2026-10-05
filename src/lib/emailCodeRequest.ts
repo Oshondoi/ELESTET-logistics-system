@@ -6,8 +6,10 @@ export const EMAIL_REQUEST_PREFIX = 'https://elestet.net/auth-email/'
 
 export async function createEmailCodeRequest(email: string, purpose: 'signup' | 'recovery' | 'invite', requestId = crypto.randomUUID()) {
   if (!supabase) throw new Error('Supabase не настроен')
-  const { data, error } = await supabase.rpc('reserve_email_delivery_number' as never, {
+  const invite = typeof window !== 'undefined' ? window.location.pathname.match(/^\/request-invite\/([a-f0-9-]{36})\/?$/i)?.[1] : undefined
+  const { data, error } = await supabase.rpc((invite ? 'reserve_invite_email_number' : 'reserve_email_delivery_number') as never, {
     p_email: email.trim(), p_request_id: requestId, p_purpose: purpose,
+    ...(invite ? {p_invite:invite} : {}),
   } as never)
   if (error) throw new Error(error.message)
   const result = data as unknown as { number: string; requested_at: string }

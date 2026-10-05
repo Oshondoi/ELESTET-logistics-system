@@ -22,7 +22,15 @@ export async function handleAuthEmail(req: Request) {
   try {
     const letters = await authLetters(payload, req.headers.get('webhook-id')!)
     const client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
-    for (const letter of letters) await sendNumberedLetter(letter, { rpc: async (name, args) => await client.rpc(name, args), apiKey, fetch })
+    for (const letter of letters) {
+      let replyTo: string | undefined
+      if (letter.reservation) {
+        const route = await client.rpc('resolve_auth_mail_route', {p_email:letter.to,p_number:letter.reservation.number,p_time:letter.reservation.requested_at})
+        if (route.error || !route.data?.allowed) throw new Error('Brand mail unavailable')
+        replyTo=route.data.reply_to??undefined
+      }
+      await sendNumberedLetter(letter, { rpc: async (name, args) => await client.rpc(name, args), apiKey, fetch, replyTo })
+    }
     return Response.json({})
   } catch {
     // Never expose an OTP, address, provider response or service key in logs or HTTP errors.

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Card } from '../components/ui/Card'
 import { ImplementationInquiryForm } from '../components/accounts/ImplementationInquiryForm'
 import { CompanyBrandSettings } from '../components/accounts/CompanyBrandSettings'
+import { BrandMailSettings } from '../components/accounts/BrandMailSettings'
 import { getBillingStatus, trialDaysLeft, graceDaysLeft } from '../lib/plans'
 import type { ActiveOverride } from '../lib/plans'
 import { activateGracePeriod } from '../services/billingService'
@@ -205,6 +206,7 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
       <Card className="rounded-3xl p-5"><h2 className="text-lg font-semibold">Премиум — с внедрением</h2><p className="mt-2">Внедрение: 90 000 сом, отдельно от регулярного тарифа.</p><p className="mt-2 text-sm text-slate-500">Состав работ и дата запуска согласовываются с командой. Оплата не запускает внедрение автоматически.</p></Card>
       <ImplementationInquiryForm key={activeAccount.id} accountId={activeAccount.id} />
       <CompanyBrandSettings key={`brand-${activeAccount.id}`} accountId={activeAccount.id} />
+      <BrandMailSettings key={`brand-mail-${activeAccount.id}`} accountId={activeAccount.id} />
       {/* Контакт */}
       <Card className="rounded-3xl p-5 text-center">
         <p className="text-sm text-slate-600">

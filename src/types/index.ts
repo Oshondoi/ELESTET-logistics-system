@@ -134,6 +134,7 @@ export interface RolePermissions {
   stores_view: boolean;
   stores_manage: boolean;
   brand_manage: boolean;
+  brand_mail_manage: boolean;
   stores_delete: boolean;
   stores_sync: boolean;
   // Справочники
@@ -191,6 +192,7 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   stores_view: false,
   stores_manage: false,
   brand_manage: false,
+  brand_mail_manage: false,
   stores_delete: false,
   stores_sync: false,
   directories_view: false,
@@ -241,6 +243,7 @@ export const FULL_PERMISSIONS: RolePermissions = {
   stores_view: true,
   stores_manage: true,
   brand_manage: true,
+  brand_mail_manage: true,
   stores_delete: true,
   stores_sync: true,
   directories_view: true,

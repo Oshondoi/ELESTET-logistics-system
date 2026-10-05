@@ -31,7 +31,8 @@ export function renderLetter(letter: Letter, number: string, time: string) {
   return { subject: `ELESTET — письмо №${number}`, html, text }
 }
 
-export async function sendNumberedLetter(letter: Letter, deps: { rpc: Rpc; apiKey: string; fetch: typeof fetch }) {
+export async function sendNumberedLetter(letter: Letter, deps: { rpc: Rpc; apiKey: string; fetch: typeof fetch; replyTo?: string }) {
+  if(deps.replyTo && (deps.replyTo.length>254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(deps.replyTo))) throw new Error('Invalid Reply-To')
   const { data, error } = await deps.rpc('prepare_email_dispatch', {
     p_email: letter.to, p_event_key: letter.eventKey, p_purpose: letter.purpose,
     p_number: letter.reservation?.number ?? null, p_requested_at: letter.reservation?.requested_at ?? null,
@@ -39,16 +40,17 @@ export async function sendNumberedLetter(letter: Letter, deps: { rpc: Rpc; apiKe
   if (error) throw new Error('Cannot prepare letter')
   const meta = data as { number: string; requested_at: string; sent: boolean }
   if (!meta || typeof meta.sent !== 'boolean') throw new Error('Invalid dispatch response')
-  if (meta.sent) return
+  if (meta.sent) return meta
   const content = renderLetter(letter, meta.number, meta.requested_at)
   const result = await deps.fetch('https://api.resend.com/emails', {
     method: 'POST', signal: AbortSignal.timeout(5000),
     headers: { Authorization: `Bearer ${deps.apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': `letter/${letter.eventKey}` },
-    body: JSON.stringify({ from: 'ELESTET <noreply@elestet.net>', to: [letter.to], ...content }),
+    body: JSON.stringify({ from: 'ELESTET <noreply@elestet.net>', to: [letter.to], ...(deps.replyTo?{reply_to:deps.replyTo}:{}), ...content }),
   })
   if (!result.ok) throw new Error('Email provider failed')
   const response = await result.json() as { id?: string }
   if (!response.id) throw new Error('Missing provider id')
   const complete = await deps.rpc('complete_email_dispatch', { p_event_key: letter.eventKey, p_provider_id: response.id })
   if (complete.error) throw new Error('Cannot record delivery')
+  return meta
 }
