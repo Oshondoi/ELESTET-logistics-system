@@ -189,7 +189,7 @@ begin
   values(o.account_id,o.target_plan,o.monthly_som,o.charged_som,o.purchase_date,o.start_tomorrow,o.starts_at,o.ends_at,now()) returning * into c;
   update public.calendar_billing_orders set cycle_id=c.id where id=o.id;
  else
-  if a.plan is null or a.plan='none' or a.plan_until<o.ends_at or a.logo_subscription_until>now() then raise exception 'Условия подключения бренда изменились'; end if;
+  if a.plan is null or a.plan='none' or a.plan_until is null or a.plan_until<o.ends_at or a.logo_subscription_until>now() then raise exception 'Условия подключения бренда изменились'; end if;
   update public.accounts set logo_subscription_until=o.ends_at where id=o.account_id;
  end if;
  if o.kind in ('main','change') and o.starts_at<=now() then
