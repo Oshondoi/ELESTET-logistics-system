@@ -1,5 +1,12 @@
 # Active Context
 
+## CURRENT FOCUS — 05.10.2026: продолжение редакции 85, ещё без публикации
+
+- Подготовлен `send-auth-email`: Standard Webhooks, серверная привязка номера, Resend idempotency, shared sender для будущих workers. `patch_email_delivery_dispatch.sql` идёт после `patch_email_delivery_numbers.sql`. Обработчик НЕ включён: `RESEND_API_KEY` отсутствует в Edge secrets, SMTP password через Management API недоступен. Запрошено добавление ключа пользователем; до него рабочий SMTP не переключать. Затем нужны `SEND_EMAIL_HOOK_SECRET`, deployment функции и включение Auth Hook. Брендированный sender не подключён.
+- `patch_calendar_billing_core.sql`: серверная котировка, закрытый баланс и журнал операций; checkout-списание требует выбора клиента, повтор operation_id не меняет деньги. НЕ подключены к заказу, смене тарифа, settlement и paid-access. Это не полноценный биллинг; Finik отложен. `quoteBalanceContribution` только отображает разбиение суммы.
+- Клиентская ссылка: карточка 640px с прокруткой, Enter на коде/пароле, состояние отправки; проверки desktop/mobile подтверждают неподвижность при номере и длинной ошибке.
+- Прошли build, Node numbered-email/calendar, Deno check и signed/unsigned/tampered/expired HTTP hook, browser signup/recovery/request-workflow/invite-layout, SQL email dispatch и wallet/calendar с ROLLBACK. Реальные письма и списания не выполнялись. Применение бренда и серверная смена тарифа впереди. Не пушить до согласованного выпуска SQL/отправки.
+
 ## CURRENT FOCUS — 05.10.2026: первый локальный этап редакции 83
 
 - Перед продолжением перечитать канонические content/item_states в БД. Начата реализация: нумерация кодовых писем, оригинал и две обрезки бренда, обращения на внедрение, календарный калькулятор. Границы и проверки — верхний раздел progress.md.

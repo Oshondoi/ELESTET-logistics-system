@@ -1,5 +1,13 @@
 ﻿# Progress
 
+## 05.10.2026 — серверная отправка и основа баланса (локально, не опубликовано)
+
+- Auth Hook `send-auth-email` переключается отдельно: Standard Webhooks проверяет подпись/время, БД связывает резерв номера с получателем, назначением и временем. Новый Auth event не использует старый номер повторно. Общий sender использует Resend idempotency; завершённая отправка не повторяется, неопределённая попытка старше 20 часов требует разбирательства вместо слепого повтора после 24-часового окна Resend. Источники: https://supabase.com/docs/guides/auth/auth-hooks/send-email-hook и https://resend.com/docs/dashboard/emails/idempotency-keys .
+- Учтены signup/recovery/magiclink/invite/reauthentication, оба получателя secure email change, Auth security notifications. Workers уведомлений/рассылок ещё требуется подключить к shared sender. Брендирование отправителя не подключено.
+- `patch_calendar_billing_core.sql`: серверный календарный расчёт, закрытый баланс, атомарные credit/debit с блокировкой и уникальным operation_id. Checkout debit запрещён без customer_confirmed. Фронт не может изменять баланс. Следующий слой — сохранённый заказ с выбором клиента, подтверждённый платёж, доступ и 48h/3 смены в серверной транзакции. Не доверять суммам/выбору из callback провайдера. Сам новый журнал пока не используется работающей оплатой.
+- SQL-тесты прошли с ROLLBACK, production-схема не изменена. Прошли Node tests, Deno typecheck и signed hook test, build, browser signup/recovery/request-workflow/invite-auth-layout (desktop/mobile). Go fallback-шаблоны и реальная доставка ещё не проверены.
+- Баланс только по выбору клиента с предложением частичной оплаты (редакция 85). `RESEND_API_KEY` отсутствует в Edge secrets, SMTP password скрыт. Пользователю отправлен запрос добавить ключ; production Auth Hook не включался. Нужны hook secret, deployment и согласованное переключение перед frontend. Finik/домены отложены.
+
 ## 05.10.2026 — первый локальный этап редакции 83 (не опубликован)
 
 - [x] Подготовлен атомарный серверный счётчик попыток письма, идемпотентность по UUID, общий порядок signup/recovery/invite и серверных notification/campaign. Таблицы закрыты от клиентского чтения; неизвестная почта не создаёт Auth-аккаунт. Формы используют RPC перед Auth-запросом.

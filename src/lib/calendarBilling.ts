@@ -39,3 +39,10 @@ export function quotePlanReplacement(input: {
   const difference = next.amountSom - previous.amountSom
   return { ...next, dueSom: Math.max(0, difference), creditSom: Math.max(0, -difference), paidAt: input.paidAt }
 }
+
+// Display quotation only. Actual balance must be checked and debited by server settlement.
+export function quoteBalanceContribution(dueSom: number, balanceSom: number, useBalance = false) {
+  price(dueSom); price(balanceSom)
+  const fromBalanceSom = useBalance ? Math.min(dueSom, balanceSom) : 0
+  return { fromBalanceSom, remainingSom: dueSom - fromBalanceSom }
+}

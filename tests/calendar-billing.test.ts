@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
-import { quoteCalendarMonth as quote, quotePlanReplacement as replace } from '../src/lib/calendarBilling'
+import { quoteCalendarMonth as quote, quotePlanReplacement as replace, quoteBalanceContribution } from '../src/lib/calendarBilling'
+assert.deepEqual(quoteBalanceContribution(3000,1000),{fromBalanceSom:0,remainingSom:3000})
+assert.deepEqual(quoteBalanceContribution(3000,1000,true),{fromBalanceSom:1000,remainingSom:2000})
+assert.deepEqual(quoteBalanceContribution(3000,5000,true),{fromBalanceSom:3000,remainingSom:0})
+assert.deepEqual(quoteBalanceContribution(0,5000,true),{fromBalanceSom:0,remainingSom:0})
+assert.throws(()=>quoteBalanceContribution(3000,-1,true))
 for (const month of ['2026-02','2028-02','2026-04','2026-01']) {
   for (const day of ['01','04','05']) assert.equal(quote(3000, `${month}-${day}`).amountSom, 3000)
 }

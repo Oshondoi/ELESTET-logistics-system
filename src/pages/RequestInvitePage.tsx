@@ -143,6 +143,7 @@ export const RequestInvitePage = ({
   const [password, setPassword] = useState("");
   const [passwordAgain, setPasswordAgain] = useState("");
   const [otpCode, setOtpCode] = useState("");
+  const [emailSending, setEmailSending] = useState(false);
   const [otpStep, setOtpStep] = useState<"idle" | "code" | "password" | "conflict" | "done">("idle");
   const [otpPurpose, setOtpPurpose] = useState<"bind" | "replace">("bind");
   const [recoverPassword, setRecoverPassword] = useState(false);
@@ -381,6 +382,7 @@ export const RequestInvitePage = ({
       return;
     }
     setBusy(true);
+    setEmailSending(true);
     setError("");
     try {
       const request = await createEmailCodeRequest(targetEmail, 'invite');
@@ -399,6 +401,7 @@ export const RequestInvitePage = ({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось отправить код");
     } finally {
+      setEmailSending(false);
       setBusy(false);
     }
   };
@@ -514,31 +517,37 @@ export const RequestInvitePage = ({
   if (otpStep === "code" || otpStep === "password" || otpStep === "conflict")
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
-        <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+        <form data-testid="invite-auth-card" className="h-[640px] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-6 shadow-xl" onSubmit={event => {
+          event.preventDefault();
+          if (busy) return;
+          if (otpStep === "code" && otpCode.length === 6) void verifyEmailCode();
+          else if (otpStep === "password") void finishEmailCode();
+          else if (otpStep === "conflict") void replaceConflictLink();
+        }}>
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">Ссылка от {executorLabel}</p>
           <h1 className="mt-2 text-xl font-semibold">
             {otpStep === "code" ? "Подтвердите почту" : otpStep === "password" ? "Создайте пароль" : "Подтвердите замену ссылки"}
           </h1>
-          <p className="mt-2 text-sm text-slate-500">{email}</p>
+          <p className="mt-2 h-10 overflow-auto break-all text-sm text-slate-500">{email}</p>
           <div className="mt-3 h-20 overflow-auto">{error && <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}</div>
           {otpStep === "code" && <>
-            <EmailCodeRequestHint requestedAt={emailRequestAt} />
+            <EmailCodeRequestHint requestedAt={emailRequestAt} sending={emailSending} />
             <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g,""))} placeholder="Шестизначный код" className="mt-5 w-full rounded-xl border px-3 py-2.5" />
-            <button type="button" disabled={busy || otpCode.length !== 6} onClick={() => void verifyEmailCode()} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Проверить код</button>
+            <button type="submit" disabled={busy || otpCode.length !== 6} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Проверить код</button>
             <button type="button" disabled={busy || otpRemaining > 0} onClick={() => void sendEmailCode(otpPurpose)} className="mt-3 w-full text-sm text-blue-600 disabled:opacity-50">{otpRemaining > 0 ? `Отправить повторно через ${otpRemaining} с` : "Отправить код повторно"}</button>
             <button type="button" disabled={busy} onClick={() => { setOtpStep("idle"); setOtpCode(""); setError(""); }} className="mt-3 w-full text-sm text-slate-500">Изменить адрес / вернуться назад</button>
           </>}
           {otpStep === "password" && <>
             <input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Новый пароль аккаунта" className="mt-5 w-full rounded-xl border px-3 py-2.5" />
             <input type="password" autoComplete="new-password" value={passwordAgain} onChange={(event) => setPasswordAgain(event.target.value)} placeholder="Повторите пароль" className="mt-3 w-full rounded-xl border px-3 py-2.5" />
-            <button type="button" disabled={busy} onClick={() => void finishEmailCode()} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Сохранить пароль и продолжить</button>
+            <button type="submit" disabled={busy} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Сохранить пароль и продолжить</button>
           </>}
           {otpStep === "conflict" && <>
             <p className="mt-4 text-sm text-slate-600">У этой почты уже есть действующая ссылка. Старые заявки сохранятся отдельно. Использовать текущую ссылку вместо прежней?</p>
             {conflictToken && <button type="button" onClick={() => void copyConflictLink()} className={`mt-3 w-full rounded-xl border px-3 py-2 text-sm ${conflictCopied ? "border-emerald-300 bg-emerald-50" : "border-slate-200"}`}>Скопировать прежнюю ссылку</button>}
-            <button type="button" disabled={busy} onClick={() => void replaceConflictLink()} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Использовать текущую ссылку</button>
+            <button type="submit" disabled={busy} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Использовать текущую ссылку</button>
           </>}
-        </div>
+        </form>
       </div>
     );
 
@@ -910,7 +919,7 @@ export const RequestInvitePage = ({
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
-      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
+      <div data-testid="invite-auth-card" className="h-[640px] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-6 shadow-xl">
         <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
           Ссылка от {executorLabel}
         </p>
@@ -989,7 +998,7 @@ export const RequestInvitePage = ({
             className="w-full rounded-2xl bg-blue-600 py-2.5 text-sm font-medium text-white disabled:opacity-50"
           >
             {busy
-              ? "Проверка…"
+              ? existingAccount ? "Проверка…" : "Отправка…"
               : existingAccount
                 ? "Войти и открыть заявку"
                 : "Получить код на почту"}
