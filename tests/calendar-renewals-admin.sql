@@ -1,0 +1,50 @@
+begin;
+do $$
+declare
+ u uuid:=gen_random_uuid(); a uuid:=gen_random_uuid(); admin uuid:=gen_random_uuid();
+ main_id uuid:=gen_random_uuid(); brand_id uuid:=gen_random_uuid(); op uuid:=gen_random_uuid();
+ ending timestamptz:=(date_trunc('month',now() at time zone 'Asia/Bishkek')+interval '1 month') at time zone 'Asia/Bishkek';
+ o jsonb; q jsonb; n bigint;
+begin
+ insert into auth.users(id,email) values(u,u::text||'@example.invalid'),(admin,admin::text||'@example.invalid');
+ insert into public.profiles(user_id,full_name,platform_role) values(admin,'Rollback admin','superadmin') on conflict(user_id) do update set platform_role='superadmin';
+ insert into public.accounts(id,name,plan,plan_until,logo_subscription_until) values(a,'Rollback renewal','seller',ending,ending);
+ insert into public.account_members(account_id,user_id,role) values(a,u,'owner');
+ insert into public.company_billing_wallets(account_id,balance_som) values(a,1000000);
+ update public.calendar_billing_config set timezone='Asia/Bishkek',checkout_enabled=true,provider_enabled=true;
+ perform set_config('request.jwt.claim.sub',u::text,true);
+ perform set_config('request.jwt.claim.role','authenticated',true);
+ set local role authenticated;
+ q:=public.quote_company_checkout(a,'operational','renew',false,true);
+ if (q->>'starts_at')::timestamptz<>ending or (q->>'monthly_som')::bigint<>(q->>'charged_som')::bigint then raise exception 'renewal must charge whole next month'; end if;
+ o:=public.create_company_checkout(main_id,a,'operational','renew',false,true,q);
+ perform public.settle_company_checkout(main_id,'wallet:'||main_id,0,'KGS');
+ perform public.settle_company_checkout(main_id,'wallet:'||main_id,0,'KGS');
+ o:=public.create_company_checkout(brand_id,a,'brand','brand_renew',false,true);
+ perform public.settle_company_checkout(brand_id,'wallet:'||brand_id,0,'KGS');
+ reset role;
+ if not exists(select 1 from public.accounts where id=a and plan='seller' and plan_until=ending and logo_subscription_until=ending) then raise exception 'future purchase changed current access'; end if;
+ if (select count(*) from public.calendar_billing_cycles where account_id=a)<>1 then raise exception 'duplicate renewal'; end if;
+ update public.accounts set plan_until=now()-interval '1 second',logo_subscription_until=now()-interval '1 second' where id=a;
+ update public.calendar_billing_cycles set starts_at=now()-interval '1 second' where account_id=a;
+ update public.calendar_billing_orders set starts_at=now()-interval '1 second' where id=brand_id;
+ perform public.maintain_calendar_billing();
+ if not exists(select 1 from public.accounts where id=a and plan='operational' and plan_until>ending and logo_subscription_until=plan_until) then raise exception 'scheduled main and brand not activated'; end if;
+ set local role authenticated;
+ begin
+  perform public.admin_calendar_billing();
+  raise exception 'owner obtained admin billing';
+ exception when raise_exception then if sqlerrm<>'Только superadmin' then raise; end if; end;
+ reset role;
+ perform set_config('request.jwt.claim.sub',admin::text,true);
+ set local role authenticated;
+ perform public.admin_adjust_calendar_balance(op,a,100,'Test reconciliation credit');
+ perform public.admin_adjust_calendar_balance(op,a,100,'Test reconciliation credit');
+ perform public.admin_note_calendar_payment(gen_random_uuid(),brand_id,'Checked test payment; no automatic settlement');
+ q:=public.admin_calendar_billing_detail(a);
+ if jsonb_array_length(q->'audit')<>2 then raise exception 'duplicate admin audit'; end if;
+ reset role;
+ select count(*) into n from public.company_balance_entries where operation_id=op;
+ if n<>1 then raise exception 'duplicate admin money'; end if;
+end $$;
+rollback;

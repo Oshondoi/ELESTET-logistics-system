@@ -17,7 +17,7 @@ export function CalendarCheckout({accountId,onRefresh}:{accountId:string;onRefre
  useEffect(()=>{let current=true;rpc<State>('get_company_checkout_state',{p_account:accountId}).then(s=>{if(current)setState(s)}).catch(e=>{if(current)setError(e.message)});return()=>{current=false}},[accountId])
  useEffect(()=>{setQuote(null)},[plan,kind,tomorrow,useBalance])
  async function run(task:()=>Promise<void>){if(busy)return;setBusy(true);setError('');try{await task()}catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить действие')}finally{setBusy(false)}}
- const args={p_account:accountId,p_plan:kind==='brand'?'brand':plan,p_kind:kind,p_tomorrow:kind==='change'?false:tomorrow,p_use_balance:useBalance}
+ const args={p_account:accountId,p_plan:kind.startsWith('brand')?'brand':plan,p_kind:kind,p_tomorrow:['main','brand'].includes(kind)?tomorrow:false,p_use_balance:useBalance}
  async function create(){
   // Reconfirm the server quotation before reserving any wallet funds.
   const fresh=await rpc<Quote>('quote_company_checkout',args)
@@ -32,11 +32,11 @@ export function CalendarCheckout({accountId,onRefresh}:{accountId:string;onRefre
   {state?.cycle&&<p className="mt-2 text-sm">Использовано смен: {state.cycle.changes} из 3. Окно смены заканчивается {new Date(Date.parse(state.cycle.original_paid_at)+48*3600000).toLocaleString('ru-RU')}.</p>}
   <div className="mt-4 grid gap-3 sm:grid-cols-2">
    <label>Действие<select aria-label="Действие оплаты" disabled={busy} className="mt-1 w-full rounded-xl border p-3" value={kind} onChange={e=>{setKind(e.target.value);setTomorrow(false)}}>
-    <option value="main">Подключить основной тариф</option><option value="change">Сменить основной тариф</option><option value="brand">Подключить «Свой бренд»</option>
+    <option value="main">Подключить основной тариф</option><option value="renew">Продлить основной тариф на месяц</option><option value="change">Сменить основной тариф</option><option value="brand">Подключить «Свой бренд»</option><option value="brand_renew">Продлить «Свой бренд» на месяц</option>
    </select></label>
-   {kind!=='brand'&&<label>Тариф<select aria-label="Тариф оплаты" disabled={busy} className="mt-1 w-full rounded-xl border p-3" value={plan} onChange={e=>setPlan(e.target.value)}><option value="seller">Селлер</option><option value="operational">Операционный</option></select></label>}
+   {!kind.startsWith('brand')&&<label>Тариф<select aria-label="Тариф оплаты" disabled={busy} className="mt-1 w-full rounded-xl border p-3" value={plan} onChange={e=>setPlan(e.target.value)}><option value="seller">Селлер</option><option value="operational">Операционный</option></select></label>}
   </div>
-  {kind==='main'&&<label className="mt-3 block text-sm"><input type="checkbox" checked={tomorrow} disabled={busy} onChange={e=>setTomorrow(e.target.checked)}/> Начать завтра (доступно после 15-го числа)</label>}
+  {['main','brand'].includes(kind)&&<label className="mt-3 block text-sm"><input type="checkbox" checked={tomorrow} disabled={busy} onChange={e=>setTomorrow(e.target.checked)}/> Начать завтра (доступно после 15-го числа)</label>}
   {(state?.balance_som??0)>0&&<label className="mt-3 block text-sm"><input type="checkbox" checked={useBalance} disabled={busy} onChange={e=>setUseBalance(e.target.checked)}/> Использовать баланс для полной или частичной оплаты</label>}
   <button disabled={busy||!state} onClick={()=>void run(async()=>setQuote(await rpc<Quote>('quote_company_checkout',args)))} className="mt-4 rounded-xl border px-4 py-2">Рассчитать на сервере</button>
   {quote&&<div className="mt-4 rounded-xl bg-slate-50 p-4">

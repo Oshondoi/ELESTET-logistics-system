@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
+import { CalendarBillingAdmin } from '../components/admin/CalendarBillingAdmin'
 import { validatePassword, normalizePassword, passwordsMatch } from '../lib/passwordUtils'
 import { ensureAuthenticatedSession, refreshAuthenticatedSession } from '../lib/authSession'
 import { toUserMessage } from '../lib/userMessage'
@@ -180,7 +181,7 @@ const SetPlanForm = ({ account, onDone, onCancel }: SetPlanFormProps) => {
 
 /* ─── AdminPage ─────────────────────────────────────────────────────── */
 const ADMIN_TAB_KEY = 'elestet-admin-tab'
-type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners' | 'request_links' | 'implementation'
+type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners' | 'request_links' | 'implementation' | 'calendar_billing'
 
 export const AdminPage = ({
   platformRole = 'user',
@@ -453,6 +454,7 @@ export const AdminPage = ({
     ...(isSuperAdmin ? [{ key: 'request_links' as const, label: 'Ссылки заявок' }] : []),
     ...(isSuperAdmin ? [{ key: 'implementation' as const, label: 'Внедрение' }] : []),
     ...(isSuperAdmin ? [{ key: 'payment' as const, label: 'Интеграция оплаты' }] : []),
+    ...(isSuperAdmin ? [{ key: 'calendar_billing' as const, label: 'Заказы и баланс' }] : []),
   ]
 
   const downloadPaymentDoc = () => {
@@ -668,6 +670,7 @@ export const AdminPage = ({
         ))}
       </div>
 
+      {activeTab === 'calendar_billing' && isSuperAdmin && <CalendarBillingAdmin />}
       {/* ═══ TAB: Пользователи ═══════════════════════════════════════ */}
       {activeTab === 'users' && (
         <Card className="overflow-hidden rounded-3xl">
