@@ -83,7 +83,7 @@ export const useAuth = () => {
       email,
       password: normalizePassword(password),
       options: {
-        emailRedirectTo: emailRequestAt ? EMAIL_REQUEST_PREFIX + emailRequestAt : createEmailCodeRequest().redirectTo,
+        emailRedirectTo: emailRequestAt ? EMAIL_REQUEST_PREFIX + emailRequestAt : (await createEmailCodeRequest(email, 'signup')).redirectTo,
         data: {
           full_name: fullName,
         },
@@ -117,7 +117,7 @@ export const useAuth = () => {
 
   const resetPasswordForEmail = async (email: string) => {
     if (!supabase) throw new Error('Supabase не настроен')
-    const redirectTo = `${window.location.origin}/reset-password`
+    const { redirectTo } = await createEmailCodeRequest(email, 'recovery')
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo })
     if (error) throw error
   }

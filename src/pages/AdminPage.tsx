@@ -22,6 +22,7 @@ import { adminGetPlanConfigs, adminUpsertPlanConfig } from '../services/planConf
 import type { PlanConfig } from '../services/planConfigService'
 import { ScannerModelsAdminTab } from '../components/admin/ScannerModelsAdminTab'
 import { RequestLinksAdminTab } from '../components/admin/RequestLinksAdminTab'
+import { ImplementationInquiriesTab } from '../components/admin/ImplementationInquiriesTab'
 
 interface AdminUser {
   id: string
@@ -179,7 +180,7 @@ const SetPlanForm = ({ account, onDone, onCancel }: SetPlanFormProps) => {
 
 /* ─── AdminPage ─────────────────────────────────────────────────────── */
 const ADMIN_TAB_KEY = 'elestet-admin-tab'
-type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners' | 'request_links'
+type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners' | 'request_links' | 'implementation'
 
 export const AdminPage = ({
   platformRole = 'user',
@@ -450,6 +451,7 @@ export const AdminPage = ({
     ...(canEdit ? [{ key: 'plans' as const, label: 'Тарифы' }] : []),
     ...(canEdit ? [{ key: 'scanners' as const, label: 'Сканеры' }] : []),
     ...(isSuperAdmin ? [{ key: 'request_links' as const, label: 'Ссылки заявок' }] : []),
+    ...(isSuperAdmin ? [{ key: 'implementation' as const, label: 'Внедрение' }] : []),
     ...(isSuperAdmin ? [{ key: 'payment' as const, label: 'Интеграция оплаты' }] : []),
   ]
 
@@ -1600,6 +1602,7 @@ export const AdminPage = ({
       {/* ═══ TAB: Сканеры ═══════════════════════════════════════ */}
       {activeTab === 'scanners' && canEdit && <ScannerModelsAdminTab />}
       {activeTab === 'request_links' && isSuperAdmin && <RequestLinksAdminTab />}
+      {activeTab === 'implementation' && isSuperAdmin && <ImplementationInquiriesTab />}
     </div>
   )
 }

@@ -10,6 +10,7 @@ export function SignupConfirmationForm({ email, justSent, initialRequestedAt, on
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [sending, setSending] = useState(false)
   const locked = useRef(false)
   const [retryAt, setRetryAt] = useState(() => justSent ? Date.now() + 60_000 : 0)
   const [now, setNow] = useState(Date.now())
@@ -23,11 +24,12 @@ export function SignupConfirmationForm({ email, justSent, initialRequestedAt, on
     if (!supabase || locked.current || (resend && Date.now() < retryAt)) return
     locked.current = true
     setBusy(true)
+    setSending(resend)
     setError('')
     try {
-      const request = createEmailCodeRequest()
+      const request = resend ? await createEmailCodeRequest(email, 'signup') : null
       const result = resend
-        ? await supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: request.redirectTo } })
+        ? await supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: request!.redirectTo } })
         : await supabase.auth.verifyOtp({ type: 'signup', email, token: code })
       if (result.error) {
         if (result.error.status === 429) {
@@ -38,18 +40,18 @@ export function SignupConfirmationForm({ email, justSent, initialRequestedAt, on
         }
         return
       }
-      if (resend) { setRequestedAt(request.requestedAt); setRetryAt(Date.now() + 60_000); setNow(Date.now()); setCode('') }
+      if (resend) { setRequestedAt(request!.requestedAt); setRetryAt(Date.now() + 60_000); setNow(Date.now()); setCode('') }
       // Successful signup verification establishes the main Auth session.
     } catch {
       setError('Не удалось выполнить запрос. Проверьте соединение и повторите попытку.')
-    } finally { locked.current = false; setBusy(false) }
+    } finally { locked.current = false; setBusy(false); setSending(false) }
   }
 
-  return <div className="grid gap-4">
+  return <div className="grid h-[520px] content-start gap-4 overflow-auto">
     <h2 className="text-lg font-semibold text-slate-800">Подтвердите почту</h2>
-    <EmailCodeRequestHint requestedAt={requestedAt} />
+    <EmailCodeRequestHint requestedAt={requestedAt} sending={sending} />
     <p className="text-sm text-slate-600">Введите шестизначный код из письма на <strong className="break-all">{email}</strong>, чтобы завершить регистрацию.</p>
-    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    <div className="h-20 overflow-auto">{error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}</div>
     <form className="grid gap-4" onSubmit={e => { e.preventDefault(); void submit(false) }}>
       <Input label="Код подтверждения" placeholder="Шестизначный код" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} required disabled={busy} />
       <Button type="submit" disabled={busy || code.length !== 6}>Подтвердить почту</Button>

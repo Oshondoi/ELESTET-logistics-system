@@ -26,7 +26,8 @@ await page.route('**/*.supabase.co/**',async route=>{
   const body=route.request().postDataJSON();
   calls.push({path:url.pathname,body});
   let result=[];
-  if(url.pathname.endsWith('/service_requests')) result=rows;
+  if(url.pathname.endsWith('/reserve_email_delivery_number')) result={number:String(calls.filter(c=>c.path.endsWith('/reserve_email_delivery_number')).length),requested_at:'2026-10-05T12:00:00Z'};
+  else if(url.pathname.endsWith('/service_requests')) result=rows;
   else if(url.pathname.endsWith('/create_service_request_invite')) result={token:'44444444-4444-4444-8444-444444444444'};
   else if(url.pathname.endsWith('/list_recent_request_executors')||url.pathname.endsWith('/search_executor_accounts')) result=[{id:executor,short_id:3,name:'Executor'}];
   else if(url.pathname.endsWith('/create_service_request_from_form')) { rows=[{id:account,short_id:91,status:'draft',current_version:0,title:body.p_title,applicant_account_id:account,executor_account_id:executor,executor_company_name:'Executor',executor_company_short_id:3,applicant_name:'Tester',applicant_email:'fixture@example.invalid',stores:[],created_at:new Date().toISOString()}]; result=rows[0]; }

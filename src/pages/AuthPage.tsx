@@ -112,7 +112,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         return
       }
 
-      const request = createEmailCodeRequest()
+      const request = await createEmailCodeRequest(values.email, 'signup')
       await onSignUp({
         emailRequestAt: request.requestedAt,
         fullName: values.fullName.trim(),

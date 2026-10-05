@@ -17,6 +17,7 @@ interface PermGroup {
 }
 
 const PERMISSION_GROUPS: PermGroup[] = [
+  { label: 'Свой бренд', items: [{ key: 'brand_manage', label: 'Настройка бренда и логотипов' }] },
   {
     label: 'Склад',
     items: [

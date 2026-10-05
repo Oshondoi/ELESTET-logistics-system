@@ -39,6 +39,7 @@ const permLabels: Record<string, string> = {
   shipments_manage_payments: 'Управление оплатой',
   stores_view: 'Магазины (просмотр)',
   stores_manage: 'Магазины (управление)',
+  brand_manage: 'Свой бренд (настройки)',
   stores_delete: 'Удаление магазинов',
   stores_sync: 'Синхронизация с WB',
   directories_view: 'Справочники (просмотр)',

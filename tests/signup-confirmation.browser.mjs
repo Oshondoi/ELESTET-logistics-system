@@ -16,6 +16,7 @@ try {
     const path=new URL(route.request().url()).pathname, body=route.request().postDataJSON();
     calls.push({path,body,url:route.request().url()});
     let result={}, status=200;
+    if(path.endsWith('/reserve_email_delivery_number')) result={number:String(calls.filter(c=>c.path.endsWith('/reserve_email_delivery_number')).length),requested_at:'2026-10-05T12:00:00Z'};
     if(path.endsWith('/signup')) result=user;
     if(path.endsWith('/token')) {status=400;result={code:'email_not_confirmed',error_code:'email_not_confirmed',msg:'Email not confirmed'};}
     if(path.endsWith('/verify')) {

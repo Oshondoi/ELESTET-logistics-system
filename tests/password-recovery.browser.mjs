@@ -17,6 +17,7 @@ try {
     const body = route.request().postDataJSON();
     calls.push({path,body,url:route.request().url()});
     let result = {}, status = 200;
+    if(path.endsWith('/reserve_email_delivery_number')) result={number:String(calls.filter(c=>c.path.endsWith('/reserve_email_delivery_number')).length),requested_at:'2026-10-05T12:00:00Z'};
     if(path.endsWith('/verify')) {
       if(body.token === '123456' && body.email === user.email) result={access_token:access,refresh_token:'fixture-refresh',token_type:'bearer',expires_in:3600,user};
       else {status=403;result={code:'otp_expired',msg:'Token has expired or is invalid'};}

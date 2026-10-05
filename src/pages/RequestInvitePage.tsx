@@ -383,7 +383,7 @@ export const RequestInvitePage = ({
     setBusy(true);
     setError("");
     try {
-      const request = createEmailCodeRequest();
+      const request = await createEmailCodeRequest(targetEmail, 'invite');
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: targetEmail,
         options: { emailRedirectTo: request.redirectTo, shouldCreateUser: purpose === "bind", ...(purpose === "bind" ? { data: { full_name: name.trim() } } : {}) },
@@ -520,7 +520,7 @@ export const RequestInvitePage = ({
             {otpStep === "code" ? "Подтвердите почту" : otpStep === "password" ? "Создайте пароль" : "Подтвердите замену ссылки"}
           </h1>
           <p className="mt-2 text-sm text-slate-500">{email}</p>
-          {error && <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}
+          <div className="mt-3 h-20 overflow-auto">{error && <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}</div>
           {otpStep === "code" && <>
             <EmailCodeRequestHint requestedAt={emailRequestAt} />
             <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g,""))} placeholder="Шестизначный код" className="mt-5 w-full rounded-xl border px-3 py-2.5" />

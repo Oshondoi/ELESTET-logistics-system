@@ -20,18 +20,21 @@ func main() {
  }
  for name, content := range subjects {
   t := template.Must(template.New(name).Parse(content))
-  for _, redirect := range []string{"", "https://elestet.net/", "https://elestet.net/auth-email/2026-10-02T01:52:30Z", "https://elestet.net/auth-email/2026-10-02T01:53:31Z"} {
+  for _, redirect := range []string{"", "https://elestet.net/", "https://elestet.net/auth-email/2026-10-02T01:52:30Z", "https://elestet.net/auth-email/2026-10-02T01:52:30Z/1", "https://elestet.net/auth-email/2026-10-02T01:53:31Z/12345"} {
    var out bytes.Buffer
    err := t.Execute(&out, map[string]any{"RedirectTo": redirect, "Token": "123456"}); if err != nil { panic(err) }
    rendered := out.String()
-   if strings.Contains(redirect, "auth-email") {
+   if len(redirect) >= 53 {
     stamp := redirect[len("https://elestet.net/auth-email/"):]
     expected := "02.10.2026, "+stamp[11:19]+" UTC"
-    if !strings.Contains(rendered, expected) { panic("timestamp mismatch: "+name) }
+    number := redirect[52:]
+    if !strings.Contains(strings.ToLower(rendered), "письмо №"+number) { panic("number mismatch: "+name) }
+    if strings.HasSuffix(name, "_body") && !strings.Contains(rendered, expected) { panic("timestamp mismatch: "+name) }
+    if strings.HasPrefix(name, "mailer_subjects_") && strings.Contains(rendered, "UTC") { panic("timestamp in subject") }
    } else if strings.Contains(rendered, "UTC") { panic("fabricated timestamp: "+name) }
    if strings.HasPrefix(name, "mailer_subjects_") && strings.Contains(rendered, "123456") { panic("OTP in subject") }
    if strings.Contains(rendered, "href=") { panic("unexpected confirmation link") }
   }
  }
- fmt.Println("email_templates_ok: Go subject/body rendering, timestamps, resends, legacy fallback, no OTP in subject")
+ fmt.Println("email_templates_ok: matching numbers, footer timestamps, resends, legacy fallback, no OTP in subject")
 }

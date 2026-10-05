@@ -45,7 +45,7 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
     await run(async () => {
       // /recover deliberately returns the same response for missing accounts;
       // unlike /otp it never signs an unknown email up.
-      const request = createEmailCodeRequest()
+      const request = await createEmailCodeRequest(email, 'recovery')
       const { error: sendError } = await client.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: request.redirectTo,
       })
@@ -88,9 +88,9 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
     })
   }
 
-  return <div className="grid gap-4">
+  return <div className="grid h-[580px] content-start gap-4 overflow-auto">
     <h2 className="text-lg font-semibold text-slate-800">Восстановление пароля</h2>
-    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    <div className="h-20 overflow-auto">{error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}</div>
     {step === 'email' && <form className="grid gap-4" onSubmit={e => { e.preventDefault(); void sendCode() }}>
       <Input label="Email" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} required disabled={busy} />
       <Button type="submit" disabled={busy || remaining > 0}>{remaining > 0 ? `Отправить код через ${remaining} с` : busy ? 'Отправка…' : 'Отправить код'}</Button>

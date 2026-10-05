@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card } from '../components/ui/Card'
+import { ImplementationInquiryForm } from '../components/accounts/ImplementationInquiryForm'
+import { CompanyBrandSettings } from '../components/accounts/CompanyBrandSettings'
 import { getBillingStatus, trialDaysLeft, graceDaysLeft } from '../lib/plans'
 import type { ActiveOverride } from '../lib/plans'
 import { activateGracePeriod } from '../services/billingService'
@@ -292,6 +294,8 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
         )}
       </div>
 
+      <ImplementationInquiryForm key={activeAccount.id} accountId={activeAccount.id} />
+      <CompanyBrandSettings key={`brand-${activeAccount.id}`} accountId={activeAccount.id} />
       {/* Контакт */}
       <Card className="rounded-3xl p-5 text-center">
         <p className="text-sm text-slate-600">
