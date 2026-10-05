@@ -161,7 +161,7 @@ export const MyRequestDraftsPage = ({ onMaterialized, onSignOut, onCreateCompany
       <div className="flex items-center justify-between gap-4">
         <div><p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Клиентский кабинет</p>
           <h1 className="mt-1 text-2xl font-semibold">Мои заявки</h1></div>
-        <div className="flex gap-2">{onBack && <button type="button" onClick={onBack} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">В ELESTET</button>}
+        <div className="flex gap-2">{onBack && <button type="button" onClick={onBack} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">В основной кабинет</button>}
           <button type="button" onClick={onSignOut} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">Выйти</button></div>
       </div>
       {error && <p className="mt-4 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-600">{error}</p>}
