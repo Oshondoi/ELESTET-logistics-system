@@ -6,7 +6,7 @@ import { CompanyBrandSettings } from '../components/accounts/CompanyBrandSetting
 import { getBillingStatus, trialDaysLeft, graceDaysLeft } from '../lib/plans'
 import type { ActiveOverride } from '../lib/plans'
 import { activateGracePeriod } from '../services/billingService'
-import { createPaymentOrder } from '../services/paymentService'
+import { CalendarCheckout } from '../components/accounts/CalendarCheckout'
 import { getPlanConfigs } from '../services/planConfigService'
 import type { PlanConfig } from '../services/planConfigService'
 import type { Account } from '../types'
@@ -28,13 +28,6 @@ const FALLBACK_PLANS: PlanConfig[] = [
   { key: 'operational', label: 'Операционный', description: 'Для фулфилмент-центров, цехов и карго',   features: ['Фулфилмент + Пайплайн','Логистика','Магазины','Товары','Справочники','Стикеры и КИЗы','Аутсорс B2B','Счета','Роли'],                              price_sale: 17000, price_full: null, sort_order: 2 },
   { key: 'premium',     label: 'Премиум',      description: 'Всё включено — сейчас и в будущем',       features: ['Всё из Операционного','White-label (логотип + заголовок вкладки)'],                                                                               price_sale: 20000, price_full: null, sort_order: 3 },
 ]
-const PERIOD_OPTIONS = [
-  { months: 1,  label: '1 мес',     discount: 0 },
-  { months: 2,  label: '2 мес',     discount: 0 },
-  { months: 3,  label: '3 мес',     discount: 0 },
-  { months: 6,  label: '6 мес',     discount: 0 },
-  { months: 12, label: '12 мес',    discount: 0 },
-]
 // ──────────────────────────────────────────────────────────────
 
 export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverride }: SubscriptionPageProps) => {
@@ -42,9 +35,6 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
   const [graceLoading, setGraceLoading] = useState(false)
   const [graceError, setGraceError] = useState<string | null>(null)
   const [showGracePopup, setShowGracePopup] = useState(true)
-  const [selectedMonths, setSelectedMonths] = useState<Record<string, number>>({ seller: 1, operational: 1, premium: 1 })
-  const [payLoading, setPayLoading] = useState<string | null>(null)
-  const [payError, setPayError] = useState<string | null>(null)
   const [plans, setPlans] = useState<PlanConfig[]>([])
   const [plansLoading, setPlansLoading] = useState(true)
 
@@ -82,30 +72,6 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
     }
   }
 
-  const handlePay = async (planKey: string) => {
-    if (!activeAccount) return
-    setPayLoading(planKey)
-    setPayError(null)
-    try {
-      const months = selectedMonths[planKey] ?? 1
-      const planCfg = plans.find((p) => p.key === planKey)
-      const base = (planCfg?.price_sale && planCfg.price_sale > 0) ? planCfg.price_sale : (planCfg?.price_full ?? 0)
-      const discount = PERIOD_OPTIONS.find((o) => o.months === months)?.discount ?? 0
-      const amount = Math.round(base * months * (1 - discount / 100))
-      const result = await createPaymentOrder({
-        account_id:   activeAccount.id,
-        plan:         planKey as 'seller' | 'operational' | 'premium',
-        months,
-        amount_som:   amount,
-        discount_pct: discount,
-      })
-      window.location.href = result.payment_url
-    } catch (e) {
-      setPayError(e instanceof Error ? e.message : 'Ошибка создания платежа')
-    } finally {
-      setPayLoading(null)
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -196,7 +162,7 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
         {plansLoading && <p className="py-6 text-center text-sm text-slate-400">Загрузка тарифов...</p>}
         {!plansLoading && (
           <div className={`grid gap-4 ${plans.length === 3 ? 'sm:grid-cols-3' : plans.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-1'}`}>
-            {plans.map((plan) => (
+            {plans.filter(plan => plan.key === 'seller' || plan.key === 'operational').map((plan) => (
               <Card
                 key={plan.key}
                 className={`rounded-3xl p-5 ${
@@ -227,73 +193,16 @@ export const SubscriptionPage = ({ activeAccount, onAccountRefresh, activeOverri
                     </li>
                   ))}
                 </ul>
-                <div className="mt-5">
-                  <p className="mb-2 text-xs text-slate-500">Период</p>
-                  <div className="mb-3 flex flex-wrap gap-1.5">
-                    {PERIOD_OPTIONS.map((opt) => {
-                      const isSelected = (selectedMonths[plan.key] ?? 1) === opt.months
-                      return (
-                        <button
-                          key={opt.months}
-                          type="button"
-                          onClick={() => setSelectedMonths((prev) => ({ ...prev, [plan.key]: opt.months }))}
-                          className={`rounded-xl px-3 py-1 text-xs font-semibold transition ${
-                            isSelected ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                          }`}
-                        >
-                          {opt.label}
-                          {opt.discount > 0 && (
-                            <span className={`ml-1 ${isSelected ? 'text-blue-200' : 'text-emerald-600'}`}>
-                              −{opt.discount}%
-                            </span>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  {/* Итоговая сумма */}
-                  {(() => {
-                    const months = selectedMonths[plan.key] ?? 1
-                    const discount = PERIOD_OPTIONS.find((o) => o.months === months)?.discount ?? 0
-                    const basePrice = plan.price_sale > 0 ? plan.price_sale : (plan.price_full ?? 0)
-                    const total = Math.round(basePrice * months * (1 - discount / 100))
-                    const full = basePrice * months
-                    return (
-                      <div className="mb-3 flex items-baseline gap-2">
-                        <span className="text-xl font-black text-slate-800">
-                          {total.toLocaleString('ru-RU')} сом
-                        </span>
-                        {discount > 0 && (
-                          <span className="text-xs text-slate-400 line-through">
-                            {full.toLocaleString('ru-RU')} сом
-                          </span>
-                        )}
-                        <span className="text-xs text-slate-400">/ {months} мес.</span>
-                      </div>
-                    )
-                  })()}
-                  {payError && payLoading === null && (
-                    <p className="mb-2 text-xs text-rose-500">{payError}</p>
-                  )}
-                  <button
-                    type="button"
-                    disabled={payLoading === plan.key}
-                    onClick={() => void handlePay(plan.key)}
-                    className={`w-full rounded-xl py-2.5 text-sm font-semibold transition ${
-                      plan.key === 'premium'
-                        ? 'bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50'
-                        : 'bg-slate-800 text-white hover:bg-slate-900 disabled:opacity-50'
-                    }`}
-                  >
-                    {payLoading === plan.key ? 'Обработка...' : 'Оплатить'}
-                  </button>
-                </div>
+                <p className="mt-5 text-sm text-slate-500">Расчёт и оформление — в блоке оплаты ниже.</p>
               </Card>
             ))}
           </div>
         )}
       </div>
 
+      <CalendarCheckout key={`checkout-${activeAccount.id}`} accountId={activeAccount.id} onRefresh={onAccountRefresh} />
+      <Card className="rounded-3xl p-5"><h2 className="text-lg font-semibold">Свой бренд</h2><p className="mt-2"><s className="mr-2 text-slate-400">10 000 сом</s>5 000 сом / месяц, отдельно от основного тарифа.</p><p className="mt-2 text-sm text-slate-500">Без пробного периода. Требуется действующий основной тариф.</p></Card>
+      <Card className="rounded-3xl p-5"><h2 className="text-lg font-semibold">Премиум — с внедрением</h2><p className="mt-2">Внедрение: 90 000 сом, отдельно от регулярного тарифа.</p><p className="mt-2 text-sm text-slate-500">Состав работ и дата запуска согласовываются с командой. Оплата не запускает внедрение автоматически.</p></Card>
       <ImplementationInquiryForm key={activeAccount.id} accountId={activeAccount.id} />
       <CompanyBrandSettings key={`brand-${activeAccount.id}`} accountId={activeAccount.id} />
       {/* Контакт */}
