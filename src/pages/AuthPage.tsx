@@ -26,6 +26,7 @@ const initialValues = {
 
 export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageProps) => {
   const [emailRequestAt, setEmailRequestAt] = useState<string | null>(null)
+  const [emailSender, setEmailSender] = useState<string | null>(null)
   const [mode, setMode] = useState<AuthMode>('sign-in')
   const [values, setValues] = useState(initialValues)
   const [showPassword, setShowPassword] = useState(false)
@@ -122,6 +123,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
 
       setConfirmationJustSent(true)
       setEmailRequestAt(request.requestedAt)
+      setEmailSender(request.senderName)
       setMode('confirm')
       setValues((current) => ({ ...current, password: '', confirmPassword: '' }))
     } catch (submitError) {
@@ -170,7 +172,7 @@ export const AuthPage = ({ isSupabaseConfigured, onSignIn, onSignUp }: AuthPageP
         {mode === 'forgot' && (
           <PasswordRecoveryForm initialEmail={values.email} onBack={() => { setMode('sign-in'); setError(null) }} />
         )}
-        {mode === 'confirm' && <SignupConfirmationForm email={values.email.trim()} justSent={confirmationJustSent} initialRequestedAt={emailRequestAt} onBack={() => { setMode('sign-in'); setError(null) }} />}
+        {mode === 'confirm' && <SignupConfirmationForm email={values.email.trim()} justSent={confirmationJustSent} initialRequestedAt={emailRequestAt} initialSenderName={emailSender} onBack={() => { setMode('sign-in'); setError(null) }} />}
 
         {/* ── Режим: Вход / Регистрация ── */}
         {(mode === 'sign-in' || mode === 'sign-up') && (<>

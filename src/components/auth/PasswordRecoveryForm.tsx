@@ -24,6 +24,7 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
   const inFlight = useRef(false)
   const [retryAt, setRetryAt] = useState(0)
   const [requestedAt, setRequestedAt] = useState<string | null>(null)
+  const [senderName, setSenderName] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
   const remaining = Math.max(0, Math.ceil((retryAt - now) / 1000))
   useEffect(() => {
@@ -51,6 +52,7 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
       })
       if (sendError && sendError.status !== 429) throw sendError
       setRequestedAt(sendError ? null : request.requestedAt)
+      setSenderName(sendError ? null : request.senderName)
       setCode('')
       setStep('code')
       setRetryAt(Date.now() + 60_000)
@@ -98,7 +100,7 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
     {step === 'code' && <>
       <p className="text-sm text-slate-600">{RECOVERY_MESSAGE}</p>
       <p className="break-all text-sm font-medium">{email.trim()}</p>
-      <EmailCodeRequestHint requestedAt={requestedAt} />
+      <EmailCodeRequestHint requestedAt={requestedAt} senderName={senderName} />
       <form className="grid gap-4" onSubmit={e => { e.preventDefault(); void verifyCode() }}>
         <Input label="Код из письма" placeholder="Шестизначный код" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} required disabled={busy} />
         <Button type="submit" disabled={busy || code.length !== 6}>Подтвердить код</Button>

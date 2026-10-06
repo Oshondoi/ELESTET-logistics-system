@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { InviteDeleteDialog } from "./InviteDeleteDialog";
+import { inviteStateLabel, inviteDate, inviteTerm } from "../../lib/invitePresentation";
 
 interface LinkRow {
   id: string;
@@ -17,16 +18,12 @@ interface LinkRow {
   email_confirmed: boolean | null;
   request_count: number;
   batch_count: number;
+  ended_at: string | null;
+  end_reason: string | null;
+  auth_created_at: string | null;
+  company_created_at: string | null;
+  is_available: boolean;
 }
-
-const stateLabel: Record<string, string> = {
-  active: "Активна 30 дней",
-  reserved: "Зарезервирована",
-  bound: "Привязана бессрочно",
-  replaced: "Заменена",
-  expired: "Истекла",
-  deleted: "Удалена",
-};
 
 export const RequestLinksAdminTab = () => {
   const [rows, setRows] = useState<LinkRow[]>([]);
@@ -36,10 +33,9 @@ export const RequestLinksAdminTab = () => {
   const [deleting, setDeleting] = useState<string | null>(null);
   const load = useCallback(async () => {
     if (!supabase) return;
-    setLoading(true);
     setError("");
     const { data, error: rpcError } = await (supabase as any).rpc(
-      "admin_list_service_request_invites",
+      "admin_list_service_request_invites_v2",
     );
     if (rpcError) setError(rpcError.message);
     else setRows((data ?? []) as LinkRow[]);
@@ -47,6 +43,10 @@ export const RequestLinksAdminTab = () => {
   }, []);
   useEffect(() => {
     void load();
+    const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 60000);
+    const wake = () => void load();
+    window.addEventListener('focus', wake);
+    return () => { clearInterval(timer); window.removeEventListener('focus', wake); };
   }, [load]);
 
   const act = async (fn: string, row: LinkRow, question: string) => {
@@ -58,11 +58,13 @@ export const RequestLinksAdminTab = () => {
     else await load();
   };
   const copy = async (row: LinkRow) => {
-    await navigator.clipboard.writeText(
+    if (!row.is_available) return;
+    try { await navigator.clipboard.writeText(
       `${window.location.origin}/request-invite/${row.token}`,
     );
     setCopied(row.id);
     window.setTimeout(() => setCopied(null), 900);
+    } catch { setError('Не удалось скопировать ссылку'); }
   };
 
   if (loading)
@@ -90,6 +92,7 @@ export const RequestLinksAdminTab = () => {
               <th className="px-3 py-3">Почта</th>
               <th className="px-3 py-3">R / P</th>
               <th className="px-3 py-3">Срок</th>
+              <th className="px-3 py-3">Прекращение · Бишкек</th>
               <th className="px-3 py-3" />
             </tr>
           </thead>
@@ -98,14 +101,15 @@ export const RequestLinksAdminTab = () => {
               <tr key={row.id}>
                 <td className="px-3 py-3">
                   <button
+                    disabled={!row.is_available}
                     onClick={() => void copy(row)}
                     className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 ${copied === row.id ? "bg-emerald-50 text-emerald-700" : "text-blue-600 hover:bg-blue-50"}`}
                   >
-                    Копировать ссылку <span aria-hidden>⧉</span>
+                    {row.is_available ? 'Копировать ссылку' : 'Ссылка недоступна'} <span aria-hidden>⧉</span>
                   </button>
                 </td>
                 <td className="px-3 py-3">
-                  {stateLabel[row.state] ?? row.state}
+                  {inviteStateLabel[row.state] ?? row.state}
                   <div className="text-xs text-slate-400">
                     {row.applicant_name
                       ? "Компания создана"
@@ -123,7 +127,8 @@ export const RequestLinksAdminTab = () => {
                 <td className="px-3 py-3">
                   {row.applicant_name
                     ? `C-${row.applicant_short_id} · ${row.applicant_name}`
-                    : "—"}
+                      : "—"}
+                  <div className="text-xs text-slate-400">Создана: {inviteDate(row.company_created_at)}</div>
                 </td>
                 <td className="px-3 py-3">
                   {row.reserved_name || "—"}
@@ -139,15 +144,16 @@ export const RequestLinksAdminTab = () => {
                     : row.email_confirmed
                       ? "Подтверждена"
                       : "Не подтверждена"}
+                  <div className="text-xs text-slate-400">Аккаунт: {inviteDate(row.auth_created_at)}</div>
                 </td>
                 <td className="px-3 py-3">
                   {row.request_count} / {row.batch_count}
                 </td>
                 <td className="px-3 py-3">
-                  {row.state === "bound"
-                    ? "Бессрочно"
-                    : new Date(row.expires_at).toLocaleDateString("ru-RU")}
+                  {inviteTerm(row.state, row.expires_at)}
+                  <div className="text-xs text-slate-400">Бишкек</div>
                 </td>
+                <td className="px-3 py-3">{row.end_reason || '—'}<div className="text-xs text-slate-400">{inviteDate(row.ended_at)}</div></td>
                 <td className="px-3 py-3">
                   <div className="flex justify-end gap-1">
                     <a

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BrandLogo, useBrand } from "../components/accounts/BrandContext";
 import { createEmailCodeRequest } from "../lib/emailCodeRequest";
 import { EmailCodeRequestHint } from "../components/auth/EmailCodeRequestHint";
+import { inviteStateLabel, inviteDate, inviteTerm } from "../lib/invitePresentation";
 import type {
   Account,
   ExecutorAccountSearchResult,
@@ -96,11 +97,16 @@ const AdminPreview = ({ data }: { data: AdminInvitePreview }) => (
         </div>
         <div className="rounded-2xl bg-slate-50 p-4">
           <span className="text-slate-400">Состояние</span>
-          <p className="mt-1 font-medium">{data.state}</p>
+          <p className="mt-1 font-medium">{inviteStateLabel[data.state] ?? data.state}</p>
+          <p className="text-xs">Срок: {inviteTerm(data.state, data.expires_at)} · Бишкек</p>
+          {data.end_reason && <p className="text-xs">{data.end_reason} · {inviteDate(data.ended_at)}</p>}
         </div>
         <div className="rounded-2xl bg-slate-50 p-4">
-          <span className="text-slate-400">Почта резерва</span>
-          <p className="mt-1 font-medium">{data.reserve?.email || "—"}</p>
+          <span className="text-slate-400">Почта заявителя</span>
+          <p className="mt-1 font-medium">{data.email || data.reserve?.email || "—"}</p>
+          <p className="text-xs">{data.email_confirmed == null ? 'Нет данных о подтверждении' : data.email_confirmed ? 'Подтверждена' : 'Не подтверждена'}</p>
+          <p className="text-xs">Аккаунт: {inviteDate(data.auth_created_at)} · Бишкек</p>
+          <p className="text-xs">Компания: {inviteDate(data.company_created_at)} · Бишкек</p>
         </div>
       </div>
       <h2 className="mt-6 font-semibold">Заявки</h2>
@@ -151,6 +157,7 @@ export const RequestInvitePage = ({
   const [recoverPassword, setRecoverPassword] = useState(false);
   const [otpRetryAt, setOtpRetryAt] = useState(0);
   const [emailRequestAt, setEmailRequestAt] = useState<string | null>(null);
+  const [emailSender, setEmailSender] = useState<string | null>(null);
   const [otpNow, setOtpNow] = useState(Date.now());
   const otpRemaining = Math.max(0, Math.ceil((otpRetryAt - otpNow) / 1000));
   useEffect(() => {
@@ -398,6 +405,7 @@ export const RequestInvitePage = ({
       });
       if (otpError) throw otpError;
       setEmailRequestAt(request.requestedAt);
+      setEmailSender(request.senderName);
       setOtpRetryAt(Date.now() + 60_000);
       setOtpNow(Date.now());
       setEmail(targetEmail);
@@ -541,7 +549,7 @@ export const RequestInvitePage = ({
           <p className="mt-2 h-10 overflow-auto break-all text-sm text-slate-500">{email}</p>
           <div className="mt-3 h-20 overflow-auto">{error && <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>}</div>
           {otpStep === "code" && <>
-            <EmailCodeRequestHint requestedAt={emailRequestAt} sending={emailSending} />
+            <EmailCodeRequestHint requestedAt={emailRequestAt} sending={emailSending} senderName={emailSender} />
             <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g,""))} placeholder="Шестизначный код" className="mt-5 w-full rounded-xl border px-3 py-2.5" />
             <button type="submit" disabled={busy || otpCode.length !== 6} className="mt-3 w-full rounded-2xl bg-blue-600 py-2.5 font-medium text-white disabled:opacity-50">Проверить код</button>
             <button type="button" disabled={busy || otpRemaining > 0} onClick={() => void sendEmailCode(otpPurpose)} className="mt-3 w-full text-sm text-blue-600 disabled:opacity-50">{otpRemaining > 0 ? `Отправить повторно через ${otpRemaining} с` : "Отправить код повторно"}</button>

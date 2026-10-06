@@ -16,7 +16,7 @@ try {
    preserved:['Аккаунт, подтверждённая почта и пароль','Компания, её сотрудники, роли, настройки и подписка'],notice:'Удаление необратимо.'});
   await page.route('**/*.supabase.co/**',async route=>{
    const name=new URL(route.request().url()).pathname.split('/').at(-1),body=route.request().postDataJSON();calls.push({name,body});
-   if(name==='admin_list_service_request_invites')return route.fulfill({json:removed?[]:[{id,token:id,state:'active',expires_at:'2099-01-01',executor_name:'Исполнитель',request_count:1,batch_count:1}]});
+   if(name==='admin_list_service_request_invites_v2')return route.fulfill({json:removed?[]:[{id,token:id,state:'active',expires_at:'2099-01-01',executor_name:'Исполнитель',request_count:1,batch_count:1,is_available:true}]});
    if(name==='admin_preview_invite_deletion') {
     if(fail)return route.fulfill({status:500,json:{message:'internal SQL error'}});
     return route.fulfill({json:makePreview()});

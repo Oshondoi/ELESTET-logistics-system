@@ -332,6 +332,13 @@ export const submitServiceRequestInviteReserve = async (
 export interface AdminInvitePreview {
   invite_id: string;
   state: string;
+  expires_at?: string;
+  ended_at?: string | null;
+  end_reason?: string | null;
+  email?: string | null;
+  email_confirmed?: boolean | null;
+  auth_created_at?: string | null;
+  company_created_at?: string | null;
   executor: { id: string; short_id: number; name: string };
   applicant: { id: string; short_id: number; name: string } | null;
   reserve: {

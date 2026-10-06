@@ -5,8 +5,9 @@ import { Button } from '../ui/Button'
 import { createEmailCodeRequest } from '../../lib/emailCodeRequest'
 import { EmailCodeRequestHint } from './EmailCodeRequestHint'
 
-export function SignupConfirmationForm({ email, justSent, initialRequestedAt, onBack }: { email: string; justSent: boolean; initialRequestedAt?: string | null; onBack: () => void }) {
+export function SignupConfirmationForm({ email, justSent, initialRequestedAt, initialSenderName = 'ELESTET', onBack }: { email: string; justSent: boolean; initialRequestedAt?: string | null; initialSenderName?: string | null; onBack: () => void }) {
   const [requestedAt, setRequestedAt] = useState(initialRequestedAt)
+  const [senderName, setSenderName] = useState(initialSenderName)
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -40,7 +41,7 @@ export function SignupConfirmationForm({ email, justSent, initialRequestedAt, on
         }
         return
       }
-      if (resend) { setRequestedAt(request!.requestedAt); setRetryAt(Date.now() + 60_000); setNow(Date.now()); setCode('') }
+      if (resend) { setRequestedAt(request!.requestedAt); setSenderName(request!.senderName); setRetryAt(Date.now() + 60_000); setNow(Date.now()); setCode('') }
       // Successful signup verification establishes the main Auth session.
     } catch {
       setError('Не удалось выполнить запрос. Проверьте соединение и повторите попытку.')
@@ -49,7 +50,7 @@ export function SignupConfirmationForm({ email, justSent, initialRequestedAt, on
 
   return <div className="grid h-[520px] content-start gap-4 overflow-auto">
     <h2 className="text-lg font-semibold text-slate-800">Подтвердите почту</h2>
-    <EmailCodeRequestHint requestedAt={requestedAt} sending={sending} />
+    <EmailCodeRequestHint requestedAt={requestedAt} sending={sending} senderName={senderName} />
     <p className="text-sm text-slate-600">Введите шестизначный код из письма на <strong className="break-all">{email}</strong>, чтобы завершить регистрацию.</p>
     <div className="h-20 overflow-auto">{error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}</div>
     <form className="grid gap-4" onSubmit={e => { e.preventDefault(); void submit(false) }}>

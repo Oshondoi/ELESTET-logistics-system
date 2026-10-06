@@ -19,7 +19,7 @@ try {
     calls.push({path,body});
     let result=[];
     if(path.endsWith('/get_service_request_invite')) result={is_available:true,state:'active',invite_id:id,token,executor_account_id:executor,executor_short_id:3,executor_name:'Executor',expires_at:'2099-01-01T00:00:00Z'};
-    else if(path.endsWith('/reserve_email_delivery_number')||path.endsWith('/reserve_invite_email_number')) result={number:'1',requested_at:'2026-10-06T00:00:00Z'};
+    else if(path.endsWith('/reserve_email_delivery_number')||path.endsWith('/reserve_invite_email_number')) result={number:'1',sender_name:'Server sender fixture',requested_at:'2026-10-06T00:00:00Z'};
     else if(path.endsWith('/otp')) result={};
     else if(path.endsWith('/verify')) result={access_token:access,refresh_token:'fixture-refresh',token_type:'bearer',expires_in:3600,user};
     else if(path.endsWith('/user')) result=user;
@@ -38,6 +38,7 @@ try {
   await page.getByRole('button',{name:'Получить код на почту',exact:true}).click();
   await page.getByPlaceholder('Шестизначный код').waitFor().catch(async error => { console.error(await page.locator('body').innerText(),calls); throw error; });
   await page.getByPlaceholder('Шестизначный код').fill('123456');
+  await page.getByText('Откройте письмо №1 от Server sender fixture',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Проверить код',exact:true}).click();
   await page.getByPlaceholder('Новый пароль аккаунта').fill('Testpass123');
   await page.getByPlaceholder('Повторите пароль').fill('Testpass123');
