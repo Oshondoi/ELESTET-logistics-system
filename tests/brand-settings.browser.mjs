@@ -3,7 +3,7 @@ import {pathToFileURL} from 'node:url';
 const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try {
-  const page=await browser.newPage();let settings=null, uploads=0, inquiries=[];const errors=[];
+  const page=await browser.newPage({isMobile:!!process.env.MOBILE_WIDTH,hasTouch:!!process.env.MOBILE_WIDTH,viewport:{width:Number(process.env.MOBILE_WIDTH)||1280,height:900}});let settings=null, uploads=0, inquiries=[];const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   const svg='<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100"><rect width="300" height="100" fill="blue"/></svg>';
   await page.route('**/*.supabase.co/**',async route=>{
@@ -35,6 +35,7 @@ try {
   await page.getByRole('button',{name:'Сохранить оформление'}).click();
   await page.getByText('Оригинал и настройки сохранены.',{exact:false}).waitFor();
   assert.equal(uploads,1);assert.equal(settings.original_path,original);assert.equal(settings.square_crop.zoom,3);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'brand editor horizontal overflow');
   await page.locator('input[type=file]').setInputFiles({name:'evil.svg',mimeType:'image/svg+xml',buffer:Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')});
   await page.getByText('Этот SVG содержит неподдерживаемые элементы.',{exact:false}).waitFor();
   assert.equal(uploads,1);

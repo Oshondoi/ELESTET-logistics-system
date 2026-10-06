@@ -2,7 +2,7 @@ import assert from'node:assert/strict';import{pathToFileURL}from'node:url';
 const{chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try{
- const page=await browser.newPage();const calls=[];let orders=[],blocked=true;
+ const page=await browser.newPage({isMobile:!!process.env.MOBILE_WIDTH,hasTouch:!!process.env.MOBILE_WIDTH,viewport:{width:Number(process.env.MOBILE_WIDTH)||1280,height:900}});const calls=[];let orders=[],blocked=true;
  await page.route('**/*.supabase.co/**',async route=>{
   const name=new URL(route.request().url()).pathname.split('/').at(-1),body=route.request().postDataJSON();calls.push({name,body});
   let result={};
@@ -21,6 +21,7 @@ try{
  await page.getByRole('checkbox',{name:/Использовать баланс/}).check();
  await page.getByRole('button',{name:'Рассчитать на сервере'}).click();
  await page.getByRole('button',{name:/Создать заказ/}).click();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'checkout horizontal overflow');
  await page.getByRole('button',{name:'Подтвердить оплату / смену'}).click();
  await page.waitForFunction(()=>window.refreshed===true);
  assert.equal(calls.filter(c=>c.name==='create_company_checkout').length,1);

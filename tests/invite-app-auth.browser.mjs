@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
 const browser = await chromium.launch({channel:'chrome',headless:true});
 try {
-  const page = await browser.newPage();
+  const page = await browser.newPage({isMobile:!!process.env.MOBILE_WIDTH,hasTouch:!!process.env.MOBILE_WIDTH,viewport:{width:Number(process.env.MOBILE_WIDTH)||1280,height:900}});
   page.setDefaultTimeout(15000);
   const calls=[], errors=[];
   page.on('pageerror', e=>errors.push(e.message));
@@ -44,6 +44,7 @@ try {
   await page.getByPlaceholder('Повторите пароль').fill('Testpass123');
   await page.getByRole('button',{name:'Сохранить пароль и продолжить',exact:true}).click();
   await page.getByRole('heading',{name:'Новая заявка',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'request form horizontal overflow');
   await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).waitFor({state:'visible'});
   assert.equal(calls.filter(c=>c.path.endsWith('/create_account_with_owner')).length,0);
   assert.equal(await page.evaluate(()=>localStorage.getItem('elestet-pending-request-invite')),token);

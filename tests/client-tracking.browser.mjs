@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';import{pathToFileURL}from'node:url';
 const{chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try{
- const context=await browser.newContext({viewport:{width:390,height:844},timezoneId:'America/New_York'}),page=await context.newPage();
+ const context=await browser.newContext({isMobile:true,hasTouch:true,viewport:{width:Number(process.env.MOBILE_WIDTH)||390,height:844},timezoneId:'America/New_York'}),page=await context.newPage();
  const errors=[];page.on('pageerror',e=>errors.push(e.message));let denied=false,slow=false;
  const row={id:'r1',short_id:7,title:'Одежда',status:'accepted',applicant_company_short_id:1,executor_company_short_id:8,executor_company_name:'Первый исполнитель',created_at:'2026-10-06T00:00:00Z',updated_at:'2026-10-06T01:00:00Z'};
  await page.route('**/*.supabase.co/**',async route=>{

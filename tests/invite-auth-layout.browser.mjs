@@ -13,7 +13,7 @@ try {
       const path=new URL(route.request().url()).pathname;
       let data=[],status=200;
       if(path.endsWith('/get_service_request_invite')) data={is_available:true,state:'active',invite_id:'11111111-1111-4111-8111-111111111111',executor_account_id:'33333333-3333-4333-8333-333333333333',executor_short_id:3,executor_name:'Executor',expires_at:'2099-01-01T00:00:00Z'};
-      else if(path.endsWith('/reserve_email_delivery_number')) {
+      else if(path.endsWith('/reserve_email_delivery_number')||path.endsWith('/reserve_invite_email_number')) {
         await new Promise(resolve=>setTimeout(resolve,300));
         data={number:'1234567890123456789',requested_at:'2026-10-05T12:00:00Z'};
       }

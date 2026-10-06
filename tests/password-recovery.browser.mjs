@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);
 const browser = await chromium.launch({channel:'chrome',headless:true});
 try {
-  const page = await browser.newPage();
+  const page = await browser.newPage({isMobile:!!process.env.MOBILE_WIDTH,hasTouch:!!process.env.MOBILE_WIDTH,viewport:{width:Number(process.env.MOBILE_WIDTH)||1280,height:900}});
   await page.clock.install();
   const calls = [];
   const errors = [];
