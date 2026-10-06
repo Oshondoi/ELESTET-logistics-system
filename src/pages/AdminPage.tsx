@@ -25,6 +25,7 @@ import type { PlanConfig } from '../services/planConfigService'
 import { ScannerModelsAdminTab } from '../components/admin/ScannerModelsAdminTab'
 import { RequestLinksAdminTab } from '../components/admin/RequestLinksAdminTab'
 import { ImplementationInquiriesTab } from '../components/admin/ImplementationInquiriesTab'
+import { CompanyDomainsAdmin } from '../components/admin/CompanyDomainsAdmin'
 
 interface AdminUser {
   id: string
@@ -182,7 +183,7 @@ const SetPlanForm = ({ account, onDone, onCancel }: SetPlanFormProps) => {
 
 /* ─── AdminPage ─────────────────────────────────────────────────────── */
 const ADMIN_TAB_KEY = 'elestet-admin-tab'
-type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners' | 'request_links' | 'implementation' | 'calendar_billing' | 'mail_queue'
+type AdminTab = 'users' | 'subscriptions' | 'access' | 'team' | 'payment' | 'plans' | 'scanners' | 'request_links' | 'implementation' | 'calendar_billing' | 'mail_queue' | 'domains'
 
 export const AdminPage = ({
   platformRole = 'user',
@@ -457,6 +458,7 @@ export const AdminPage = ({
     ...(isSuperAdmin ? [{ key: 'payment' as const, label: 'Интеграция оплаты' }] : []),
     ...(isSuperAdmin ? [{ key: 'calendar_billing' as const, label: 'Заказы и баланс' }] : []),
     ...(isSuperAdmin ? [{ key: 'mail_queue' as const, label: 'Почтовая очередь' }] : []),
+    ...(isSuperAdmin ? [{ key: 'domains' as const, label: 'Домены компаний' }] : []),
   ]
 
   const downloadPaymentDoc = () => {
@@ -674,6 +676,7 @@ export const AdminPage = ({
 
       {activeTab === 'calendar_billing' && isSuperAdmin && <CalendarBillingAdmin />}
       {activeTab === 'mail_queue' && isSuperAdmin && <MailQueueAdmin />}
+      {activeTab === 'domains' && isSuperAdmin && <CompanyDomainsAdmin />}
       {/* ═══ TAB: Пользователи ═══════════════════════════════════════ */}
       {activeTab === 'users' && (
         <Card className="overflow-hidden rounded-3xl">

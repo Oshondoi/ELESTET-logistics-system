@@ -3,7 +3,7 @@ begin;
 do $$
 declare u uuid:=gen_random_uuid();actor uuid:=gen_random_uuid(); stranger uuid:=gen_random_uuid();
  e uuid;e2 uuid;a uuid;i1 uuid;i2 uuid;i3 uuid;i4 uuid;occupied uuid;t1 uuid:=gen_random_uuid();t2 uuid:=gen_random_uuid();t3 uuid:=gen_random_uuid();t4 uuid:=gen_random_uuid();to_occupied uuid:=gen_random_uuid();
- dev uuid:=gen_random_uuid();result jsonb; preview jsonb; r1 uuid;r2 uuid;p uuid;s uuid;wh uuid;zone uuid;cell uuid;box uuid;stock_wh uuid;box_items_before jsonb;company_before jsonb;stores_before jsonb;
+ dev uuid:=gen_random_uuid();result jsonb; preview jsonb; r1 uuid;r2 uuid;p uuid;s uuid;wh uuid;zone uuid;cell uuid;box uuid;stock_wh uuid;box_items_before jsonb;company_before jsonb;stores_before jsonb;finance_before jsonb;finance_after jsonb;
  goods jsonb:='[{"name":"Lifecycle store","marketplace":"wildberries","intake_mode":"bulk","items":[{"name":"Lifecycle goods","barcode":"LIFECYCLE","qty":4}]}]';
 begin
  if has_function_privilege('authenticated','public.invite_delete_snapshot(uuid,boolean)','EXECUTE')
@@ -102,6 +102,12 @@ begin
  if not exists(select 1 from public.service_requests where id=r1) then raise exception 'Denied deletion changed request'; end if;
  select to_jsonb(ac) into company_before from public.accounts ac where id=a;
  select jsonb_agg(to_jsonb(st) order by st.id) into stores_before from public.stores st where st.account_id=a;
+ -- Parent-company money and store finance must survive link deletion byte-for-byte.
+ insert into public.company_billing_wallets(account_id,balance_som) values(a,7000);
+ insert into public.company_balance_entries(operation_id,account_id,delta_som,balance_after_som,reason,source_reference,customer_confirmed) values(gen_random_uuid(),a,7000,7000,'manual_adjustment','rollback-lifecycle',true);
+ insert into public.payment_orders(account_id,user_id,plan,months,amount_som) values(a,u,'seller',1,2000);
+ insert into public.wb_finance_report_rows(account_id,store_id,period_from,period_to,op_uid,for_pay) select a,st.id,current_date,current_date,'rollback-finance-'||st.id,1234 from public.stores st where st.account_id=a;
+ select jsonb_build_object('wallet',(select to_jsonb(w) from public.company_billing_wallets w where w.account_id=a),'entries',(select jsonb_agg(to_jsonb(x) order by x.operation_id) from public.company_balance_entries x where x.account_id=a),'payments',(select jsonb_agg(to_jsonb(x) order by x.id) from public.payment_orders x where x.account_id=a),'wb',(select jsonb_agg(to_jsonb(x) order by x.id) from public.wb_finance_report_rows x where x.account_id=a)) into finance_before;
  perform set_config('request.jwt.claim.sub',actor::text,true);
  select b.id into box from public.fulfillment_boxes b join public.fulfillment_supplies sp on sp.id=b.supply_id where sp.batch_id=p limit 1;
  select jsonb_agg(to_jsonb(bi) order by bi.id) into box_items_before from public.fulfillment_box_items bi where bi.box_id=box;
@@ -150,6 +156,8 @@ begin
   or exists(select 1 from public.fulfillment_step_versions where batch_id=p) then raise exception 'Target descendants left behind'; end if;
  if not exists(select 1 from public.service_requests where id=r2 and executor_account_id=e2) then raise exception 'Other link request lost'; end if;
  if (select to_jsonb(ac) from public.accounts ac where id=a) is distinct from company_before then raise exception 'Company/subscription changed'; end if;
+ select jsonb_build_object('wallet',(select to_jsonb(w) from public.company_billing_wallets w where w.account_id=a),'entries',(select jsonb_agg(to_jsonb(x) order by x.operation_id) from public.company_balance_entries x where x.account_id=a),'payments',(select jsonb_agg(to_jsonb(x) order by x.id) from public.payment_orders x where x.account_id=a),'wb',(select jsonb_agg(to_jsonb(x) order by x.id) from public.wb_finance_report_rows x where x.account_id=a)) into finance_after;
+ if finance_after is distinct from finance_before then raise exception 'Parent financial records changed during link deletion';end if;
  if (select jsonb_agg(to_jsonb(st) order by st.id) from public.stores st where st.account_id=a) is distinct from stores_before then raise exception 'Parent stores changed'; end if;
  if not exists(select 1 from auth.users where id=u and encrypted_password='fixture-password-hash') then raise exception 'Auth removed by link deletion'; end if;
  if not exists(select 1 from public.account_members where account_id=a and user_id=u and role='owner') then raise exception 'Membership deleted'; end if;
