@@ -3,9 +3,12 @@ begin;
 do $$
 declare u uuid:=gen_random_uuid();actor uuid:=gen_random_uuid(); stranger uuid:=gen_random_uuid();
  e uuid;e2 uuid;a uuid;i1 uuid;i2 uuid;i3 uuid;i4 uuid;occupied uuid;t1 uuid:=gen_random_uuid();t2 uuid:=gen_random_uuid();t3 uuid:=gen_random_uuid();t4 uuid:=gen_random_uuid();to_occupied uuid:=gen_random_uuid();
- dev uuid:=gen_random_uuid();result jsonb; r1 uuid;r2 uuid;p uuid;s uuid;wh uuid;zone uuid;cell uuid;box uuid;stock_wh uuid;box_items_before jsonb;company_before jsonb;stores_before jsonb;
+ dev uuid:=gen_random_uuid();result jsonb; preview jsonb; r1 uuid;r2 uuid;p uuid;s uuid;wh uuid;zone uuid;cell uuid;box uuid;stock_wh uuid;box_items_before jsonb;company_before jsonb;stores_before jsonb;
  goods jsonb:='[{"name":"Lifecycle store","marketplace":"wildberries","intake_mode":"bulk","items":[{"name":"Lifecycle goods","barcode":"LIFECYCLE","qty":4}]}]';
 begin
+ if has_function_privilege('authenticated','public.invite_delete_snapshot(uuid,boolean)','EXECUTE')
+ or has_function_privilege('authenticated','public.admin_delete_invite_data_internal(uuid)','EXECUTE')
+ or has_function_privilege('anon','public.admin_preview_invite_deletion(uuid)','EXECUTE') then raise exception 'Deletion privilege leak'; end if;
  insert into auth.users(id,email,email_confirmed_at,encrypted_password) values
  (u,u||'@example.invalid',now(),'fixture-password-hash'),(actor,actor||'@example.invalid',now(),''),(stranger,stranger||'@example.invalid',now(),'');
  insert into public.profiles(user_id,full_name,platform_role) values(actor,'Lifecycle administrator','superadmin') on conflict(user_id) do update set platform_role='superadmin';
@@ -94,6 +97,8 @@ begin
  if (public.list_client_request_tracking(a)->>'total')::integer<>2 then raise exception 'Multi-executor tracking incomplete'; end if;
  -- Non-superadmin cannot delete link data. Any rejection must be atomic.
  begin perform public.admin_delete_service_request_invite_data(i1);raise exception 'FAIL: applicant deleted link data';exception when others then if sqlerrm like 'FAIL:%' then raise;end if;end;
+ begin perform public.admin_preview_invite_deletion(i1);raise exception 'FAIL: applicant previewed link data';exception when insufficient_privilege then null;end;
+ begin perform public.admin_confirm_invite_deletion(i1,'forged');raise exception 'FAIL: applicant confirmed deletion';exception when insufficient_privilege then null;end;
  if not exists(select 1 from public.service_requests where id=r1) then raise exception 'Denied deletion changed request'; end if;
  select to_jsonb(ac) into company_before from public.accounts ac where id=a;
  select jsonb_agg(to_jsonb(st) order by st.id) into stores_before from public.stores st where st.account_id=a;
@@ -106,13 +111,38 @@ begin
   insert into public.wms_zones(account_id,warehouse_id,name) values(a,stock_wh,'Lifecycle zone') returning id into zone;
   insert into public.wms_cells(account_id,zone_id,col,row) values(a,zone,'A',1) returning id into cell;
   insert into public.wms_cell_items(account_id,cell_id,item_type,fulfillment_box_id,qty) values(a,cell,'box',box,1);
-  perform public.admin_delete_service_request_invite_data(i1);
-  raise exception 'FAIL: occupied warehouse box deleted';
- exception when foreign_key_violation then null;
+  preview:=public.admin_preview_invite_deletion(i1);
+  if (preview->>'can_delete')::boolean or not exists(select 1 from jsonb_array_elements(preview->'blockers') x where x->>'table'='wms_cell_items') then raise exception 'FAIL: warehouse blocker missing'; end if;
+  result:=public.admin_confirm_invite_deletion(i1,preview->>'fingerprint');
+  if result->>'code'<>'BLOCKED' then raise exception 'FAIL: occupied warehouse box deleted'; end if;
+  raise exception 'Rollback warehouse fixture' using errcode='P9998';
+ exception when sqlstate 'P9998' then null;
  end;
  if (select jsonb_agg(to_jsonb(bi) order by bi.id) from public.fulfillment_box_items bi where bi.box_id=box) is distinct from box_items_before then raise exception 'Blocked deletion partially removed box items'; end if;
  if not exists(select 1 from public.service_requests where id=r1) or not exists(select 1 from public.fulfillment_step_versions where batch_id=p) then raise exception 'Blocked deletion lost business history'; end if;
- perform public.admin_delete_service_request_invite_data(i1);
+ insert into public.fbs_stock_allocations(account_id,store_id,wb_order_id,box_item_id,box_id,product_barcode,quantity,status)
+ select a,st.id,-98765,bi.id,box,'LIFECYCLE',1,'reserved' from public.stores st cross join public.fulfillment_box_items bi where st.account_id=a and bi.box_id=box limit 1;
+ preview:=public.admin_preview_invite_deletion(i1);
+ if not exists(select 1 from jsonb_array_elements(preview->'blockers') x where x->>'code'='FBS_RESERVED') then raise exception 'FBS blocker missing'; end if;
+ result:=public.admin_confirm_invite_deletion(i1,preview->>'fingerprint');
+ if result->>'code'<>'BLOCKED' then raise exception 'FBS reserve bypassed'; end if;
+ update public.fbs_stock_allocations set status='released' where account_id=a and wb_order_id='-98765';
+ preview:=public.admin_preview_invite_deletion(i1);
+ if not exists(select 1 from jsonb_array_elements(preview->'effects') x where x->>'table'='fbs_stock_allocations') then raise exception 'Preserved external reference not disclosed'; end if;
+ if not (preview->>'can_delete')::boolean then raise exception 'Unexpected blockers: %',preview->'blockers'; end if;
+ if not exists(select 1 from jsonb_array_elements(preview->'groups') x where x->>'table'='fulfillment_box_items') then raise exception 'Box descendants absent from preview'; end if;
+ if not exists(select 1 from public.service_requests where id=r1) then raise exception 'Preview mutated data'; end if;
+ result:=public.admin_delete_service_request_invite_data(i1);
+ if result->>'code'<>'PREVIEW_REQUIRED' then raise exception 'Legacy call bypassed confirmation'; end if;
+ update public.service_requests set title='Changed after preview' where id=r1;
+ result:=public.admin_confirm_invite_deletion(i1,preview->>'fingerprint');
+ if result->>'code'<>'PREVIEW_CHANGED' or not exists(select 1 from public.service_requests where id=r1) then raise exception 'Stale preview accepted'; end if;
+ preview:=result->'preview';
+ result:=public.admin_confirm_invite_deletion(i1,preview->>'fingerprint');
+ if not (result->>'ok')::boolean then raise exception 'Delete refused: %',result; end if;
+ result:=public.admin_confirm_invite_deletion(i1,preview->>'fingerprint');
+ if not (result->>'already_deleted')::boolean then raise exception 'Retry not idempotent'; end if;
+ if not exists(select 1 from public.fbs_stock_allocations where account_id=a and wb_order_id='-98765' and box_id is null and box_item_id is null) then raise exception 'External allocation not preserved'; end if;
  if exists(select 1 from public.service_requests where id=r1) or exists(select 1 from public.fulfillment_batches where id=p) then raise exception 'Target cascade incomplete'; end if;
  if exists(select 1 from public.fulfillment_supplies where batch_id=p)
   or exists(select 1 from public.fulfillment_boxes b join public.fulfillment_supplies sp on sp.id=b.supply_id where sp.batch_id=p)
@@ -126,7 +156,9 @@ begin
  if not exists(select 1 from public.service_request_invite_reserves where invite_id=i3 and user_id=u) then raise exception 'Other link draft removed'; end if;
  if not exists(select 1 from public.service_request_invite_admin_audit where invite_id=i1 and action='delete_link_data') then raise exception 'Deletion audit missing'; end if;
  -- Delete only an unmaterialized draft of the active link: parents/other R remain.
- perform public.admin_delete_service_request_invite_data(i3);
+ preview:=public.admin_preview_invite_deletion(i3);
+ result:=public.admin_confirm_invite_deletion(i3,preview->>'fingerprint');
+ if not (result->>'ok')::boolean then raise exception 'Reserve delete refused: %',result; end if;
  if exists(select 1 from public.service_request_invite_reserves where invite_id=i3) then raise exception 'Target reserve left behind'; end if;
  if not exists(select 1 from public.service_requests where id=r2) or not exists(select 1 from auth.users where id=u) then raise exception 'Reserve deletion affected parent'; end if;
 end $$;

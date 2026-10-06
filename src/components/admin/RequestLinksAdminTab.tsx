@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import { InviteDeleteDialog } from "./InviteDeleteDialog";
 
 interface LinkRow {
   id: string;
@@ -32,6 +33,7 @@ export const RequestLinksAdminTab = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const load = useCallback(async () => {
     if (!supabase) return;
     setLoading(true);
@@ -172,11 +174,7 @@ export const RequestLinksAdminTab = () => {
                         </button>
                         <button
                           onClick={() =>
-                            void act(
-                              "admin_delete_service_request_invite_data",
-                              row,
-                              "Удалить ссылку, созданные через неё заявки, партии и их потомков? Действие необратимо.",
-                            )
+                            setDeleting(row.id)
                           }
                           className="rounded-xl bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700"
                         >
@@ -191,6 +189,7 @@ export const RequestLinksAdminTab = () => {
           </tbody>
         </table>
       </div>
+      {deleting && <InviteDeleteDialog key={deleting} inviteId={deleting} onClose={() => setDeleting(null)} onDeleted={() => { setDeleting(null); void load(); }} />}
     </div>
   );
 };
