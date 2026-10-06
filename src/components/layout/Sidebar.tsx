@@ -370,7 +370,7 @@ export const Sidebar = ({
                             <path d="m5 13 4 4L19 7" />
                           </svg>
                         ) : null}
-                      {isOwner ? (
+                      {isOwner || account.my_role === 'implementation' ? (
                         <span className="absolute inset-0 flex items-center justify-center gap-1">
                           <button
                             type="button"
@@ -387,7 +387,7 @@ export const Sidebar = ({
                               <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                             </svg>
                           </button>
-                          <button
+                          {isOwner && <button
                             type="button"
                             aria-label="Удалить компанию"
                             title="Удалить компанию"
@@ -411,7 +411,7 @@ export const Sidebar = ({
                               <path d="M10 11v4" />
                               <path d="M14 11v4" />
                             </svg>
-                          </button>
+                          </button>}
                         </span>
                       ) : null}
                       </span>

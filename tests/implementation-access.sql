@@ -1,0 +1,85 @@
+-- Run ONLY on the isolated empty PostgreSQL clone with public RLS/grants copied.
+begin;
+do $$
+declare boss uuid:=gen_random_uuid(); client uuid:=gen_random_uuid(); worker uuid:=gen_random_uuid(); outsider uuid:=gen_random_uuid();
+ a uuid; other_account uuid; p uuid; paid timestamptz:=now(); r uuid; v integer; role_id uuid;
+begin
+ insert into auth.users(id,email) values(boss,'boss@example.invalid'),(client,'client@example.invalid'),(worker,'worker@example.invalid'),(outsider,'outsider@example.invalid');
+ insert into public.profiles(user_id,short_id,platform_role,full_name) values(boss,1,'superadmin','Owner'),(client,901,'user','Client'),(worker,902,'user','Worker'),(outsider,903,'superadmin','Other admin') on conflict(user_id) do update set short_id=excluded.short_id,platform_role=excluded.platform_role,full_name=excluded.full_name;
+ insert into public.accounts(name,plan,plan_until) values('Implementation test','operational',now()+interval '1 month') returning id into a;
+ insert into public.accounts(name) values('Other company') returning id into other_account;
+ insert into public.account_members(account_id,user_id,role) values(a,client,'owner'),(other_account,client,'owner');
+ insert into public.roles(account_id,name,permissions) values(a,'Customer role','{}') returning id into role_id;
+ perform set_config('request.jwt.claim.sub',client::text,true);
+ set local role authenticated;
+ begin perform public.admin_implementation_overview();raise exception 'FAIL customer admin';exception when insufficient_privilege then null;end;
+ begin perform public.register_implementation_payment(a,'proof-1',90000,paid);raise exception 'FAIL browser payment';exception when insufficient_privilege then null;end;
+ begin insert into public.implementation_staff(user_id,eligible) values(worker,true);raise exception 'FAIL table write';exception when insufficient_privilege then null;end;
+ reset role;
+ perform set_config('request.jwt.claim.sub',outsider::text,true);
+ set local role authenticated;
+ begin perform public.admin_set_implementation_staff(902,true,true);raise exception 'FAIL another superadmin';exception when insufficient_privilege then null;end;
+ reset role;
+ perform set_config('request.jwt.claim.sub',boss::text,true);
+ set local role authenticated;
+ perform public.admin_set_implementation_staff(902,true,true);
+ reset role;
+ if (select platform_role from public.profiles where user_id=worker)<>'user' then raise exception 'Staff became platform admin';end if;
+ set local role service_role;
+ p:=public.register_implementation_payment(a,'proof-1',90000,paid);
+ r:=public.register_implementation_payment(a,'proof-1',90000,paid);
+ if p<>r then raise exception 'Duplicate payment';end if;
+ begin perform public.register_implementation_payment(other_account,'proof-1',90000,paid);raise exception 'FAIL proof reuse';exception when raise_exception then if sqlerrm like 'FAIL%' then raise;end if;end;
+ reset role;
+ set local role authenticated;
+ begin perform public.admin_assign_implementation(p,outsider,true,0);raise exception 'FAIL arbitrary user';exception when raise_exception then if sqlerrm like 'FAIL%' then raise;end if;end;
+ perform public.admin_assign_implementation(p,worker,true,0);
+ if public.implementation_access(a,worker) then raise exception 'Premature access';end if;
+ begin perform public.admin_transition_implementation(p,'start',0);raise exception 'FAIL stale version';exception when raise_exception then if sqlerrm like 'FAIL%' then raise;end if;end;
+ perform public.admin_transition_implementation(p,'start',1);
+ perform public.admin_transition_implementation(p,'start',1); -- transport retry
+ if not public.implementation_access(a,boss) or not public.implementation_access(a,worker) then raise exception 'Missing access';end if;
+ reset role;
+ if (select count(*) from public.implementation_audit where project_id=p and event='started')<>1 then raise exception 'Duplicate start audit';end if;
+ perform set_config('request.jwt.claim.sub',worker::text,true);
+ set local role authenticated;
+ if not public.account_user_has_permission(a,'roles_manage') or not public.request_user_has_permission(a,'request_create')
+ or not public.fulfillment_user_has_permission(worker,a,'fulfillment_manage') or not public.fbs_user_has_account_permission(worker,a,'fbs_sync')
+ or not public.can_manage_company_brand(a) or not public.can_manage_brand_mail(a,worker) then raise exception 'Work permission missing';end if;
+ if not exists(select 1 from public.get_my_accounts() where id=a and my_role='implementation') then raise exception 'Company missing';end if;
+ if exists(select 1 from public.accounts where id=other_account) then raise exception 'Cross-company read';end if;
+ update public.accounts set name='Configured by worker' where id=a;
+ begin update public.accounts set plan_until=now()+interval '10 years' where id=a;raise exception 'FAIL billing mutation';exception when insufficient_privilege then null;end;
+ begin update public.account_members set role='owner' where account_id=a and user_id=worker;raise exception 'FAIL role escalation';exception when insufficient_privilege then null;end;
+ begin insert into public.role_assignments(role_id,account_id,user_id) values(role_id,a,worker);raise exception 'FAIL persistent customer role';exception when insufficient_privilege then null;end;
+ begin perform public.delete_account_with_owner(a);raise exception 'FAIL deletion';exception when raise_exception then if sqlerrm like 'FAIL%' then raise;end if;end;
+ begin perform public.quote_company_checkout(a,'operational');raise exception 'FAIL billing';exception when raise_exception then if sqlerrm like 'FAIL%' then raise;end if;end;
+ reset role;
+ if not exists(select 1 from public.implementation_audit where actor_id=worker and event='work' and details->>'table'='accounts') then raise exception 'Work audit missing';end if;
+ perform set_config('request.jwt.claim.sub',client::text,true);
+ set local role authenticated;
+ begin insert into public.role_assignments(role_id,account_id,user_id) values(role_id,a,worker);raise exception 'FAIL client controls system access';exception when insufficient_privilege then null;end;
+ reset role;
+ perform set_config('request.jwt.claim.sub',boss::text,true);
+ set local role authenticated;
+ perform public.admin_set_implementation_staff(902,false,false);
+ if public.implementation_access(a,worker) then raise exception 'Offboard did not revoke';end if;
+ perform public.admin_set_implementation_staff(902,true,true);
+ if public.implementation_access(a,worker) then raise exception 'Reactivation resurrected grant';end if;
+ reset role;
+ if exists(select 1 from public.account_members where account_id=a and user_id=worker) then raise exception 'Bridge remained';end if;
+ -- Existing independent membership must survive revoke, unchanged.
+ insert into public.account_members(account_id,user_id,role) values(a,worker,'viewer');
+ set local role authenticated;
+ perform public.admin_assign_implementation(p,worker,true,2);
+ perform public.admin_transition_implementation(p,'complete',3);
+ perform public.admin_transition_implementation(p,'complete',3);
+ if public.implementation_access(a,boss) or public.implementation_access(a,worker) then raise exception 'Completion access remains';end if;
+ reset role;
+ if (select role from public.account_members where account_id=a and user_id=worker)<>'viewer' then raise exception 'Independent membership changed';end if;
+ if exists(select 1 from public.account_members where account_id=a and user_id=boss) then raise exception 'U1 bridge remained';end if;
+ if (select platform_role from public.profiles where user_id=boss)<>'superadmin' then raise exception 'U1 authority removed';end if;
+ if exists(select 1 from public.roles where account_id=a and name ilike '%внедрен%') then raise exception 'Client role template created';end if;
+ if has_function_privilege('authenticated','public.implementation_sync_member(uuid,uuid)','execute') or has_table_privilege('authenticated','public.implementation_audit','update') then raise exception 'Private grant leak';end if;
+end $$;
+rollback;

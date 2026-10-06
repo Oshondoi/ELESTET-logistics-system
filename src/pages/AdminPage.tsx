@@ -25,6 +25,7 @@ import type { PlanConfig } from '../services/planConfigService'
 import { ScannerModelsAdminTab } from '../components/admin/ScannerModelsAdminTab'
 import { RequestLinksAdminTab } from '../components/admin/RequestLinksAdminTab'
 import { ImplementationInquiriesTab } from '../components/admin/ImplementationInquiriesTab'
+import { ImplementationAccessAdmin } from '../components/admin/ImplementationAccessAdmin'
 import { CompanyDomainsAdmin } from '../components/admin/CompanyDomainsAdmin'
 
 interface AdminUser {
@@ -1611,7 +1612,7 @@ export const AdminPage = ({
       {/* ═══ TAB: Сканеры ═══════════════════════════════════════ */}
       {activeTab === 'scanners' && canEdit && <ScannerModelsAdminTab />}
       {activeTab === 'request_links' && isSuperAdmin && <RequestLinksAdminTab />}
-      {activeTab === 'implementation' && isSuperAdmin && <ImplementationInquiriesTab />}
+      {activeTab === 'implementation' && isSuperAdmin && <div className="space-y-8"><ImplementationAccessAdmin /><ImplementationInquiriesTab /></div>}
     </div>
   )
 }

@@ -8,7 +8,7 @@ export const useMyPermissions = (
   userId: string | null,
   myRole: MemberRole | undefined,
 ) => {
-  const isOwnerOrAdmin = myRole === 'owner' || myRole === 'admin'
+  const isOwnerOrAdmin = myRole === 'owner' || myRole === 'admin' || myRole === 'implementation'
 
   const [permissions, setPermissions] = useState<RolePermissions>(
     isOwnerOrAdmin ? FULL_PERMISSIONS : DEFAULT_PERMISSIONS,
@@ -16,7 +16,7 @@ export const useMyPermissions = (
   const [isLoading, setIsLoading] = useState(!isOwnerOrAdmin)
 
   const load = useCallback(async () => {
-    if (myRole === 'owner' || myRole === 'admin') {
+    if (myRole === 'owner' || myRole === 'admin' || myRole === 'implementation') {
       setPermissions(FULL_PERMISSIONS)
       setIsLoading(false)
       return

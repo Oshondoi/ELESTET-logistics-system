@@ -1,4 +1,4 @@
-export type MemberRole = "owner" | "admin" | "manager" | "operator" | "viewer";
+export type MemberRole = "owner" | "admin" | "manager" | "operator" | "viewer" | "implementation";
 
 // ─── Товары ───────────────────────────────────────────────────
 

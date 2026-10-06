@@ -45,6 +45,17 @@ try{
  console.log(`local_schema_ready: ${tables.length} empty tables; PostgreSQL 17.6; loopback only`);
  // Optional candidate migrations are executed only on the local clone.
  for(const file of (process.env.PG_TEST_PATCHES||'').split(';').filter(Boolean))await sql(await readFile(file,'utf8'));
+ // Optional authorization suites: replay public RLS and table grants on the empty clone.
+ if(process.env.PG_TEST_SQL){
+  for(const r of await remote("select format('revoke all on function %I.%I(%s) from public,anon,authenticated,service_role',n.nspname,p.proname,pg_get_function_identity_arguments(p.oid)) as ddl from pg_proc p join pg_namespace n on n.oid=p.pronamespace join pg_language l on l.oid=p.prolang where n.nspname in ('public','auth') and l.lanname in ('sql','plpgsql') and p.prokind='f'"))await sql(r.ddl);
+  for(const r of await remote("select format('grant execute on function %I.%I(%s) to %s',n.nspname,p.proname,pg_get_function_identity_arguments(p.oid),case when x.grantee=0 then 'public' else quote_ident(pg_get_userbyid(x.grantee)) end) as ddl from pg_proc p join pg_namespace n on n.oid=p.pronamespace join pg_language l on l.oid=p.prolang cross join lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) x where n.nspname in ('public','auth') and l.lanname in ('sql','plpgsql') and p.prokind='f' and (x.grantee=0 or pg_get_userbyid(x.grantee) in ('anon','authenticated','service_role'))"))await sql(r.ddl);
+  for(const r of await remote("select format('create policy %I on %I.%I as %s for %s to %s%s%s',policyname,schemaname,tablename,permissive,cmd,array_to_string(roles,','),case when qual is null then '' else ' using ('||qual||')' end,case when with_check is null then '' else ' with check ('||with_check||')' end) as ddl from pg_policies where schemaname='public'"))await sql(r.ddl);
+  for(const t of tables.filter(t=>t.nspname==='public'&&t.relrowsecurity))await sql(`alter table public."${t.relname}" enable row level security`);
+  await sql('grant usage on schema public,auth to authenticated,anon,service_role');
+  for(const r of await remote("select format('grant %s on table public.%I to %I',g.privilege_type,g.table_name,g.grantee) as ddl from information_schema.role_table_grants g join information_schema.tables t on t.table_schema=g.table_schema and t.table_name=g.table_name and t.table_type='BASE TABLE' where g.table_schema='public' and g.grantee in ('authenticated','anon','service_role')"))await sql(r.ddl);
+  for(const file of process.env.PG_TEST_SQL.split(';').filter(Boolean))await sql(await readFile(file,'utf8'));
+  console.log('local_authorization_suites_passed');
+ }
  for(let round=1;round<=3;round++){console.log(`concurrency_round ${round}/3`);await runInvites();await runBilling();}
  console.log('local_concurrency_all_passed');
 }finally{
