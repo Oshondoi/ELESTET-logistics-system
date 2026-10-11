@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module">
+import React,{useState} from 'react';import{createRoot}from'react-dom/client';
+import{FbsStocksPanel}from'/src/components/fbs/FbsStocksPanel.tsx';
+function App(){
+ const[tick,setTick]=useState(0),[store,setStore]=useState('test-store'),[wb,setWb]=useState(1),[source,setSource]=useState('source-1');
+ return React.createElement('div',null,
+  React.createElement('button',{id:'background',onClick:()=>setTick(tick+1)},'Background '+tick),
+  React.createElement('button',{id:'store',onClick:()=>setStore('other-store')},'Store'),
+  React.createElement('button',{id:'wb',onClick:()=>setWb(2)},'WB'),
+  React.createElement('button',{id:'source',onClick:()=>setSource('source-2')},'Source'),
+  React.createElement(FbsStocksPanel,{key:store,accountId:'account',storeId:store,
+   warehouses:[{id:wb,name:'WB '+tick}],sourceWarehouses:[{id:source,name:'Source '+tick}],
+   canManage:true,warehouseControlsContainerId:'controls'}));
+}
+createRoot(document.getElementById('root')).render(React.createElement(App));
+</script></body></html>

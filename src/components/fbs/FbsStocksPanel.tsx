@@ -93,8 +93,6 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, sourceWarehouse
     const saved = Number(localStorage.getItem(warehouseStorageKey))
     const next = warehouses.some((warehouse) => warehouse.id === saved) ? saved : (warehouses[0]?.id ?? 0)
     setWarehouseId(next)
-    setDrafts({})
-    setErrorChrtIds(new Set())
   }, [warehouseStorageKey, warehouses])
 
   useEffect(() => {
@@ -103,9 +101,16 @@ export function FbsStocksPanel({ accountId, storeId, warehouses, sourceWarehouse
       ? saved
       : (sourceWarehouses[0]?.id ?? '')
     setSourceWarehouseId(next)
+  }, [sourceWarehouseStorageKey, sourceWarehouses])
+
+  // Parent background updates recreate warehouse arrays without changing the
+  // selected warehouse. Discard edits only when the actual stock scope changes.
+  useEffect(() => {
     setDrafts({})
     setErrorChrtIds(new Set())
-  }, [sourceWarehouseStorageKey, sourceWarehouses])
+    setFilter('all')
+    setConfirmOpen(false)
+  }, [accountId, storeId, warehouseId, sourceWarehouseId])
 
   const loadHistory = useCallback(async (selectedWarehouseId: number) => {
     if (!supabase || !storeId || !selectedWarehouseId) return
