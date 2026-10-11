@@ -56,6 +56,10 @@ try{
   for(const file of process.env.PG_TEST_SQL.split(';').filter(Boolean))await sql(await readFile(file,'utf8'));
   console.log('local_authorization_suites_passed');
  }
+ if(process.env.PG_TEST_FBS_NET_STOCK){
+  const {runFbsNetStockRace}=await import('./fbs-scanner-net-stock.mjs');
+  await runFbsNetStockRace({sql,asUser,user,company});
+ }
  for(let round=1;round<=3;round++){console.log(`concurrency_round ${round}/3`);await runInvites();await runBilling();}
  console.log('local_concurrency_all_passed');
 }finally{
