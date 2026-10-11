@@ -1,3 +1,4 @@
+import { RequestExecutorSelect } from "../components/fulfillment/RequestExecutorSelect";
 import { EmailCodeInput } from "../components/auth/EmailCodeInput";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BrandLogo, useBrand } from "../components/accounts/BrandContext";
@@ -19,7 +20,6 @@ import {
   replaceServiceRequestInviteReserve,
   reserveServiceRequestInvite,
   saveServiceRequestInviteReserve,
-  searchExecutorAccounts,
   submitServiceRequestInviteReserve,
   type AdminInvitePreview,
   type PublicRequestInvite,
@@ -183,10 +183,7 @@ const RequestInviteContent = ({
   const [executor, setExecutor] = useState<ExecutorAccountSearchResult | null>(
     null,
   );
-  const [executorQuery, setExecutorQuery] = useState("");
-  const [executorResults, setExecutorResults] = useState<
-    ExecutorAccountSearchResult[]
-  >([]);
+
   const [stores, setStores] = useState<StoreForm[]>([emptyStore()]);
   const [activeScannerStore, setActiveScannerStore] = useState(0);
   useEffect(() => {
@@ -228,9 +225,7 @@ const RequestInviteContent = ({
           name: row.executor_name,
         };
         setExecutor(defaultExecutor);
-        setExecutorQuery(
-          `C-${defaultExecutor.short_id} · ${defaultExecutor.name}`,
-        );
+
         const draft = row.reserve_draft;
         if (draft) {
           setCompanyName(
@@ -243,9 +238,7 @@ const RequestInviteContent = ({
           if (draft.executor && typeof draft.executor === "object") {
             const savedExecutor = draft.executor as ExecutorAccountSearchResult;
             setExecutor(savedExecutor);
-            setExecutorQuery(
-              `C-${savedExecutor.short_id} · ${savedExecutor.name}`,
-            );
+
           }
           if (Array.isArray(draft.stores) && draft.stores.length)
             setStores(draft.stores as StoreForm[]);
@@ -288,18 +281,7 @@ const RequestInviteContent = ({
       .then(setHasExistingLink)
       .catch(() => setHasExistingLink(false));
   }, [selectedAccountId, invite?.applicant_account_id]);
-  useEffect(() => {
-    if (executor || !executorQuery.trim() || !isSignedIn) {
-      setExecutorResults([]);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      void searchExecutorAccounts(executorQuery)
-        .then(setExecutorResults)
-        .catch(() => setExecutorResults([]));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [executor, executorQuery, isSignedIn]);
+
   useEffect(() => {
     setReserveLeaseReady(false);
     if (!isSignedIn || accounts.length || isAdminPreview || !invite?.reserved_email || !invite.invite_id) return;
@@ -683,7 +665,7 @@ const RequestInviteContent = ({
           </p>
           <h1 className="mt-2 text-xl font-semibold">Новая заявка</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Компания, магазины, заявка и партии будут созданы одновременно после
+            Магазины, заявка и партии будут созданы одновременно после
             подтверждения.
           </p>
           {error && (
@@ -693,48 +675,7 @@ const RequestInviteContent = ({
           )}
           {!reserveLeaseReady && error && <button type="button" onClick={() => { setError(""); setReserveOpenAttempt((value) => value + 1); }} className="mt-3 rounded-xl border px-3 py-2 text-sm">Попробовать открыть черновик снова</button>}
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <label className="text-sm">
-              Компания
-              <input
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                className="mt-1 w-full rounded-xl border px-3 py-2.5"
-              />
-            </label>
-            <label className="text-sm">
-              Исполнитель: C-ID или название
-              <input
-                value={
-                  executor
-                    ? `C-${executor.short_id} · ${executor.name}`
-                    : executorQuery
-                }
-                onChange={(event) => {
-                  setExecutor(null);
-                  setExecutorQuery(event.target.value);
-                }}
-                className="mt-1 w-full rounded-xl border px-3 py-2.5"
-              />
-              {!executor && executorResults.length > 0 && (
-                <span className="relative block">
-                  <span className="absolute z-10 mt-1 w-full rounded-xl border bg-white p-1 shadow-xl">
-                    {executorResults.map((result) => (
-                      <button
-                        type="button"
-                        key={result.id}
-                        onClick={() => {
-                          setExecutor(result);
-                          setExecutorResults([]);
-                        }}
-                        className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-blue-50"
-                      >
-                        C-{result.short_id} · {result.name}
-                      </button>
-                    ))}
-                  </span>
-                </span>
-              )}
-            </label>
+            <RequestExecutorSelect value={executor} onChange={setExecutor} disabled={busy} />
             <label className="text-sm">
               Название заявки
               <input

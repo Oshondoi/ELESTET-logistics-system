@@ -25,6 +25,7 @@ try {
     else if(path.endsWith('/user')) result=user;
     else if(path.endsWith('/reserve_service_request_invite')) result={ok:true};
     else if(path.endsWith('/open_my_request_reserve')) result={};
+    else if(path.endsWith('/search_executor_accounts')) result=[{id:'55555555-5555-4555-8555-555555555555',short_id:5,name:'Other executor'}];
     else if(path.endsWith('/submit_service_request_invite_reserve')) {submitted=true;result={account_id:id};}
     else if(path.endsWith('/get_my_accounts')) {
       await new Promise(resolve=>setTimeout(resolve,250));
@@ -59,6 +60,14 @@ try {
   await page.getByRole('button',{name:'Сохранить пароль и продолжить',exact:true}).click();
   }
   await page.getByRole('heading',{name:'Новая заявка',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('Компания',{exact:true}).count(),0,'no editable company in invite form');
+  const executorPicker=page.getByRole('button',{name:'Исполнитель',exact:true});
+  assert.ok((await executorPicker.innerText()).includes('C-3'));
+  await executorPicker.click();
+  await page.getByText('Работали вместе',{exact:true}).waitFor();
+  await page.getByRole('textbox',{name:'Поиск исполнителя'}).fill('C-5');
+  await page.getByRole('button',{name:'C-5 · Other executor',exact:true}).click();
+  assert.ok((await executorPicker.innerText()).includes('C-5'));
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'request form horizontal overflow');
   await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).waitFor({state:'visible'});
   const scroll=page.getByTestId('request-invite-scroll');
@@ -76,6 +85,7 @@ try {
   await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).click();
   await page.waitForURL('**/client-request');
   assert.equal(calls.filter(c=>c.path.endsWith('/submit_service_request_invite_reserve')).length,1);
+  assert.equal(calls.find(c=>c.path.endsWith('/submit_service_request_invite_reserve')).body.p_executor_account_id,'55555555-5555-4555-8555-555555555555');
   assert.equal(calls.filter(c=>c.path.endsWith('/create_account_with_owner')).length,0);
   assert.equal(await page.getByText('Активируйте бесплатный период на 10 дней',{exact:true}).count(),0);
   assert.deepEqual(errors,[]);
