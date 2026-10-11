@@ -1,3 +1,4 @@
+import { EmailCodeInput } from './EmailCodeInput'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { Input } from '../ui/Input'
@@ -102,7 +103,7 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
       <p className="break-all text-sm font-medium">{email.trim()}</p>
       <EmailCodeRequestHint requestedAt={requestedAt} senderName={senderName} />
       <form className="grid gap-4" onSubmit={e => { e.preventDefault(); void verifyCode() }}>
-        <Input label="Код из письма" placeholder="Шестизначный код" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} required disabled={busy} />
+        <EmailCodeInput label="Код из письма" value={code} onChange={setCode} disabled={busy} />
         <Button type="submit" disabled={busy || code.length !== 6}>Подтвердить код</Button>
       </form>
       <button type="button" disabled={busy || remaining > 0} onClick={() => void sendCode()} className="text-sm text-blue-600 disabled:text-slate-400">{remaining > 0 ? `Отправить повторно через ${remaining} с` : 'Отправить код повторно'}</button>

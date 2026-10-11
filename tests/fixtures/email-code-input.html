@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module">
+import '/src/styles.css';import React,{useState}from'react';import{createRoot}from'react-dom/client';import{EmailCodeInput}from'/src/components/auth/EmailCodeInput.tsx';
+function App(){const[value,setValue]=useState('');return React.createElement('form',{style:{maxWidth:440,margin:'24px auto',padding:24},onSubmit:e=>{e.preventDefault();window.submitted=value}},React.createElement(EmailCodeInput,{value,onChange:setValue}),React.createElement('button',{type:'submit'},'Submit'))}
+createRoot(document.getElementById('root')).render(React.createElement(App));
+</script></body></html>

@@ -1,6 +1,6 @@
+import { EmailCodeInput } from './EmailCodeInput'
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
-import { Input } from '../ui/Input'
 import { Button } from '../ui/Button'
 import { createEmailCodeRequest } from '../../lib/emailCodeRequest'
 import { EmailCodeRequestHint } from './EmailCodeRequestHint'
@@ -54,7 +54,7 @@ export function SignupConfirmationForm({ email, justSent, initialRequestedAt, in
     <p className="text-sm text-slate-600">Введите шестизначный код из письма на <strong className="break-all">{email}</strong>, чтобы завершить регистрацию.</p>
     <div className="h-20 overflow-auto">{error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}</div>
     <form className="grid gap-4" onSubmit={e => { e.preventDefault(); void submit(false) }}>
-      <Input label="Код подтверждения" placeholder="Шестизначный код" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} required disabled={busy} />
+        <EmailCodeInput label="Код подтверждения" value={code} onChange={setCode} disabled={busy} />
       <Button type="submit" disabled={busy || code.length !== 6}>Подтвердить почту</Button>
     </form>
     <button type="button" disabled={busy || remaining > 0} onClick={() => void submit(true)} className="text-sm text-blue-600 disabled:text-slate-400">{remaining > 0 ? `Отправить повторно через ${remaining} с` : 'Отправить код повторно'}</button>
