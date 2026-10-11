@@ -22,7 +22,7 @@ try {
       if(body.token === '123456' && body.email === user.email) result={access_token:access,refresh_token:'fixture-refresh',token_type:'bearer',expires_in:3600,user};
       else {status=403;result={code:'otp_expired',msg:'Token has expired or is invalid'};}
     }
-    if(path.endsWith('/user')) result={user};
+    if(path.endsWith('/user')) result=route.request().method()==='GET'?user:{user};
     await route.fulfill({status,contentType:'application/json',body:JSON.stringify(result)});
   });
   async function open(email) {
@@ -54,12 +54,24 @@ try {
   assert.equal(await page.evaluate(()=>Object.keys(localStorage).some(k=>k.includes('auth-token') || k==='elestet-password-recovery')),false,'Recovery session must not be persisted');
   await page.getByLabel('Новый пароль',{exact:true}).fill('Newpass123');
   await page.getByLabel('Повторите пароль',{exact:true}).fill('Newpass123');
+  await page.getByRole('button',{name:'Показать пароль: Новый пароль',exact:true}).click();
+  assert.equal(await page.getByLabel('Новый пароль',{exact:true}).getAttribute('type'),'text');
+  assert.equal(await page.getByLabel('Повторите пароль',{exact:true}).getAttribute('type'),'password');
+  await page.getByRole('button',{name:'Скрыть пароль: Новый пароль',exact:true}).click();
+  await page.getByRole('button',{name:'Показать пароль: Повторите пароль',exact:true}).click();
+  assert.equal(await page.getByLabel('Повторите пароль',{exact:true}).getAttribute('type'),'text');
   await page.getByRole('button',{name:'Сохранить пароль'}).click();
   await page.getByRole('status').waitFor();
   assert.equal(calls.filter(c=>c.path.endsWith('/signup') || c.path.endsWith('/otp')).length,0);
   assert.ok(calls.filter(c=>c.path.endsWith('/verify')).every(c=>c.body.type==='recovery'));
   assert.equal(calls.filter(c=>c.path.endsWith('/user')).length,1);
   assert.equal(calls.filter(c=>c.path.endsWith('/logout')).length,1);
+  assert.ok(calls.find(c=>c.path.endsWith('/logout')).url.includes('scope=others'));
+  assert.equal(await page.getByRole('status').innerText(),'Пароль обновлён.');
+  assert.equal(await page.evaluate(()=>Object.keys(localStorage).some(k=>k.includes('auth-token'))),false,'no main login before explicit button');
+  await page.getByRole('button',{name:'Войти в систему',exact:true}).click();
+  await page.getByText('Auth session established',{exact:true}).waitFor();
+  assert.equal(calls.filter(c=>c.url.includes('grant_type=password')).length,0,'no second password login');
   assert.deepEqual(errors,[]);
   console.log('password_recovery_browser_ok: neutral response, no signup, cooldown, edit email, invalid/valid recovery OTP, isolated session, password save');
 } finally { await browser.close(); }

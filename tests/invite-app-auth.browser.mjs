@@ -30,11 +30,25 @@ try {
       await new Promise(resolve=>setTimeout(resolve,250));
       result=submitted?[{id,name:'Applicant',short_id:155,my_role:'owner'}]:[];
     }
+    if(process.env.RECOVERY_FLOW&&path.endsWith('/get_service_request_invite'))result={...result,reserved_email:user.email};
     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
   });
   await page.goto('http://localhost:5173/request-invite/'+token);
-  await page.getByPlaceholder('Имя',{exact:true}).fill('Tester');
-  await page.getByPlaceholder('Почта',{exact:true}).fill(user.email);
+  if(!process.env.RECOVERY_FLOW)await page.getByPlaceholder('Имя',{exact:true}).fill('Tester');
+  if(!process.env.RECOVERY_FLOW)await page.getByPlaceholder('Почта',{exact:true}).fill(user.email);
+  if(process.env.RECOVERY_FLOW){
+    await page.getByRole('button',{name:'Забыли пароль?',exact:true}).click();
+    await page.getByRole('button',{name:'Отправить код',exact:true}).click();
+    await page.getByPlaceholder('Шестизначный код').fill('123456');
+    await page.getByRole('button',{name:'Подтвердить код',exact:true}).click();
+    await page.getByLabel('Новый пароль',{exact:true}).fill('Testpass123');
+    await page.getByLabel('Повторите пароль',{exact:true}).fill('Testpass123');
+    await page.getByRole('button',{name:'Сохранить пароль',exact:true}).click();
+    await page.getByText('Пароль обновлён.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Войти в систему',exact:true}).click();
+    assert.ok(page.url().includes('/request-invite/'+token));
+    assert.equal(calls.filter(c=>c.path.endsWith('/otp')||c.path.endsWith('/token')).length,0);
+  }else{
   await page.getByRole('button',{name:'Получить код на почту',exact:true}).click();
   await page.getByPlaceholder('Шестизначный код').waitFor().catch(async error => { console.error(await page.locator('body').innerText(),calls); throw error; });
   await page.getByPlaceholder('Шестизначный код').fill('123456');
@@ -43,6 +57,7 @@ try {
   await page.getByPlaceholder('Новый пароль аккаунта').fill('Testpass123');
   await page.getByPlaceholder('Повторите пароль').fill('Testpass123');
   await page.getByRole('button',{name:'Сохранить пароль и продолжить',exact:true}).click();
+  }
   await page.getByRole('heading',{name:'Новая заявка',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'request form horizontal overflow');
   await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).waitFor({state:'visible'});
@@ -56,7 +71,7 @@ try {
   const bottom=await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).boundingBox();
   assert.ok(bottom.y>=0&&bottom.y+bottom.height<=900,'submit reachable inside viewport');
   assert.equal(calls.filter(c=>c.path.endsWith('/create_account_with_owner')).length,0);
-  assert.equal(await page.evaluate(()=>localStorage.getItem('elestet-pending-request-invite')),token);
+  if(!process.env.RECOVERY_FLOW)assert.equal(await page.evaluate(()=>localStorage.getItem('elestet-pending-request-invite')),token);
   await page.getByPlaceholder('Название магазина').fill('Test store');
   await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).click();
   await page.waitForURL('**/client-request');

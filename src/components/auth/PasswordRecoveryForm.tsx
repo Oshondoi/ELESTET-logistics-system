@@ -2,6 +2,8 @@ import { EmailCodeInput } from './EmailCodeInput'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { Input } from '../ui/Input'
+import { PasswordInput } from '../ui/PasswordInput'
+import { supabase } from '../../lib/supabase'
 import { Button } from '../ui/Button'
 import { normalizePassword, passwordsMatch, validatePassword } from '../../lib/passwordUtils'
 import { createEmailCodeRequest } from '../../lib/emailCodeRequest'
@@ -83,11 +85,28 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
         setError(updateError.code === 'same_password' ? 'Укажите пароль, который отличается от прежнего.' : 'Не удалось сохранить пароль. Повторите попытку или запросите новый код.')
         return
       }
-      // Revoke refresh sessions, including the temporary recovery session.
-      await client.auth.signOut({ scope: 'global' })
+      // Revoke other sessions, but retain this verified session in memory.
+      // Only the explicit login button transfers it to the main app.
+      await client.auth.signOut({ scope: 'others' })
       setPassword('')
       setRepeat('')
       setStep('done')
+    })
+  }
+
+  async function enterSystem() {
+    await run(async () => {
+      const { data, error: sessionError } = await client.auth.getSession()
+      if (sessionError || !data.session || !supabase) {
+        setError('Пароль обновлён, но сессия истекла. Вернитесь к входу.')
+        return
+      }
+      const { error: loginError } = await supabase.auth.setSession({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      })
+      if (loginError) { setError('Не удалось войти. Повторите попытку.'); return }
+      onBack()
     })
   }
 
@@ -110,11 +129,14 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
       <button type="button" disabled={busy} onClick={() => { setStep('email'); setCode(''); setError('') }} className="text-sm text-blue-600">Изменить почту</button>
     </>}
     {step === 'password' && <form className="grid gap-4" onSubmit={e => { e.preventDefault(); void savePassword() }}>
-      <Input label="Новый пароль" type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} required disabled={busy} />
-      <Input label="Повторите пароль" type="password" autoComplete="new-password" value={repeat} onChange={e => setRepeat(e.target.value)} required disabled={busy} />
+      <PasswordInput label="Новый пароль" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} required disabled={busy} />
+      <PasswordInput label="Повторите пароль" autoComplete="new-password" value={repeat} onChange={e => setRepeat(e.target.value)} required disabled={busy} />
       <Button type="submit" disabled={busy}>Сохранить пароль</Button>
     </form>}
-    {step === 'done' && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">Пароль изменён. Войдите с новым паролем.</p>}
-    <button type="button" disabled={busy} onClick={onBack} className="text-sm text-slate-500">← Назад к входу</button>
+    {step === 'done' && <>
+      <p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">Пароль обновлён.</p>
+      <Button type="button" disabled={busy} onClick={() => void enterSystem()}>{busy ? 'Вход…' : 'Войти в систему'}</Button>
+    </>}
+    {(step !== 'done' || error) && <button type="button" disabled={busy} onClick={onBack} className="text-sm text-slate-500">← Назад к входу</button>}
   </div>
 }
