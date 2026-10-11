@@ -134,7 +134,15 @@ const AdminPreview = ({ data }: { data: AdminInvitePreview }) => (
   </div>
 );
 
-export const RequestInvitePage = ({
+// The app shell locks html/body scrolling. Public invite screens therefore
+// own one viewport-sized scroll container, including the long request form.
+export const RequestInvitePage = (props: Props) => (
+  <div data-testid="request-invite-scroll" className="h-dvh w-full overflow-y-auto bg-slate-50">
+    <RequestInviteContent {...props} />
+  </div>
+);
+
+const RequestInviteContent = ({
   token,
   isSignedIn,
   isAdminPreview,

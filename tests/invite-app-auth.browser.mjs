@@ -46,6 +46,15 @@ try {
   await page.getByRole('heading',{name:'Новая заявка',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'request form horizontal overflow');
   await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).waitFor({state:'visible'});
+  const scroll=page.getByTestId('request-invite-scroll');
+  assert.equal(await scroll.evaluate(el=>el.scrollHeight>el.clientHeight),true,'long form must have scroll range');
+  await scroll.evaluate(el=>el.scrollTop=0);
+  await page.mouse.move(20,200);
+  await page.mouse.wheel(0,600);
+  await page.waitForFunction(()=>document.querySelector('[data-testid="request-invite-scroll"]').scrollTop>0);
+  await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).scrollIntoViewIfNeeded();
+  const bottom=await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).boundingBox();
+  assert.ok(bottom.y>=0&&bottom.y+bottom.height<=900,'submit reachable inside viewport');
   assert.equal(calls.filter(c=>c.path.endsWith('/create_account_with_owner')).length,0);
   assert.equal(await page.evaluate(()=>localStorage.getItem('elestet-pending-request-invite')),token);
   await page.getByPlaceholder('Название магазина').fill('Test store');
