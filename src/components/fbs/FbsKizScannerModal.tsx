@@ -361,19 +361,34 @@ function pairErrorText(error: string, orderId: string): string {
   return message
 }
 
-function signal(success: boolean) {
+async function signal(success: boolean) {
+  let context: AudioContext | undefined
   try {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
-    const context = new AudioContextClass()
+    context = new AudioContextClass() as AudioContext
+    if (context.state === 'suspended') await context.resume()
     const oscillator = context.createOscillator()
     const gain = context.createGain()
+    const start = context.currentTime
+    const duration = success ? 0.14 : 0.28
     oscillator.frequency.value = success ? 880 : 220
-    gain.gain.value = 0.08
+    // Louder and longer, with short fades to avoid sharp clicks.
+    gain.gain.setValueAtTime(0, start)
+    gain.gain.linearRampToValueAtTime(0.3, start + 0.008)
+    gain.gain.setValueAtTime(0.3, start + duration - 0.02)
+    gain.gain.linearRampToValueAtTime(0, start + duration)
     oscillator.connect(gain)
     gain.connect(context.destination)
-    oscillator.start()
-    oscillator.stop(context.currentTime + (success ? 0.07 : 0.18))
+    const activeContext = context
+    oscillator.onended = () => {
+      oscillator.disconnect()
+      gain.disconnect()
+      void activeContext.close().catch(() => undefined)
+    }
+    oscillator.start(start)
+    oscillator.stop(start + duration)
   } catch {
+    if (context) void context.close().catch(() => undefined)
     // Цвет и текст остаются обязательной обратной связью, даже если звук запрещён браузером.
   }
 }
