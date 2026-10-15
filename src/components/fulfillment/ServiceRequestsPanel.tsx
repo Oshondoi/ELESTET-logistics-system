@@ -13,7 +13,6 @@ import {
   copyServiceRequest,
   createServiceRequestFromForm,
   createServiceRequestInvite,
-  fetchRecentExecutorAccounts,
   fetchServiceRequestVersions,
   getRequestDraftDeviceId,
   heartbeatServiceRequestWorkDraft,
@@ -23,13 +22,13 @@ import {
   rejectServiceRequest,
   removeServiceRequests,
   saveServiceRequestWorkDraft,
-  searchExecutorAccounts,
   startServiceRequestWork,
   submitServiceRequest,
   type RequestBatchSummary,
   type ServiceRequestVersion,
 } from "../../services/requestService";
 import { createStoreInSupabase } from "../../services/storeService";
+import { RequestExecutorSelect } from "./RequestExecutorSelect";
 import { RequestIntakeEditor } from "./RequestIntakeEditor";
 import { reassignRejectedServiceRequest } from "../../services/requestService";
 import {
@@ -129,18 +128,13 @@ export const ServiceRequestsPanel = ({
   const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([]);
   const [requestFilter, setRequestFilter] = useState<"active" | "cancelled">("active");
   const [directionFilter, setDirectionFilter] = useState<"all" | "incoming" | "outgoing">("all");
-  const [recentExecutors, setRecentExecutors] = useState<ExecutorAccountSearchResult[]>([]);
   const [title, setTitle] = useState("");
   const [name, setName] = useState(userName);
   const [email, setEmail] = useState(userEmail);
   const [comment, setComment] = useState("");
-  const [executorQuery, setExecutorQuery] = useState("");
   const [executor, setExecutor] = useState<ExecutorAccountSearchResult | null>(
     null,
   );
-  const [executorResults, setExecutorResults] = useState<
-    ExecutorAccountSearchResult[]
-  >([]);
   const [storeDrafts, setStoreDrafts] = useState<StoreDraft[]>([]);
   const [activeStore, setActiveStore] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -176,11 +170,6 @@ export const ServiceRequestsPanel = ({
     void load();
   }, [accountId]);
 
-  useEffect(() => {
-    void fetchRecentExecutorAccounts(accountId)
-      .then(setRecentExecutors)
-      .catch(() => setRecentExecutors([]));
-  }, [accountId]);
 
   useEffect(() => {
     if (!accountId || !canAssign) {
@@ -219,16 +208,6 @@ export const ServiceRequestsPanel = ({
     return () => { active = false; };
   }, [viewing?.id]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(async () => {
-      try {
-        setExecutorResults(await searchExecutorAccounts(executorQuery));
-      } catch {
-        setExecutorResults([]);
-      }
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [executorQuery]);
 
   const openEditor = async (request: ServiceRequest) => {
     setError("");
@@ -246,7 +225,7 @@ export const ServiceRequestsPanel = ({
         short_id: request.executor_company_short_id ?? 0,
         name: request.executor_company_name ?? "",
       } : null));
-      setExecutorQuery("");
+
       setInviteUrl("");
       setStoreDrafts(work.stores ? work.stores.map((row) => ({
         storeId: row.store_id,
@@ -280,7 +259,7 @@ export const ServiceRequestsPanel = ({
     setComment("");
     setExecutor(defaultExecutor ?? null);
     setPendingInviteToken(inviteToken ?? null);
-    setExecutorQuery("");
+
     setStoreDrafts([]);
     setActiveStore(0);
     setError("");
@@ -513,7 +492,6 @@ export const ServiceRequestsPanel = ({
       ? request.executor_account_id === accountId
       : request.applicant_account_id === accountId))
   ), [requests, requestFilter, directionFilter, accountId]);
-  const suggestedExecutors = executorQuery.trim() ? executorResults : recentExecutors;
   const currentStoreDraft = storeDrafts[activeStore];
   const currentStore = currentStoreDraft
     ? stores.find((store) => store.id === currentStoreDraft.storeId)
@@ -713,7 +691,7 @@ export const ServiceRequestsPanel = ({
                     <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}>
                       <div className="flex flex-wrap justify-end gap-1">
                         {canCreate && isApplicant && request.status === "rejected" && (
-                          <button type="button" onClick={() => { setReassigning(request); setExecutor(null); setExecutorQuery(""); setError(""); }} className="rounded-xl border px-2.5 py-1.5 text-xs">
+                          <button type="button" onClick={() => { setReassigning(request); setExecutor(null); setError(""); }} className="rounded-xl border px-2.5 py-1.5 text-xs">
                             Другой исполнитель
                           </button>
                         )}
@@ -844,8 +822,7 @@ export const ServiceRequestsPanel = ({
         <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
           <h2 className="text-lg font-semibold">Исполнитель заявки R-{reassigning.short_id}</h2>
           <p className="mt-2 text-sm text-slate-500">Заявка и партии сохранят свои номера. Новый исполнитель получит заявку после отправки.</p>
-          <input value={executor ? `C-${executor.short_id} · ${executor.name}` : executorQuery} onChange={(event) => { setExecutor(null); setExecutorQuery(event.target.value); }} placeholder="Название компании или C-ID" className="mt-4 w-full rounded-xl border px-3 py-2" />
-          {!executor && suggestedExecutors.filter((row) => row.id !== reassigning.executor_account_id).map((row) => <button key={row.id} type="button" onClick={() => setExecutor(row)} className="block w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-blue-50">C-{row.short_id} · {row.name}</button>)}
+          <RequestExecutorSelect value={executor} onChange={setExecutor} accountId={accountId} excludeAccountId={reassigning.executor_account_id} />
           {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={saving} onClick={() => setReassigning(null)} className="rounded-xl border px-4 py-2">Отмена</button>
@@ -903,41 +880,7 @@ export const ServiceRequestsPanel = ({
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                 />
               </label>
-              <label className="text-xs text-slate-500">
-                Исполнитель: C-ID или название
-                <input
-                  disabled={(editing?.current_version ?? 0) > 0}
-                  value={
-                    executor
-                      ? `C-${executor.short_id} · ${executor.name}`
-                      : executorQuery
-                  }
-                  onChange={(e) => {
-                    setExecutor(null);
-                    setExecutorQuery(e.target.value);
-                  }}
-                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm disabled:bg-slate-50"
-                />
-                {!executor && suggestedExecutors.length > 0 && (
-                  <div className="relative">
-                    <div className="absolute z-10 mt-1 w-full rounded-xl border bg-white p-1 shadow-xl">
-                      {!executorQuery.trim() && <p className="px-3 py-1 text-xs text-slate-400">Работали вместе</p>}
-                      {suggestedExecutors.map((result) => (
-                        <button
-                          key={result.id}
-                          onClick={() => {
-                            setExecutor(result);
-                            setExecutorResults([]);
-                          }}
-                          className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-blue-50"
-                        >
-                          C-{result.short_id} · {result.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </label>
+              <RequestExecutorSelect value={executor} onChange={setExecutor} accountId={accountId} disabled={(editing?.current_version ?? 0) > 0} />
               <label className="text-xs text-slate-500">
                 Имя заявителя
                 <input

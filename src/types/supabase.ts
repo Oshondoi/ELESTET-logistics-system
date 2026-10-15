@@ -506,6 +506,14 @@ export interface Database {
       [_ in never]: never
     }
     Functions: {
+      complete_resolved_fbs_marking_session: {
+        Args: { p_session_id: string; p_device_id: string }
+        Returns: Json
+      }
+      get_fbs_marking_session_receipt: {
+        Args: { p_session_id: string }
+        Returns: Json
+      }
       create_shipment: {
         Args: {
           p_account_id: string

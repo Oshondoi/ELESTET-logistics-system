@@ -529,7 +529,7 @@ export const copyServiceRequest = async (
 export const searchExecutorAccounts = async (
   query: string,
 ): Promise<ExecutorAccountSearchResult[]> => {
-  if (!query.trim()) return [];
+  if (!/^[0-9]+$/.test(query.trim())) return [];
   const { data, error } = await client().rpc("search_executor_accounts", {
     p_query: query.trim(),
   });

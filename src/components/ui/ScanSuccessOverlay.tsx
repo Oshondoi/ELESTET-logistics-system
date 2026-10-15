@@ -59,13 +59,13 @@ export function ScanSuccessOverlayHost() {
       key={entry.nonce}
       role="status"
       aria-live="polite"
-      className={`pointer-events-none fixed inset-x-0 top-[18%] z-[300] flex justify-center px-4 transition-opacity duration-1000 ease-linear ${fading ? 'opacity-0' : 'opacity-100'}`}
+      className={`pointer-events-none fixed inset-x-0 bottom-0 z-[300] h-[45dvh] w-full transition-opacity duration-1000 ease-linear ${fading ? 'opacity-0' : 'opacity-100'}`}
     >
-      <div className={`min-w-[260px] max-w-[min(92vw,680px)] rounded-3xl border px-7 py-5 text-center text-white shadow-2xl backdrop-blur-md ${entry.kind === 'cancelled' ? 'border-red-300/70 bg-red-700/95' : 'border-white/60 bg-[#191919]/95'}`}>
+      <div className={`flex h-full w-full flex-col items-center justify-center overflow-hidden border-t px-4 py-4 text-center text-white shadow-2xl backdrop-blur-md sm:px-7 ${entry.kind === 'cancelled' ? 'border-red-300/70 bg-red-700/95' : 'border-white/60 bg-[#191919]/95'}`}>
         <div className={`text-xs font-bold uppercase tracking-[0.18em] ${entry.kind === 'cancelled' ? 'text-red-100' : 'text-emerald-300'}`}>
           {entry.title || defaultTitle(entry.kind)}
         </div>
-        <div className="mt-1 break-all font-mono text-5xl font-black leading-none tracking-wider sm:text-7xl">
+        <div className="mt-2 max-w-full break-all font-mono font-black leading-none tracking-wider" style={{ fontSize: entry.primary.length > 12 ? 'clamp(24px, 6dvh, 48px)' : `clamp(32px, min(18dvh, ${130 / Math.max(entry.primary.length, 4)}vw), 160px)` }}>
           {entry.primary}
         </div>
         {entry.details?.filter(Boolean).map((detail, index) => (

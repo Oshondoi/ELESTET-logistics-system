@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ExecutorAccountSearchResult, ServiceRequestItemDraft, Store } from "../types";
 import { fetchStoresFromSupabase } from "../services/storeService";
+import { RequestExecutorSelect } from "../components/fulfillment/RequestExecutorSelect";
 import { RequestIntakeEditor } from "../components/fulfillment/RequestIntakeEditor";
 import {
   heartbeatMyRequestReserve,
   listMyRequestReserves,
   openMyRequestReserve,
   saveMyRequestReserve,
-  searchExecutorAccounts,
   submitMyRequestReserve,
   type MyRequestReserve,
   type ReservedInviteStore,
@@ -44,8 +44,6 @@ export const MyRequestDraftsPage = ({ onMaterialized, onSignOut, onCreateCompany
   const [activeScannerStore, setActiveScannerStore] = useState(0);
   const [existingStores, setExistingStores] = useState<Store[]>([]);
   const [executor, setExecutor] = useState<ExecutorAccountSearchResult | null>(null);
-  const [executorQuery, setExecutorQuery] = useState("");
-  const [executorResults, setExecutorResults] = useState<ExecutorAccountSearchResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -84,7 +82,6 @@ export const MyRequestDraftsPage = ({ onMaterialized, onSignOut, onCreateCompany
       short_id: active.executor_short_id,
       name: active.executor_name,
     });
-    setExecutorQuery("");
     setHydratedId(active.invite_id);
     setError("");
     }).catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Черновик сейчас открыт на другом устройстве"); });
@@ -92,13 +89,13 @@ export const MyRequestDraftsPage = ({ onMaterialized, onSignOut, onCreateCompany
   }, [activeId, rows, openAttempt]);
   useEffect(() => {
     if (!active || hydratedId !== active.invite_id) return;
+    let cancelled = false;
     const timer = window.setInterval(() => {
-      if (Date.now() - lastActivityRef.current > 120_000) return;
       void heartbeatMyRequestReserve(active.invite_id).then((ok) => {
-        if (!ok) { setHydratedId(""); setError("Право записи черновика истекло. Выберите заявку снова, чтобы продолжить."); }
-      }).catch(() => setHydratedId(""));
+        if (!cancelled && !ok) { setHydratedId(""); setError("Черновик недоступен для записи: возможно, он открыт на другом устройстве."); }
+      }).catch(() => { /* Retry transient network errors on next heartbeat. */ });
     }, 30_000);
-    return () => window.clearInterval(timer);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [activeId, hydratedId]);
   useEffect(() => {
     if (!active || !loaded || hydratedId !== active.invite_id) return;
@@ -110,13 +107,6 @@ export const MyRequestDraftsPage = ({ onMaterialized, onSignOut, onCreateCompany
     }, 700);
     return () => window.clearTimeout(timer);
   }, [activeId, hydratedId, companyName, title, comment, stores, executor, loaded]);
-  useEffect(() => {
-    if (executor || !executorQuery.trim()) { setExecutorResults([]); return; }
-    const timer = window.setTimeout(() => {
-      void searchExecutorAccounts(executorQuery).then(setExecutorResults).catch(() => setExecutorResults([]));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [executor, executorQuery]);
   useEffect(() => {
     if (!applicantAccountId) { setExistingStores([]); return; }
     let active = true;
@@ -190,10 +180,7 @@ export const MyRequestDraftsPage = ({ onMaterialized, onSignOut, onCreateCompany
                 {accounts?.length ? <select value={applicantAccountId} onChange={(e) => setApplicantAccountId(e.target.value)} className="mt-1 w-full rounded-xl border px-3 py-2 text-sm">
                   {accounts.map((account) => <option key={account.id} value={account.id}>C-{account.short_id} · {account.name}</option>)}
                 </select> : <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} className="mt-1 w-full rounded-xl border px-3 py-2 text-sm" />}</label>
-              <label className="text-xs text-slate-500">Исполнитель
-                <input value={executor ? `C-${executor.short_id} · ${executor.name}` : executorQuery} onChange={(e) => { setExecutor(null); setExecutorQuery(e.target.value); }} className="mt-1 w-full rounded-xl border px-3 py-2 text-sm" />
-                {!executor && executorResults.length > 0 && <div className="relative"><div className="absolute z-10 w-full rounded-xl border bg-white p-1 shadow-lg">{executorResults.map((row) => <button type="button" key={row.id} onClick={() => { setExecutor(row); setExecutorResults([]); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-blue-50">C-{row.short_id} · {row.name}</button>)}</div></div>}
-              </label>
+              <RequestExecutorSelect value={executor} onChange={setExecutor} accountId={applicantAccountId || undefined} disabled={busy} />
               <label className="text-xs text-slate-500">Имя заявителя<input value={active.full_name} readOnly className="mt-1 w-full rounded-xl border bg-slate-50 px-3 py-2 text-sm" /></label>
               <label className="text-xs text-slate-500">Подтверждённая почта<input value={active.email} readOnly className="mt-1 w-full rounded-xl border bg-slate-50 px-3 py-2 text-sm" /></label>
               <label className="text-xs text-slate-500">Название заявки<input value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1 w-full rounded-xl border px-3 py-2 text-sm" /></label>

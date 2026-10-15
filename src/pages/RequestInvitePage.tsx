@@ -1,6 +1,7 @@
 import { RequestExecutorSelect } from "../components/fulfillment/RequestExecutorSelect";
 import { EmailCodeInput } from "../components/auth/EmailCodeInput";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import "./RequestInvitePage.css";
 import { BrandLogo, useBrand } from "../components/accounts/BrandContext";
 import { createEmailCodeRequest } from "../lib/emailCodeRequest";
 import { EmailCodeRequestHint } from "../components/auth/EmailCodeRequestHint";
@@ -198,8 +199,6 @@ const RequestInviteContent = ({
   );
   const [reserveLeaseReady, setReserveLeaseReady] = useState(false);
   const [reserveOpenAttempt, setReserveOpenAttempt] = useState(0);
-  const lastActivityRef = useRef(Date.now());
-  useEffect(() => { lastActivityRef.current = Date.now(); }, [stores]);
 
   useEffect(() => {
     setInvite(null);
@@ -304,13 +303,13 @@ const RequestInviteContent = ({
   }, [isSignedIn, accounts.length, isAdminPreview, invite?.reserved_email, invite?.invite_id, reserveOpenAttempt]);
   useEffect(() => {
     if (!reserveLeaseReady || !invite?.invite_id) return;
+    let cancelled = false;
     const timer = window.setInterval(() => {
-      if (Date.now() - lastActivityRef.current > 120_000) return;
       void heartbeatMyRequestReserve(invite.invite_id).then((ok) => {
-        if (!ok) { setReserveLeaseReady(false); setError("Право записи черновика истекло. Обновите страницу, чтобы продолжить."); }
-      }).catch(() => setReserveLeaseReady(false));
+        if (!cancelled && !ok) { setReserveLeaseReady(false); setError("Черновик недоступен для записи: возможно, он открыт на другом устройстве. Введённые данные остаются на этой странице."); }
+      }).catch(() => { /* A temporary network failure does not transfer ownership. Retry on the next heartbeat. */ });
     }, 30_000);
-    return () => window.clearInterval(timer);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [reserveLeaseReady, invite?.invite_id]);
   useEffect(() => {
     if (
@@ -658,8 +657,8 @@ const RequestInviteContent = ({
       }
     };
     return (
-      <div className="min-h-screen bg-slate-50 p-4 sm:p-8" onChangeCapture={() => { lastActivityRef.current = Date.now(); }} onKeyDown={() => { lastActivityRef.current = Date.now(); }}>
-        <div className="mx-auto max-w-4xl rounded-3xl bg-white p-6 shadow-xl">
+      <div className="client-invite-form min-h-screen bg-slate-50 p-4 sm:p-8">
+        <div className="mx-auto max-w-4xl rounded-3xl bg-white p-4 shadow-xl sm:p-7">
           <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
             <BrandLogo />Ссылка от {executorLabel}
           </p>
@@ -674,7 +673,7 @@ const RequestInviteContent = ({
             </p>
           )}
           {!reserveLeaseReady && error && <button type="button" onClick={() => { setError(""); setReserveOpenAttempt((value) => value + 1); }} className="mt-3 rounded-xl border px-3 py-2 text-sm">Попробовать открыть черновик снова</button>}
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <div className="invite-details mt-6 grid gap-3 sm:grid-cols-2">
             <RequestExecutorSelect value={executor} onChange={setExecutor} disabled={busy} />
             <label className="text-sm">
               Название заявки
@@ -686,9 +685,9 @@ const RequestInviteContent = ({
             </label>
           </div>
           {stores.map((store, index) => (
-            <div key={index} className="mt-4 rounded-2xl border p-4">
+            <div key={index} className="invite-store mt-5 rounded-2xl bg-slate-50 p-4 sm:p-5">
               <button type="button" onClick={() => setActiveScannerStore(index)} className={`mb-3 rounded-lg px-3 py-1.5 text-xs ${activeScannerStore === index ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"}`}>
-                {activeScannerStore === index ? "Сканер подключён к этому магазину" : "Подключить сканер к этому магазину"}
+                {activeScannerStore === index ? "Магазин выбран для сканирования" : "Выбрать магазин для сканирования"}
               </button>
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold">Магазин {index + 1}</h2>

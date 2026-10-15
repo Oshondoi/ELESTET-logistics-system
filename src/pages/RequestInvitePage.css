@@ -1,0 +1,48 @@
+/* Client form only: preserve shared editor behaviour and brand accent colours. */
+.client-invite-form .invite-details > * {
+  min-width: 0;
+  padding: 16px;
+  border-radius: 18px;
+  background: #f8fafc;
+}
+
+.client-invite-form :is(input, select, textarea) {
+  min-width: 0;
+  max-width: 100%;
+  border-color: #e2e8f0;
+  background-color: white;
+  color: #0f172a;
+  border-radius: 14px;
+}
+
+.client-invite-form :is(input, select, textarea):focus-visible {
+  outline: 2px solid #94a3b8;
+  outline-offset: 2px;
+}
+
+.client-invite-form :is(input, textarea)::placeholder {
+  color: #94a3b8;
+}
+
+.client-invite-form :is(button, div).border {
+  border-color: #e2e8f0;
+}
+
+.client-invite-form .invite-details button[aria-expanded] {
+  background: white;
+  min-height: 44px;
+}
+
+.client-invite-form .invite-store > button:first-child {
+  border-radius: 12px;
+  min-height: 36px;
+}
+
+.client-invite-form .invite-store h2 {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.client-invite-form .invite-store textarea {
+  padding: 14px;
+}

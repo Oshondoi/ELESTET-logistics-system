@@ -1665,6 +1665,22 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
     }
   }
 
+  const downloadHistory = async () => {
+    if (!supabase || !session || busy) return
+    setBusy(true)
+    try {
+      const { data, error: receiptError } = await supabase.rpc('get_fbs_marking_session_receipt', { p_session_id: session.id })
+      if (receiptError) throw receiptError
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `ELESTET-scanning-history-${session.id}.json`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (e) { setError(errorText(e)) }
+    finally { setBusy(false) }
+  }
+
   const finish = async () => {
     if (!session || busy || !deviceReady) return
     if (session.pending_order_id || session.pending_product_barcode) {
@@ -1672,14 +1688,22 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
       signal(false)
       return
     }
-    if (!pairs.some((pair) => pair.status === 'draft' || pair.status === 'error')) {
-      setError('Нет новых пар для отправки')
-      return
-    }
+    const resolvedOnly = pairs.length > 0 && pairs.every(pair => pair.status === 'sent' || pair.status === 'cancelled')
     setBusy(true)
     setError('')
-    setNotice('Отправляем КИЗ в Wildberries…')
+    setNotice(resolvedOnly ? 'Завершаем сессию без повторной отправки…' : 'Отправляем КИЗ в Wildberries…')
     try {
+      if (resolvedOnly) {
+        if (!supabase) throw new Error('Нет соединения с базой')
+        const { error: finishError } = await supabase.rpc('complete_resolved_fbs_marking_session', {
+          p_session_id: session.id, p_device_id: stableDeviceId,
+        })
+        if (finishError) throw finishError
+        await Promise.all([loadPairs(session.id), loadSession(session.id)])
+        setNotice('Сессия завершена без повторной отправки в WB. Отправленные КИЗ и история сохранены.')
+        signal(true)
+        return
+      }
       const result = await invokeFbs(storeId, {
         action: 'submit_marking_session', session_id: session.id, device_id: stableDeviceId,
       })
@@ -2031,9 +2055,10 @@ export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onCl
             <span className="min-w-0 truncate">{deviceReady ? session?.device_name : 'Назвать устройство'}</span>
             {deviceReady && <span className="shrink-0 text-[10px] font-medium text-slate-400">Изменить</span>}
           </button>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <button type="button" disabled={!session || busy} onClick={() => void downloadHistory()} className="rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600 disabled:opacity-40">Скачать историю</button>
             <button type="button" onClick={onClose} className={`h-12 rounded-xl border border-slate-200 px-3 text-sm font-medium text-slate-600 sm:h-auto sm:px-4 sm:py-2.5 ${session?.status === 'completed' ? 'col-span-2' : ''}`}>Закрыть</button>
-            {session?.status !== 'completed' && <button type="button" onClick={() => void finish()} disabled={!deviceReady || busy || loading || pairs.length === 0} className="h-12 whitespace-nowrap rounded-xl bg-violet-600 px-3 text-sm font-semibold text-white disabled:opacity-40 sm:h-auto sm:px-5 sm:py-2.5"><span className="sm:hidden">Отправить</span><span className="hidden sm:inline">Завершить и отправить в WB</span></button>}
+            {session?.status !== 'completed' && <button type="button" onClick={() => void finish()} disabled={!deviceReady || busy || loading || pairs.length === 0} className="h-12 whitespace-nowrap rounded-xl bg-violet-600 px-3 text-sm font-semibold text-white disabled:opacity-40 sm:h-auto sm:px-5 sm:py-2.5">{pairs.length > 0 && pairs.every(pair => pair.status === 'sent' || pair.status === 'cancelled') ? 'Завершить сессию' : <><span className="sm:hidden">Отправить</span><span className="hidden sm:inline">Завершить и отправить в WB</span></>}</button>}
           </div>
         </footer>
 

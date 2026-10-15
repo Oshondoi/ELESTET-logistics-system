@@ -2,11 +2,12 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { fetchRecentExecutorAccounts, searchExecutorAccounts } from '../../services/requestService'
 import type { ExecutorAccountSearchResult } from '../../types'
 
-export function RequestExecutorSelect({ value, onChange, accountId, disabled = false }: {
+export function RequestExecutorSelect({ value, onChange, accountId, disabled = false, excludeAccountId }: {
   value: ExecutorAccountSearchResult | null
   onChange: (value: ExecutorAccountSearchResult) => void
   accountId?: string
   disabled?: boolean
+  excludeAccountId?: string | null
 }) {
   const id = useId(), root = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false), [query, setQuery] = useState('')
@@ -18,7 +19,7 @@ export function RequestExecutorSelect({ value, onChange, accountId, disabled = f
     setRecent([])
     if (accountId) void fetchRecentExecutorAccounts(accountId).then(rows => { if (!cancelled) setRecent(rows) }).catch(() => { if (!cancelled) setError('Не удалось загрузить список. Используйте поиск.') })
     return () => { cancelled = true }
-  }, [accountId])
+  }, [accountId, open])
   useEffect(() => {
     let cancelled = false
     setResults([])
@@ -39,7 +40,7 @@ export function RequestExecutorSelect({ value, onChange, accountId, disabled = f
     return () => document.removeEventListener('pointerdown', close)
   }, [open])
   const choose = (row: ExecutorAccountSearchResult) => { onChange(row); setOpen(false); setQuery('') }
-  const option = (row: ExecutorAccountSearchResult) => <button type="button" key={row.id} onClick={() => choose(row)} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-blue-50 focus:bg-blue-50">C-{row.short_id} · {row.name}</button>
+  const option = (row: ExecutorAccountSearchResult) => row.id === excludeAccountId ? null : <button type="button" key={row.id} onClick={() => choose(row)} className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-blue-50 focus:bg-blue-50">C-{row.short_id} · {row.name}</button>
   return <div ref={root} className="relative text-sm" onKeyDown={event => { if (event.key === 'Escape') { setOpen(false); event.stopPropagation() } }}>
     <span id={id}>Исполнитель</span>
     <button type="button" aria-labelledby={id} aria-expanded={open} disabled={disabled} onClick={() => setOpen(current => !current)} className="mt-1 flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left disabled:opacity-50">
@@ -50,9 +51,9 @@ export function RequestExecutorSelect({ value, onChange, accountId, disabled = f
         <p className="px-3 py-1 text-xs text-slate-500">Работали вместе</p>
         {recent.length ? recent.map(option) : <p className="px-3 py-2 text-xs text-slate-400">Пока нет подтверждённых заявок</p>}
       </div>
-      <input autoFocus aria-label="Поиск исполнителя" placeholder="Название или точный C-ID" value={query} onChange={event => setQuery(event.target.value)} className="my-2 w-full rounded-lg border px-3 py-2" />
+      <div className="my-2 flex items-center gap-2 px-3"><span aria-hidden="true" className="font-semibold">C-</span><input autoFocus aria-label="ID исполнителя" inputMode="numeric" pattern="[0-9]*" maxLength={10} placeholder="ID" value={query} onChange={event => setQuery(event.target.value.replace(/\D/g, ''))} className="h-16 w-16 rounded-lg border px-1 text-center font-semibold" /></div>
       <div className="max-h-44 overflow-y-auto">
-        {loading ? <p className="px-3 py-2 text-slate-400">Поиск…</p> : error ? <p role="alert" className="px-3 py-2 text-rose-600">{error}</p> : query.trim() ? results.length ? results.map(option) : <p className="px-3 py-2 text-slate-400">Ничего не найдено</p> : value && option(value)}
+        {loading ? <p className="px-3 py-2 text-slate-400">Поиск…</p> : error ? <p role="alert" className="px-3 py-2 text-rose-600">{error}</p> : query.trim() ? results.length ? results.map(option) : <p className="px-3 py-2 text-slate-400">Ничего не найдено</p> : null}
       </div>
     </div>}
   </div>

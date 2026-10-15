@@ -25,6 +25,7 @@ try {
     else if(path.endsWith('/user')) result=user;
     else if(path.endsWith('/reserve_service_request_invite')) result={ok:true};
     else if(path.endsWith('/open_my_request_reserve')) result={};
+    else if(path.endsWith('/heartbeat_my_request_reserve')) result=true;
     else if(path.endsWith('/search_executor_accounts')) result=[{id:'55555555-5555-4555-8555-555555555555',short_id:5,name:'Other executor'}];
     else if(path.endsWith('/submit_service_request_invite_reserve')) {submitted=true;result={account_id:id};}
     else if(path.endsWith('/get_my_accounts')) {
@@ -34,6 +35,7 @@ try {
     if(process.env.RECOVERY_FLOW&&path.endsWith('/get_service_request_invite'))result={...result,reserved_email:user.email};
     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
   });
+  await page.clock.install();
   await page.goto('http://localhost:5173/request-invite/'+token);
   if(!process.env.RECOVERY_FLOW)await page.getByPlaceholder('Имя',{exact:true}).fill('Tester');
   if(!process.env.RECOVERY_FLOW)await page.getByPlaceholder('Почта',{exact:true}).fill(user.email);
@@ -60,14 +62,27 @@ try {
   await page.getByRole('button',{name:'Сохранить пароль и продолжить',exact:true}).click();
   }
   await page.getByRole('heading',{name:'Новая заявка',exact:true}).waitFor();
+  const storeCard=page.locator('.client-invite-form .invite-store').first();
+  assert.equal(await storeCard.evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
+  assert.equal(await page.getByPlaceholder('Название магазина').first().evaluate(el=>getComputedStyle(el).borderTopColor),'rgb(226, 232, 240)');
+  if(process.env.INVITE_SCREENSHOT) await page.screenshot({path:process.env.INVITE_SCREENSHOT,fullPage:true});
   assert.equal(await page.getByLabel('Компания',{exact:true}).count(),0,'no editable company in invite form');
   const executorPicker=page.getByRole('button',{name:'Исполнитель',exact:true});
   assert.ok((await executorPicker.innerText()).includes('C-3'));
   await executorPicker.click();
   await page.getByText('Работали вместе',{exact:true}).waitFor();
-  await page.getByRole('textbox',{name:'Поиск исполнителя'}).fill('C-5');
+  assert.equal(await page.getByRole('button',{name:'C-3 · Executor',exact:true}).count(),0);
+  await page.getByRole('textbox',{name:'ID исполнителя'}).fill('Letters');
+  assert.equal(await page.getByRole('textbox',{name:'ID исполнителя'}).inputValue(),'');
+  await page.getByRole('textbox',{name:'ID исполнителя'}).fill('5');
   await page.getByRole('button',{name:'C-5 · Other executor',exact:true}).click();
   assert.ok((await executorPicker.innerText()).includes('C-5'));
+  assert.equal(calls.find(c=>c.path.endsWith('/search_executor_accounts')).body.p_query,'5');
+  const heartbeatCount=()=>calls.filter(c=>c.path.endsWith('/heartbeat_my_request_reserve')).length;
+  const countBeforePause=heartbeatCount();
+  await page.clock.runFor(180000);
+  assert.ok(heartbeatCount()-countBeforePause>=5,'heartbeat continues without input');
+  assert.equal(await page.getByText('Попробовать открыть черновик снова',{exact:true}).count(),0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'request form horizontal overflow');
   await page.getByRole('button',{name:'Подтвердить заявку',exact:true}).waitFor({state:'visible'});
   const scroll=page.getByTestId('request-invite-scroll');
