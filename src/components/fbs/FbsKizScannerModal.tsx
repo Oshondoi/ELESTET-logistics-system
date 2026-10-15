@@ -370,12 +370,14 @@ async function signal(success: boolean) {
     const oscillator = context.createOscillator()
     const gain = context.createGain()
     const start = context.currentTime
-    const duration = success ? 0.14 : 0.28
-    oscillator.frequency.value = success ? 880 : 220
-    // Louder and longer, with short fades to avoid sharp clicks.
+    const duration = success ? 0.25 : 0.45
+    oscillator.type = 'triangle'
+    oscillator.frequency.value = success ? 1200 : 440
+    // Warehouse signal: strong level and audible harmonics, below full scale.
+    // Keep fades so increased volume does not introduce sharp clicks.
     gain.gain.setValueAtTime(0, start)
-    gain.gain.linearRampToValueAtTime(0.3, start + 0.008)
-    gain.gain.setValueAtTime(0.3, start + duration - 0.02)
+    gain.gain.linearRampToValueAtTime(0.9, start + 0.008)
+    gain.gain.setValueAtTime(0.9, start + duration - 0.02)
     gain.gain.linearRampToValueAtTime(0, start + duration)
     oscillator.connect(gain)
     gain.connect(context.destination)
