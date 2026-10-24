@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { marketplaceOptions } from '../../lib/constants'
 import type { StoreFormValues } from '../../types'
 import { Button } from '../ui/Button'
@@ -28,30 +28,58 @@ const DEFAULT_VALUES: StoreFormValues = {
   phone: '',
 }
 
+const formSignature = (values: StoreFormValues | undefined) =>
+  values
+    ? [values.name, values.marketplace, values.store_code, values.supplier, values.supplier_full, values.address, values.country, values.inn, values.phone].join('\u0001')
+    : ''
+
+const submitErrorText = (error: unknown) => {
+  if (error instanceof Error && error.message.trim()) return error.message
+  if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) {
+    return error.message
+  }
+  return 'Не удалось сохранить магазин. Проверьте данные и повторите сохранение.'
+}
+
 export const StoreFormModal = ({ open, initialValues, hasApiKey, hasCompanyLink, onClose, onSubmit }: StoreFormModalProps) => {
   const [values, setValues] = useState<StoreFormValues>(initialValues ?? DEFAULT_VALUES)
   const [changingKey, setChangingKey] = useState(false)
   const [removingKey, setRemovingKey] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const initialValuesRef = useRef(initialValues)
+  initialValuesRef.current = initialValues
+  const openedSignature = open ? formSignature(initialValues) : ''
 
   useEffect(() => {
-    if (open) {
-      setValues(initialValues ?? DEFAULT_VALUES)
-      setChangingKey(false)
-      setRemovingKey(false)
-    }
-  }, [open, initialValues])
+    if (!open) return
+    setValues(initialValuesRef.current ?? DEFAULT_VALUES)
+    setChangingKey(false)
+    setRemovingKey(false)
+    setSubmitError(null)
+  }, [open, openedSignature])
 
   const isEditing = Boolean(initialValues)
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
+    if (isSubmitting) return
     const submitValues: StoreFormValues = {
       ...values,
       api_key: removingKey ? '' : (isEditing && !changingKey) ? undefined : (values.api_key?.trim() || undefined),
     }
-    void onSubmit(submitValues).then(() => {
-      onClose()
-    })
+    setSubmitError(null)
+    setIsSubmitting(true)
+    void onSubmit(submitValues)
+      .then(() => {
+        onClose()
+      })
+      .catch((error: unknown) => {
+        setSubmitError(submitErrorText(error))
+      })
+      .finally(() => {
+        setIsSubmitting(false)
+      })
   }
 
   return (
@@ -65,11 +93,12 @@ export const StoreFormModal = ({ open, initialValues, hasApiKey, hasCompanyLink,
           <Button type="button" variant="secondary" onClick={onClose}>
             Отмена
           </Button>
-          <Button type="submit" form="store-form">{isEditing ? 'Сохранить' : 'Создать магазин'}</Button>
+          <Button type="submit" form="store-form" disabled={isSubmitting}>{isEditing ? 'Сохранить' : 'Создать магазин'}</Button>
         </div>
       }
     >
       <form id="store-form" className="grid gap-4" onSubmit={handleSubmit}>
+        {submitError && <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{submitError}</p>}
         <Input
           label="Название"
           placeholder="Например, WB Москва"

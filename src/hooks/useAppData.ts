@@ -230,8 +230,13 @@ export const useAppData = (accountId: string | null) => {
     }
 
     const updated = await updateStoreInSupabase(storeId, values)
-    setStores((current) => current.map((s) => (s.id === storeId ? updated : s)))
-    return updated
+    let merged = updated
+    setStores((current) => current.map((s) => {
+      if (s.id !== storeId) return s
+      merged = { ...s, ...updated }
+      return merged
+    }))
+    return merged
   }
 
   const removeStore = async (storeId: string) => {

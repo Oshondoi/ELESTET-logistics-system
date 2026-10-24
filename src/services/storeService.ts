@@ -65,11 +65,12 @@ export const createStoreInSupabase = async (values: StoreFormValues, accountId: 
   const { data, error } = await (supabase as any).from('stores').insert(payload).select('id,account_id,store_code,name,marketplace,created_at,supplier,supplier_full,address,country,inn,phone,deleted_at,short_id,customer_account_id').single()
 
   if (error) throw error
-  if (values.api_key?.trim()) {
-    const { error: secretError } = await (supabase as any).rpc('save_store_wb_api_key', { p_store_id: data.id, p_api_key: values.api_key.trim() })
+  const savedKey = values.api_key?.trim()
+  if (savedKey) {
+    const { error: secretError } = await (supabase as any).rpc('save_store_wb_api_key', { p_store_id: data.id, p_api_key: savedKey })
     if (secretError) throw secretError
   }
-  return data as Store
+  return { ...data, api_key: savedKey ? '__configured__' : null } as Store
 }
 
 export const updateStoreInSupabase = async (storeId: string, values: StoreFormValues) => {
@@ -102,7 +103,12 @@ export const updateStoreInSupabase = async (storeId: string, values: StoreFormVa
     const { error: secretError } = await (supabase as any).rpc('save_store_wb_api_key', { p_store_id: storeId, p_api_key: values.api_key.trim() })
     if (secretError) throw secretError
   }
-  return data as Store
+  return {
+    ...data,
+    ...(values.api_key !== undefined
+      ? { api_key: values.api_key.trim() ? '__configured__' : null }
+      : {}),
+  } as Store
 }
 
 export const deleteStoreInSupabase = async (storeId: string) => {
