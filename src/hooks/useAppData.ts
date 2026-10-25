@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
-import { writeLogisticsActivity } from '../services/logisticsActivityService'
+import {
+  customFieldChanges,
+  lineLabel,
+  logFieldChanges,
+  logLogisticsChange,
+  tripLabel,
+} from '../services/logisticsActivityHelpers'
 import {
   listShipments,
   fetchShipmentsFromSupabase,
@@ -118,6 +124,8 @@ export const useAppData = (accountId: string | null) => {
   const [error, setError] = useState<string | null>(null)
 
   const accountStores = useMemo(() => (accountId ? listStores(stores, accountId) : []), [stores, accountId])
+  const storeDisplayName = (storeId: string) =>
+    accountStores.find((store) => store.id === storeId)?.name ?? storeId
   const shipmentViews = useMemo(
     () => (accountId ? listShipments(shipments, accountStores, accountId) : []),
     [shipments, accountStores, accountId],
@@ -289,6 +297,12 @@ export const useAppData = (accountId: string | null) => {
     const trip = await createTrip(accountId, values)
     const tripWithLines = { ...trip, lines: [] }
     setTrips((current) => [tripWithLines, ...current])
+    void logLogisticsChange(accountId, {
+      tripId: trip.id,
+      message: `Создан ${tripLabel(trip)}`,
+      fieldKey: 'created',
+      newValue: tripLabel(trip),
+    })
     return trip
   }
 
@@ -306,6 +320,16 @@ export const useAppData = (accountId: string | null) => {
         trip.id === tripId ? { ...trip, lines: [...trip.lines, lineWithStore] } : trip,
       ),
     )
+    const parentTrip = trips.find((t) => t.id === tripId)
+    void logLogisticsChange(accountId, {
+      tripId,
+      tripLineId: line.id,
+      message: parentTrip
+        ? `Создана ${lineLabel(line)} в ${tripLabel(parentTrip)}`
+        : `Создана ${lineLabel(line)}`,
+      fieldKey: 'created',
+      newValue: lineLabel(line),
+    })
     return lineWithStore
   }
 
@@ -314,7 +338,16 @@ export const useAppData = (accountId: string | null) => {
       throw new Error('Supabase не настроен')
     }
 
+    const trip = trips.find((t) => t.id === tripId)
     await deleteTripInSupabase(accountId, tripId)
+    if (trip) {
+      void logLogisticsChange(accountId, {
+        tripId,
+        message: `Удалён ${tripLabel(trip)} (${trip.lines.length} поставок)`,
+        fieldKey: 'deleted',
+        oldValue: tripLabel(trip),
+      })
+    }
     setTrips((current) => current.filter((trip) => trip.id !== tripId))
   }
 
@@ -323,7 +356,18 @@ export const useAppData = (accountId: string | null) => {
       throw new Error('Supabase не настроен')
     }
 
+    const trip = trips.find((t) => t.id === tripId)
+    const line = trip?.lines.find((l) => l.id === lineId)
     await archiveTripLineInSupabase(accountId, lineId)
+    if (line) {
+      void logLogisticsChange(accountId, {
+        tripId,
+        tripLineId: lineId,
+        message: `${lineLabel(line)} отправлена в архив`,
+        fieldKey: 'archived',
+        oldValue: lineLabel(line),
+      })
+    }
 
     // Убираем из активных trips
     setTrips((current) => current.map((trip) => (
@@ -349,7 +393,16 @@ export const useAppData = (accountId: string | null) => {
       throw new Error('Supabase не настроен')
     }
 
+    const archived = archivedTripLines.find((l) => l.id === lineId)
     await restoreTripLineInSupabase(accountId, lineId)
+    if (archived) {
+      void logLogisticsChange(accountId, {
+        tripLineId: lineId,
+        message: `${lineLabel(archived)} восстановлена из архива`,
+        fieldKey: 'restored',
+        newValue: lineLabel(archived),
+      })
+    }
 
     // Убираем из архива
     setArchivedTripLines((current) => current.filter((l) => l.id !== lineId))
@@ -370,6 +423,16 @@ export const useAppData = (accountId: string | null) => {
     const currentIdx = TRIP_ORDER.indexOf(currentTrip?.status ?? 'Формируется')
     const newIdx = TRIP_ORDER.indexOf(status)
     const isAscending = newIdx > currentIdx
+
+    if (currentTrip && currentTrip.status !== status) {
+      void logLogisticsChange(accountId, {
+        tripId,
+        message: `${tripLabel(currentTrip)}: статус изменён с «${currentTrip.status}» на «${status}»`,
+        fieldKey: 'trip_status',
+        oldValue: currentTrip.status,
+        newValue: status,
+      })
+    }
 
     if (status === 'Прибыл' && isAscending) {
       await bulkArriveTripLinesInSupabase(accountId, tripId, today)
@@ -440,11 +503,10 @@ export const useAppData = (accountId: string | null) => {
     )
 
     if (currentLine && currentLine.status !== status) {
-      void writeLogisticsActivity({
-        accountId,
+      void logLogisticsChange(accountId, {
         tripId,
         tripLineId: lineId,
-        message: `Поставка S-${currentLine.shipment_number}: статус изменён с «${currentLine.status}» на «${status}»`,
+        message: `${lineLabel(currentLine)}: статус изменён с «${currentLine.status}» на «${status}»`,
         fieldKey: 'status',
         oldValue: currentLine.status,
         newValue: status,
@@ -464,12 +526,20 @@ export const useAppData = (accountId: string | null) => {
               : trip,
           ),
         )
+        void logLogisticsChange(accountId, {
+          tripId,
+          message: `${tripLabel(completedTrip)}: рейс автоматически завершён — все поставки отгружены`,
+          fieldKey: 'trip_status',
+          oldValue: parentTrip.status,
+          newValue: 'Завершён',
+        })
       }
     }
   }
 
   const changeTripLinePaymentStatus = async (tripId: string, lineId: string, payment_status: PaymentStatus) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const currentLine = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
     await updateTripLinePaymentStatusInSupabase(accountId, lineId, payment_status)
     setTrips((current) =>
       current.map((trip) =>
@@ -478,10 +548,21 @@ export const useAppData = (accountId: string | null) => {
           : trip,
       ),
     )
+    if (currentLine && currentLine.payment_status !== payment_status) {
+      void logLogisticsChange(accountId, {
+        tripId,
+        tripLineId: lineId,
+        message: `${lineLabel(currentLine)}: оплата — было «${currentLine.payment_status}», стало «${payment_status}»`,
+        fieldKey: 'payment_status',
+        oldValue: currentLine.payment_status,
+        newValue: payment_status,
+      })
+    }
   }
 
   const editTrip = async (tripId: string, values: TripFormValues) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const before = trips.find((t) => t.id === tripId)
     const updatedTrip = await updateTripInSupabase(accountId, tripId, values) as Trip
     setTrips((current) =>
       current.map((trip) =>
@@ -490,10 +571,18 @@ export const useAppData = (accountId: string | null) => {
           : trip,
       ),
     )
+    if (before) {
+      void logFieldChanges(accountId, { tripId, prefix: tripLabel(before) }, [
+        { key: 'carrier', label: 'Перевозчик', previous: before.carrier, nextValue: updatedTrip.carrier },
+        { key: 'comment', label: 'Комментарий', previous: before.comment, nextValue: updatedTrip.comment },
+        { key: 'departure_date', label: 'Дата отправки', previous: before.departure_date, nextValue: updatedTrip.departure_date },
+      ])
+    }
   }
 
   const editTripLine = async (tripId: string, lineId: string, values: TripLineFormValues, newTripId?: string) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const before = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
     const updatedLine = await updateTripLineInSupabase(accountId, lineId, values) as TripLine
     const store = accountStores.find((s) => s.id === updatedLine.store_id)
     if (newTripId && newTripId !== tripId) {
@@ -506,6 +595,18 @@ export const useAppData = (accountId: string | null) => {
           return trip
         }),
       )
+      const fromTrip = trips.find((t) => t.id === tripId)
+      const toTrip = trips.find((t) => t.id === newTripId)
+      if (before && fromTrip && toTrip) {
+        void logLogisticsChange(accountId, {
+          tripId: newTripId,
+          tripLineId: lineId,
+          message: `${lineLabel(before)} перенесена из ${tripLabel(fromTrip)} в ${tripLabel(toTrip)}`,
+          fieldKey: 'trip_id',
+          oldValue: tripLabel(fromTrip),
+          newValue: tripLabel(toTrip),
+        })
+      }
     } else {
       setTrips((current) =>
         current.map((trip) =>
@@ -519,6 +620,25 @@ export const useAppData = (accountId: string | null) => {
             : trip,
         ),
       )
+    }
+
+    if (before) {
+      void logFieldChanges(accountId, { tripId: newTripId ?? tripId, tripLineId: lineId, prefix: lineLabel(before) }, [
+        { key: 'store_id', label: 'Магазин', previous: storeDisplayName(before.store_id), nextValue: storeDisplayName(values.store_id) },
+        { key: 'destination_warehouse', label: 'Склад назначения', previous: before.destination_warehouse, nextValue: values.destination_warehouse },
+        { key: 'box_qty', label: 'Коробов', previous: before.box_qty, nextValue: values.box_qty },
+        { key: 'units_qty', label: 'Единиц в коробе', previous: before.units_qty, nextValue: values.units_qty },
+        { key: 'units_total', label: 'Всего единиц', previous: before.units_total, nextValue: values.units_total },
+        { key: 'arrived_box_qty', label: 'Прибыло коробов', previous: before.arrived_box_qty, nextValue: values.arrived_box_qty },
+        { key: 'weight', label: 'Объём/вес', previous: before.weight, nextValue: values.weight },
+        { key: 'planned_marketplace_delivery_date', label: 'Плановая дата на МП', previous: before.planned_marketplace_delivery_date, nextValue: values.planned_marketplace_delivery_date },
+        { key: 'arrival_date', label: 'Дата прибытия', previous: before.arrival_date, nextValue: values.arrival_date },
+        { key: 'reception_date', label: 'Дата приёмки', previous: before.reception_date, nextValue: values.reception_date },
+        { key: 'shipped_date', label: 'Дата отгрузки', previous: before.shipped_date, nextValue: values.shipped_date },
+        { key: 'status', label: 'Статус', previous: before.status, nextValue: values.status },
+        { key: 'payment_status', label: 'Оплата', previous: before.payment_status, nextValue: values.payment_status },
+        { key: 'comment', label: 'Комментарий', previous: before.comment, nextValue: values.comment },
+      ])
     }
   }
 
@@ -554,18 +674,42 @@ export const useAppData = (accountId: string | null) => {
         return trip
       })
     })
+    const toTrip = trips.find((t) => t.id === newTripId)
+    for (const { lineId, oldTripId } of linesToMove) {
+      const line = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
+      const fromTrip = trips.find((t) => t.id === oldTripId)
+      if (line && fromTrip && toTrip) {
+        void logLogisticsChange(accountId, {
+          tripId: newTripId,
+          tripLineId: lineId,
+          message: `${lineLabel(line)} перенесена из ${tripLabel(fromTrip)} в ${tripLabel(toTrip)}`,
+          fieldKey: 'trip_id',
+          oldValue: tripLabel(fromTrip),
+          newValue: tripLabel(toTrip),
+        })
+      }
+    }
   }
 
   const updateTripCustomFields = async (tripId: string, fields: Record<string, unknown>) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const before = trips.find((t) => t.id === tripId)
     await updateTripCustomFieldsInSupabase(tripId, fields)
     setTrips((current) =>
       current.map((trip) => (trip.id === tripId ? { ...trip, custom_fields: fields } : trip)),
     )
+    if (before) {
+      void logFieldChanges(
+        accountId,
+        { tripId, prefix: tripLabel(before) },
+        customFieldChanges(before.custom_fields as Record<string, unknown> | undefined, fields),
+      )
+    }
   }
 
   const updateLineCustomFields = async (tripId: string, lineId: string, fields: Record<string, unknown>) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const before = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
     await updateLineCustomFieldsInSupabase(lineId, fields)
     setTrips((current) =>
       current.map((trip) =>
@@ -579,6 +723,13 @@ export const useAppData = (accountId: string | null) => {
           : trip,
       ),
     )
+    if (before) {
+      void logFieldChanges(
+        accountId,
+        { tripId, tripLineId: lineId, prefix: lineLabel(before) },
+        customFieldChanges(before.custom_fields as Record<string, unknown> | undefined, fields),
+      )
+    }
   }
 
   const addCarrier = async (name: string): Promise<Carrier> => {
@@ -679,12 +830,19 @@ export const useAppData = (accountId: string | null) => {
     )
   }
 
+  const logLineAction = (tripId: string, lineId: string, message: string, fieldKey: string) => {
+    const line = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
+    if (!accountId || !line) return
+    void logLogisticsChange(accountId, { tripId, tripLineId: lineId, message: `${lineLabel(line)}: ${message}`, fieldKey })
+  }
+
   const addInvoicePhoto = async (tripId: string, lineId: string, file: File) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
     const url = await uploadInvoicePhotoInSupabase(accountId, lineId, file)
     const newUrls = [...getLineUrls(tripId, lineId), url]
     await updateTripLineInvoicePhotosInSupabase(accountId, lineId, newUrls)
     applyUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, 'добавлено фото накладной', 'invoice_photo')
   }
 
   const replaceInvoicePhoto = async (tripId: string, lineId: string, index: number, file: File) => {
@@ -694,6 +852,7 @@ export const useAppData = (accountId: string | null) => {
     newUrls[index] = url
     await updateTripLineInvoicePhotosInSupabase(accountId, lineId, newUrls)
     applyUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, `заменено фото накладной №${index + 1}`, 'invoice_photo')
   }
 
   const removeInvoicePhoto = async (tripId: string, lineId: string, index: number) => {
@@ -701,6 +860,7 @@ export const useAppData = (accountId: string | null) => {
     const newUrls = getLineUrls(tripId, lineId).filter((_, i) => i !== index)
     await updateTripLineInvoicePhotosInSupabase(accountId, lineId, newUrls)
     applyUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, `удалено фото накладной №${index + 1}`, 'invoice_photo')
   }
 
   const getStickerUrls = (tripId: string, lineId: string): string[] => {
@@ -724,6 +884,7 @@ export const useAppData = (accountId: string | null) => {
     const newUrls = [...getStickerUrls(tripId, lineId), url]
     await updateTripLineStickerFilesInSupabase(accountId, lineId, newUrls)
     applyStickerUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, 'добавлен файл стикера', 'sticker_file')
   }
 
   const removeStickerFile = async (tripId: string, lineId: string, index: number) => {
@@ -731,6 +892,7 @@ export const useAppData = (accountId: string | null) => {
     const newUrls = getStickerUrls(tripId, lineId).filter((_, i) => i !== index)
     await updateTripLineStickerFilesInSupabase(accountId, lineId, newUrls)
     applyStickerUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, `удалён файл стикера №${index + 1}`, 'sticker_file')
   }
 
   const getCombinedStickerUrls = (tripId: string, lineId: string): string[] => {
@@ -754,6 +916,7 @@ export const useAppData = (accountId: string | null) => {
     const newUrls = [...getCombinedStickerUrls(tripId, lineId), url]
     await updateTripLineCombinedStickerFilesInSupabase(accountId, lineId, newUrls)
     applyCombinedStickerUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, 'добавлен комбинированный стикер', 'combined_sticker')
   }
 
   const removeCombinedStickerFile = async (tripId: string, lineId: string, index: number) => {
@@ -761,6 +924,7 @@ export const useAppData = (accountId: string | null) => {
     const newUrls = getCombinedStickerUrls(tripId, lineId).filter((_, i) => i !== index)
     await updateTripLineCombinedStickerFilesInSupabase(accountId, lineId, newUrls)
     applyCombinedStickerUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, `удалён комбинированный стикер №${index + 1}`, 'combined_sticker')
   }
 
   const getPassUrls = (tripId: string, lineId: string): string[] => {
@@ -784,6 +948,7 @@ export const useAppData = (accountId: string | null) => {
     const newUrls = [...getPassUrls(tripId, lineId), url]
     await updateTripLineWbPassUrlsInSupabase(accountId, lineId, newUrls)
     applyPassUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, 'добавлен пропуск WB', 'wb_pass')
   }
 
   const removeWbPass = async (tripId: string, lineId: string, index: number) => {
@@ -791,10 +956,12 @@ export const useAppData = (accountId: string | null) => {
     const newUrls = getPassUrls(tripId, lineId).filter((_, i) => i !== index)
     await updateTripLineWbPassUrlsInSupabase(accountId, lineId, newUrls)
     applyPassUrls(tripId, lineId, newUrls)
+    logLineAction(tripId, lineId, `удалён пропуск WB №${index + 1}`, 'wb_pass')
   }
 
   const saveWbSupplyId = async (tripId: string, lineId: string, wbSupplyId: string) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const before = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
     await updateTripLineWbSupplyIdInSupabase(accountId, lineId, wbSupplyId || null)
     setTrips((current) =>
       current.map((t) =>
@@ -810,10 +977,21 @@ export const useAppData = (accountId: string | null) => {
           : t,
       ),
     )
+    if (before && (before.wb_supply_id ?? '') !== (wbSupplyId || '')) {
+      void logLogisticsChange(accountId, {
+        tripId,
+        tripLineId: lineId,
+        message: `${lineLabel(before)}: ID поставки WB — было «${before.wb_supply_id ?? '—'}», стало «${wbSupplyId || '—'}»`,
+        fieldKey: 'wb_supply_id',
+        oldValue: before.wb_supply_id,
+        newValue: wbSupplyId || null,
+      })
+    }
   }
 
   const fetchWbBarcodes = async (tripId: string, lineId: string, wbSupplyId: string) => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const before = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
     const result = await getWbSupplyStickersInSupabase(accountId, lineId, wbSupplyId)
     // Обновляем wb_supply_id, wb_cargo_type и wb_package_codes в локальном state
     const packageCodes = result.package_codes
@@ -843,6 +1021,16 @@ export const useAppData = (accountId: string | null) => {
     const newUrls = [...existing, ...result.sticker_urls]
     await updateTripLineStickerFilesInSupabase(accountId, lineId, newUrls)
     applyStickerUrls(tripId, lineId, newUrls)
+    if (before) {
+      void logLogisticsChange(accountId, {
+        tripId,
+        tripLineId: lineId,
+        actorLabel: 'WB',
+        message: `${lineLabel(before)}: WB загрузил ${result.sticker_urls.length} стикер(ов)`,
+        fieldKey: 'wb_stickers',
+        newValue: String(result.sticker_urls.length),
+      })
+    }
   }
 
   const applyWbSupplySummary = (tripId: string, lineId: string, summary: WbSupplySummary) => {
@@ -857,8 +1045,21 @@ export const useAppData = (accountId: string | null) => {
 
   const refreshWbSupply = async (tripId: string, lineId: string): Promise<WbSupplySyncResult> => {
     if (!isSupabaseConfigured || !accountId) throw new Error('Supabase не настроен')
+    const before = trips.flatMap((t) => t.lines).find((l) => l.id === lineId)
     const result = await syncWbSupplySummaryInSupabase(accountId, lineId)
     applyWbSupplySummary(tripId, lineId, result.summary)
+    if (before) {
+      void logFieldChanges(
+        accountId,
+        { tripId, tripLineId: lineId, prefix: `WB — ${lineLabel(before)}`, actorLabel: 'WB' },
+        [
+          { key: 'wb_status_id', label: 'Статус WB', previous: before.wb_status_id, nextValue: result.summary.wb_status_id },
+          { key: 'planned_marketplace_delivery_date', label: 'Плановая дата на МП', previous: before.planned_marketplace_delivery_date, nextValue: result.summary.planned_marketplace_delivery_date },
+          { key: 'wb_quantity', label: 'Кол-во WB', previous: before.wb_quantity, nextValue: result.summary.wb_quantity },
+          { key: 'wb_warehouse_name', label: 'Склад WB', previous: before.wb_warehouse_name, nextValue: result.summary.wb_warehouse_name },
+        ],
+      )
+    }
     return result
   }
 
@@ -876,6 +1077,13 @@ export const useAppData = (accountId: string | null) => {
       try {
         const result = await syncWbSupplySummaryInSupabase(accountId, line.id)
         applyWbSupplySummary(tripId, line.id, result.summary)
+        void logLogisticsChange(accountId, {
+          tripId,
+          tripLineId: line.id,
+          actorLabel: 'WB',
+          message: `${lineLabel(line)}: синхронизация с WB (статус, даты, склады)`,
+          fieldKey: 'wb_sync',
+        })
         if (result.package_sync.warning) warnings.push(`Поставка ${line.shipment_number}: ${result.package_sync.warning}`)
         updated += 1
       } catch (error) {
