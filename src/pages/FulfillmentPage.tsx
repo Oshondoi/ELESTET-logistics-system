@@ -162,6 +162,7 @@ import { showScanSuccess } from "../components/ui/ScanSuccessOverlay";
 import { FulfillmentKizPairsModal } from "../components/fulfillment/FulfillmentKizPairsModal";
 import { FulfillmentElestetScanner } from "../components/fulfillment/FulfillmentElestetScanner";
 import { FulfillmentBoxExcelDialog } from "../components/fulfillment/FulfillmentBoxExcelDialog";
+import { lookupStoreBarcode } from "../services/phoneBoxCamera";
 import { ServiceRequestsPanel } from "../components/fulfillment/ServiceRequestsPanel";
 import { PhoneBoxCamera } from "../components/fulfillment/PhoneBoxCamera";
 import { PipelineStageFloors } from "../components/fulfillment/PipelineStageFloors";
@@ -3400,6 +3401,21 @@ const BatchDetailModal = ({
     setIsAddingSaving(true);
     setError(null);
 
+    if (batch.store_id) {
+      try {
+        const match = await lookupStoreBarcode(batch.store_id, newBarcode.trim());
+        if (!match.found) {
+          setError(`Этот баркод не принадлежит магазину «${store?.name ?? "магазина партии"}».`);
+          setIsAddingSaving(false);
+          return;
+        }
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Не удалось проверить баркод");
+        setIsAddingSaving(false);
+        return;
+      }
+    }
+
     let resolvedName = newName.trim();
     let resolvedSize = newSize.trim();
     let resolvedColor = newColor.trim();
@@ -4117,7 +4133,19 @@ const BatchDetailModal = ({
 
   // Добавить товар в короб: сначала write в DB, потом обновляем state точечно (без _opt_)
   const addItemToBoxDirect = useCallback(
-    (supplyId: string, boxId: string, bc: string, qty: number) => {
+    async (supplyId: string, boxId: string, bc: string, qty: number) => {
+      if (batch.store_id) {
+        try {
+          const match = await lookupStoreBarcode(batch.store_id, bc);
+          if (!match.found) {
+            setError(`Этот баркод не принадлежит магазину «${store?.name ?? "магазина партии"}».`);
+            return;
+          }
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : "Не удалось проверить баркод");
+          return;
+        }
+      }
       const matched = items.find((it) => it.barcode === bc);
       const safeItemId = matched?.id?.startsWith("_local_")
         ? null
@@ -6942,120 +6970,40 @@ const BatchDetailModal = ({
               );
 
               // OTK: по логам, разбивка годные/браки
-              const activeOtkLogs = otkLogs.filter(
-                (l) => !otkDeletedIds.includes(l.id),
-              );
-              const sOtkGood =
-                activeOtkLogs.reduce(
-                  (s, l) => s + (otkEdits[l.id]?.qty ?? l.qty),
-                  0,
-                ) +
-                (viewStage === "otk"
-                  ? otkBuffer.reduce((s, e) => s + e.qty, 0)
-                  : 0);
-              const sOtkDefect =
-                activeOtkLogs.reduce(
-                  (s, l) => s + (otkEdits[l.id]?.qty_defect ?? l.qty_defect),
-                  0,
-                ) +
-                (viewStage === "otk"
-                  ? otkBuffer.reduce((s, e) => s + e.qty_defect, 0)
-                  : 0);
+              // Карточки считают только уже записанные строки. Черновик, правка
+              // до сохранения и помеченное к удалению в число не входят.
+              const sOtkGood = otkLogs.reduce((s, l) => s + l.qty, 0);
+              const sOtkDefect = otkLogs.reduce((s, l) => s + l.qty_defect, 0);
               const sOtk = sOtkGood + sOtkDefect;
 
-              // Маркировка: по логам, разбивка годные/браки
-              const activeMarkingLogs = markingLogs.filter(
-                (l) => !markingDeletedIds.includes(l.id),
+              const sMarkGood = markingLogs.reduce((s, l) => s + l.qty, 0);
+              const sMarkDefect = markingLogs.reduce(
+                (s, l) => s + l.qty_defect,
+                0,
               );
-              const sMarkGood =
-                activeMarkingLogs.reduce(
-                  (s, l) => s + (markingEdits[l.id]?.qty ?? l.qty),
-                  0,
-                ) +
-                (viewStage === "marking"
-                  ? markingBuffer.reduce((s, e) => s + e.qty, 0)
-                  : 0);
-              const sMarkDefect =
-                activeMarkingLogs.reduce(
-                  (s, l) =>
-                    s + (markingEdits[l.id]?.qty_defect ?? l.qty_defect),
-                  0,
-                ) +
-                (viewStage === "marking"
-                  ? markingBuffer.reduce((s, e) => s + e.qty_defect, 0)
-                  : 0);
               const sMarking = sMarkGood + sMarkDefect;
 
-              // Упаковка: по логам
-              const activePackagingLogs = packagingLogs.filter(
-                (l) => !packagingDeletedIds.includes(l.id),
+              const sPackagingGood = packagingLogs.reduce((s, l) => s + l.qty, 0);
+              const sPackagingDefect = packagingLogs.reduce(
+                (s, l) => s + l.qty_defect,
+                0,
               );
-              const sPackagingGood =
-                activePackagingLogs.reduce(
-                  (s, l) => s + (packagingEdits[l.id]?.qty ?? l.qty),
-                  0,
-                ) +
-                (viewStage === "packaging"
-                  ? packagingBuffer.reduce((s, e) => s + e.qty, 0)
-                  : 0);
-              const sPackagingDefect =
-                activePackagingLogs.reduce(
-                  (s, l) =>
-                    s + (packagingEdits[l.id]?.qty_defect ?? l.qty_defect),
-                  0,
-                ) +
-                (viewStage === "packaging"
-                  ? packagingBuffer.reduce((s, e) => s + e.qty_defect, 0)
-                  : 0);
               const sPackaging = sPackagingGood + sPackagingDefect;
 
-              // Короба: единицы, коробов, баркодов (через stageDraft при текущем этапе)
-              const sPackUnits =
-                viewStage === "packing"
-                  ? items.reduce(
-                      (s, it) =>
-                        s +
-                        (stageDraft[it.id]?.qty ??
-                          it.qty_packed ??
-                          it.qty_marked ??
-                          it.qty_otk ??
-                          it.qty_received),
-                      0,
-                    )
-                  : items.reduce(
-                      (s, it) =>
-                        s +
-                        (it.qty_packed ??
-                          it.qty_marked ??
-                          it.qty_otk ??
-                          it.qty_received),
-                      0,
-                    );
-              const sPackBoxes =
-                viewStage === "packing"
-                  ? items.reduce(
-                      (s, it) =>
-                        s + (stageDraft[it.id]?.boxes ?? it.boxes ?? 0),
-                      0,
-                    )
-                  : items.reduce((s, it) => s + (it.boxes ?? 0), 0);
-              const sPackBarcodes =
-                viewStage === "packing"
-                  ? new Set([
-                      ...supplies.flatMap((s) =>
-                        s.boxes.flatMap((b) => [
-                          ...b.items.map((i) => i.barcode),
-                          ...(packingBoxBuffer[b.id] ?? []).map(
-                            (i) => i.barcode,
-                          ),
-                        ]),
-                      ),
-                    ]).size
-                  : new Set(
-                      supplies.flatMap((s) =>
-                        s.boxes.flatMap((b) => b.items.map((i) => i.barcode)),
-                      ),
-                    ).size;
+              const savedBoxItems = supplies.flatMap((supply) =>
+                supply.boxes.flatMap((box) => box.items),
+              );
+              const sPackUnits = savedBoxItems.reduce(
+                (s, item) => s + item.qty,
+                0,
+              );
+              const sPackBoxes = supplies.reduce(
+                (s, supply) => s + supply.boxes.length,
+                0,
+              );
+              const sPackBarcodes = new Set(
+                savedBoxItems.map((item) => item.barcode),
+              ).size;
 
               // Каждый этап получает только годный выход предыдущего включённого этапа.
               // Брак остаётся в журнале этапа и дальше по цепочке не передаётся.
@@ -13180,9 +13128,9 @@ const BatchDetailModal = ({
                                     onClick={() =>
                                       setDeleteSupplyConfirm(supply.id)
                                     }
-                                    className="text-sm text-red-400 hover:text-red-600"
+                                    className="mr-8 text-sm text-red-400 hover:text-red-600"
                                   >
-                                    Удалить
+                                    Удалить поставку
                                   </button>
                                 ) : null;
                               })()}
@@ -13511,7 +13459,7 @@ const BatchDetailModal = ({
                                             }
                                             className="text-xs text-red-400 hover:text-red-600"
                                           >
-                                            Удалить
+                                            Удалить короб
                                           </button>
                                         )}
                                     </div>
@@ -18793,6 +18741,7 @@ const BatchDetailModal = ({
           if (!supply) return null;
           return (
             <FulfillmentBoxExcelDialog
+              accountId={accountId}
               supply={supply}
               batchNumber={batch.short_id}
               auditContext={packingKizAuditContext}

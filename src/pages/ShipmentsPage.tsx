@@ -17,6 +17,9 @@ import {
 import { fetchExecutorOptions } from '../services/outsourceService'
 import { fetchIncomingTripLineTransfers } from '../services/tripService'
 import type { WbSupplySyncResult } from '../services/tripService'
+import { setLogisticsManualDate, writeLogisticsActivity } from '../services/logisticsActivityService'
+import { LogisticsActivityJournal } from '../components/logistics/LogisticsActivityJournal'
+import { formatDate } from '../lib/utils'
 
 const pluralize = (count: number, one: string, few: string, many: string) => {
   const mod10 = count % 10
@@ -72,6 +75,19 @@ interface ShipmentsPageProps {
   accountId?: string
   userId?: string
   onBulkMoveLinesToTrip?: (lineIds: string[], newTripId: string) => Promise<void>
+  onRefreshTrips?: () => void | Promise<void>
+}
+
+const DATE_FIELD_LABELS: Record<string, string> = {
+  created_at: 'дата формирования',
+  departure_date: 'дата отправки',
+  arrived_at: 'дата прибытия рейса',
+  finished_at: 'дата завершения',
+  waiting_at: 'дата ожидания отправки',
+  transit_at: 'дата отправки',
+  arrival_date: 'дата прибытия',
+  shipped_date: 'дата отгрузки',
+  reception_date: 'дата приёма',
 }
 
 export const ShipmentsPage = ({
@@ -113,8 +129,52 @@ export const ShipmentsPage = ({
   accountId,
   userId,
   onBulkMoveLinesToTrip,
+  onRefreshTrips,
 }: ShipmentsPageProps) => {
+  const [logisticsJournalOpen, setLogisticsJournalOpen] = useState(false)
   const lsKey = (k: string) => userId ? `${k}-${userId}` : k
+
+  const handleTripManualDate = async (
+    tripId: string,
+    field: string,
+    date: string,
+    tripLabel: string,
+    oldValue: string | null,
+  ) => {
+    if (!accountId) return
+    await setLogisticsManualDate('trip', tripId, field, date)
+    await writeLogisticsActivity({
+      accountId,
+      tripId,
+      message: `${tripLabel}: изменена ${DATE_FIELD_LABELS[field] ?? field} с ${oldValue ? formatDate(oldValue) : '—'} на ${formatDate(date)}`,
+      fieldKey: field,
+      oldValue: oldValue ? formatDate(oldValue) : null,
+      newValue: formatDate(date),
+    })
+    await onRefreshTrips?.()
+  }
+
+  const handleLineManualDate = async (
+    tripId: string,
+    lineId: string,
+    field: string,
+    date: string,
+    lineLabel: string,
+    oldValue: string | null,
+  ) => {
+    if (!accountId) return
+    await setLogisticsManualDate('trip_line', lineId, field, date)
+    await writeLogisticsActivity({
+      accountId,
+      tripId,
+      tripLineId: lineId,
+      message: `${lineLabel}: изменена ${DATE_FIELD_LABELS[field] ?? field} с ${oldValue ? formatDate(oldValue) : '—'} на ${formatDate(date)}`,
+      fieldKey: field,
+      oldValue: oldValue ? formatDate(oldValue) : null,
+      newValue: formatDate(date),
+    })
+    await onRefreshTrips?.()
+  }
   const [expandAllTrips, setExpandAllTrips] = useState(() => localStorage.getItem(lsKey('elestet-expand-all')) === 'true')
   const [collapseSignal, setCollapseSignal] = useState(0)
   const [anyTripExpanded, setAnyTripExpanded] = useState(false)
@@ -142,7 +202,6 @@ export const ShipmentsPage = ({
     }
   }, [])
   const [hoverAddMode, setHoverAddMode] = useState(() => localStorage.getItem(lsKey('elestet-hover-add-mode')) !== 'false')
-  const [showSupplier, setShowSupplier] = useState(() => localStorage.getItem(lsKey('elestet-logistics-show-supplier')) !== 'false')
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false)
   const [addLineOpen, setAddLineOpen] = useState(false)
   const [tripConfig, setTripConfig] = useState<ColumnConfig>(DEFAULT_COLUMN_CONFIG)
@@ -565,38 +624,14 @@ export const ShipmentsPage = ({
                   <path d="M19 17v4M17 19h4" />
                 </svg>
               </Button>
-              {/* Кнопка переключения названия магазина (юр. / WB) */}
               <Button
                 type="button"
                 variant="secondary"
-                className={[
-                  '!h-10 !w-10 !min-w-10 !rounded-2xl !px-0',
-                  showSupplier
-                    ? '!bg-[#E3EAF6] !text-blue-600 hover:!bg-[#E3EAF6]'
-                    : '!text-slate-400',
-                ].join(' ')}
-                onClick={() => setShowSupplier((prev) => { const next = !prev; localStorage.setItem(lsKey('elestet-logistics-show-supplier'), String(next)); return next })}
-                aria-pressed={showSupplier}
-                aria-label={showSupplier ? 'Показывать: юр. название — переключить на название WB' : 'Показывать: название WB — переключить на юр. название'}
-                title={showSupplier ? 'Юр. название (ИП / ООО)' : 'Название магазина WB'}
+                className="!h-10 !rounded-2xl !px-3 !text-slate-500"
+                onClick={() => setLogisticsJournalOpen(true)}
+                title="Журнал действий логистики"
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  className="h-[15px] w-[15px] shrink-0"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  {/* Два перекрывающихся бейджа с именами — символ переключения названия */}
-                  <rect x="2" y="4" width="13" height="7" rx="1.5" />
-                  <rect x="9" y="13" width="13" height="7" rx="1.5" />
-                  <path d="M5 7.5h7" />
-                  <path d="M5 9.5h4" />
-                  <path d="M12 16.5h7" />
-                  <path d="M12 18.5h4" />
-                </svg>
+                Журнал
               </Button>
               {/* Кнопка фильтра по дате */}
               <Button
@@ -704,7 +739,6 @@ export const ShipmentsPage = ({
           transferPartners={transferPartners}
           expandAll={expandAllTrips || searchQuery.trim().length > 0}
           hoverAddMode={hoverAddMode}
-          showSupplier={showSupplier}
           collapseAllSignal={collapseSignal}
           onExpandedCountChange={(count) => { setAnyTripExpanded(count > 0); if (count === 0) setExpandAllTrips(false) }}
           onDeleteTrip={onDeleteTrip}
@@ -748,8 +782,18 @@ export const ShipmentsPage = ({
           lineConfig={lineConfig}
           onUpdateTripCustomFields={onUpdateTripCustomFields}
           onUpdateLineCustomFields={onUpdateLineCustomFields}
+          onTripManualDate={canManage ? handleTripManualDate : undefined}
+          onLineManualDate={canManage ? handleLineManualDate : undefined}
         />
       </div>
+
+      <Modal
+        open={logisticsJournalOpen}
+        title="Журнал логистики"
+        onClose={() => setLogisticsJournalOpen(false)}
+      >
+        {accountId ? <LogisticsActivityJournal accountId={accountId} /> : null}
+      </Modal>
 
       <DeleteConfirmModal
         open={bulkDeleteOpen}

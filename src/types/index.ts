@@ -566,6 +566,7 @@ export interface Trip {
   custom_fields: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  date_manual?: Record<string, boolean>;
 }
 
 export interface WbSupplyGoodSnapshot {
@@ -647,6 +648,7 @@ export interface TripLine {
   deleted_at?: string | null;
   fulfillment_batch_id?: string | null;
   fulfillment_supply_id?: string | null;
+  date_manual?: Record<string, boolean>;
 }
 
 export interface TripLineWithStore extends TripLine {

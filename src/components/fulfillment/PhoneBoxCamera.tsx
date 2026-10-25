@@ -405,8 +405,12 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
       try {
         const match = await lookupStoreBarcode(box.store_id, code)
         if (!match.found) {
-          setDialog({ kind: 'unknown-product', barcode: code, qty: amount, name: null })
-          setDialogError(null)
+          setNotice({
+            tone: 'error',
+            text: box.store_name
+              ? `Этот баркод не принадлежит магазину «${box.store_name}».`
+              : 'Этот баркод не принадлежит магазину этой партии.',
+          })
           return
         }
         await commitAdd(code, amount, match.name)

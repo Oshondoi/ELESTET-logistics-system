@@ -40,6 +40,8 @@ import { getActiveOverride } from "./services/accessOverrideService";
 import { AuthPage } from "./pages/AuthPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { RequestInvitePage } from "./pages/RequestInvitePage";
+import { RoleJoinPage } from "./pages/RoleJoinPage";
+import { acceptRoleInvite } from "./services/roleInviteService";
 import { MyRequestDraftsPage } from "./pages/MyRequestDraftsPage";
 import { HomePage } from "./pages/HomePage";
 import { FulfillmentPage } from "./pages/FulfillmentPage";
@@ -52,6 +54,7 @@ import { StickersPage } from "./pages/StickersPage";
 import { ReviewsPage } from "./pages/ReviewsPage";
 import { InvoicesPage } from "./pages/InvoicesPage";
 import { AdminPage } from "./pages/AdminPage";
+import { AdminTestsPage } from "./pages/AdminTestsPage";
 import type {
   AdminStats,
   AccountBillingRow as AdminAccountBillingRow,
@@ -123,6 +126,7 @@ type PageKey =
   | "roles"
   | "stickers"
   | "admin"
+  | "tests"
   | "glossary"
   | "diary"
   | "finance_report"
@@ -145,6 +149,7 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   roles: "/roles",
   stickers: "/stickers",
   admin: "/admin",
+  tests: "/tests",
   glossary: "/glossary",
   diary: "/diary",
   finance_report: "/finance-report",
@@ -367,6 +372,7 @@ const pageTitles: Record<PageKey, string> = {
   invoices: "Счета",
   roles: "Роли",
   admin: "Администратор",
+  tests: "Тесты",
   glossary: "Словарь",
   diary: "Дневник ELESTET",
   finance_report: "Фин-отчет",
@@ -391,6 +397,8 @@ function App() {
   const requestInviteToken =
     location.pathname.match(/^\/request-invite\/([0-9a-f-]{36})\/?$/i)?.[1] ??
     null;
+  const roleJoinToken =
+    location.pathname.match(/^\/role-join\/([0-9a-f-]{36})\/?$/i)?.[1] ?? null;
 
   // Разбираем URL вида /fulfillment/C-{n}/P-{m} при первом рендере
   const parsedFulfillmentUrl = (() => {
@@ -631,6 +639,8 @@ function App() {
       session &&
       accounts.length === 0 &&
       !requestInviteToken &&
+      !roleJoinToken &&
+      !window.localStorage.getItem("elestet-pending-role-join") &&
       !["/client-request", "/my-requests"].includes(location.pathname) &&
       session.user.user_metadata?.registration_source !== "request_invite" &&
       !hasPendingRequestInvite &&
@@ -641,7 +651,21 @@ function App() {
         setActiveAccountId(account.id);
       });
     }
-  }, [hasAccountsFetched, isAccountsLoading, accountsError, session, accounts.length, requestInviteToken, location.pathname]);
+  }, [hasAccountsFetched, isAccountsLoading, accountsError, session, accounts.length, requestInviteToken, roleJoinToken, location.pathname]);
+
+  useEffect(() => {
+    if (!session || roleJoinToken || requestInviteToken) return;
+    const pendingRoleJoin = window.localStorage.getItem("elestet-pending-role-join");
+    if (!pendingRoleJoin) return;
+    void acceptRoleInvite(pendingRoleJoin)
+      .then(({ account_id }) => {
+        window.localStorage.removeItem("elestet-pending-role-join");
+        setActiveAccountId(account_id);
+      })
+      .catch(() => {
+        /* пользователь откроет ссылку снова или админ сменит роль вручную */
+      });
+  }, [session, roleJoinToken, requestInviteToken]);
 
   const {
     shipments,
@@ -724,6 +748,7 @@ function App() {
     fbs: "fbs_view",
     roles: "roles_manage",
     admin: null,
+    tests: null,
     glossary: null,
     diary: null,
     finance_report: null,
@@ -737,6 +762,7 @@ function App() {
   // Используем вычисляемое значение (не useEffect), чтобы избежать race condition:
   // useEffect читает stale state из той же фазы рендера и не видит обновлений permissions.
   const effectivePage: PageKey = (() => {
+    if (activePage === "tests" && !isSuperAdmin) return "home";
     if (isAccountsLoading || isPermissionsLoading) return activePage;
     if ((activePage === "admin" || activePage === "glossary") && !isSupport)
       return "home";
@@ -753,6 +779,7 @@ function App() {
     return activePage;
   })();
   const hasSidebar = ![
+    "tests",
     "admin",
     "glossary",
     "diary",
@@ -810,7 +837,7 @@ function App() {
     // Public invitation owns its URL throughout authentication and OTP steps.
     // This effect also runs before Auth finishes loading; never replace it
     // with the last internal page (or the default home page).
-    if (requestInviteToken) return;
+    if (requestInviteToken || roleJoinToken) return;
     window.localStorage.setItem(ACTIVE_PAGE_STORAGE_KEY, activePage);
     if (location.pathname === "/my-requests" || location.pathname === "/client-request") return;
     const route = PAGE_ROUTES[activePage];
@@ -882,6 +909,23 @@ function App() {
       <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
         Загрузка...
       </div>
+    );
+  }
+
+  if (roleJoinToken) {
+    return (
+      <RoleJoinPage
+        token={roleJoinToken}
+        isSignedIn={Boolean(session)}
+        onSignIn={signIn}
+        onSignUp={signUp}
+        onJoined={(accountId) => {
+          window.localStorage.removeItem("elestet-pending-role-join");
+          setActiveAccountId(accountId);
+          setActivePage("fulfillment");
+          navigate("/fulfillment", { replace: true });
+        }}
+      />
     );
   }
 
@@ -1340,6 +1384,7 @@ function App() {
             unreadCount={unreadNotifCount}
             onNotificationClick={undefined}
             onAdminClick={() => setActivePage("admin")}
+            onTestsClick={isSuperAdmin ? () => setActivePage("tests") : undefined}
             onGlossaryClick={() => setActivePage("glossary")}
             onDiaryClick={isAdmin ? () => setActivePage("diary") : undefined}
             onFinanceReportClick={
@@ -1353,6 +1398,7 @@ function App() {
             }
             onHomeClick={
               [
+                "tests",
                 "admin",
                 "glossary",
                 "diary",
@@ -1578,6 +1624,7 @@ function App() {
                     onUpdateTripCustomFields={updateTripCustomFields}
                     onUpdateLineCustomFields={updateLineCustomFields}
                     onBulkMoveLinesToTrip={bulkMoveLinesToTrip}
+                    onRefreshTrips={refreshTrips}
                   />
                 )
               ) : effectivePage === "stores" ? (
@@ -1725,6 +1772,8 @@ function App() {
                 <GlossaryPage />
               ) : effectivePage === "tz_prompts" ? (
                 <TzPromptsPage />
+              ) : effectivePage === "tests" ? (
+                <AdminTestsPage />
               ) : effectivePage === "wms" ? (
                 isPageGated("wms") ? (
                   <PlanGatewall

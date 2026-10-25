@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
+import { writeLogisticsActivity } from '../services/logisticsActivityService'
 import {
   listShipments,
   fetchShipmentsFromSupabase,
@@ -437,6 +438,18 @@ export const useAppData = (accountId: string | null) => {
           : trip,
       ),
     )
+
+    if (currentLine && currentLine.status !== status) {
+      void writeLogisticsActivity({
+        accountId,
+        tripId,
+        tripLineId: lineId,
+        message: `Поставка S-${currentLine.shipment_number}: статус изменён с «${currentLine.status}» на «${status}»`,
+        fieldKey: 'status',
+        oldValue: currentLine.status,
+        newValue: status,
+      })
+    }
 
     // Автозавершение рейса: если все поставки стали «Отгружен» → рейс → «Завершён»
     const parentTrip = trips.find((t) => t.id === tripId)

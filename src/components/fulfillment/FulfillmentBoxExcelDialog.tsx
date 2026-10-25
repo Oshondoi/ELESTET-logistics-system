@@ -16,8 +16,10 @@ import {
   type WbBoxCodeExcelRow,
 } from '../../lib/fulfillmentBoxExcelImport'
 import { FulfillmentExcelHistory } from './FulfillmentExcelHistory'
+import { FulfillmentExcelConstructorPanel } from './FulfillmentExcelConstructorPanel'
 
 interface Props {
+  accountId: string
   supply: FulfillmentSupplyWithBoxes
   batchNumber: number | null
   auditContext: FulfillmentKizAuditContext
@@ -47,7 +49,7 @@ interface WbBoxCodePreview {
   newExternalCode: string | null
 }
 
-type ExcelTab = 'contents' | 'wb' | 'export'
+type ExcelTab = 'contents' | 'wb' | 'export' | 'constructor'
 
 const sumUnits = (items: Array<{ qty: number }>) => items.reduce((sum, item) => sum + item.qty, 0)
 
@@ -103,7 +105,7 @@ const wbPreviewPresentation = (entry: WbBoxCodePreview) => {
   return { label: 'Новая привязка', colors: 'border-violet-200 bg-violet-50 text-violet-700' }
 }
 
-export function FulfillmentBoxExcelDialog({ supply, batchNumber, auditContext, canManage, exportContent, onClose, onImported }: Props) {
+export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, auditContext, canManage, exportContent, onClose, onImported }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const wbCodesInputRef = useRef<HTMLInputElement>(null)
   const [activeTab, setActiveTab] = useState<ExcelTab>(canManage ? 'contents' : 'export')
@@ -352,12 +354,12 @@ export function FulfillmentBoxExcelDialog({ supply, batchNumber, auditContext, c
             <button type="button" disabled={Boolean(busyAction)} onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 disabled:opacity-40">×</button>
           </div>
         </div>
-        <div className="grid shrink-0 grid-cols-3 border-b border-slate-100 px-6 pt-2">
-          {([['contents', 'Содержимое коробов'], ['wb', 'Загрузить WB ШК'], ['export', 'Экспорт']] as const).map(([tab, label]) => <button key={tab} type="button" disabled={Boolean(busyAction) || (!canManage && tab !== 'export')} title={!canManage && tab !== 'export' ? 'Нет права изменять данные коробов' : undefined} onClick={() => changeTab(tab)} className={`border-b-2 px-2 py-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-sm ${!showHistory && activeTab === tab ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{label}</button>)}
+        <div className="grid shrink-0 grid-cols-2 border-b border-slate-100 px-6 pt-2 sm:grid-cols-4">
+          {([['contents', 'Содержимое коробов'], ['wb', 'Загрузить WB ШК'], ['export', 'Экспорт'], ['constructor', 'Конструктор']] as const).map(([tab, label]) => <button key={tab} type="button" disabled={Boolean(busyAction) || (!canManage && tab !== 'export' && tab !== 'constructor')} title={!canManage && tab !== 'export' && tab !== 'constructor' ? 'Нет права изменять данные коробов' : undefined} onClick={() => changeTab(tab)} className={`border-b-2 px-2 py-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-sm ${!showHistory && activeTab === tab ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain p-6 [scrollbar-gutter:stable]">
           {!showHistory && errors.length > 0 && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"><p className="font-bold">Excel не применён</p><ul className="mt-1 list-disc space-y-1 pl-5">{errors.map((error, index) => <li key={`${index}-${error}`}>{error}</li>)}</ul></div>}
-          {showHistory ? <FulfillmentExcelHistory supplyId={supply.id} /> : activeTab === 'contents' ? renderContents() : activeTab === 'wb' ? renderWb() : exportContent}
+          {showHistory ? <FulfillmentExcelHistory supplyId={supply.id} /> : activeTab === 'contents' ? renderContents() : activeTab === 'wb' ? renderWb() : activeTab === 'constructor' ? <FulfillmentExcelConstructorPanel accountId={accountId} supply={supply} batchNumber={batchNumber} /> : exportContent}
         </div>
         <input ref={fileInputRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file) }} />
         <input ref={wbCodesInputRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWbCodesFile(file) }} />

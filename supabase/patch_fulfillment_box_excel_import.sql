@@ -40,6 +40,7 @@ declare
   v_new_units integer;
   v_box_action text;
   v_box_results jsonb := '[]'::jsonb;
+  v_barcode text;
 begin
   if jsonb_typeof(p_rows) is distinct from 'array' or jsonb_array_length(p_rows) = 0 then
     raise exception 'В Excel нет заполненных строк для загрузки';
@@ -52,6 +53,15 @@ begin
   if not found then raise exception 'Поставка не найдена'; end if;
 
   perform public.fulfillment_kiz_assert_editable(v_supply.id);
+
+  for v_barcode in
+    select distinct btrim(imported.barcode)
+    from jsonb_to_recordset(p_rows) as imported(barcode text, qty bigint, box_number bigint)
+    where coalesce(imported.barcode, '') <> ''
+      and coalesce(imported.qty, 0) > 0
+  loop
+    perform public.assert_fulfillment_batch_store_barcode(v_supply.batch_id, v_barcode);
+  end loop;
 
   if exists (
     select 1

@@ -15,6 +15,7 @@ import {
   saveFbsOutsourceAccess,
 } from '../services/outsourceService'
 import { DEFAULT_PERMISSIONS } from '../types'
+import { ensureRoleInviteLink } from '../services/roleInviteService'
 import type { Account, FbsOutsourceAccess, Role, RoleFormValues, OutsourcePartner, RolePermissions, Store } from '../types'
 
 // ─── Иконка щита ─────────────────────────────────────────────
@@ -123,6 +124,27 @@ const RoleRow = ({ role, onEdit, onDelete, canManage = true }: RoleRowProps) => 
       <div className="flex h-7 flex-shrink-0 items-center gap-1">
         {canManage && (
         <>
+        <button
+          type="button"
+          onClick={() => {
+            void ensureRoleInviteLink(role.id)
+              .then(({ token }) => {
+                const url = `${window.location.origin}/role-join/${token}`
+                void navigator.clipboard.writeText(url)
+                window.alert('Ссылка для сотрудников скопирована.')
+              })
+              .catch((reason) => {
+                window.alert(reason instanceof Error ? reason.message : 'Не удалось получить ссылку')
+              })
+          }}
+          className="flex h-7 w-7 items-center justify-center rounded-xl text-slate-300 transition hover:bg-violet-50 hover:text-violet-600"
+          title="Скопировать ссылку для сотрудников"
+        >
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M10 13a5 5 0 0 1 7.07 0l1.41 1.41a5 5 0 0 1-7.07 7.07l-1.77-1.77" />
+            <path d="M14 11a5 5 0 0 0-7.07 0L5.52 12.4a5 5 0 1 0 7.07 7.07l1.77-1.77" />
+          </svg>
+        </button>
         {/* Редактировать */}
         <button
           type="button"

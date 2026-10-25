@@ -22,6 +22,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
   const [batchShortId, setBatchShortId] = useState<number | null>(null)
   const [sellerName, setSellerName] = useState('')
   const [tab, setTab] = useState<'system' | 'wb'>('system')
+  const [withInfo, setWithInfo] = useState(true)
   const [idDraft, setIdDraft] = useState<Record<string, string>>({})
   const [lastSynced, setLastSynced] = useState<Record<string, boolean>>({})
   const [working, setWorking] = useState(false)
@@ -131,7 +132,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
         ? supply.wb_cargo_type ?? null
         : null,
     }))
-    return buildFulfillmentBoxQrPdf(labels)
+    return buildFulfillmentBoxQrPdf(labels, { withInfo })
   }
 
   const print = () => {
@@ -153,7 +154,7 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
         : supplies.length === 1 ? `S${supplies[0].supply_number}` : 'BATCH'
       const link = document.createElement('a')
       link.href = url
-      link.download = `EL_P${batchShortId}_${scope}_${tab === 'wb' ? 'WB' : 'SYSTEM'}.pdf`
+      link.download = `EL_P${batchShortId}_${scope}_${tab === 'wb' ? 'WB' : 'SYSTEM'}${withInfo ? '' : '_QR'}.pdf`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -202,7 +203,11 @@ export const BoxBarcodePrintDialog = ({ supplyIds, boxId, allowSupplyMapping = f
           {!allowSupplyMapping && !wbAvailable && <p className="text-xs text-slate-500">Чтобы печатать ШК WB, откройте поставку и получите её коды из WB. Здесь доступна только печать.</p>}
           {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{error}</p>}
         </div>
-        <div className="flex shrink-0 justify-end gap-2 border-t border-slate-100 p-4">
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 p-4">
+          <div className="mr-auto flex rounded-xl bg-slate-100 p-0.5">
+            <button type="button" onClick={() => setWithInfo(true)} className={`rounded-lg px-3 py-1.5 text-sm font-medium ${withInfo ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>С инфо</button>
+            <button type="button" onClick={() => setWithInfo(false)} className={`rounded-lg px-3 py-1.5 text-sm font-medium ${withInfo ? 'text-slate-500' : 'bg-white text-slate-800 shadow-sm'}`}>Без</button>
+          </div>
           <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600">Отмена</button>
           <button type="button" onClick={download} disabled={working || visible.length === 0 || (tab === 'wb' && !allMapped)} className="rounded-xl border border-blue-200 px-4 py-2 text-sm font-medium text-blue-700 disabled:opacity-40">Скачать PDF</button>
           <button type="button" onClick={print} disabled={working || visible.length === 0 || (tab === 'wb' && !allMapped)} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">Открыть PDF</button>

@@ -69,7 +69,7 @@ const cargoTypeLabel = (value: number | null) => {
  * Горизонтальные соседние модули объединяются в один прямоугольник — так PDF
  * получается заметно компактнее, чем при отрисовке каждого квадрата отдельно.
  */
-const drawVectorQr = (pdf: jsPDF, value: string) => {
+const drawVectorQr = (pdf: jsPDF, value: string, leftMm: number) => {
   let sourceWidth = 0
   let sourceHeight = 0
   const path: Array<{ op: 'm' | 'l' | 'h'; c: number[] }> = []
@@ -87,7 +87,7 @@ const drawVectorQr = (pdf: jsPDF, value: string) => {
         path.push({
           op: index === 0 ? 'm' : 'l',
           c: [
-            QR_LEFT_MM + (x / sourceWidth) * QR_SIZE_MM,
+            leftMm + (x / sourceWidth) * QR_SIZE_MM,
             QR_TOP_MM + (y / sourceHeight) * QR_SIZE_MM,
           ],
         })
@@ -179,7 +179,10 @@ const renderInfoBlock = (label: FulfillmentBoxQrLabel) => {
   return canvas.toDataURL('image/png')
 }
 
-export const buildFulfillmentBoxQrPdf = (labels: FulfillmentBoxQrLabel[]): Blob => {
+export const buildFulfillmentBoxQrPdf = (
+  labels: FulfillmentBoxQrLabel[],
+  options?: { withInfo?: boolean },
+): Blob => {
   if (labels.length === 0) throw new Error('Нет коробов для печати')
 
   const pdf = new jsPDF({
@@ -190,25 +193,30 @@ export const buildFulfillmentBoxQrPdf = (labels: FulfillmentBoxQrLabel[]): Blob 
     putOnlyUsedFonts: true,
   })
 
+  const withInfo = options?.withInfo !== false
+  const plainQrLeftMm = (LABEL_WIDTH_MM - QR_SIZE_MM) / 2
+
   labels.forEach((label, index) => {
     if (index > 0) pdf.addPage([LABEL_WIDTH_MM, LABEL_HEIGHT_MM], 'landscape')
 
-    drawVectorQr(pdf, label.barcode)
+    drawVectorQr(pdf, label.barcode, withInfo ? QR_LEFT_MM : plainQrLeftMm)
 
-    pdf.setDrawColor(203, 213, 225)
-    pdf.setLineWidth(0.18)
-    pdf.line(DIVIDER_X_MM, 2.3, DIVIDER_X_MM, 32.7)
+    if (withInfo) {
+      pdf.setDrawColor(203, 213, 225)
+      pdf.setLineWidth(0.18)
+      pdf.line(DIVIDER_X_MM, 2.3, DIVIDER_X_MM, 32.7)
 
-    pdf.addImage(
-      renderInfoBlock(label),
-      'PNG',
-      INFO_LEFT_MM,
-      INFO_TOP_MM,
-      INFO_WIDTH_MM,
-      INFO_HEIGHT_MM,
-      undefined,
-      'FAST',
-    )
+      pdf.addImage(
+        renderInfoBlock(label),
+        'PNG',
+        INFO_LEFT_MM,
+        INFO_TOP_MM,
+        INFO_WIDTH_MM,
+        INFO_HEIGHT_MM,
+        undefined,
+        'FAST',
+      )
+    }
 
     pdf.setTextColor(0, 0, 0)
     pdf.setFont('helvetica', 'bold')

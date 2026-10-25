@@ -15,6 +15,7 @@ import { InvoicePhotoCell } from '../ui/InvoicePhotoCell'
 import { TripLineStickerCell } from '../ui/TripLineStickerCell'
 import { TripLineFormModal } from './TripLineFormModal'
 import { TripFormModal } from './TripFormModal'
+import { LogisticsDateText } from './LogisticsDateText'
 
 const TOOLTIP_MAX_W = 480
 const TOOLTIP_OFFSET = 14
@@ -275,13 +276,14 @@ interface TripTableProps {
   canDeleteTrip?: boolean
   focusMode?: boolean
   hoverAddMode?: boolean
-  showSupplier?: boolean
   onExpandedCountChange?: (count: number) => void
   collapseAllSignal?: number
   tripConfig?: ColumnConfig
   lineConfig?: ColumnConfig
   onUpdateTripCustomFields?: (tripId: string, fields: Record<string, unknown>) => Promise<void>
   onUpdateLineCustomFields?: (tripId: string, lineId: string, fields: Record<string, unknown>) => Promise<void>
+  onTripManualDate?: (tripId: string, field: string, date: string, tripLabel: string, oldValue: string | null) => Promise<void>
+  onLineManualDate?: (tripId: string, lineId: string, field: string, date: string, lineLabel: string, oldValue: string | null) => Promise<void>
 }
 
 const tripStatusTone = {
@@ -493,13 +495,14 @@ export const TripTable = ({
   isOwnerOrAdmin = false,
   focusMode = false,
   hoverAddMode = true,
-  showSupplier = true,
   onExpandedCountChange,
   collapseAllSignal = 0,
   tripConfig = DEFAULT_COLUMN_CONFIG,
   lineConfig = DEFAULT_COLUMN_CONFIG,
   onUpdateTripCustomFields,
   onUpdateLineCustomFields,
+  onTripManualDate,
+  onLineManualDate,
 }: TripTableProps) => {
   const transferPartnerNames = useMemo(
     () => new Map(transferPartners.map((partner) => [partner.account_id, partner.account_name])),
@@ -955,10 +958,31 @@ export const TripTable = ({
                             'Прибыл': trip.arrived_at,
                             'Завершён': trip.finished_at,
                           }
-                          const prefix = trip.status === 'Формируется' ? 'с ' : ''
+                          const fieldMap: Partial<Record<TripStatus, string>> = {
+                            'Формируется': 'created_at',
+                            'Отправлен': 'departure_date',
+                            'Прибыл': 'arrived_at',
+                            'Завершён': 'finished_at',
+                          }
+                          const field = fieldMap[trip.status]
                           const date = dateMap[trip.status]
-                          return date ? (
-                            <div className="mt-0.5 pl-2.5 text-[10px] text-slate-400">{prefix}{formatDate(date)}</div>
+                          return date && field ? (
+                            <div className="mt-0.5 pl-2.5">
+                              <LogisticsDateText
+                                value={date}
+                                manual={Boolean(trip.date_manual?.[field])}
+                                editable={canManage}
+                                onSave={onTripManualDate
+                                  ? (nextDate) => onTripManualDate(
+                                    trip.id,
+                                    field,
+                                    nextDate,
+                                    trip.trip_number ? `Рейс ${trip.trip_number}` : `Черновик-${trip.draft_number}`,
+                                    date,
+                                  )
+                                  : undefined}
+                              />
+                            </div>
                           ) : null
                         })()}
                       </td>
@@ -1146,11 +1170,10 @@ export const TripTable = ({
                                   </td>
                                   <td className="px-3 py-2.5">
                                     <div className="flex flex-col leading-tight">
-                                      <span className="font-medium text-slate-800">
-                                        {showSupplier
-                                          ? (line.store?.supplier ?? line.store?.name ?? '—')
-                                          : (line.store?.name ?? '—')}
-                                      </span>
+                                      {line.store?.supplier?.trim() ? (
+                                        <span className="font-medium text-slate-800">{line.store.supplier.trim()}</span>
+                                      ) : null}
+                                      <span className="font-medium text-slate-800">{line.store?.name?.trim() || '—'}</span>
                                       {line.store?.store_code && (
                                         <span className="text-[11px] text-slate-400">{line.store.store_code}</span>
                                       )}
@@ -1164,8 +1187,9 @@ export const TripTable = ({
                                             ? `Передача: ${transferPartnerNames.get(line.transfer_to_account_id) ?? 'компания-партнёр'}`
                                             : (line.destination_warehouse || '—')}
                                         </span>
+                                        <span className="mt-0.5 text-[11px] text-slate-400">Поставка</span>
                                         <div className="mt-0.5 flex items-center gap-1">
-                                          <span className="text-[11px] text-slate-400">Поставка {line.shipment_number}</span>
+                                          <span className="text-[11px] text-slate-400">S-{line.shipment_number}</span>
                                           {canManage && (
                                             <WbSupplyIdButton
                                               wbSupplyId={line.wb_supply_id}
@@ -1281,10 +1305,33 @@ export const TripTable = ({
                                           'Прибыл': line.arrival_date,
                                           'Отгружен': line.shipped_date,
                                         }
+                                        const fieldMap: Partial<Record<ShipmentStatus, string>> = {
+                                          'Формируется': 'created_at',
+                                          'Ожидает отправки': 'waiting_at',
+                                          'В пути': 'transit_at',
+                                          'Прибыл': 'arrival_date',
+                                          'Отгружен': 'shipped_date',
+                                        }
+                                        const field = fieldMap[line.status]
                                         const date = dateMap[line.status]
-                                        const prefix = (line.status === 'Формируется' || line.status === 'Ожидает отправки') ? 'с ' : ''
-                                        return date ? (
-                                          <div className="mt-0.5 pl-2.5 text-[10px] text-slate-400">{prefix}{formatDate(date)}</div>
+                                        return date && field ? (
+                                          <div className="mt-0.5 pl-2.5">
+                                            <LogisticsDateText
+                                              value={date}
+                                              manual={Boolean(line.date_manual?.[field])}
+                                              editable={canManage}
+                                              onSave={onLineManualDate
+                                                ? (nextDate) => onLineManualDate(
+                                                  trip.id,
+                                                  line.id,
+                                                  field,
+                                                  nextDate,
+                                                  `Поставка S-${line.shipment_number}`,
+                                                  date,
+                                                )
+                                                : undefined}
+                                            />
+                                          </div>
                                         ) : null
                                       })()}
                                       {line.wb_status_id != null && (
@@ -1316,32 +1363,80 @@ export const TripTable = ({
                                       {
                                         key: 'reception_date',
                                         label: 'Приём',
-                                        content: <span className="text-slate-500">{line.reception_date ? formatDate(line.reception_date) : '—'}</span>,
+                                        content: (
+                                          <LogisticsDateText
+                                            value={line.reception_date}
+                                            manual={Boolean(line.date_manual?.reception_date)}
+                                            editable={canManage}
+                                            onSave={onLineManualDate
+                                              ? (nextDate) => onLineManualDate(
+                                                trip.id,
+                                                line.id,
+                                                'reception_date',
+                                                nextDate,
+                                                `Поставка S-${line.shipment_number}`,
+                                                line.reception_date,
+                                              )
+                                              : undefined}
+                                          />
+                                        ),
                                       },
                                       {
                                         key: 'transit_at',
                                         label: 'Отправлен',
-                                        content: <span className="text-slate-500">{line.transit_at ? formatDate(line.transit_at) : '—'}</span>,
+                                        content: (
+                                          <LogisticsDateText
+                                            value={line.transit_at}
+                                            manual={Boolean(line.date_manual?.transit_at)}
+                                            editable={canManage}
+                                            onSave={onLineManualDate
+                                              ? (nextDate) => onLineManualDate(
+                                                trip.id,
+                                                line.id,
+                                                'transit_at',
+                                                nextDate,
+                                                `Поставка S-${line.shipment_number}`,
+                                                line.transit_at,
+                                              )
+                                              : undefined}
+                                          />
+                                        ),
                                       },
                                       {
                                         key: 'arrival_date',
                                         label: 'Прибыл',
-                                        content: <span className="text-slate-500">{line.arrival_date ? formatDate(line.arrival_date) : '—'}</span>,
+                                        content: (
+                                          <LogisticsDateText
+                                            value={line.arrival_date}
+                                            manual={Boolean(line.date_manual?.arrival_date)}
+                                            editable={canManage}
+                                            onSave={onLineManualDate
+                                              ? (nextDate) => onLineManualDate(
+                                                trip.id,
+                                                line.id,
+                                                'arrival_date',
+                                                nextDate,
+                                                `Поставка S-${line.shipment_number}`,
+                                                line.arrival_date,
+                                              )
+                                              : undefined}
+                                          />
+                                        ),
                                       },
                                       {
                                         key: 'wb_created_at',
                                         label: 'Поставка создана',
-                                        content: <span className="text-slate-500">{line.wb_created_at ? formatDate(line.wb_created_at) : '—'}</span>,
+                                        content: <LogisticsDateText value={line.wb_created_at} editable={false} />,
                                       },
                                       {
                                         key: 'marketplace_delivery_date',
                                         label: 'Запланирован',
-                                        content: <span className="text-slate-500">{line.planned_marketplace_delivery_date ? formatDate(line.planned_marketplace_delivery_date) : '—'}</span>,
+                                        content: <LogisticsDateText value={line.planned_marketplace_delivery_date} editable={false} />,
                                       },
                                       {
                                         key: 'wb_acceptance_date',
                                         label: 'Приём ВБ',
-                                        content: <span className="text-slate-500">{line.wb_acceptance_date ? formatDate(line.wb_acceptance_date) : '—'}</span>,
+                                        content: <LogisticsDateText value={line.wb_acceptance_date} editable={false} />,
                                       },
                                     ];
                                     const visibleDates = DATE_ITEMS.filter(e => !lineHidden.has(e.key));
