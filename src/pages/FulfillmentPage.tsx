@@ -163,6 +163,7 @@ import { FulfillmentKizPairsModal } from "../components/fulfillment/FulfillmentK
 import { FulfillmentElestetScanner } from "../components/fulfillment/FulfillmentElestetScanner";
 import { FulfillmentBoxExcelDialog } from "../components/fulfillment/FulfillmentBoxExcelDialog";
 import { ServiceRequestsPanel } from "../components/fulfillment/ServiceRequestsPanel";
+import { PhoneBoxCamera } from "../components/fulfillment/PhoneBoxCamera";
 import { PipelineStageFloors } from "../components/fulfillment/PipelineStageFloors";
 import { FulfillmentSupplyExcelExport } from "../components/fulfillment/FulfillmentSupplyExcelExport";
 import { downloadBoxesTemplate } from "../lib/wbExcelExport";
@@ -20803,6 +20804,7 @@ export const FulfillmentPage = ({
       return stored === "requests" || stored === "batches" ? stored : "batches";
     },
   );
+  const [phoneCameraOpen, setPhoneCameraOpen] = useState(false);
   const [batches, setBatches] = useState<FulfillmentBatch[]>([]);
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -21458,23 +21460,35 @@ export const FulfillmentPage = ({
   return (
     <div className="space-y-4">
       <Card className="rounded-3xl p-1.5">
-        <div className="flex w-fit items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-fit items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
+            <button
+              type="button"
+              onClick={() => setWorkspaceTab("requests")}
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "requests" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              Заявки
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkspaceTab("batches")}
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "batches" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              Партии
+            </button>
+          </div>
           <button
             type="button"
-            onClick={() => setWorkspaceTab("requests")}
-            className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "requests" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+            onClick={() => setPhoneCameraOpen(true)}
+            className="ml-auto flex h-9 shrink-0 items-center rounded-2xl bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 lg:hidden"
           >
-            Заявки
-          </button>
-          <button
-            type="button"
-            onClick={() => setWorkspaceTab("batches")}
-            className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "batches" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-          >
-            Партии
+            Камера
           </button>
         </div>
       </Card>
+      {phoneCameraOpen ? (
+        <PhoneBoxCamera onClose={() => setPhoneCameraOpen(false)} />
+      ) : null}
       {workspaceTab === "requests" ? (
         <ServiceRequestsPanel
           accountId={accountId}
