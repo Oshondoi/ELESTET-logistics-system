@@ -54,7 +54,6 @@ import { StickersPage } from "./pages/StickersPage";
 import { ReviewsPage } from "./pages/ReviewsPage";
 import { InvoicesPage } from "./pages/InvoicesPage";
 import { AdminPage } from "./pages/AdminPage";
-import { AdminTestsPage } from "./pages/AdminTestsPage";
 import type {
   AdminStats,
   AccountBillingRow as AdminAccountBillingRow,
@@ -126,7 +125,6 @@ type PageKey =
   | "roles"
   | "stickers"
   | "admin"
-  | "tests"
   | "glossary"
   | "diary"
   | "finance_report"
@@ -149,7 +147,6 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   roles: "/roles",
   stickers: "/stickers",
   admin: "/admin",
-  tests: "/tests",
   glossary: "/glossary",
   diary: "/diary",
   finance_report: "/finance-report",
@@ -372,7 +369,6 @@ const pageTitles: Record<PageKey, string> = {
   invoices: "Счета",
   roles: "Роли",
   admin: "Администратор",
-  tests: "Тесты",
   glossary: "Словарь",
   diary: "Дневник ELESTET",
   finance_report: "Фин-отчет",
@@ -748,7 +744,6 @@ function App() {
     fbs: "fbs_view",
     roles: "roles_manage",
     admin: null,
-    tests: null,
     glossary: null,
     diary: null,
     finance_report: null,
@@ -762,7 +757,6 @@ function App() {
   // Используем вычисляемое значение (не useEffect), чтобы избежать race condition:
   // useEffect читает stale state из той же фазы рендера и не видит обновлений permissions.
   const effectivePage: PageKey = (() => {
-    if (activePage === "tests" && !isSuperAdmin) return "home";
     if (isAccountsLoading || isPermissionsLoading) return activePage;
     if ((activePage === "admin" || activePage === "glossary") && !isSupport)
       return "home";
@@ -779,7 +773,6 @@ function App() {
     return activePage;
   })();
   const hasSidebar = ![
-    "tests",
     "admin",
     "glossary",
     "diary",
@@ -1384,7 +1377,6 @@ function App() {
             unreadCount={unreadNotifCount}
             onNotificationClick={undefined}
             onAdminClick={() => setActivePage("admin")}
-            onTestsClick={isSuperAdmin ? () => setActivePage("tests") : undefined}
             onGlossaryClick={() => setActivePage("glossary")}
             onDiaryClick={isAdmin ? () => setActivePage("diary") : undefined}
             onFinanceReportClick={
@@ -1398,7 +1390,6 @@ function App() {
             }
             onHomeClick={
               [
-                "tests",
                 "admin",
                 "glossary",
                 "diary",
@@ -1772,8 +1763,6 @@ function App() {
                 <GlossaryPage />
               ) : effectivePage === "tz_prompts" ? (
                 <TzPromptsPage />
-              ) : effectivePage === "tests" ? (
-                <AdminTestsPage />
               ) : effectivePage === "wms" ? (
                 isPageGated("wms") ? (
                   <PlanGatewall
