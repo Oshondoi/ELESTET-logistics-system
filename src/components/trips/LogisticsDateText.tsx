@@ -3,12 +3,29 @@ import { cn, formatDate } from '../../lib/utils'
 
 type Props = {
   value: string | null | undefined
+  /** Ручная правка пользователем — оранжевая плашка */
   manual?: boolean
+  /** Дата с WB (только чтение) — синяя плашка, как у автоматических */
+  fromWb?: boolean
   editable?: boolean
   onSave?: (isoDate: string) => void | Promise<void>
 }
 
-export const LogisticsDateText = ({ value, manual = false, editable = false, onSave }: Props) => {
+const pillClass = (manual: boolean, editable: boolean) =>
+  cn(
+    'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium',
+    manual
+      ? cn('bg-amber-50 text-amber-700', editable && 'hover:bg-amber-100')
+      : cn('bg-blue-50 text-blue-700', editable && 'hover:bg-blue-100'),
+  )
+
+export const LogisticsDateText = ({
+  value,
+  manual = false,
+  fromWb = false,
+  editable = false,
+  onSave,
+}: Props) => {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
 
@@ -16,8 +33,11 @@ export const LogisticsDateText = ({ value, manual = false, editable = false, onS
     return <span className="text-slate-300">—</span>
   }
 
+  const readOnly = fromWb || !editable || !onSave
+  const isManual = manual && !fromWb
+
   const open = () => {
-    if (!editable || !onSave) return
+    if (readOnly) return
     setDraft(value.slice(0, 10))
     setEditing(true)
   }
@@ -50,30 +70,13 @@ export const LogisticsDateText = ({ value, manual = false, editable = false, onS
 
   const label = formatDate(value)
 
-  if (manual) {
-    return (
-      <button
-        type="button"
-        disabled={!editable}
-        onClick={open}
-        className={cn(
-          'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium',
-          'bg-amber-50 text-amber-700',
-          editable && 'hover:bg-amber-100',
-        )}
-      >
-        {label}
-      </button>
-    )
+  if (readOnly) {
+    return <span className={pillClass(isManual, false)}>{label}</span>
   }
 
-  if (editable) {
-    return (
-      <button type="button" onClick={open} className="text-[10px] text-slate-500 hover:text-slate-700">
-        {label}
-      </button>
-    )
-  }
-
-  return <span className="text-[10px] text-slate-500">{label}</span>
+  return (
+    <button type="button" onClick={open} className={pillClass(isManual, true)}>
+      {label}
+    </button>
+  )
 }

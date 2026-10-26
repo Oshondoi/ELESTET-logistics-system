@@ -1426,17 +1426,23 @@ export const TripTable = ({
                                       {
                                         key: 'wb_created_at',
                                         label: 'Поставка создана',
-                                        content: <LogisticsDateText value={line.wb_created_at} editable={false} />,
+                                        content: <LogisticsDateText value={line.wb_created_at} fromWb editable={false} />,
                                       },
                                       {
                                         key: 'marketplace_delivery_date',
                                         label: 'Запланирован',
-                                        content: <LogisticsDateText value={line.planned_marketplace_delivery_date} editable={false} />,
+                                        content: (
+                                          <LogisticsDateText
+                                            value={line.planned_marketplace_delivery_date}
+                                            fromWb
+                                            editable={false}
+                                          />
+                                        ),
                                       },
                                       {
                                         key: 'wb_acceptance_date',
                                         label: 'Приём ВБ',
-                                        content: <LogisticsDateText value={line.wb_acceptance_date} editable={false} />,
+                                        content: <LogisticsDateText value={line.wb_acceptance_date} fromWb editable={false} />,
                                       },
                                     ];
                                     const visibleDates = DATE_ITEMS.filter(e => !lineHidden.has(e.key));
