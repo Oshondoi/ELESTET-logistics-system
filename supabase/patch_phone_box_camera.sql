@@ -89,12 +89,27 @@ begin
     'product_name', item.product_name,
     'vendor_code', prod.vendor_code,
     'nm_id', prod.nm_id,
+    'size', prod.tech_size,
     'in_catalog', prod.found
   ) order by item.created_at, item.barcode), '[]'::jsonb)
   into v_items
   from public.fulfillment_box_items item
   left join lateral (
-    select p.vendor_code, p.nm_id::text as nm_id, true as found
+    select p.vendor_code, p.nm_id::text as nm_id, true as found,
+      (
+        select nullif(btrim(coalesce(size_row->>'techSize', size_row->>'tech_size', '')), '')
+        from jsonb_array_elements(
+          case when jsonb_typeof(p.sizes) = 'array' then p.sizes else '[]'::jsonb end
+        ) size_row
+        where exists (
+          select 1
+          from jsonb_array_elements_text(
+            case when jsonb_typeof(size_row->'skus') = 'array' then size_row->'skus' else '[]'::jsonb end
+          ) sku
+          where btrim(sku) = btrim(item.barcode)
+        )
+        limit 1
+      ) as tech_size
     from public.products p
     where v_batch.store_id is not null
       and p.store_id = v_batch.store_id

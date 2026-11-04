@@ -8,6 +8,7 @@ export interface PhoneBoxItem {
   product_name: string | null
   vendor_code: string | null
   nm_id: string | null
+  size: string | null
   in_catalog: boolean
 }
 
@@ -105,6 +106,7 @@ export async function lookupPhoneBox(code: string): Promise<PhoneBoxLookup> {
         product_name: textOrNull(line.product_name),
         vendor_code: textOrNull(line.vendor_code),
         nm_id: textOrNull(line.nm_id),
+        size: textOrNull(line.size),
         in_catalog: line.in_catalog === true,
       }
     }),

@@ -11,20 +11,18 @@ import {
   type PhoneBoxItem,
 } from '../../services/phoneBoxCamera'
 
-type Screen = 'home' | 'scan' | 'info' | 'branch' | 'add' | 'remove'
-type Mode = 'view' | 'edit'
-type ExitTarget = 'home' | 'close'
+type Screen = 'scan' | 'info' | 'add'
+type ExitTarget = 'scan' | 'info' | 'close'
 type Notice = { tone: 'info' | 'error'; text: string }
 type Dialog =
   | { kind: 'start-correction' }
   | { kind: 'unsaved'; target: ExitTarget }
-  | { kind: 'correction'; target: ExitTarget }
-  | { kind: 'remove-all'; barcode: string; qty: number; inBox: number }
-  | { kind: 'unknown-product'; barcode: string; qty: number; name: string | null }
+  | { kind: 'correction'; target: 'scan' | 'close' }
+  | { kind: 'remove-all'; barcode: string; inBox: number }
 
 const primaryButton = 'flex h-14 w-full items-center justify-center rounded-2xl bg-blue-600 px-4 text-base font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50'
 const secondaryButton = 'flex h-12 w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 disabled:opacity-50'
-const roseButton = 'flex h-14 w-full items-center justify-center rounded-2xl bg-rose-600 px-4 text-base font-semibold text-white transition hover:bg-rose-700 disabled:opacity-50'
+const roseButton = 'flex h-12 w-full items-center justify-center rounded-2xl bg-rose-600 px-4 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:opacity-50'
 const quietButton = 'flex h-12 w-full items-center justify-center rounded-2xl px-4 text-sm font-medium text-slate-500 transition hover:bg-slate-100 disabled:opacity-50'
 
 const SCAN_FORMATS = ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'data_matrix', 'upc_a', 'upc_e', 'itf']
@@ -51,6 +49,10 @@ function parseQty(value: string) {
   return Number.isInteger(qty) && qty >= 1 ? qty : null
 }
 
+function itemKey(item: PhoneBoxItem) {
+  return item.id || item.barcode
+}
+
 function buzz() {
   try {
     navigator.vibrate?.(30)
@@ -64,12 +66,11 @@ async function openCameraStream() {
 }
 
 export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
-  const [screen, setScreen] = useState<Screen>('home')
-  const [mode, setMode] = useState<Mode>('view')
+  const [screen, setScreen] = useState<Screen>('scan')
   const [box, setBox] = useState<PhoneBox | null>(null)
-  const [pendingBox, setPendingBox] = useState<PhoneBox | null>(null)
   const [barcode, setBarcode] = useState('')
   const [qty, setQty] = useState('1')
+  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({})
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [dialogError, setDialogError] = useState<string | null>(null)
@@ -90,11 +91,13 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const pausedRef = useRef(false)
   const onScanRef = useRef<(code: string) => void>(() => {})
+  const pendingWrite = useRef<(() => void) | null>(null)
+  const correctionArmedRef = useRef(false)
+  const correctionChangedRef = useRef(false)
   const live = useRef({
     screen,
     barcode,
     box,
-    mode,
     heldCode: null as string | null,
     lastCode: '',
     lastAt: 0,
@@ -103,10 +106,12 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
   live.current.screen = screen
   live.current.barcode = barcode
   live.current.box = box
-  live.current.mode = mode
+  correctionArmedRef.current = correctionArmed
+  correctionChangedRef.current = correctionChanged
 
-  const cameraOn = screen === 'scan' || screen === 'add' || screen === 'remove'
-  const fieldLocksCamera = screen !== 'scan' && barcode.trim().length > 0
+  const cameraOn = screen === 'scan' || screen === 'add'
+  const fieldLocksCamera = screen === 'add' && barcode.trim().length > 0
+  const canEdit = Boolean(box?.can_write && (!box.packing_completed || correctionArmed))
   pausedRef.current = looking || busy || dialog !== null || fieldLocksCamera
 
   useEffect(() => {
@@ -120,7 +125,8 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
         ignorePop.current = false
         return
       }
-      if (exitRef.current('home')) {
+      const backTarget: ExitTarget = live.current.screen === 'add' ? 'info' : 'scan'
+      if (exitRef.current(backTarget)) {
         window.history.pushState({ phoneBoxCamera: 1 }, '')
         historyPushed.current = true
       }
@@ -213,60 +219,81 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
 
   function resetVisit() {
     setBox(null)
-    setPendingBox(null)
     setBarcode('')
     setQty('1')
+    setQtyDrafts({})
     setDialog(null)
     setDialogError(null)
     setCorrectionArmed(false)
+    correctionArmedRef.current = false
+    correctionChangedRef.current = false
     setCorrectionChanged(false)
     setNotice(null)
+    pendingWrite.current = null
     live.current.heldCode = null
   }
 
-  function arrive(target: ExitTarget) {
+  function finishExit(target: 'scan' | 'close') {
+    if (correctionChangedRef.current) {
+      setDialog({ kind: 'correction', target })
+      setDialogError(null)
+      return
+    }
     resetVisit()
     if (target === 'close') {
       popHistory()
       onCloseRef.current()
       return
     }
-    setScreen('home')
+    setScreen('scan')
+    setBoot((value) => value + 1)
   }
 
   function requestExit(target: ExitTarget) {
     if (dialog) {
       setDialog(null)
       setDialogError(null)
+      pendingWrite.current = null
       return true
     }
-    if (screen === 'home') {
+    if (screen === 'scan') {
+      popHistory()
       onCloseRef.current()
       return false
     }
-    if (screen === 'scan') {
-      setScreen('home')
-      setNotice(null)
-      setPendingBox(null)
-      live.current.heldCode = null
-      return true
-    }
-    if ((screen === 'add' || screen === 'remove') && barcode.trim()) {
+    if (screen === 'add' && barcode.trim()) {
       setDialog({ kind: 'unsaved', target })
       setDialogError(null)
       return true
     }
-    if (correctionChanged) {
-      setDialog({ kind: 'correction', target })
-      setDialogError(null)
+    if (screen === 'add' && target === 'info') {
+      setBarcode('')
+      setQty('1')
+      setNotice(null)
+      setScreen('info')
       return true
     }
-    arrive(target)
+    finishExit(target === 'close' ? 'close' : 'scan')
     return target !== 'close'
   }
   exitRef.current = requestExit
 
-  async function primeAndOpen(nextScreen: Screen, nextMode?: Mode) {
+  function ensureEdit(run: () => void) {
+    if (!box) return
+    if (!box.can_write) {
+      setNotice({ tone: 'error', text: blockText(box.block_reason) })
+      return
+    }
+    if (box.packing_completed && !correctionArmedRef.current) {
+      pendingWrite.current = run
+      setDialog({ kind: 'start-correction' })
+      setDialogError(null)
+      return
+    }
+    run()
+  }
+
+  async function primeAndOpen(nextScreen: Screen) {
     if (busy || opening.current) return
     opening.current = true
     setCameraError(null)
@@ -278,8 +305,7 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
       primed.current = null
       setCameraError('Разрешите доступ к камере, чтобы сканировать код.')
     } finally {
-      if (nextMode) setMode(nextMode)
-      if (nextScreen === 'add' || nextScreen === 'remove') {
+      if (nextScreen === 'add') {
         setBarcode('')
         setQty('1')
         setNotice(null)
@@ -301,27 +327,18 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
         return
       }
       buzz()
-      if (live.current.mode === 'view') {
-        setBox(result)
-        setNotice(null)
-        setScreen('info')
-        return
-      }
-      if (!result.can_write) {
-        setNotice({ tone: 'error', text: blockText(result.block_reason) })
-        return
-      }
-      if (result.packing_completed) {
-        setPendingBox(result)
+      setBox(result)
+      setQtyDrafts({})
+      setCorrectionArmed(false)
+      correctionArmedRef.current = false
+      correctionChangedRef.current = false
+      setCorrectionChanged(false)
+      setNotice(result.can_write ? null : { tone: 'error', text: blockText(result.block_reason) })
+      setScreen('info')
+      if (result.can_write && result.packing_completed) {
         setDialog({ kind: 'start-correction' })
         setDialogError(null)
-        setNotice(null)
-        return
       }
-      setBox(result)
-      setCorrectionArmed(false)
-      setNotice(null)
-      setScreen('branch')
     } catch (error) {
       setNotice({ tone: 'error', text: phoneBoxErrorText(error) })
     } finally {
@@ -340,12 +357,10 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
     if (current.screen === 'scan') {
       if (code === current.heldCode) return
       current.heldCode = null
-      setPendingBox(null)
       void findBox(code)
       return
     }
-    if (current.screen !== 'add' && current.screen !== 'remove') return
-    if (current.barcode.trim() || !current.box) return
+    if (current.screen !== 'add' || current.barcode.trim() || !current.box) return
     if (isThisBox(current.box, code)) {
       setNotice({ tone: 'error', text: 'Это QR короба. Сначала закройте короб.' })
       return
@@ -362,16 +377,23 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
     if (next.found) setBox(next)
   }
 
+  function markChanged() {
+    if (!correctionArmedRef.current) return
+    correctionChangedRef.current = true
+    setCorrectionChanged(true)
+  }
+
   async function commitAdd(code: string, amount: number, productName: string | null) {
     if (!box) return
     setBusy(true)
     setDialog(null)
     try {
       await addPhoneBoxItem(box.box_id, code, amount, productName)
-      if (correctionArmed) setCorrectionChanged(true)
+      markChanged()
       setBarcode('')
       setQty('1')
       setNotice({ tone: 'info', text: 'Добавлено' })
+      setScreen('info')
       try {
         await refresh(box)
       } catch {
@@ -425,20 +447,35 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
     await commitAdd(code, amount, null)
   }
 
-  async function commitRemove(code: string, amount: number, removeAll: boolean) {
-    if (!box) return
+  async function saveQty(item: PhoneBoxItem, next: number) {
+    if (!box || busy) return
+    const key = itemKey(item)
+    if (next === item.qty) {
+      setQtyDrafts((current) => {
+        const copy = { ...current }
+        delete copy[key]
+        return copy
+      })
+      return
+    }
     setBusy(true)
-    setDialog(null)
     try {
-      await removePhoneBoxItem(box.box_id, code, amount, removeAll)
-      if (correctionArmed) setCorrectionChanged(true)
-      setBarcode('')
-      setQty('1')
-      setNotice({ tone: 'info', text: 'Убрано' })
+      if (next > item.qty) {
+        await addPhoneBoxItem(box.box_id, item.barcode, next - item.qty, item.product_name)
+      } else {
+        await removePhoneBoxItem(box.box_id, item.barcode, item.qty - next, false)
+      }
+      markChanged()
+      setQtyDrafts((current) => {
+        const copy = { ...current }
+        delete copy[key]
+        return copy
+      })
+      setNotice({ tone: 'info', text: 'Количество обновлено' })
       try {
         await refresh(box)
       } catch {
-        /* строка уже записана, список обновится при следующем открытии */
+        /* строка уже записана */
       }
     } catch (error) {
       setNotice({ tone: 'error', text: phoneBoxErrorText(error) })
@@ -447,43 +484,71 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
     }
   }
 
-  async function submitRemove() {
-    if (!box || busy) return
-    const code = barcode.trim()
-    if (!code) {
-      setNotice({ tone: 'error', text: 'Сканируйте или введите баркод.' })
-      return
-    }
-    if (isThisBox(box, code)) {
-      setNotice({ tone: 'error', text: 'Это QR короба. Сначала закройте короб.' })
-      return
-    }
-    const amount = parseQty(qty)
-    if (!amount) {
+  function commitQty(item: PhoneBoxItem) {
+    const key = itemKey(item)
+    const raw = qtyDrafts[key]
+    if (raw == null) return
+    const next = parseQty(raw)
+    if (!next) {
       setNotice({ tone: 'error', text: 'Укажите количество от 1.' })
       return
     }
-    const line = box.items.find((item) => item.barcode.trim() === code)
-    if (!line) {
-      setNotice({ tone: 'error', text: 'В коробе нет этого баркода.' })
+    if (next === item.qty) {
+      setQtyDrafts((current) => {
+        const copy = { ...current }
+        delete copy[key]
+        return copy
+      })
       return
     }
-    if (amount > line.qty) {
-      setDialog({ kind: 'remove-all', barcode: code, qty: amount, inBox: line.qty })
-      setDialogError(null)
-      return
-    }
-    await commitRemove(code, amount, false)
+    ensureEdit(() => { void saveQty(item, next) })
   }
 
-  async function confirmCorrection(target: ExitTarget) {
+  async function commitRemove(code: string) {
+    if (!box) return
+    setBusy(true)
+    setDialog(null)
+    try {
+      await removePhoneBoxItem(box.box_id, code, 1, true)
+      markChanged()
+      setNotice({ tone: 'info', text: 'Товар удалён' })
+      try {
+        await refresh(box)
+      } catch {
+        /* строка уже записана */
+      }
+    } catch (error) {
+      setNotice({ tone: 'error', text: phoneBoxErrorText(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function askDelete(item: PhoneBoxItem) {
+    ensureEdit(() => {
+      setDialog({ kind: 'remove-all', barcode: item.barcode, inBox: item.qty })
+      setDialogError(null)
+    })
+  }
+
+  async function confirmCorrection(target: 'scan' | 'close') {
     if (!box || busy) return
     setBusy(true)
     setDialogError(null)
     try {
       await confirmPhoneBoxCorrection(box.batch_id, box.pipeline_stage_id)
+      correctionChangedRef.current = false
+      setCorrectionChanged(false)
       setBusy(false)
-      arrive(target)
+      setDialog(null)
+      resetVisit()
+      if (target === 'close') {
+        popHistory()
+        onCloseRef.current()
+        return
+      }
+      setScreen('scan')
+      setBoot((value) => value + 1)
     } catch (error) {
       setDialogError(phoneBoxErrorText(error))
       setBusy(false)
@@ -502,14 +567,7 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const title = screen === 'add'
-    ? 'Добавить товар'
-    : screen === 'remove'
-      ? 'Убрать товар'
-      : mode === 'view'
-        ? 'Информация о коробе'
-        : 'Редактировать короб'
-  const matchedLine = box?.items.find((item) => item.barcode.trim() === barcode.trim())
+  const title = screen === 'add' ? 'Занести товар' : 'Информация о коробе'
 
   return createPortal(
     <div className="fixed inset-0 z-[90] flex flex-col bg-slate-50 text-slate-900">
@@ -518,18 +576,6 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {screen === 'home' ? (
-          <div className="flex min-h-full flex-col justify-center gap-3 py-6">
-            <p className="text-center text-sm text-slate-500">Сканируйте QR короба</p>
-            <button type="button" className="flex h-16 w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 text-base font-semibold text-slate-900 transition hover:bg-slate-50" onClick={() => { void primeAndOpen('scan', 'view') }}>
-              Посмотреть инфо
-            </button>
-            <button type="button" className="flex h-16 w-full items-center justify-center rounded-2xl bg-blue-600 px-4 text-base font-semibold text-white transition hover:bg-blue-700" onClick={() => { void primeAndOpen('scan', 'edit') }}>
-              Занести инфо
-            </button>
-          </div>
-        ) : null}
-
         {cameraOn ? (
           <div>
             <div className="relative mx-auto aspect-square w-full max-h-[42vh] max-w-[42vh] overflow-hidden rounded-3xl bg-slate-200">
@@ -538,7 +584,7 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
               {cameraError ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-100 px-6 text-center">
                   <p className="text-sm leading-6 text-slate-700">{cameraError}</p>
-                  {screen !== 'scan' ? <p className="text-sm text-slate-500">Баркод можно ввести вручную.</p> : null}
+                  {screen === 'add' ? <p className="text-sm text-slate-500">Баркод можно ввести вручную.</p> : null}
                   <button type="button" className={primaryButton + ' h-12 max-w-xs'} onClick={() => { void retryCamera() }}>
                     Разрешить камеру
                   </button>
@@ -552,42 +598,38 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
           </div>
         ) : null}
 
-        {notice && screen !== 'home' ? (
+        {notice && screen !== 'add' ? (
           <p className={`mt-3 text-center text-sm leading-6 ${notice.tone === 'error' ? 'text-rose-700' : 'text-slate-600'}`} aria-live="polite">
             {notice.text}
           </p>
         ) : null}
 
-        {pendingBox && screen === 'scan' && !dialog ? (
-          <button
-            type="button"
-            className={secondaryButton + ' mt-4'}
-            onClick={() => {
-              setDialog({ kind: 'start-correction' })
-              setDialogError(null)
-            }}
-          >
-            Всё же корректировать этот короб
-          </button>
-        ) : null}
-
-        {box && (screen === 'info' || screen === 'branch') ? (
+        {box && screen === 'info' ? (
           <div className="space-y-3">
-            <h2 className="text-lg font-semibold">{screen === 'info' ? 'Информация о коробе' : 'Редактировать короб'}</h2>
+            <h2 className="text-lg font-semibold">Информация о коробе</h2>
             <BoxFacts box={box} />
-            {screen === 'info' ? <ItemList items={box.items} /> : (
-              <div className="grid gap-3 pt-2">
-                <button type="button" className={primaryButton} onClick={() => { void primeAndOpen('add') }}>Добавить товар</button>
-                <button type="button" className="flex h-14 w-full items-center justify-center rounded-2xl border border-rose-200 bg-white px-4 text-base font-semibold text-rose-700 transition hover:bg-rose-50" onClick={() => { void primeAndOpen('remove') }}>
-                  Убрать товар
-                </button>
-              </div>
-            )}
+            <ItemList
+              items={box.items}
+              drafts={qtyDrafts}
+              editable={canEdit}
+              busy={busy}
+              onDraft={(item, value) => {
+                setQtyDrafts((current) => ({ ...current, [itemKey(item)]: value.replace(/[^\d]/g, '') }))
+                setNotice(null)
+              }}
+              onCommit={(item) => commitQty(item)}
+              onDelete={askDelete}
+            />
           </div>
         ) : null}
 
-        {box && (screen === 'add' || screen === 'remove') ? (
+        {box && screen === 'add' ? (
           <div className="mt-4 space-y-3">
+            {notice ? (
+              <p className={`text-center text-sm leading-6 ${notice.tone === 'error' ? 'text-rose-700' : 'text-slate-600'}`} aria-live="polite">
+                {notice.text}
+              </p>
+            ) : null}
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-slate-700">Баркод</span>
               <span className="relative block">
@@ -620,11 +662,6 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
                 ) : null}
               </span>
             </label>
-            {screen === 'remove' && barcode.trim() ? (
-              <p className="text-sm text-slate-600">
-                {matchedLine ? `В коробе этот баркод: ${matchedLine.qty} шт.` : 'В коробе нет этого баркода.'}
-              </p>
-            ) : null}
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-slate-700">Количество</span>
               <input
@@ -634,42 +671,40 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     event.preventDefault()
-                    void (screen === 'add' ? submitAdd() : submitRemove())
+                    void submitAdd()
                   }
                 }}
                 className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-base outline-none focus:border-blue-500"
               />
             </label>
-            <ItemList items={box.items} />
           </div>
         ) : null}
       </div>
 
       <footer className="shrink-0 border-t border-slate-200 bg-white px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        {screen === 'home' ? (
-          <button type="button" className={quietButton} onClick={() => { popHistory(); onCloseRef.current() }}>Закрыть</button>
-        ) : null}
         {screen === 'scan' ? (
-          <button type="button" className={secondaryButton} onClick={() => requestExit('home')}>Назад</button>
+          <button type="button" className={secondaryButton} onClick={() => requestExit('close')}>Закрыть</button>
         ) : null}
-        {screen === 'info' || screen === 'branch' ? (
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" className={secondaryButton} onClick={() => requestExit('home')}>Закрыть короб</button>
-            <button type="button" className={quietButton} onClick={() => requestExit('close')}>Завершить</button>
+        {screen === 'info' ? (
+          <div className="space-y-2">
+            {box?.can_write ? (
+              <button type="button" className={primaryButton} disabled={busy} onClick={() => ensureEdit(() => { void primeAndOpen('add') })}>
+                Занести
+              </button>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" className={secondaryButton} disabled={busy} onClick={() => requestExit('scan')}>Закрыть короб</button>
+              <button type="button" className={quietButton} disabled={busy} onClick={() => requestExit('close')}>Завершить</button>
+            </div>
           </div>
         ) : null}
-        {screen === 'add' || screen === 'remove' ? (
+        {screen === 'add' ? (
           <div className="space-y-2">
-            <button
-              type="button"
-              className={screen === 'add' ? primaryButton : roseButton}
-              disabled={busy}
-              onClick={() => { void (screen === 'add' ? submitAdd() : submitRemove()) }}
-            >
-              {busy ? 'Записываем…' : screen === 'add' ? 'Добавить' : 'Убрать'}
+            <button type="button" className={primaryButton} disabled={busy} onClick={() => { void submitAdd() }}>
+              {busy ? 'Записываем…' : 'Добавить'}
             </button>
             <div className="grid grid-cols-2 gap-2">
-              <button type="button" className={secondaryButton} disabled={busy} onClick={() => requestExit('home')}>Закрыть короб</button>
+              <button type="button" className={secondaryButton} disabled={busy} onClick={() => requestExit('info')}>К коробу</button>
               <button type="button" className={quietButton} disabled={busy} onClick={() => requestExit('close')}>Завершить</button>
             </div>
           </div>
@@ -688,37 +723,35 @@ export function PhoneBoxCamera({ onClose }: { onClose: () => void }) {
                 setDialogError(null)
               }}
               onLeaveUnsaved={() => {
-                const target = dialog.kind === 'unsaved' ? dialog.target : 'home'
+                const target = dialog.kind === 'unsaved' ? dialog.target : 'scan'
                 setBarcode('')
+                setQty('1')
                 setDialog(null)
-                if (correctionChanged) {
-                  setDialog({ kind: 'correction', target })
+                if (target === 'info') {
+                  setNotice(null)
+                  setScreen('info')
                   return
                 }
-                arrive(target)
+                finishExit(target === 'close' ? 'close' : 'scan')
               }}
               onStartCorrection={() => {
-                if (!pendingBox) return
-                setBox(pendingBox)
-                setPendingBox(null)
-                live.current.heldCode = null
+                correctionArmedRef.current = true
                 setCorrectionArmed(true)
                 setDialog(null)
                 setNotice(null)
-                setScreen('branch')
+                const run = pendingWrite.current
+                pendingWrite.current = null
+                run?.()
               }}
               onDeclineCorrection={() => {
-                live.current.heldCode = live.current.lastCode || null
+                pendingWrite.current = null
+                setQtyDrafts({})
                 setDialog(null)
-                setNotice({ tone: 'info', text: 'Корректировка не начата. Можно сканировать другой короб.' })
+                setNotice({ tone: 'info', text: 'Корректировка не начата. Короб только для просмотра.' })
               }}
               onRemoveAll={() => {
                 if (dialog.kind !== 'remove-all') return
-                void commitRemove(dialog.barcode, dialog.inBox, true)
-              }}
-              onAddUnknown={() => {
-                if (dialog.kind !== 'unknown-product') return
-                void commitAdd(dialog.barcode, dialog.qty, dialog.name)
+                void commitRemove(dialog.barcode)
               }}
               onConfirm={() => {
                 if (dialog.kind !== 'correction') return
@@ -757,22 +790,70 @@ function BoxFacts({ box }: { box: PhoneBox }) {
   )
 }
 
-function ItemList({ items }: { items: PhoneBoxItem[] }) {
+function ItemList({
+  items,
+  drafts,
+  editable,
+  busy,
+  onDraft,
+  onCommit,
+  onDelete,
+}: {
+  items: PhoneBoxItem[]
+  drafts: Record<string, string>
+  editable: boolean
+  busy: boolean
+  onDraft: (item: PhoneBoxItem, value: string) => void
+  onCommit: (item: PhoneBoxItem) => void
+  onDelete: (item: PhoneBoxItem) => void
+}) {
   if (items.length === 0) {
     return <p className="rounded-3xl border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500">В коробе пока нет товаров.</p>
   }
   return (
-    <div className="max-h-64 space-y-2 overflow-y-auto">
-      {items.map((item) => (
-        <article key={item.id || item.barcode} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <p className="break-all font-medium">{item.barcode}</p>
-            <p className="shrink-0 text-sm font-semibold">{item.qty} шт</p>
-          </div>
-          <p className="mt-2 text-sm text-slate-600">Артикул продавца: {articleText(item, 'vendor_code')}</p>
-          <p className="mt-1 text-sm text-slate-600">Артикул WB: {articleText(item, 'nm_id')}</p>
-        </article>
-      ))}
+    <div className="space-y-2">
+      {items.map((item) => {
+        const key = itemKey(item)
+        return (
+          <article key={key} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <p className="break-all font-medium">{item.barcode}</p>
+              {editable ? (
+                <div className="flex shrink-0 items-center gap-1">
+                  <input
+                    value={drafts[key] ?? String(item.qty)}
+                    inputMode="numeric"
+                    aria-label={`Количество ${item.barcode}`}
+                    disabled={busy}
+                    onChange={(event) => onDraft(item, event.target.value)}
+                    onBlur={() => onCommit(item)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                    }}
+                    className="h-10 w-16 rounded-xl border border-slate-200 bg-white text-center text-sm font-semibold outline-none focus:border-blue-500 disabled:opacity-50"
+                  />
+                  <span className="text-sm text-slate-500">шт</span>
+                  <button
+                    type="button"
+                    aria-label={`Удалить ${item.barcode}`}
+                    disabled={busy}
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={() => onDelete(item)}
+                    className="flex h-10 w-10 items-center justify-center rounded-xl text-2xl leading-none text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : (
+                <p className="shrink-0 text-sm font-semibold">{item.qty} шт</p>
+              )}
+            </div>
+            <p className="mt-2 text-sm text-slate-600">Артикул продавца: {articleText(item, 'vendor_code')}</p>
+            <p className="mt-1 text-sm text-slate-600">Артикул WB: {articleText(item, 'nm_id')}</p>
+            <p className="mt-1 text-sm text-slate-600">Размер: {item.size?.trim() || '—'}</p>
+          </article>
+        )
+      })}
     </div>
   )
 }
@@ -786,7 +867,6 @@ function DialogBody({
   onStartCorrection,
   onDeclineCorrection,
   onRemoveAll,
-  onAddUnknown,
   onConfirm,
 }: {
   dialog: Dialog
@@ -797,7 +877,6 @@ function DialogBody({
   onStartCorrection: () => void
   onDeclineCorrection: () => void
   onRemoveAll: () => void
-  onAddUnknown: () => void
   onConfirm: () => void
 }) {
   const copy = dialog.kind === 'start-correction'
@@ -806,9 +885,7 @@ function DialogBody({
       ? { title: 'Баркод не записан', text: 'Баркод введён, но не записан. Если выйти, эти данные пропадут.' }
       : dialog.kind === 'correction'
         ? { title: 'Корректировка', text: 'Подтвердить корректировку этапа коробов?' }
-        : dialog.kind === 'remove-all'
-          ? { title: 'Удалить баркод', text: `В коробе этот баркод: ${dialog.inBox} шт. Удалить всё?` }
-          : { title: 'Нет в товарах магазина', text: 'Этого баркода нет в товарах магазина. Всё равно добавить?' }
+        : { title: 'Удалить товар', text: `В коробе ${dialog.inBox} шт. Удалить эту строку?` }
 
   return (
     <>
@@ -836,14 +913,8 @@ function DialogBody({
         ) : null}
         {dialog.kind === 'remove-all' ? (
           <>
-            <button type="button" className={roseButton} disabled={busy} onClick={onRemoveAll}>{busy ? 'Удаляем…' : 'Удалить всё'}</button>
+            <button type="button" className={roseButton} disabled={busy} onClick={onRemoveAll}>{busy ? 'Удаляем…' : 'Удалить'}</button>
             <button type="button" className={secondaryButton} disabled={busy} onClick={onStay}>Отмена</button>
-          </>
-        ) : null}
-        {dialog.kind === 'unknown-product' ? (
-          <>
-            <button type="button" className={primaryButton} disabled={busy} onClick={onAddUnknown}>{busy ? 'Добавляем…' : 'Добавить'}</button>
-            <button type="button" className={secondaryButton} disabled={busy} onClick={onStay}>Нет</button>
           </>
         ) : null}
       </div>
