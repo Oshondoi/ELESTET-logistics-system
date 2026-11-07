@@ -2,7 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import { BoxBarcodePrintDialog } from "../components/ui/BoxBarcodePrintDialog";
-import { previewStickerPdf } from "../lib/stickerPdf";
+import { printStickerNow } from "../lib/stickerPdf";
 import { PhotoThumb } from "../components/ui/PhotoThumb";
 import { ConfirmedStepHistory } from "../components/fulfillment/ConfirmedStepHistory";
 import { confirmStepCorrection } from "../services/fulfillmentService";
@@ -1433,15 +1433,6 @@ const BatchDetailModal = ({
   const [packingProductCache, setPackingProductCache] = useState<
     Record<string, ProductInfo | null>
   >({});
-  const [boxStickerPrint, setBoxStickerPrint] = useState<{
-    name: string;
-    barcode: string;
-    sellerArticle: string;
-    wbArticle: string;
-    size: string;
-    color: string;
-    copies: string;
-  } | null>(null);
   const [packingKizPairs, setPackingKizPairs] = useState<FulfillmentKizPair[]>(
     [],
   );
@@ -13854,17 +13845,36 @@ const BatchDetailModal = ({
                                                     type="button"
                                                     title="Печать стикера"
                                                     aria-label={`Печать стикера ${item.barcode}`}
-                                                    onClick={() =>
-                                                      setBoxStickerPrint({
-                                                        name: displayName ?? item.barcode,
+                                                    onClick={() => {
+                                                      const sellerArticle = displayArticle ?? ""
+                                                      const wbArticle = info?.nm_id != null ? String(info.nm_id) : ""
+                                                      const sticker: StickerTemplate = {
+                                                        id: "box-line",
+                                                        account_id: accountId,
                                                         barcode: item.barcode,
-                                                        sellerArticle: displayArticle ?? "",
-                                                        wbArticle: info?.nm_id != null ? String(info.nm_id) : "",
-                                                        size: displaySize ?? "",
-                                                        color: info?.color ?? batchItem?.color ?? "",
-                                                        copies: String(visibleQty),
-                                                      })
-                                                    }
+                                                        name: displayName ?? item.barcode,
+                                                        composition: null,
+                                                        article: wbArticle || null,
+                                                        seller_article: sellerArticle || null,
+                                                        brand: null,
+                                                        size: displaySize ?? null,
+                                                        color: info?.color ?? batchItem?.color ?? null,
+                                                        supplier: null,
+                                                        supplier_address: null,
+                                                        production_date: null,
+                                                        country: "",
+                                                        copies: 1,
+                                                        icon_wash: false,
+                                                        icon_iron: false,
+                                                        icon_no_bleach: false,
+                                                        icon_no_tumble_dry: false,
+                                                        icon_eac: false,
+                                                        created_at: "",
+                                                        show_wb_article: Boolean(wbArticle),
+                                                        show_seller_article: Boolean(sellerArticle),
+                                                      }
+                                                      printStickerNow([sticker])
+                                                    }}
                                                     className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-slate-200 transition hover:bg-slate-50 hover:text-slate-800"
                                                   >
                                                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -14985,88 +14995,6 @@ const BatchDetailModal = ({
                       document.body,
                     );
                   })()}
-
-                {boxStickerPrint &&
-                  createPortal(
-                    <div
-                      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40"
-                      onClick={() => setBoxStickerPrint(null)}
-                    >
-                      <div
-                        className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl"
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <h3 className="text-base font-semibold text-slate-900">Печать стикера</h3>
-                        <p className="mt-1 text-sm text-slate-500">{boxStickerPrint.name}</p>
-                        <p className="mt-1 font-mono text-xs text-slate-400">{boxStickerPrint.barcode}</p>
-                        <label className="mt-4 block text-sm font-medium text-slate-700">
-                          Сколько наклеек
-                          <input
-                            type="number"
-                            min={1}
-                            autoFocus
-                            value={boxStickerPrint.copies}
-                            onChange={(event) =>
-                              setBoxStickerPrint((current) =>
-                                current
-                                  ? { ...current, copies: event.target.value.replace(/[^\d]/g, "") }
-                                  : current,
-                              )
-                            }
-                            className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3 text-base outline-none focus:border-blue-500"
-                          />
-                        </label>
-                        <div className="mt-5 flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setBoxStickerPrint(null)}
-                            className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            Отмена
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!Number.isInteger(Number(boxStickerPrint.copies)) || Number(boxStickerPrint.copies) < 1}
-                            onClick={() => {
-                              const copies = Number(boxStickerPrint.copies);
-                              if (!Number.isInteger(copies) || copies < 1) return;
-                              const sticker: StickerTemplate = {
-                                id: "box-line",
-                                account_id: accountId,
-                                barcode: boxStickerPrint.barcode,
-                                name: boxStickerPrint.name,
-                                composition: null,
-                                article: boxStickerPrint.wbArticle || null,
-                                seller_article: boxStickerPrint.sellerArticle || null,
-                                brand: null,
-                                size: boxStickerPrint.size || null,
-                                color: boxStickerPrint.color || null,
-                                supplier: null,
-                                supplier_address: null,
-                                production_date: null,
-                                country: "",
-                                copies,
-                                icon_wash: false,
-                                icon_iron: false,
-                                icon_no_bleach: false,
-                                icon_no_tumble_dry: false,
-                                icon_eac: false,
-                                created_at: "",
-                                show_wb_article: Boolean(boxStickerPrint.wbArticle),
-                                show_seller_article: Boolean(boxStickerPrint.sellerArticle),
-                              };
-                              previewStickerPdf([sticker]);
-                              setBoxStickerPrint(null);
-                            }}
-                            className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
-                          >
-                            Печать
-                          </button>
-                        </div>
-                      </div>
-                    </div>,
-                    document.body,
-                  )}
 
                 {/* Модалка: подтверждение удаления позиции из короба */}
                 {deleteBoxItemConfirm &&
