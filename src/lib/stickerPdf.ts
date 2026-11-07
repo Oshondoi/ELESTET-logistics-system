@@ -235,15 +235,17 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
     y = boldLabel(ctx, 'Дата производства: ', dateFormatted, PAD, y, 21, maxX)
   }
 
-  /* Страна + иконки по уходу на одной строке */
-  ctx.fillStyle = '#000000'
-  ctx.font = '400 21px Arial, sans-serif'
-  const countryLabel = 'Страна: '
-  ctx.fillText(countryLabel, PAD, y)
-  ctx.fillStyle = '#0f172a'
-  ctx.font = '600 21px Arial, sans-serif'
+  /* Страна — только если она указана. Пустую подпись не печатаем. */
   const countryVal = (tpl.country || '').replace(/^[\s\-–—]+|[\s\-–—]+$/g, '')
-  ctx.fillText(countryVal, PAD + ctx.measureText(countryLabel).width, y)
+  if (countryVal) {
+    ctx.fillStyle = '#000000'
+    ctx.font = '400 21px Arial, sans-serif'
+    const countryLabel = 'Страна: '
+    ctx.fillText(countryLabel, PAD, y)
+    ctx.fillStyle = '#0f172a'
+    ctx.font = '600 21px Arial, sans-serif'
+    ctx.fillText(countryVal, PAD + ctx.measureText(countryLabel).width, y)
+  }
 
   /* иконки по уходу — всегда фиксированы у нижнего края, не зависят от y */
   const iconFlags: Record<string, boolean> = {
