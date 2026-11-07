@@ -2,7 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import { BoxBarcodePrintDialog } from "../components/ui/BoxBarcodePrintDialog";
-import { printStickerNow } from "../lib/stickerPdf";
+import { previewStickerPdf } from "../lib/stickerPdf";
 import { PhotoThumb } from "../components/ui/PhotoThumb";
 import { ConfirmedStepHistory } from "../components/fulfillment/ConfirmedStepHistory";
 import { confirmStepCorrection } from "../services/fulfillmentService";
@@ -13873,7 +13873,7 @@ const BatchDetailModal = ({
                                                         show_wb_article: Boolean(wbArticle),
                                                         show_seller_article: Boolean(sellerArticle),
                                                       }
-                                                      printStickerNow([sticker])
+                                                      previewStickerPdf([sticker])
                                                     }}
                                                     className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-slate-200 transition hover:bg-slate-50 hover:text-slate-800"
                                                   >

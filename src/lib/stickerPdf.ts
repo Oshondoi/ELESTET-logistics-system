@@ -307,33 +307,3 @@ export const previewStickerPdf = (templates: StickerTemplate[]): void => {
   const url = buildPdf(templates).output('bloburl') as unknown as string
   window.open(url, '_blank')
 }
-
-/** Открывает системное окно печати с готовыми наклейками. Количество копий задают уже там. */
-export const printStickerNow = (templates: StickerTemplate[]): void => {
-  if (templates.length === 0) return
-  const images = templates.flatMap((tpl) => {
-    const src = renderStickerToCanvas(tpl)
-    const copies = Math.max(1, tpl.copies || 1)
-    return Array.from({ length: copies }, () => src)
-  })
-  const pages = images.map((src) => `<img alt="" src="${src}" />`).join('')
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Стикер</title>
-  <style>
-    @page { size: 58mm 40mm; margin: 0; }
-    html, body { margin: 0; padding: 0; background: #fff; }
-    img { width: 58mm; height: 40mm; display: block; break-after: page; }
-  </style>
-</head>
-<body>
-  ${pages}
-  <script>window.addEventListener('load', function () { window.print() })<\/script>
-</body>
-</html>`
-  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
-  const win = window.open(url, '_blank')
-  if (!win) URL.revokeObjectURL(url)
-}
