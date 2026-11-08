@@ -209,9 +209,13 @@ async function resolveEmissionProduct(
     ?? product.productGroupMarking
     ?? product.productGroup,
   )
+  const tnved = asObject(product.tnved)
+  const catalog = asObject(asObject(tnved.productSubgroup).productGroupCatalog)
   const productGroupCode = firstText(
     product.productGroupCode,
     product.product_group_code,
+    catalog.code,
+    catalog.alias,
     nestedGroup.code,
     nestedGroup.id,
     cached?.product_group_code,
@@ -219,6 +223,8 @@ async function resolveEmissionProduct(
   const directAlias = firstText(
     product.productGroupAlias,
     product.extension,
+    catalog.alias,
+    catalog.extension,
     nestedGroup.alias,
     nestedGroup.extension,
   ).toLowerCase()
@@ -235,6 +241,7 @@ async function resolveEmissionProduct(
     productGroupCode,
     extensionCandidateFromGroupCode(productGroupCode),
     directAlias,
+    ...groupReferences(catalog),
     ...groupReferences(nestedGroup),
   ].map((value) => value.toLowerCase()).filter(Boolean))
   const matchedGroup = groups.find((group) => groupReferences(group).some((reference) => wanted.has(reference))) ?? null
@@ -254,7 +261,7 @@ async function resolveEmissionProduct(
     name: firstText(product.fullName, product.full_name, product.name, cached?.full_name, cached?.name),
     status: status || 'PUBLISHED',
     productGroupCode,
-    productGroupName: firstText(matchedGroup?.name, matchedGroup?.nameRu, nestedGroup.name, productGroupCode),
+    productGroupName: firstText(matchedGroup?.name, matchedGroup?.nameRu, catalog.name, nestedGroup.name, productGroupCode),
     extension,
   }
 }
