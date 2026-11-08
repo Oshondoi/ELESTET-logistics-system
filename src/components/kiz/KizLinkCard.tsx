@@ -108,6 +108,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
       {open && createPortal(
       <Modal
         open
+        tall
         onClose={() => setOpen(false)}
         title="Связка баркода и GTIN"
         footer={<button type="button" onClick={() => setOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Закрыть</button>}
@@ -126,7 +127,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
               className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
             />
           </label>
-          <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-200">
+          <div className="max-h-[28vh] overflow-y-auto rounded-xl border border-slate-200">
             {foundSizes.map((item) => (
               <button
                 key={item.row.rowKey}
@@ -158,7 +159,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
               className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
             />
           </label>
-          <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-200">
+          <div className="max-h-[28vh] overflow-y-auto rounded-xl border border-slate-200">
             {foundGtins.map((card) => (
               <button
                 key={card.gtin}

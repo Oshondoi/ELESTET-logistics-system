@@ -11,15 +11,21 @@ interface ModalProps {
   onClose: () => void
   className?: string
   headerContent?: ReactNode
+  tall?: boolean
+  fill?: boolean
 }
 
-export const Modal = ({ open, title, description, children, footer, onClose, className, headerContent }: ModalProps) => {
+export const Modal = ({ open, title, description, children, footer, onClose, className, headerContent, tall = false, fill = false }: ModalProps) => {
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-x-hidden bg-slate-950/40 p-3 sm:p-4">
+    <div className={cn('fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-slate-950/40', !tall && 'p-3 sm:p-4')}>
       <div className="absolute inset-0" onClick={onClose} />
-      <Card className={cn('relative z-10 flex w-full max-w-3xl min-w-0 flex-col overflow-hidden p-0 max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-2rem)]', className)}>
+      <Card className={cn(
+        'relative z-10 flex min-w-0 flex-col overflow-hidden p-0',
+        tall ? 'h-[90vh] w-[90vw] max-h-[90vh] max-w-[90vw]' : 'w-full max-w-3xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-2rem)]',
+        className,
+      )}>
         <div className="shrink-0 border-b border-slate-200">
           <div className="flex min-w-0 items-start justify-between gap-4 px-4 pt-4 pb-3 sm:px-6 sm:pt-5 sm:pb-4">
             <div className="min-w-0">
@@ -32,7 +38,7 @@ export const Modal = ({ open, title, description, children, footer, onClose, cla
           </div>
           {headerContent && <div className="px-4 sm:px-6">{headerContent}</div>}
         </div>
-        <div className="min-h-0 flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 py-4 sm:px-6 sm:py-5">
+        <div className={cn('min-h-0 min-w-0 flex-1 overflow-x-hidden', fill ? 'flex flex-col overflow-hidden' : 'overflow-y-auto px-4 py-4 sm:px-6 sm:py-5')}>
           {children}
         </div>
         {footer && (
