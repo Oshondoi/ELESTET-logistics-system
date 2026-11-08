@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Modal } from '../components/ui/Modal'
@@ -19,13 +19,13 @@ import {
   type CalendarRange,
 } from '../lib/workshopCalendar'
 import {
-  loadWorkshopOccupancies,
-  saveWorkshopOccupancies,
+  deleteWorkshopOccupancy,
+  fetchWorkshopOccupancies,
+  upsertWorkshopOccupancy,
   type WorkshopOccupancy,
 } from '../services/workshopCalendarService'
 
 const LANE_HEIGHT = 46
-const MIN_ROWS = 5
 const BAR_HEIGHT = 20
 const FACT_SHIFT_X = 6
 const FACT_SHIFT_Y = 8
@@ -80,13 +80,18 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
   const today = useMemo(() => startOfDay(new Date()), [])
   const todayIso = formatISODate(today)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
+  const headerRef = useRef<HTMLDivElement | null>(null)
+  const [rowSpace, setRowSpace] = useState(0)
   const cameraRef = useRef<CameraMode>('today')
   const scrollAdjustRef = useRef(0)
   const [applied, setApplied] = useState<CalendarRange>(() => defaultRange())
   const [draftStart, setDraftStart] = useState(applied.start)
   const [draftEnd, setDraftEnd] = useState(applied.end)
   const [rangeError, setRangeError] = useState<string | null>(null)
-  const [items, setItems] = useState<WorkshopOccupancy[]>(() => loadWorkshopOccupancies(accountId))
+  const [items, setItems] = useState<WorkshopOccupancy[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [editorError, setEditorError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -97,7 +102,9 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
     setApplied(next)
     setDraftStart(next.start)
     setDraftEnd(next.end)
-    setItems(loadWorkshopOccupancies(accountId))
+    setItems([])
+    setIsLoading(true)
+    setLoadError(null)
     setRangeError(null)
     setEditor(null)
     setEditorError(null)
@@ -135,11 +142,47 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
       if (!union) continue
       placed.push({ item, lane: placed.length })
     }
-    return { placed, count: Math.max(MIN_ROWS, placed.length) }
+    return placed
   }, [items, applied.start, applied.end])
+
+  useEffect(() => {
+    if (!accountId) return
+    let cancelled = false
+    setIsLoading(true)
+    setLoadError(null)
+    void fetchWorkshopOccupancies(accountId)
+      .then((rows) => {
+        if (!cancelled) setItems(rows)
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setItems([])
+          setLoadError(error instanceof Error ? error.message : 'Не удалось загрузить занятости. Обновите страницу.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [accountId])
 
   const placingRef = useRef(false)
   const [todayScroll, setTodayScroll] = useState(0)
+
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current
+    const header = headerRef.current
+    if (!scroller || !header) return
+    const measure = () => {
+      const next = Math.max(0, Math.floor(scroller.clientHeight - header.offsetHeight))
+      setRowSpace((current) => current === next ? current : next)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(scroller)
+    observer.observe(header)
+    return () => observer.disconnect()
+  }, [accountId])
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current
@@ -171,9 +214,53 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
     return () => observer.disconnect()
   }, [accountId, applied.start, applied.end, today, todayScroll])
 
-  const persist = (next: WorkshopOccupancy[]) => {
-    setItems(next)
-    if (accountId) saveWorkshopOccupancies(accountId, next)
+  const saveEditor = () => {
+    if (!editor || !accountId || isSaving) return
+    const error = validate(editor)
+    if (error) {
+      setEditorError(error)
+      return
+    }
+    const draft: WorkshopOccupancy = {
+      id: editor.id ?? '',
+      title: editor.title.trim(),
+      planStart: editor.planStart,
+      planEnd: editor.planEnd,
+      factStart: editor.factStart || null,
+      factEnd: editor.factEnd || null,
+    }
+    const companyId = accountId
+    setIsSaving(true)
+    setEditorError(null)
+    void upsertWorkshopOccupancy(companyId, draft)
+      .then((saved) => {
+        if (loadedAccountRef.current !== companyId) return
+        setItems((current) => editor.id ? current.map((item) => item.id === saved.id ? saved : item) : [...current, saved])
+        setEditor(null)
+      })
+      .catch((saveError: unknown) => {
+        setEditorError(saveError instanceof Error ? saveError.message : 'Не удалось записать занятость. Повторите.')
+      })
+      .finally(() => setIsSaving(false))
+  }
+
+  const deleteEditor = () => {
+    if (!editor?.id || !accountId || isSaving) return
+    const id = editor.id
+    const companyId = accountId
+    setIsSaving(true)
+    setEditorError(null)
+    void deleteWorkshopOccupancy(companyId, id)
+      .then(() => {
+        if (loadedAccountRef.current !== companyId) return
+        setItems((current) => current.filter((item) => item.id !== id))
+        setEditor(null)
+        setConfirmDelete(false)
+      })
+      .catch((deleteError: unknown) => {
+        setEditorError(deleteError instanceof Error ? deleteError.message : 'Не удалось удалить занятость. Повторите.')
+      })
+      .finally(() => setIsSaving(false))
   }
 
   const goToToday = () => {
@@ -244,35 +331,10 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
     setConfirmDelete(false)
   }
 
-  const saveEditor = () => {
-    if (!editor || !accountId) return
-    const error = validate(editor)
-    if (error) {
-      setEditorError(error)
-      return
-    }
-    const nextItem: WorkshopOccupancy = {
-      id: editor.id ?? crypto.randomUUID(),
-      title: editor.title.trim(),
-      planStart: editor.planStart,
-      planEnd: editor.planEnd,
-      factStart: editor.factStart || null,
-      factEnd: editor.factEnd || null,
-    }
-    const next = editor.id
-      ? items.map((item) => item.id === editor.id ? nextItem : item)
-      : [...items, nextItem]
-    persist(next)
-    setEditor(null)
-  }
-
-  const deleteEditor = () => {
-    if (!editor?.id) return
-    persist(items.filter((item) => item.id !== editor.id))
-    setEditor(null)
-  }
-
-  const bodyHeight = lanes.count * LANE_HEIGHT
+  const occupiedRows = lanes.length
+  const rowsFit = rowSpace > 0 && occupiedRows * LANE_HEIGHT <= rowSpace
+  const laneHeight = occupiedRows === 0 || rowsFit ? (occupiedRows === 0 ? rowSpace : rowSpace / occupiedRows) : LANE_HEIGHT
+  const bodyHeight = occupiedRows === 0 || rowsFit ? rowSpace : occupiedRows * LANE_HEIGHT
   const canvasWidth = days.length * DAY_WIDTH + FACT_SHIFT_X
 
   if (!accountId) {
@@ -280,8 +342,8 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-2">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <div className="flex shrink-0 flex-wrap items-end gap-2">
         <Button type="button" variant="secondary" onClick={extendEarlier}>Раньше</Button>
         <Button type="button" variant="secondary" onClick={goToToday}>Сегодня</Button>
         <Button type="button" variant="secondary" onClick={extendLater}>Дальше</Button>
@@ -302,15 +364,18 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
         </div>
       </div>
       {rangeError ? <p className="text-sm text-rose-600">{rangeError}</p> : null}
+      {loadError ? <p className="text-sm text-rose-600">{loadError}</p> : null}
+      {isLoading ? <p className="text-sm text-slate-500">Загружаю занятости…</p> : null}
 
       <div
         ref={scrollerRef}
         onScroll={() => {
           if (!placingRef.current) cameraRef.current = 'preserve'
         }}
-        className="w-full min-w-0 overflow-x-auto rounded-2xl border border-slate-200 bg-white"
+        className="min-h-0 w-full min-w-0 flex-1 overflow-x-auto overflow-y-auto rounded-2xl border border-slate-200 bg-white [scrollbar-gutter:stable]"
       >
         <div className="relative" style={{ width: canvasWidth }}>
+          <div ref={headerRef} className="sticky top-0 z-30 bg-white">
           <div className="flex h-7 border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
             {months.map((month) => (
               <div key={month.label + month.days} className="flex items-center border-r border-slate-200 px-2 capitalize" style={{ width: month.days * DAY_WIDTH }}>
@@ -336,6 +401,7 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
               )
             })}
           </div>
+          </div>
           <div className="relative" style={{ height: bodyHeight }}>
             {days.map((day, index) => (
               <div
@@ -344,16 +410,16 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
                 style={{ left: index * DAY_WIDTH, width: DAY_WIDTH }}
               />
             ))}
-            {Array.from({ length: lanes.count }, (_, index) => (
-              <div key={index} className="absolute right-0 left-0 border-b border-slate-100" style={{ top: (index + 1) * LANE_HEIGHT }} />
+            {Array.from({ length: occupiedRows }, (_, index) => (
+              <div key={index} className="absolute right-0 left-0 border-b border-slate-100" style={{ top: (index + 1) * laneHeight }} />
             ))}
             {todayIso >= applied.start && todayIso <= applied.end ? (
               <div className="absolute top-0 bottom-0 z-20 w-px bg-blue-600" style={{ left: diffDays(today, rangeStart) * DAY_WIDTH + DAY_WIDTH / 2 }} />
             ) : null}
-            {lanes.placed.map(({ item, lane }) => {
+            {lanes.map(({ item, lane }) => {
               const plan = clipToRange(item.planStart, item.planEnd, rangeStart, rangeEnd)
               const fact = item.factStart && item.factEnd ? clipToRange(item.factStart, item.factEnd, rangeStart, rangeEnd) : null
-              const top = lane * LANE_HEIGHT + 8
+              const top = lane * laneHeight + 8
               const title = `${item.title}. План ${formatRuDate(item.planStart)} — ${formatRuDate(item.planEnd)}${item.factStart && item.factEnd ? `. Факт ${formatRuDate(item.factStart)} — ${formatRuDate(item.factEnd)}` : ''}`
               return (
                 <div key={item.id}>
@@ -380,7 +446,7 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
                 </div>
               )
             })}
-            {lanes.placed.length === 0 ? (
+            {occupiedRows === 0 ? (
               <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-400">В этом диапазоне занятий нет.</div>
             ) : null}
           </div>
@@ -398,7 +464,7 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
               confirmDelete ? (
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-slate-600">Удалить эту занятость?</span>
-                  <Button type="button" variant="secondary" onClick={deleteEditor}>Удалить</Button>
+                  <Button type="button" variant="secondary" onClick={deleteEditor} disabled={isSaving}>Удалить</Button>
                   <Button type="button" variant="ghost" onClick={() => setConfirmDelete(false)}>Отмена</Button>
                 </div>
               ) : (
@@ -407,7 +473,7 @@ export function WorkshopCalendarPage({ accountId, canManage }: { accountId: stri
             ) : <span />}
             <div className="flex gap-2">
               <Button type="button" variant="secondary" onClick={() => setEditor(null)}>Закрыть</Button>
-              {canManage ? <Button type="button" onClick={saveEditor}>Сохранить</Button> : null}
+              {canManage ? <Button type="button" onClick={saveEditor} disabled={isSaving}>{isSaving ? 'Сохранение...' : 'Сохранить'}</Button> : null}
             </div>
           </div>
         }
