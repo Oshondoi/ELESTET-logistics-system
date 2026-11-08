@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { KizLinkCard } from '../components/kiz/KizLinkCard'
+import { fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
 import { TransgranPanel } from '../components/kiz/TransgranPanel'
 import { getStoreSelectorLabel } from '../lib/storeDisplay'
@@ -485,18 +486,22 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const loadProducts = useCallback(async (page = 0, search = '') => {
     if (!activeStore?.id) return
     setProductsLoading(true)
-    const { data, error } = await invoke({ store_id: activeStore.id, action: 'products', page, size: 20, search })
-    setProductsLoading(false)
-    if (error) { showAction('err', error); return }
-    if (page === 0) setProducts((data?.items as TeksherProduct[]) ?? [])
-    else setProducts((prev) => [...prev, ...((data?.items as TeksherProduct[]) ?? [])])
-    setProductsTotal(Number(data?.total ?? 0))
-    setProductsPage(page)
+    try {
+      const result = await fetchTeksherCatalog(activeStore.id, page, search)
+      if (page === 0) setProducts(result.items)
+      else setProducts((prev) => [...prev, ...result.items])
+      setProductsTotal(result.total)
+      setProductsPage(page)
+    } catch (loadFailure: unknown) {
+      showAction('err', loadFailure instanceof Error ? loadFailure.message : 'Не удалось загрузить товары.')
+    } finally {
+      setProductsLoading(false)
+    }
   }, [activeStore?.id])
 
   useEffect(() => {
-    if (tab === 'products' && stats) void loadProducts(0, productsSearch)
-  }, [tab, stats, loadProducts, productsSearch])
+    if (tab === 'products' && activeStore?.id) void loadProducts(0, productsSearch)
+  }, [tab, activeStore?.id, loadProducts, productsSearch])
 
   // ── Загрузка кодов ───────────────────────────────────────────────────────
   const loadCodes = useCallback(async (statusFilter = '') => {
@@ -560,10 +565,17 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const handleSync = async () => {
     if (!activeStore?.id) return
     await loadStats(activeStore.id)
-    if (tab === 'products') void loadProducts(0, productsSearch)
-    if (tab === 'codes') void loadCodes(codesStatusFilter)
-    if (tab === 'operations') void loadOperations()
-    showAction('ok', 'Данные обновлены')
+    try {
+      if (tab === 'products') {
+        await syncStoreTeksherCatalog(activeStore.id)
+        await loadProducts(0, productsSearch)
+      }
+      if (tab === 'codes') void loadCodes(codesStatusFilter)
+      if (tab === 'operations') void loadOperations()
+      showAction('ok', tab === 'products' ? 'Товары Teksher записаны в базу' : 'Данные обновлены')
+    } catch (syncFailure: unknown) {
+      showAction('err', syncFailure instanceof Error ? syncFailure.message : 'Не удалось обновить товары Teksher.')
+    }
   }
 
   // ── Обновить базу ТН ВЭД ─────────────────────────────────────────────────
@@ -593,6 +605,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     if (!activeStore?.id) return
     const { error } = await invoke({ store_id: activeStore.id, action: 'publish_product', productId: String(productId) })
     if (error) { showAction('err', error); return }
+    try { await syncStoreTeksherCatalog(activeStore.id) }
+    catch (syncFailure: unknown) {
+      showAction('err', syncFailure instanceof Error ? syncFailure.message : 'Товар опубликован, но база не обновилась. Нажмите «Обновить».')
+      return
+    }
     showAction('ok', 'Товар опубликован')
     void loadProducts(productsPage, productsSearch)
   }
@@ -680,6 +697,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     setCreateProductModal(false)
     setCpGtin(''); setCpName(''); setCpTrademark(''); setCpTnved(''); setCpMpArticle('')
     setCpAttrValues({}); setCpAttrUnits({}); setCpAttrTemplates([]); setCpTeksherTnvedId(null); setCpCountryId(null)
+    try { await syncStoreTeksherCatalog(activeStore.id) }
+    catch (syncFailure: unknown) {
+      showAction('err', syncFailure instanceof Error ? syncFailure.message : 'Товар создан, но база не обновилась. Нажмите «Обновить».')
+      return
+    }
     showAction('ok', 'Товар создан (статус DRAFT)')
     void loadProducts(0, productsSearch)
   }
@@ -1107,7 +1129,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 {productsLoading && products.length === 0 ? (
                   <Skeleton rows={6} />
                 ) : products.length === 0 ? (
-                  <EmptyState text="Товары не найдены" sub="Создайте первый товар (GTIN) нажав «Новый товар»" />
+                  <EmptyState text="Товаров пока нет" sub="Нажмите «Обновить», чтобы забрать каталог из Teksher и записать его в базу." />
                 ) : (
                   <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
                     <table className="w-full text-sm">

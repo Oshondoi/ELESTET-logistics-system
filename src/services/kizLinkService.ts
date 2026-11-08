@@ -102,7 +102,11 @@ export function kizLinkError(error: { message?: string; code?: string } | null):
   return 'Не удалось записать связку. Повторите.'
 }
 
-export async function fetchStoreTeksherProducts(storeId: string): Promise<KizGtinCard[]> {
+function catalogNeedle(search: string): string {
+  return search.trim().replace(/[%_,]/g, '')
+}
+
+export async function syncStoreTeksherCatalog(storeId: string): Promise<number> {
   if (!supabase) throw new Error('База не настроена. Обновите страницу.')
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) throw new Error('Сессия истекла. Войдите снова.')
@@ -110,15 +114,67 @@ export async function fetchStoreTeksherProducts(storeId: string): Promise<KizGti
     body: { store_id: storeId, action: 'link_products' },
     headers: { Authorization: `Bearer ${session.access_token}` },
   })
-  if (error) throw new Error('Не удалось загрузить товары Teksher.')
-  const payload = data as { error?: string; items?: KizGtinCard[] } | null
+  if (error) throw new Error('Не удалось обновить товары Teksher.')
+  const payload = data as { error?: string; items?: unknown[] } | null
   if (payload?.error) throw new Error(payload.error)
+  return payload?.items?.length ?? 0
+}
+
+export type TeksherCatalogItem = {
+  id: string | number
+  gtin: string
+  name?: string
+  fullName?: string
+  status?: string
+  codesCount?: number
+}
+
+export async function fetchTeksherCatalog(storeId: string, page: number, search: string): Promise<{ items: TeksherCatalogItem[]; total: number }> {
+  const client = db()
+  const size = 20
+  const from = page * size
+  let query = client.from('teksher_products')
+    .select('teksher_id,gtin,name,full_name,status,codes_count', { count: 'exact' })
+    .eq('store_id', storeId)
+    .eq('in_catalog', true)
+    .order('full_name')
+  const needle = catalogNeedle(search)
+  if (needle) query = query.or(`name.ilike.%${needle}%,full_name.ilike.%${needle}%,gtin.ilike.%${needle}%`)
+  const { data, error, count } = await query.range(from, from + size - 1)
+  if (error) throw new Error('Не удалось загрузить товары Teksher.')
+  const items = ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    id: (row.teksher_id as string | number | null) ?? String(row.gtin ?? ''),
+    gtin: String(row.gtin ?? ''),
+    name: (row.name as string | null) ?? undefined,
+    fullName: (row.full_name as string | null) ?? undefined,
+    status: (row.status as string | null) ?? undefined,
+    codesCount: row.codes_count == null ? undefined : Number(row.codes_count),
+  }))
+  return { items, total: count ?? items.length }
+}
+
+export async function fetchStoreTeksherProducts(storeId: string): Promise<KizGtinCard[]> {
+  const client = db()
+  const pageSize = 1000
   const seen = new Set<string>()
-  return (payload?.items ?? []).filter((item) => {
-    if (!item?.gtin || seen.has(item.gtin)) return false
-    seen.add(item.gtin)
-    return true
-  })
+  const items: KizGtinCard[] = []
+  for (let from = 0; from < 100000; from += pageSize) {
+    const { data, error } = await client.from('teksher_products')
+      .select('gtin,name,full_name,product_group_code,status')
+      .eq('store_id', storeId)
+      .eq('in_catalog', true)
+      .order('gtin')
+      .range(from, from + pageSize - 1)
+    if (error) throw new Error('Не удалось загрузить товары Teksher.')
+    const rows = (data ?? []) as KizGtinCard[]
+    rows.forEach((item) => {
+      if (!item?.gtin || seen.has(item.gtin)) return
+      seen.add(item.gtin)
+      items.push(item)
+    })
+    if (rows.length < pageSize) break
+  }
+  return items
 }
 
 export async function fetchKizOrderSources(storeId: string): Promise<{
@@ -130,7 +186,7 @@ export async function fetchKizOrderSources(storeId: string): Promise<{
   const [productsResult, linksResult, gtinsResult] = await Promise.all([
     client.from('products').select('id,nm_id,vendor_code,name,brand,color,barcodes,photos,sizes').eq('store_id', storeId),
     client.from('fulfillment_product_gtin_links').select('wb_barcode,gtin').eq('store_id', storeId).eq('active', true),
-    client.from('teksher_products').select('gtin,name,full_name,product_group_code,status').eq('store_id', storeId).order('full_name'),
+    client.from('teksher_products').select('gtin,name,full_name,product_group_code,status').eq('store_id', storeId).eq('in_catalog', true).order('full_name'),
   ])
   if (productsResult.error) throw new Error('Не удалось загрузить товары магазина.')
   if (linksResult.error) throw new Error('Не удалось загрузить связки баркодов.')

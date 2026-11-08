@@ -511,6 +511,7 @@ Deno.serve(async (req: Request) => {
           codes_count: item.codesCount == null && item.codes_count == null ? null : Number(item.codesCount ?? item.codes_count),
           trademark: String(item.trademark ?? '') || null,
           synced_at: new Date().toISOString(),
+          in_catalog: true,
         })
       })
       if (items.length < pageSize || pageInfo.last === true) break
@@ -520,6 +521,29 @@ Deno.serve(async (req: Request) => {
     if (rows.length > 0) {
       const { error: cacheError } = await svc.from('teksher_products').upsert(rows, { onConflict: 'store_id,gtin' })
       if (cacheError) return err(`Не удалось сохранить товары Teksher: ${cacheError.message}`)
+    }
+    const keep = new Set(rows.map((row) => String(row.gtin)))
+    const markedGtins: string[] = []
+    let markedFrom = 0
+    while (markedFrom < 100000) {
+      const { data: marked, error: markedError } = await svc.from('teksher_products')
+        .select('gtin')
+        .eq('store_id', store_id)
+        .eq('in_catalog', true)
+        .range(markedFrom, markedFrom + 999)
+      if (markedError) return err(`Не удалось сохранить товары Teksher: ${markedError.message}`)
+      markedGtins.push(...(marked ?? []).map((row) => String((row as { gtin?: unknown }).gtin ?? '')))
+      if (!marked || marked.length < 1000) break
+      markedFrom += 1000
+    }
+    const stale = markedGtins.filter((gtin) => gtin && !keep.has(gtin))
+    for (let index = 0; index < stale.length; index += 100) {
+      const chunk = stale.slice(index, index + 100)
+      const { error: clearError } = await svc.from('teksher_products')
+        .update({ in_catalog: false })
+        .eq('store_id', store_id)
+        .in('gtin', chunk)
+      if (clearError) return err(`Не удалось сохранить товары Teksher: ${clearError.message}`)
     }
     return ok({
       items: rows.map((row) => ({
