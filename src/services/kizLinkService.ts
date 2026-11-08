@@ -87,6 +87,25 @@ export function kizLinkError(error: { message?: string; code?: string } | null):
   return 'Не удалось записать связку. Повторите.'
 }
 
+export async function fetchStoreTeksherProducts(storeId: string): Promise<KizGtinCard[]> {
+  if (!supabase) throw new Error('База не настроена. Обновите страницу.')
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) throw new Error('Сессия истекла. Войдите снова.')
+  const { data, error } = await supabase.functions.invoke('teksher-auth', {
+    body: { store_id: storeId, action: 'link_products' },
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  })
+  if (error) throw new Error('Не удалось загрузить товары Teksher.')
+  const payload = data as { error?: string; items?: KizGtinCard[] } | null
+  if (payload?.error) throw new Error(payload.error)
+  const seen = new Set<string>()
+  return (payload?.items ?? []).filter((item) => {
+    if (!item?.gtin || seen.has(item.gtin)) return false
+    seen.add(item.gtin)
+    return true
+  })
+}
+
 export async function fetchKizOrderSources(storeId: string): Promise<{
   products: KizWbProduct[]
   links: KizBarcodeLink[]

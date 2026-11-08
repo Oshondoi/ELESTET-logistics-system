@@ -473,6 +473,58 @@ Deno.serve(async (req: Request) => {
     })
   }
 
+  // Полный список товаров Teksher этого магазина для связки баркода.
+  // Пишет в уже существующую таблицу, отдельный каталог не создаёт.
+  if (action === 'link_products') {
+    const pageSize = 100
+    const byGtin = new Map<string, Record<string, unknown>>()
+    let page = 0
+    let total = Number.POSITIVE_INFINITY
+    while (page < 100 && page * pageSize < total) {
+      const params = new URLSearchParams({ page: String(page), size: String(pageSize) })
+      const response = await fetch(`${BASE}/products?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      if (!response.ok) return err(`Teksher: ${response.status}`)
+      const payload = await response.json() as Record<string, unknown>
+      const pageInfo = (payload.page ?? {}) as Record<string, unknown>
+      const items = (payload.content ?? payload.items ?? []) as Record<string, unknown>[]
+      const reported = Number(pageInfo.totalElements ?? payload.totalElements)
+      if (Number.isFinite(reported)) total = reported
+      items.forEach((item) => {
+        const digits = String(item.gtin ?? '').replace(/\D/g, '')
+        if (digits.length < 8 || digits.length > 14) return
+        const gtin = digits.padStart(14, '0')
+        byGtin.set(gtin, {
+          store_id,
+          teksher_id: item.id == null ? null : String(item.id),
+          gtin,
+          name: String(item.name ?? '') || null,
+          full_name: String(item.fullName ?? item.full_name ?? '') || null,
+          product_group_code: String(item.productGroupCode ?? item.product_group_code ?? '') || null,
+          status: String(item.status ?? '') || null,
+          codes_count: item.codesCount == null && item.codes_count == null ? null : Number(item.codesCount ?? item.codes_count),
+          trademark: String(item.trademark ?? '') || null,
+          synced_at: new Date().toISOString(),
+        })
+      })
+      if (items.length < pageSize || pageInfo.last === true) break
+      page += 1
+    }
+    const rows = [...byGtin.values()]
+    if (rows.length > 0) {
+      const { error: cacheError } = await svc.from('teksher_products').upsert(rows, { onConflict: 'store_id,gtin' })
+      if (cacheError) return err(`Не удалось сохранить товары Teksher: ${cacheError.message}`)
+    }
+    return ok({
+      items: rows.map((row) => ({
+        gtin: row.gtin,
+        name: row.name,
+        full_name: row.full_name,
+        product_group_code: row.product_group_code,
+        status: row.status,
+      })),
+    })
+  }
+
   // ── action: codes ───────────────────────────────────────────────────────────
   if (action === 'codes') {
     const page = Number(body.page ?? 0)

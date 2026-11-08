@@ -7,6 +7,7 @@ import { planKizLinkWrites } from '../../lib/kizLinkExcel'
 import {
   clearKizBarcodeLink,
   fetchKizOrderSources,
+  fetchStoreTeksherProducts,
   kizPhotoUrl,
   kizProductMatches,
   kizSizeRows,
@@ -112,10 +113,13 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
   const [saving, setSaving] = useState(false)
 
   async function reload() {
-    const sources = await fetchKizOrderSources(storeId)
+    const [sources, storeGtins] = await Promise.all([
+      fetchKizOrderSources(storeId),
+      fetchStoreTeksherProducts(storeId),
+    ])
     setProducts(sources.products)
     setLinks(sources.links)
-    setGtins(sources.gtins)
+    setGtins(storeGtins)
     setCount(sources.links.length)
   }
 
@@ -150,7 +154,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
     const needle = gtinQuery.trim().toLowerCase()
     if (!needle) return true
     return [card.gtin, card.name, card.full_name].some((value) => (value ?? '').toLowerCase().includes(needle))
-  }).slice(0, 30)
+  })
 
   const visibleBarcodes = new Set(selected.flatMap((product) => kizSizeRows(product).map((row) => row.barcode)))
   const desired = Object.entries(pending)
@@ -239,7 +243,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
               {linkPlan.errors.length > 0 && <div className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">{linkPlan.errors.map((problem) => <p key={problem}>{problem}</p>)}</div>}
               {!canManage && <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">Менять связку может владелец или администратор.</p>}
               {products.length === 0 && <p className="text-sm text-slate-500">В этом магазине нет товаров WB. Сначала обновите их на странице товаров.</p>}
-              {gtins.length === 0 && <p className="text-sm text-slate-500">Нет товаров Teksher. Сначала обновите товары КИЗ.</p>}
+              {gtins.length === 0 && <p className="text-sm text-slate-500">У этого магазина нет товаров Teksher.</p>}
             </div>
           )}
           <div className="flex min-h-0 flex-1">
