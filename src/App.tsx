@@ -1724,6 +1724,7 @@ function App() {
                     !isReadOnly
                   }
                   isAdmin={isAdmin}
+                  canManageLinks={isOwnerOrAdmin && !isReadOnly}
                 />
               ) : effectivePage === "reviews" ? (
                 <ReviewsPage

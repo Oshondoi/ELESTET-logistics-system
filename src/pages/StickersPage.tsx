@@ -110,9 +110,10 @@ interface StickersPageProps {
   canDelete?: boolean
   canImport?: boolean
   isAdmin?: boolean
+  canManageLinks?: boolean
 }
 
-export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activeAccountId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true, isAdmin }: StickersPageProps) => {
+export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activeAccountId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true, isAdmin, canManageLinks = false }: StickersPageProps) => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingSticker, setEditingSticker] = useState<StickerTemplate | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<StickerTemplate | null>(null)
@@ -879,7 +880,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
       </div>
 
       {mainTab === 'stickers2' && (
-        <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} />
+        <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} canManageLinks={canManageLinks} />
       )}
 
       {isAdmin && mainTab === 'stickers3' && <KizGuidePage />}

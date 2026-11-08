@@ -4,7 +4,10 @@ import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
+import { KizLinkCard } from '../components/kiz/KizLinkCard'
+import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
 import { TransgranPanel } from '../components/kiz/TransgranPanel'
+import { getStoreSelectorLabel } from '../lib/storeDisplay'
 import type { Store } from '../types'
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
@@ -112,6 +115,7 @@ interface KizPageProps {
   selectedStoreId: string
   onStoreChange: (id: string) => void
   isAdmin?: boolean
+  canManageLinks?: boolean
 }
 
 // ── Утилиты ───────────────────────────────────────────────────────────────────
@@ -307,12 +311,12 @@ function SearchableSelect({ value, options, placeholder = '— Выберите 
 
 // ── Основной компонент ────────────────────────────────────────────────────────
 
-export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps) => {
+export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks = false }: KizPageProps) => {
   const sortedStores = [...stores].sort((a, b) => {
     const aConn = a.teksher_login ? 0 : 1
     const bConn = b.teksher_login ? 0 : 1
     if (aConn !== bConn) return aConn - bConn
-    return a.name.localeCompare(b.name, 'ru')
+    return getStoreSelectorLabel(a).localeCompare(getStoreSelectorLabel(b), 'ru')
   })
   const activeStore = sortedStores.find((store) => store.id === selectedStoreId) ?? sortedStores[0]
 
@@ -356,14 +360,10 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
 
   // Emit modal
   const [emitModal, setEmitModal] = useState(false)
-  const [emitGtin, setEmitGtin] = useState('')
-  const [emitQty, setEmitQty] = useState('10')
+  const [emitSeed, setEmitSeed] = useState('')
   const [emitLoading, setEmitLoading] = useState(false)
   const [emitError, setEmitError] = useState<string | null>(null)
   const [emitSuccess, setEmitSuccess] = useState<string | null>(null)
-  const [emitProduct, setEmitProduct] = useState<EmissionProduct | null>(null)
-  const [emitProductLoading, setEmitProductLoading] = useState(false)
-  const [emitProductError, setEmitProductError] = useState<string | null>(null)
 
   // Create product modal
   const [createProductModal, setCreateProductModal] = useState(false)
@@ -480,31 +480,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
       void loadStats(activeStore.id)
     }
   }, [activeStore?.id, loadStats])
-
-  useEffect(() => {
-    if (!emitModal || !activeStore?.id) return
-    const gtin = emitGtin.trim()
-    let cancelled = false
-    setEmitProduct(null)
-    setEmitProductError(null)
-    setEmitProductLoading(false)
-    if (!/^\d{8,14}$/.test(gtin)) return
-    const timeoutId = window.setTimeout(async () => {
-      setEmitProductLoading(true)
-      const { data, error } = await invoke({ store_id: activeStore.id, action: 'resolve_emission_product', gtin })
-      if (cancelled) return
-      setEmitProductLoading(false)
-      if (error) {
-        setEmitProductError(error)
-        return
-      }
-      setEmitProduct((data?.product as unknown as EmissionProduct) ?? null)
-    }, 450)
-    return () => {
-      cancelled = true
-      window.clearTimeout(timeoutId)
-    }
-  }, [emitModal, emitGtin, activeStore?.id])
 
   // ── Загрузка товаров ─────────────────────────────────────────────────────
   const loadProducts = useCallback(async (page = 0, search = '') => {
@@ -632,20 +607,36 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
   }
 
   // ── Заказать КИЗы ────────────────────────────────────────────────────────
-  const handleEmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!activeStore?.id) return
+  const emitBusy = useRef(false)
+  const handleEmitLines = async (lines: KizOrderLine[]) => {
+    if (!activeStore?.id || emitBusy.current) return { ok: [] }
+    emitBusy.current = true
     setEmitLoading(true)
     setEmitError(null)
     setEmitSuccess(null)
-    const { data, error } = await invoke({ store_id: activeStore.id, action: 'emit', gtin: emitGtin, quantity: Number(emitQty) })
-    setEmitLoading(false)
-    if (error) { setEmitError(error); return }
-    const product = data?.product as unknown as EmissionProduct | undefined
-    const group = product?.productGroupName || product?.extension || emitProduct?.productGroupName || emitProduct?.extension
-    setEmitSuccess(`Операция создана${data?.operationId ? `. ID: ${String(data.operationId).slice(0, 16)}…` : ''}${group ? `. Группа: ${group}` : ''}`)
-    if (data?.mappingWarning) setEmitError(String(data.mappingWarning))
-    void loadStats(activeStore.id)
+    const ok: string[] = []
+    const ordered: string[] = []
+    const failed: string[] = []
+    try {
+      for (const line of lines) {
+        const { data, error } = await invoke({ store_id: activeStore.id, action: 'emit', gtin: line.gtin, quantity: line.quantity })
+        if (error) {
+          failed.push(`${line.label}: ${error}`)
+          continue
+        }
+        const product = data?.product as unknown as EmissionProduct | undefined
+        const group = product?.productGroupName || product?.extension
+        ok.push(line.gtin)
+        ordered.push(`${line.label}${group ? `, ${group}` : ''}`)
+      }
+      if (ordered.length > 0) setEmitSuccess(`Заказано: ${ordered.join('; ')}. Уже принятые строки повторно не отправляем.`)
+      if (failed.length > 0) setEmitError(failed.join(' '))
+      if (ok.length > 0) void loadStats(activeStore.id)
+      return { ok }
+    } finally {
+      emitBusy.current = false
+      setEmitLoading(false)
+    }
   }
 
   // ── Создать товар ─────────────────────────────────────────────────────────
@@ -782,6 +773,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
           value={activeStore?.id ?? ''}
           stores={sortedStores}
           onChange={onStoreChange}
+          groupConnected
         />
 
         {/* Статус */}
@@ -956,7 +948,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
             {isConnected && (
               <>
                 {/* Баланс */}
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-[1fr_1fr_max-content_1fr]">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                   <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                     <div className="mb-2 text-2xl">🎫</div>
                     <p className="text-xl font-bold text-slate-800">{stats.balance.toLocaleString('ru-RU')}</p>
@@ -999,6 +991,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                       </div>
                     )}
                   </div>
+                  {activeStore?.id && <KizLinkCard storeId={activeStore.id} canManage={canManageLinks} />}
                   {/* Пополнить баланс */}
                   <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm flex flex-col justify-between">
                     <div>
@@ -1024,7 +1017,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => { setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
+                    onClick={() => { setEmitSeed(''); setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
                     className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 transition-colors shadow-sm"
                   >
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12l7-7 7 7"/></svg>
@@ -1148,7 +1141,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                                 {p.status === 'PUBLISHED' && (
                                   <button
                                     type="button"
-                                    onClick={() => { setEmitGtin(p.gtin); setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
+                                    onClick={() => { setEmitSeed(p.gtin); setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
                                     className="text-xs font-medium text-emerald-600 hover:underline"
                                   >
                                     Заказать КИЗы
@@ -1280,7 +1273,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
+                      onClick={() => { setEmitSeed(''); setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
                       className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors"
                     >
                       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
@@ -1352,90 +1345,18 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange }: KizPageProps
         )}
       </div>
 
-      {/* ══ МОДАЛ: Заказать КИЗ-коды ══════════════════════════════════════════ */}
-      {emitModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setEmitModal(false)}>
-          <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-5 flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-800">Заказать КИЗ-коды</h3>
-              <button type="button" onClick={() => setEmitModal(false)} className="text-slate-400 hover:text-slate-600">
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-              </button>
-            </div>
-            {emitSuccess ? (
-              <div className="space-y-4">
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-                  ✅ {emitSuccess}
-                </div>
-                {emitError && (
-                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{emitError}</p>
-                )}
-                <p className="text-xs text-slate-500">Операция создана. Коды генерируются — обычно 30–60 сек на 100 кодов. Проверьте статус во вкладке «Операции».</p>
-                <button
-                  type="button"
-                  onClick={() => { setEmitModal(false); handleSetTab('operations'); void loadOperations() }}
-                  className="w-full rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
-                >
-                  Посмотреть операции →
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={(e) => void handleEmit(e)} className="space-y-4">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">GTIN товара</label>
-                  <input
-                    type="text"
-                    value={emitGtin}
-                    onChange={(e) => setEmitGtin(e.target.value.replace(/\D/g, ''))}
-                    placeholder="4600000000000"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    required
-                  />
-                  <p className="mt-1 text-xs text-slate-400">GTIN из вкладки «Товары». ELESTET сам определит товарную группу Teksher.</p>
-                  {emitProductLoading && (
-                    <p className="mt-2 flex items-center gap-1.5 text-xs text-blue-600">
-                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
-                      Проверяем товар и товарную группу…
-                    </p>
-                  )}
-                  {emitProduct && !emitProductLoading && (
-                    <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                      <div className="font-medium">{emitProduct.name || `GTIN ${emitProduct.gtin}`}</div>
-                      <div className="mt-0.5">Группа: {emitProduct.productGroupName || emitProduct.productGroupCode} · extension: {emitProduct.extension}</div>
-                    </div>
-                  )}
-                  {emitProductError && !emitProductLoading && (
-                    <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{emitProductError}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">Количество кодов</label>
-                  <input
-                    type="number"
-                    value={emitQty}
-                    onChange={(e) => setEmitQty(e.target.value)}
-                    min="1"
-                    max="5000"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    required
-                  />
-                  <p className="mt-1 text-xs text-slate-400">Макс. 5 000 за операцию. Спишется {emitQty || 0} единиц с баланса.</p>
-                </div>
-                {emitError && (
-                  <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">{emitError}</p>
-                )}
-                <div className="flex gap-2 pt-1">
-                  <button type="button" onClick={() => setEmitModal(false)} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
-                    Отмена
-                  </button>
-                  <button type="submit" disabled={emitLoading || emitProductLoading || !emitProduct} className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
-                    {emitLoading ? 'Заказываем…' : emitProductLoading ? 'Проверяем…' : 'Заказать'}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
+      {activeStore?.id && (
+        <KizOrderModal
+          open={emitModal}
+          storeId={activeStore.id}
+          initialGtin={emitSeed}
+          ordering={emitLoading}
+          error={emitError}
+          success={emitSuccess}
+          onClose={() => setEmitModal(false)}
+          onOrder={handleEmitLines}
+          onShowOperations={() => { setEmitModal(false); handleSetTab('operations'); void loadOperations() }}
+        />
       )}
 
       {/* ══ МОДАЛ: Регистрация нового товара ══════════════════════════════════ */}
