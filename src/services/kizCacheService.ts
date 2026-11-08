@@ -69,17 +69,26 @@ async function teksherInvoke(body: Record<string, unknown>): Promise<Record<stri
   return payload
 }
 
+export const TEKSHER_PAGE_SIZES = [10, 20, 50, 100] as const
+export type TeksherPageSize = (typeof TEKSHER_PAGE_SIZES)[number]
+
+export function teksherPageSize(value: number): TeksherPageSize {
+  return TEKSHER_PAGE_SIZES.includes(value as TeksherPageSize) ? value as TeksherPageSize : 20
+}
+
 async function syncList(
   storeId: string,
   action: 'sync_codes' | 'sync_operations',
+  size: TeksherPageSize,
   onPage?: (page: number, total: number | null) => void,
 ): Promise<void> {
   let startedAt = ''
-  for (let page = 0; page < 400; page++) {
+  for (let page = 0; page < 2000; page++) {
     const payload = await teksherInvoke({
       store_id: storeId,
       action,
       page,
+      size,
       started_at: startedAt || undefined,
     })
     startedAt = String(payload.started_at ?? startedAt)
@@ -90,12 +99,12 @@ async function syncList(
   throw new Error('Teksher отдал слишком длинный список. Нажмите «Обновить» ещё раз.')
 }
 
-export function syncCachedCodes(storeId: string, onPage?: (page: number, total: number | null) => void): Promise<void> {
-  return syncList(storeId, 'sync_codes', onPage)
+export function syncCachedCodes(storeId: string, size: TeksherPageSize, onPage?: (page: number, total: number | null) => void): Promise<void> {
+  return syncList(storeId, 'sync_codes', size, onPage)
 }
 
-export function syncCachedOperations(storeId: string, onPage?: (page: number, total: number | null) => void): Promise<void> {
-  return syncList(storeId, 'sync_operations', onPage)
+export function syncCachedOperations(storeId: string, size: TeksherPageSize, onPage?: (page: number, total: number | null) => void): Promise<void> {
+  return syncList(storeId, 'sync_operations', size, onPage)
 }
 
 export async function fetchCachedCodes(

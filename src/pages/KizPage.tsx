@@ -7,7 +7,7 @@ import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { KizLinkCard } from '../components/kiz/KizLinkCard'
 import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
 import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
-import { fetchCachedCodes, fetchCachedOperations, syncCachedCodes, syncCachedOperations, type CachedOperation } from '../services/kizCacheService'
+import { fetchCachedCodes, fetchCachedOperations, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
@@ -176,6 +176,22 @@ const NotConnectedPlug = ({ onGoToMain }: { onGoToMain: () => void }) => (
     </button>
   </div>
 )
+
+function PageSizeSelect({ value, disabled, onChange }: { value: TeksherPageSize; disabled?: boolean; onChange: (size: TeksherPageSize) => void }) {
+  return (
+    <label className="flex items-center gap-1 text-xs text-slate-500">
+      По
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(teksherPageSize(Number(event.target.value)))}
+        className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-50"
+      >
+        {TEKSHER_PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+      </select>
+    </label>
+  )
+}
 
 function ListPager({ page, pageSize, total, onPage }: { page: number; pageSize: number; total: number; onPage: (page: number) => void }) {
   if (total <= pageSize) return null
@@ -360,6 +376,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [operationsLoading, setOperationsLoading] = useState(false)
   const [operationsSyncing, setOperationsSyncing] = useState(false)
   const [listSyncNote, setListSyncNote] = useState('')
+  const [syncPageSize, setSyncPageSize] = useState<TeksherPageSize>(20)
 
   // Emit modal
   const [emitModal, setEmitModal] = useState(false)
@@ -553,11 +570,12 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
   const refreshCodes = async () => {
     if (!activeStore?.id || codesSyncing) return
+    const size = syncPageSize
     setCodesSyncing(true)
-    setListSyncNote('Забираем коды из Teksher…')
+    setListSyncNote(`Забираем коды из Teksher по ${size}…`)
     try {
-      await syncCachedCodes(activeStore.id, (page, total) => {
-        setListSyncNote(total ? `Коды: страница ${page}, всего ${total}` : `Коды: страница ${page}`)
+      await syncCachedCodes(activeStore.id, size, (page, total) => {
+        setListSyncNote(total ? `Коды: по ${size}, страница ${page}, всего ${total}` : `Коды: по ${size}, страница ${page}`)
       })
       setCodesPage(0)
       await loadCodes(0, codesStatusFilter)
@@ -572,11 +590,12 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
   const refreshOperations = async () => {
     if (!activeStore?.id || operationsSyncing) return
+    const size = syncPageSize
     setOperationsSyncing(true)
-    setListSyncNote('Забираем операции из Teksher…')
+    setListSyncNote(`Забираем операции из Teksher по ${size}…`)
     try {
-      await syncCachedOperations(activeStore.id, (page, total) => {
-        setListSyncNote(total ? `Операции: страница ${page}, всего ${total}` : `Операции: страница ${page}`)
+      await syncCachedOperations(activeStore.id, size, (page, total) => {
+        setListSyncNote(total ? `Операции: по ${size}, страница ${page}, всего ${total}` : `Операции: по ${size}, страница ${page}`)
       })
       setOperationsPage(0)
       await loadOperations(0)
@@ -888,6 +907,9 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
               <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${tnvedSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
               {tnvedSyncing ? 'Загрузка ТН ВЭД…' : 'Обновить ТН ВЭД'}
             </button>
+            {(tab === 'codes' || tab === 'operations') && (
+              <PageSizeSelect value={syncPageSize} disabled={codesSyncing || operationsSyncing} onChange={setSyncPageSize} />
+            )}
             <button
               type="button"
               onClick={() => void handleSync()}
@@ -1320,6 +1342,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     ))}
                   </div>
                   <span className="ml-auto text-xs text-slate-400">Всего: {codesTotal}</span>
+                  <PageSizeSelect value={syncPageSize} disabled={codesSyncing} onChange={setSyncPageSize} />
                   <button
                     type="button"
                     onClick={() => void refreshCodes()}
@@ -1380,7 +1403,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
               <>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs text-slate-500">Всего: {operationsTotal}</span>
-                  <div className="ml-auto flex gap-2">
+                  <div className="ml-auto flex items-center gap-2">
+                    <PageSizeSelect value={syncPageSize} disabled={operationsSyncing} onChange={setSyncPageSize} />
                     <button
                       type="button"
                       onClick={() => void refreshOperations()}

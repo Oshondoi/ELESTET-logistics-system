@@ -114,6 +114,10 @@ create index if not exists idx_teksher_codes_store_id   on public.teksher_codes(
 create index if not exists idx_teksher_codes_gtin       on public.teksher_codes(gtin);
 create index if not exists idx_teksher_codes_status     on public.teksher_codes(status);
 create index if not exists idx_teksher_codes_teksher_id on public.teksher_codes(teksher_id);
+-- The table may already exist from an earlier create without this key.
+-- Upsert of the codes list requires it.
+create unique index if not exists teksher_codes_store_id_teksher_id_key
+  on public.teksher_codes (store_id, teksher_id);
 
 
 -- ─────────────────────────────────────────────────────────────

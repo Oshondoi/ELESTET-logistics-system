@@ -716,18 +716,36 @@ Deno.serve(async (req: Request) => {
   }
 
   // One page of codes or operations is written here. The screen reads the table.
+  // The chosen size is sent to Teksher as-is: 10, 20, 50 or 100.
   // The last page drops rows that were not in this refresh.
   if (action === 'sync_codes' || action === 'sync_operations') {
     const page = Number(body.page ?? 0)
-    const size = 100
-    if (!Number.isInteger(page) || page < 0 || page > 400) return err('Некорректная страница')
+    const requested = Number(body.size)
+    const size = [10, 20, 50, 100].includes(requested) ? requested : 20
+    const batch = 1
+    if (!Number.isInteger(page) || page < 0 || page > 2000) return err('Некорректная страница')
     const startedAt = syncStamp(body.started_at)
-    const params = new URLSearchParams({ page: String(page), size: String(size) })
     const path = action === 'sync_codes' ? 'marking_codes/filter' : 'operations/filter'
-    const response = await fetch(`${BASE}/${path}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
-    if (!response.ok) return err(`Teksher не отдал список (${response.status})`)
-    const payload = await response.json() as JsonObject
-    const items = arrayFromResponse(payload)
+    let items: JsonObject[] = []
+    let payload: JsonObject = {}
+    let finished = false
+    for (let step = 0; step < batch; step++) {
+      const params = new URLSearchParams({ page: String(page * batch + step), size: String(size) })
+      let response: Response | null = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        response = await fetch(`${BASE}/${path}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+        if (response.status !== 502 && response.status !== 503 && response.status !== 504) break
+        await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)))
+      }
+      if (!response?.ok) return err(`Teksher не отдал список (${response?.status ?? 0})`)
+      payload = await response.json() as JsonObject
+      const pageItems = arrayFromResponse(payload)
+      items = items.concat(pageItems)
+      if (pageLast(payload, pageItems.length, size).last) {
+        finished = true
+        break
+      }
+    }
     const rows = items
       .map((item) => action === 'sync_codes' ? codeRow(store_id, item, startedAt) : operationRow(store_id, item, startedAt))
       .filter((row): row is JsonObject => Boolean(row))
@@ -745,11 +763,12 @@ Deno.serve(async (req: Request) => {
       if (writeError) return err(`Не удалось записать список в базу: ${writeError.message}`)
     }
     const info = pageLast(payload, items.length, size)
-    if (info.last) {
+    const last = finished || info.last
+    if (last) {
       const { error: dropError } = await svc.from(table).delete().eq('store_id', store_id).lt('synced_at', startedAt)
       if (dropError) return err(`Список записан, но старые строки не убрались: ${dropError.message}`)
     }
-    return ok({ page, started_at: startedAt, count: unique.length, total: info.total, last: info.last })
+    return ok({ page, started_at: startedAt, count: unique.length, total: info.total, last })
   }
 
   // Codes of one operation. Used for a print file. Does not register application.
