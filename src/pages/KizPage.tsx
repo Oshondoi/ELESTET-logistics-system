@@ -1432,7 +1432,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                   <EmptyState text="В базе нет операций" sub="Нажмите «Обновить», чтобы забрать операции из Teksher. Открытие вкладки читает только базу." />
                 ) : (
                   <div className="w-full overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
-                    <table className="w-full min-w-[1100px] text-sm">
+                    <table className="w-full min-w-[860px] text-sm">
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50">
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">#</th>
