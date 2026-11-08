@@ -21,8 +21,10 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
   const [links, setLinks] = useState<KizBarcodeLink[]>([])
   const [gtins, setGtins] = useState<KizGtinCard[]>([])
   const [query, setQuery] = useState('')
-  const [picked, setPicked] = useState<{ barcode: string; label: string } | null>(null)
+  const [listOpen, setListOpen] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [gtinQuery, setGtinQuery] = useState('')
+  const [openGtinBarcode, setOpenGtinBarcode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -44,35 +46,35 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
   useEffect(() => {
     if (!open) return
     setError(null)
-    setPicked(null)
     setQuery('')
+    setListOpen(false)
+    setSelectedIds([])
     setGtinQuery('')
+    setOpenGtinBarcode(null)
     void reload().catch((loadFailure: unknown) => {
       setError(loadFailure instanceof Error ? loadFailure.message : 'Не удалось открыть связки.')
     })
   }, [open, storeId])
 
-  const sizes = useMemo(() => products.flatMap((product) => kizSizeRows(product).map((row) => ({
-    product,
-    row,
-    linked: links.find((link) => link.wb_barcode === row.barcode)?.gtin ?? null,
-  }))), [products, links])
-  const foundSizes = sizes.filter((item) => item.row.barcode !== '—' && kizProductMatches(item.product, query)).slice(0, 30)
-  const foundGtins = gtins.filter((card) => {
+  const linkByBarcode = useMemo(() => new Map(links.map((link) => [link.wb_barcode, link.gtin])), [links])
+  const found = products.filter((product) => !selectedIds.includes(product.id) && kizProductMatches(product, query)).slice(0, 40)
+  const selected = selectedIds
+    .map((id) => products.find((product) => product.id === id))
+    .filter((product): product is KizWbProduct => Boolean(product))
+  const gtinChoices = gtins.filter((card) => {
     const needle = gtinQuery.trim().toLowerCase()
     if (!needle) return true
     return [card.gtin, card.name, card.full_name].some((value) => (value ?? '').toLowerCase().includes(needle))
   }).slice(0, 30)
-  const linkedRows = sizes.filter((item) => item.linked)
 
-  async function save(gtin: string) {
-    if (!picked || saving) return
+  async function save(barcode: string, gtin: string) {
+    if (!canManage || saving || barcode === '—') return
     setSaving(true)
     setError(null)
     try {
-      await saveKizBarcodeLink(storeId, picked.barcode, gtin)
-      setPicked(null)
+      await saveKizBarcodeLink(storeId, barcode, gtin)
       setGtinQuery('')
+      setOpenGtinBarcode(null)
       await reload()
     } catch (saveFailure: unknown) {
       setError(saveFailure instanceof Error ? saveFailure.message : 'Не удалось сохранить связку.')
@@ -109,90 +111,138 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
       <Modal
         open
         tall
+        fill
         onClose={() => setOpen(false)}
         title="Связка баркода и GTIN"
         footer={<button type="button" onClick={() => setOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Закрыть</button>}
       >
-        <div className="space-y-4">
-          {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-          {!canManage && <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">Менять связку может владелец или администратор.</p>}
-          {products.length === 0 && <p className="text-sm text-slate-500">В этом магазине нет товаров WB. Сначала обновите их на странице товаров.</p>}
-          {gtins.length === 0 && <p className="text-sm text-slate-500">Нет товаров Teksher. Сначала обновите товары КИЗ.</p>}
-          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Размер на Wildberries
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Артикул, баркод или название"
-              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
-            />
-          </label>
-          <div className="max-h-[28vh] overflow-y-auto rounded-xl border border-slate-200">
-            {foundSizes.map((item) => (
-              <button
-                key={item.row.rowKey}
-                type="button"
-                disabled={!canManage}
-                onClick={() => setPicked({ barcode: item.row.barcode, label: `${item.product.name || 'Товар'} · ${item.row.techSize} · ${item.row.barcode}` })}
-                className="flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50 disabled:hover:bg-white"
-              >
-                <PhotoThumb url={kizPhotoUrl(item.product.photos)} previewZIndex={80} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm text-slate-800">{item.product.name || 'Без названия'} · {item.row.techSize}</span>
-                  <span className="block font-mono text-xs text-slate-400">{item.row.barcode}</span>
-                </span>
-                <span className="font-mono text-xs text-emerald-700">{item.linked || 'нет GTIN'}</span>
-              </button>
-            ))}
-          </div>
-          {picked && (
-            <div className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-              Выбран размер: {picked.label}
+        <div className="flex min-h-0 flex-1 flex-col">
+          {(error || !canManage || products.length === 0 || gtins.length === 0) && (
+            <div className="shrink-0 space-y-2 border-b border-slate-100 px-4 py-3">
+              {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+              {!canManage && <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">Менять связку может владелец или администратор.</p>}
+              {products.length === 0 && <p className="text-sm text-slate-500">В этом магазине нет товаров WB. Сначала обновите их на странице товаров.</p>}
+              {gtins.length === 0 && <p className="text-sm text-slate-500">Нет товаров Teksher. Сначала обновите товары КИЗ.</p>}
             </div>
           )}
-          <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-            GTIN из Teksher
-            <input
-              value={gtinQuery}
-              onChange={(event) => setGtinQuery(event.target.value)}
-              placeholder="GTIN или название карточки"
-              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
-            />
-          </label>
-          <div className="max-h-[28vh] overflow-y-auto rounded-xl border border-slate-200">
-            {foundGtins.map((card) => (
-              <button
-                key={card.gtin}
-                type="button"
-                disabled={!canManage || !picked || saving}
-                onClick={() => void save(card.gtin)}
-                className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50 disabled:opacity-60"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-sm text-slate-800">{card.full_name || card.name || 'Без названия'}</span>
-                  <span className="block font-mono text-xs text-slate-400">{card.gtin}</span>
-                </span>
-                <span className="text-xs font-semibold text-emerald-700">{saving ? '…' : 'Связать'}</span>
-              </button>
-            ))}
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Уже связано</p>
-            <div className="mt-2 space-y-2">
-              {linkedRows.length === 0 && <p className="text-sm text-slate-400">Связок пока нет.</p>}
-              {linkedRows.map((item) => (
-                <div key={item.row.rowKey} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 px-3 py-2">
-                  <span className="min-w-0 text-sm">
-                    <span className="block truncate">{item.product.name || 'Товар'} · {item.row.techSize}</span>
-                    <span className="block font-mono text-xs text-slate-400">{item.row.barcode} → {item.linked}</span>
-                  </span>
-                  {canManage && (
-                    <button type="button" disabled={saving} onClick={() => void remove(item.row.barcode)} className="text-xs font-semibold text-red-600 hover:underline disabled:opacity-50">
-                      Снять
+          <div className="flex min-h-0 flex-1">
+            <div className="flex w-[40%] min-w-0 flex-col overflow-hidden border-r border-slate-200 p-4">
+              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Артикул</label>
+              <input
+                value={query}
+                onFocus={() => setListOpen(true)}
+                onChange={(event) => { setQuery(event.target.value); setListOpen(true) }}
+                placeholder="Артикул WB, артикул продавца, баркод или название"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
+              />
+              {listOpen && (
+                <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-white">
+                  {found.length === 0 && <p className="px-3 py-2 text-sm text-slate-400">Ничего не найдено</p>}
+                  {found.map((product) => (
+                    <button
+                      key={product.id}
+                      type="button"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setSelectedIds((current) => [...current, product.id])
+                        setQuery('')
+                        setListOpen(false)
+                      }}
+                      className="flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50"
+                    >
+                      <PhotoThumb url={kizPhotoUrl(product.photos)} previewZIndex={80} />
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-slate-800">{product.name || 'Без названия'}</span>
+                        <span className="block truncate text-xs text-slate-400">{product.nm_id} · {product.vendor_code || 'без артикула продавца'}</span>
+                      </span>
                     </button>
-                  )}
+                  ))}
                 </div>
-              ))}
+              )}
+            </div>
+            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
+              {selected.length === 0 && <p className="text-sm text-slate-400">Выберите артикул слева. Размеры и GTIN появятся здесь.</p>}
+              <div className="space-y-3">
+                {selected.map((product) => {
+                  const rows = kizSizeRows(product)
+                  return (
+                    <section key={product.id} className="rounded-2xl border border-slate-200 p-3">
+                      <div className="flex items-start gap-3">
+                        <PhotoThumb url={kizPhotoUrl(product.photos)} className="h-14 w-11 rounded-lg" previewZIndex={80} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-slate-800">{product.name || 'Без названия'}</p>
+                          <p className="truncate text-xs text-slate-400">{product.nm_id} · {product.vendor_code || '—'} · {product.color || 'цвет не указан'}</p>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label="Убрать товар"
+                          onClick={() => setSelectedIds((current) => current.filter((id) => id !== product.id))}
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                        </button>
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {rows.map((row) => {
+                          const linked = linkByBarcode.get(row.barcode) ?? null
+                          const choosing = openGtinBarcode === row.barcode
+                          return (
+                            <div key={row.rowKey} className="flex items-start gap-3">
+                              <div className="min-w-0 flex-1 pt-2 text-sm">
+                                <span className="font-medium text-slate-700">{row.techSize}</span>
+                                <span className="ml-2 font-mono text-xs text-slate-400">{row.barcode}</span>
+                              </div>
+                              <div className="w-72 shrink-0">
+                                {row.barcode === '—' ? (
+                                  <p className="pt-2 text-xs text-amber-700">Нет баркода</p>
+                                ) : linked ? (
+                                  <div className="flex items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                                    <span className="truncate font-mono text-xs text-emerald-800">{linked}</span>
+                                    {canManage && (
+                                      <button type="button" disabled={saving} onClick={() => void remove(row.barcode)} className="shrink-0 text-xs font-semibold text-red-600 hover:underline disabled:opacity-50">
+                                        Снять
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <>
+                                    <input
+                                      value={choosing ? gtinQuery : ''}
+                                      disabled={!canManage || saving}
+                                      onFocus={() => { setOpenGtinBarcode(row.barcode); setGtinQuery('') }}
+                                      onChange={(event) => { setOpenGtinBarcode(row.barcode); setGtinQuery(event.target.value) }}
+                                      placeholder="Выберите GTIN"
+                                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none placeholder:text-slate-300 focus:border-emerald-400 disabled:bg-slate-50"
+                                    />
+                                    {choosing && (
+                                      <div className="mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white">
+                                        {gtinChoices.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">GTIN не найден</p>}
+                                        {gtinChoices.map((card) => (
+                                          <button
+                                            key={card.gtin}
+                                            type="button"
+                                            disabled={saving}
+                                            onMouseDown={(event) => event.preventDefault()}
+                                            onClick={() => void save(row.barcode, card.gtin)}
+                                            className="flex w-full flex-col border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50 disabled:opacity-50"
+                                          >
+                                            <span className="truncate text-sm text-slate-800">{card.full_name || card.name || 'Без названия'}</span>
+                                            <span className="font-mono text-xs text-slate-400">{card.gtin}</span>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  )
+                })}
+              </div>
             </div>
           </div>
         </div>
