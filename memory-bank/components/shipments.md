@@ -1,5 +1,10 @@
 # Shipments Component Area
 
+## 07.11.2026 — даты и журнал
+
+- `LogisticsDateText`: ручная дата (`date_manual`) — оранжевая плашка, дата статуса и дата WB — синяя. WB-даты только для чтения.
+- Журнал открывается кнопкой «Журнал». Запись идёт из `useAppData` через `logisticsActivityHelpers` после успешного сохранения. Прямые правки в БД в журнал не попадают.
+
 ## Purpose
 Handles the main business workflow: viewing and creating shipments.
 

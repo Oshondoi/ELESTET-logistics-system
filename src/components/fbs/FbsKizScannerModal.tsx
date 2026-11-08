@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import JsBarcode from 'jsbarcode'
+import { playScannerSound as signal } from '../../lib/scannerSound'
 import { QRCodeCanvas } from 'qrcode.react'
 import { supabase } from '../../lib/supabase'
 import { ensureAuthenticatedSession } from '../../lib/authSession'
@@ -359,40 +360,6 @@ function pairErrorText(error: string, orderId: string): string {
   const httpStatus = message.match(/\bWB\s+(\d{3})\b/i)?.[1]
   if (httpStatus) return `WB отклонил КИЗ заказа №${orderId} (HTTP ${httpStatus}).`
   return message
-}
-
-async function signal(success: boolean) {
-  let context: AudioContext | undefined
-  try {
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
-    context = new AudioContextClass() as AudioContext
-    if (context.state === 'suspended') await context.resume()
-    const oscillator = context.createOscillator()
-    const gain = context.createGain()
-    const start = context.currentTime
-    const duration = success ? 0.25 : 0.45
-    oscillator.type = 'triangle'
-    oscillator.frequency.value = success ? 1200 : 440
-    // Warehouse signal: strong level and audible harmonics, below full scale.
-    // Keep fades so increased volume does not introduce sharp clicks.
-    gain.gain.setValueAtTime(0, start)
-    gain.gain.linearRampToValueAtTime(0.9, start + 0.008)
-    gain.gain.setValueAtTime(0.9, start + duration - 0.02)
-    gain.gain.linearRampToValueAtTime(0, start + duration)
-    oscillator.connect(gain)
-    gain.connect(context.destination)
-    const activeContext = context
-    oscillator.onended = () => {
-      oscillator.disconnect()
-      gain.disconnect()
-      void activeContext.close().catch(() => undefined)
-    }
-    oscillator.start(start)
-    oscillator.stop(start + duration)
-  } catch {
-    if (context) void context.close().catch(() => undefined)
-    // Цвет и текст остаются обязательной обратной связью, даже если звук запрещён браузером.
-  }
 }
 
 export function FbsKizScannerModal({ accountId, storeId, storeName, orders, onClose, onKizStatesUpdated }: Props) {

@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module">
+import React from 'react';import{createRoot}from'react-dom/client';
+import {AdminTestsPage} from '/src/pages/AdminTestsPage.tsx';
+import {Topbar} from '/src/components/layout/Topbar.tsx';
+import '/src/styles.css';
+const admin=!location.search.includes('client');
+createRoot(document.getElementById('root')).render(React.createElement(React.Fragment,null,
+ React.createElement(Topbar,{title:'Тесты',userName:'Admin',userEmail:'',onHomeClick:()=>{},onTestsClick:admin?()=>{}:undefined,onFinanceReportClick:()=>{},onProfileClick:()=>{},onSignOut:()=>{}}),
+ React.createElement(AdminTestsPage)));
+</script></body></html>

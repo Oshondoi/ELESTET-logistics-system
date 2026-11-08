@@ -48,6 +48,7 @@ import { FulfillmentPage } from "./pages/FulfillmentPage";
 import { ProductsPage } from "./pages/ProductsPage";
 import { RolesPage } from "./pages/RolesPage";
 import { ShipmentsPage } from "./pages/ShipmentsPage";
+import { WorkshopCalendarPage } from "./pages/WorkshopCalendarPage";
 import { StoresPage } from "./pages/StoresPage";
 import { DirectoriesPage } from "./pages/DirectoriesPage";
 import { StickersPage } from "./pages/StickersPage";
@@ -115,6 +116,7 @@ type PageKey =
   | "home"
   | "fulfillment"
   | "shipments"
+  | "calendar"
   | "wms"
   | "fbs"
   | "stores"
@@ -137,6 +139,7 @@ const PAGE_ROUTES: Record<PageKey, string> = {
   home: "/",
   fulfillment: "/fulfillment",
   shipments: "/shipments",
+  calendar: "/calendar",
   wms: "/wms",
   fbs: "/fbs",
   stores: "/stores",
@@ -359,6 +362,7 @@ const pageTitles: Record<PageKey, string> = {
   home: "Главная",
   fulfillment: "Фулфилмент",
   shipments: "Логистика",
+  calendar: "Календарь",
   wms: "Склад",
   fbs: "FBS Заказы",
   stores: "Магазины",
@@ -734,6 +738,7 @@ function App() {
     home: null,
     fulfillment: "fulfillment_view",
     shipments: "shipments_view",
+    calendar: null,
     stores: "stores_view",
     products: "stores_view",
     directories: "directories_view",
@@ -1494,6 +1499,8 @@ function App() {
                   hasAccount={accounts.length > 0}
                   onCreateCompany={() => setAccountModalOpen(true)}
                 />
+              ) : effectivePage === "calendar" ? (
+                <WorkshopCalendarPage accountId={activeAccount?.id ?? ""} canManage={!isReadOnly} />
               ) : effectivePage === "fulfillment" ? (
                 isPageGated("fulfillment") ? (
                   <PlanGatewall
