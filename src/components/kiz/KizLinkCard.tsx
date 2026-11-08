@@ -211,7 +211,8 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
         footer={(
           <div className="flex items-center justify-between gap-3">
             {canManage ? (
-              <button type="button" onClick={() => setExcelOpen(true)} className="flex h-10 w-10 items-center justify-center rounded-xl text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700" title="Действия с Excel" aria-label="Действия с Excel">
+              <button type="button" onClick={() => setExcelOpen(true)} className="flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700">
+                Действия с Excel
                 <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                   <path d="M14 2v6h6" />
