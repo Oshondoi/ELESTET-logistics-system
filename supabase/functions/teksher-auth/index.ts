@@ -113,6 +113,82 @@ function firstText(...values: unknown[]): string {
   return ''
 }
 
+function asTime(value: unknown): string | null {
+  if (value == null || value === '') return null
+  const date = new Date(typeof value === 'number' ? value : String(value))
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function asInt(value: unknown): number | null {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.trunc(number) : null
+}
+
+function codeOf(value: unknown): string | null {
+  if (value && typeof value === 'object') {
+    const object = asObject(value)
+    return firstText(object.code, object.id, object.name) || null
+  }
+  return firstText(value) || null
+}
+
+function pageLast(payload: JsonObject, count: number, size: number): { total: number | null; last: boolean } {
+  const page = asObject(payload.page)
+  const total = Number(page.totalElements ?? payload.totalElements)
+  return {
+    total: Number.isFinite(total) ? total : null,
+    last: page.last === true || payload.last === true || count < size,
+  }
+}
+
+function syncStamp(value: unknown): string {
+  const text = String(value ?? '')
+  return /^\d{4}-\d{2}-\d{2}T/.test(text) ? text : new Date().toISOString()
+}
+
+function codeRow(storeId: string, item: JsonObject, syncedAt: string): JsonObject | null {
+  const teksherId = firstText(item.id, item.markingCodeId, item.code)
+  if (!teksherId) return null
+  return {
+    store_id: storeId,
+    teksher_id: teksherId,
+    code: firstText(item.code, item.markingCode) || null,
+    barcode: firstText(item.barcode) || null,
+    gtin: firstText(item.gtin) || null,
+    status: codeOf(item.status ?? item.state),
+    serial_number: firstText(item.serialNumber, item.serial) || null,
+    issue_date: asTime(item.issueDate),
+    created_date: asTime(item.createdAt ?? item.createdDate),
+    emission_date: asTime(item.emissionDate),
+    synced_at: syncedAt,
+  }
+}
+
+function operationRow(storeId: string, item: JsonObject, syncedAt: string): JsonObject | null {
+  const operationId = firstText(item.operationId, item.id)
+  if (!operationId) return null
+  const product = asObject(item.product)
+  const group = asObject(item.productGroupMarkingDto ?? item.productGroupMarking)
+  return {
+    store_id: storeId,
+    operation_id: operationId,
+    operation_type: codeOf(item.operationType ?? item.type),
+    type: codeOf(item.type),
+    status: codeOf(item.status),
+    kms_count: asInt(item.kmsCount ?? item.codesCount ?? item.quantity),
+    codes_count: asInt(item.codesCount),
+    quantity: asInt(item.quantity),
+    gtin: firstText(product.gtin, item.gtin) || null,
+    created_at_teksher: asTime(item.createdAt ?? item.createdDate),
+    created_date: asTime(item.createdDate),
+    operation_date: asTime(item.date ?? item.operationDate ?? item.endAt),
+    product_group_code: firstText(group.code, group.alias, item.productGroupCode) || null,
+    product_group_marking: Object.keys(group).length > 0 ? group : null,
+    product: Object.keys(product).length > 0 ? product : null,
+    synced_at: syncedAt,
+  }
+}
+
 function isExtensionAlias(value: string): boolean {
   return /^[a-z][a-z0-9_-]{0,63}$/i.test(value)
 }
@@ -636,6 +712,75 @@ Deno.serve(async (req: Request) => {
     return ok({
       items: rawItems.map((op) => ({ ...op, id: op.operationId ?? op.id, gtin: (op.product as Record<string, unknown>)?.gtin ?? op.gtin })),
       total: (d.page as Record<string, unknown>)?.totalElements ?? d.totalElements ?? 0,
+    })
+  }
+
+  // One page of codes or operations is written here. The screen reads the table.
+  // The last page drops rows that were not in this refresh.
+  if (action === 'sync_codes' || action === 'sync_operations') {
+    const page = Number(body.page ?? 0)
+    const size = 100
+    if (!Number.isInteger(page) || page < 0 || page > 400) return err('Некорректная страница')
+    const startedAt = syncStamp(body.started_at)
+    const params = new URLSearchParams({ page: String(page), size: String(size) })
+    const path = action === 'sync_codes' ? 'marking_codes/filter' : 'operations/filter'
+    const response = await fetch(`${BASE}/${path}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!response.ok) return err(`Teksher не отдал список (${response.status})`)
+    const payload = await response.json() as JsonObject
+    const items = arrayFromResponse(payload)
+    const rows = items
+      .map((item) => action === 'sync_codes' ? codeRow(store_id, item, startedAt) : operationRow(store_id, item, startedAt))
+      .filter((row): row is JsonObject => Boolean(row))
+    const seen = new Set<string>()
+    const unique = rows.filter((row) => {
+      const key = String(action === 'sync_codes' ? row.teksher_id : row.operation_id)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    const table = action === 'sync_codes' ? 'teksher_codes' : 'teksher_operations'
+    const conflict = action === 'sync_codes' ? 'store_id,teksher_id' : 'store_id,operation_id'
+    if (unique.length > 0) {
+      const { error: writeError } = await svc.from(table).upsert(unique, { onConflict: conflict })
+      if (writeError) return err(`Не удалось записать список в базу: ${writeError.message}`)
+    }
+    const info = pageLast(payload, items.length, size)
+    if (info.last) {
+      const { error: dropError } = await svc.from(table).delete().eq('store_id', store_id).lt('synced_at', startedAt)
+      if (dropError) return err(`Список записан, но старые строки не убрались: ${dropError.message}`)
+    }
+    return ok({ page, started_at: startedAt, count: unique.length, total: info.total, last: info.last })
+  }
+
+  // Codes of one operation. Used for a print file. Does not register application.
+  if (action === 'operation_codes') {
+    const operationId = firstText(body.operationId, body.orderId)
+    if (!operationId) return err('operationId обязателен')
+    const size = 100
+    const rows: JsonObject[] = []
+    for (let page = 0; page < 50; page++) {
+      const params = new URLSearchParams({ page: String(page), size: String(size), operationId })
+      const response = await fetch(`${BASE}/marking_codes/filter?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      if (!response.ok) {
+        if (page === 0) return err(`Teksher не отдал коды операции (${response.status})`)
+        break
+      }
+      const payload = await response.json() as JsonObject
+      const items = arrayFromResponse(payload)
+      const foreign = items.find((item) => {
+        const rowOperation = firstText(item.operationId, asObject(item.operation).operationId, asObject(item.operation).id)
+        return rowOperation && rowOperation !== operationId
+      })
+      if (foreign) return err('Teksher вернул коды другой операции. Печать остановлена.')
+      rows.push(...items)
+      if (pageLast(payload, items.length, size).last) break
+    }
+    return ok({
+      items: rows.map((item) => ({
+        code: firstText(item.code, item.markingCode),
+        gtin: firstText(item.gtin),
+        serial: firstText(item.serialNumber, item.serial),
+      })).filter((item) => item.code),
     })
   }
 

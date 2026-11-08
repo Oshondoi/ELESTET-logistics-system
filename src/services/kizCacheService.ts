@@ -1,0 +1,210 @@
+import { supabase } from '../lib/supabase'
+
+export type CachedCode = {
+  id: string
+  code?: string
+  barcode?: string
+  gtin?: string
+  status?: string
+  issueDate?: string
+  createdDate?: string
+  emissionDate?: string
+}
+
+export type CachedOperation = {
+  id: string
+  operationId: string
+  operationType?: string
+  type?: string
+  status?: string
+  kmsCount?: number
+  codesCount?: number
+  gtin?: string
+  createdAt?: string
+  createdDate?: string
+  product: Record<string, unknown> | null
+}
+
+export type PrintCode = {
+  code: string
+  gtin: string
+  serial: string
+}
+
+export type LabelGoods = {
+  name: string
+  article: string
+  color: string
+  size: string
+}
+
+const PAGE = 20
+
+function db() {
+  if (!supabase) throw new Error('База не настроена. Обновите страницу.')
+  return supabase as any
+}
+
+async function teksherInvoke(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const client = db()
+  const { data: { session } } = await client.auth.getSession()
+  if (!session) throw new Error('Сессия истекла. Войдите снова.')
+  const { data, error } = await client.functions.invoke('teksher-auth', {
+    body,
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  })
+  if (error) {
+    let message = error.message || 'Не удалось обратиться к Teksher'
+    const context = (error as { context?: Response }).context
+    if (context) {
+      try {
+        const payload = await context.clone().json() as { error?: string }
+        if (payload?.error) message = payload.error
+      } catch { /* the function returned a non-JSON body */ }
+    }
+    throw new Error(message)
+  }
+  const payload = (data ?? {}) as Record<string, unknown>
+  if (typeof payload.error === 'string' && payload.error) throw new Error(payload.error)
+  return payload
+}
+
+async function syncList(
+  storeId: string,
+  action: 'sync_codes' | 'sync_operations',
+  onPage?: (page: number, total: number | null) => void,
+): Promise<void> {
+  let startedAt = ''
+  for (let page = 0; page < 400; page++) {
+    const payload = await teksherInvoke({
+      store_id: storeId,
+      action,
+      page,
+      started_at: startedAt || undefined,
+    })
+    startedAt = String(payload.started_at ?? startedAt)
+    const total = typeof payload.total === 'number' ? payload.total : null
+    onPage?.(page + 1, total)
+    if (payload.last === true) return
+  }
+  throw new Error('Teksher отдал слишком длинный список. Нажмите «Обновить» ещё раз.')
+}
+
+export function syncCachedCodes(storeId: string, onPage?: (page: number, total: number | null) => void): Promise<void> {
+  return syncList(storeId, 'sync_codes', onPage)
+}
+
+export function syncCachedOperations(storeId: string, onPage?: (page: number, total: number | null) => void): Promise<void> {
+  return syncList(storeId, 'sync_operations', onPage)
+}
+
+export async function fetchCachedCodes(
+  storeId: string,
+  page: number,
+  status: string,
+): Promise<{ items: CachedCode[]; total: number }> {
+  const client = db()
+  let query = client.from('teksher_codes')
+    .select('teksher_id, code, barcode, gtin, status, issue_date, created_date, emission_date', { count: 'exact' })
+    .eq('store_id', storeId)
+    .order('created_date', { ascending: false, nullsFirst: false })
+  if (status) query = query.eq('status', status)
+  const from = page * PAGE
+  const { data, error, count } = await query.range(from, from + PAGE - 1)
+  if (error) throw new Error('Не удалось прочитать коды из базы.')
+  const items = ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.teksher_id ?? ''),
+    code: (row.code as string | null) ?? undefined,
+    barcode: (row.barcode as string | null) ?? undefined,
+    gtin: (row.gtin as string | null) ?? undefined,
+    status: (row.status as string | null) ?? undefined,
+    issueDate: (row.issue_date as string | null) ?? undefined,
+    createdDate: (row.created_date as string | null) ?? undefined,
+    emissionDate: (row.emission_date as string | null) ?? undefined,
+  }))
+  return { items, total: count ?? items.length }
+}
+
+export async function fetchCachedOperations(
+  storeId: string,
+  page: number,
+): Promise<{ items: CachedOperation[]; total: number }> {
+  const client = db()
+  const from = page * PAGE
+  const { data, error, count } = await client.from('teksher_operations')
+    .select('operation_id, operation_type, type, status, kms_count, codes_count, gtin, created_at_teksher, created_date, product', { count: 'exact' })
+    .eq('store_id', storeId)
+    .order('created_at_teksher', { ascending: false, nullsFirst: false })
+    .range(from, from + PAGE - 1)
+  if (error) throw new Error('Не удалось прочитать операции из базы.')
+  const items = ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.operation_id ?? ''),
+    operationId: String(row.operation_id ?? ''),
+    operationType: (row.operation_type as string | null) ?? undefined,
+    type: (row.type as string | null) ?? undefined,
+    status: (row.status as string | null) ?? undefined,
+    kmsCount: row.kms_count == null ? undefined : Number(row.kms_count),
+    codesCount: row.codes_count == null ? undefined : Number(row.codes_count),
+    gtin: (row.gtin as string | null) ?? undefined,
+    createdAt: (row.created_at_teksher as string | null) ?? undefined,
+    createdDate: (row.created_date as string | null) ?? undefined,
+    product: (row.product as Record<string, unknown> | null) ?? null,
+  }))
+  return { items, total: count ?? items.length }
+}
+
+export async function fetchOperationCodes(storeId: string, operationId: string): Promise<PrintCode[]> {
+  const payload = await teksherInvoke({ store_id: storeId, action: 'operation_codes', operationId })
+  const items = Array.isArray(payload.items) ? payload.items : []
+  return items
+    .map((item) => {
+      const row = item as Record<string, unknown>
+      return {
+        code: String(row.code ?? ''),
+        gtin: String(row.gtin ?? ''),
+        serial: String(row.serial ?? ''),
+      }
+    })
+    .filter((item) => item.code)
+}
+
+export async function fetchLabelGoods(storeId: string, gtin: string): Promise<LabelGoods> {
+  const empty = { name: '', article: '', color: '', size: '' }
+  if (!gtin) return empty
+  const client = db()
+  const { data: links, error: linkError } = await client.from('fulfillment_product_gtin_links')
+    .select('wb_barcode')
+    .eq('store_id', storeId)
+    .eq('gtin', gtin)
+    .eq('active', true)
+    .limit(1)
+  if (linkError) return empty
+  const barcode = (links?.[0] as { wb_barcode?: string } | undefined)?.wb_barcode
+  if (!barcode) return empty
+  const { data, error } = await client.from('products')
+    .select('vendor_code, name, color, sizes, barcodes')
+    .eq('store_id', storeId)
+  if (error) return empty
+  const products = (data ?? []) as Array<{
+    vendor_code?: string | null
+    name?: string | null
+    color?: string | null
+    barcodes?: string[] | null
+    sizes?: Array<{ techSize?: string; wbSize?: string; skus?: string[] }> | null
+  }>
+  const product = products.find((item) => {
+    if (item.barcodes?.includes(barcode)) return true
+    return (item.sizes ?? []).some((size) => size.skus?.includes(barcode))
+  })
+  if (!product) return empty
+  const size = (product.sizes ?? []).find((item) => item.skus?.includes(barcode))
+  const tech = size?.techSize?.trim() ?? ''
+  const wb = size?.wbSize?.trim() ?? ''
+  const sizeText = tech && wb && tech !== wb ? `${tech} (${wb})` : tech || wb
+  return {
+    name: product.name?.trim() ?? '',
+    article: product.vendor_code?.trim() ?? '',
+    color: product.color?.trim() ?? '',
+    size: sizeText,
+  }
+}

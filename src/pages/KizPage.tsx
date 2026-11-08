@@ -5,6 +5,9 @@ import { supabase } from '../lib/supabase'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { KizLinkCard } from '../components/kiz/KizLinkCard'
+import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
+import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
+import { fetchCachedCodes, fetchCachedOperations, syncCachedCodes, syncCachedOperations, type CachedOperation } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
@@ -46,18 +49,7 @@ interface TeksherCode {
   emissionDate?: string
 }
 
-interface TeksherOperation {
-  id: string | number
-  operationId?: string | number
-  operationType?: string
-  type?: string
-  status?: string
-  kmsCount?: number
-  codesCount?: number
-  gtin?: string
-  createdAt?: string
-  createdDate?: string
-}
+type TeksherOperation = CachedOperation
 
 interface EmissionProduct {
   gtin: string
@@ -146,16 +138,6 @@ function statusBadge(status: string | undefined): { label: string; cls: string }
   return map[status] ?? { label: status, cls: 'bg-slate-100 text-slate-600 border-slate-200' }
 }
 
-function opTypeLabel(type: string | undefined): string {
-  const map: Record<string, string> = {
-    EMISSION:    'Эмиссия',
-    UTILISATION: 'Нанесение',
-    TRANSGRAN:   'Трансгран',
-    IMPORT:      'Импорт',
-  }
-  if (!type) return '—'
-  return map[type] ?? type
-}
 
 function fmtDate(d: string | undefined): string {
   if (!d) return '—'
@@ -194,6 +176,18 @@ const NotConnectedPlug = ({ onGoToMain }: { onGoToMain: () => void }) => (
     </button>
   </div>
 )
+
+function ListPager({ page, pageSize, total, onPage }: { page: number; pageSize: number; total: number; onPage: (page: number) => void }) {
+  if (total <= pageSize) return null
+  const pages = Math.ceil(total / pageSize)
+  return (
+    <div className="flex items-center justify-center gap-3 border-t border-slate-100 p-3 text-xs text-slate-500">
+      <button type="button" disabled={page === 0} onClick={() => onPage(page - 1)} className="font-medium text-blue-600 disabled:text-slate-300">Назад</button>
+      <span>{page + 1} / {pages}</span>
+      <button type="button" disabled={page + 1 >= pages} onClick={() => onPage(page + 1)} className="font-medium text-blue-600 disabled:text-slate-300">Дальше</button>
+    </div>
+  )
+}
 
 const EmptyState = ({ text, sub }: { text: string; sub?: string }) => (
   <div className="flex flex-col items-center justify-center gap-2 py-14 text-center">
@@ -354,13 +348,18 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   // Codes
   const [codes, setCodes] = useState<TeksherCode[]>([])
   const [codesTotal, setCodesTotal] = useState(0)
+  const [codesPage, setCodesPage] = useState(0)
   const [codesLoading, setCodesLoading] = useState(false)
   const [codesStatusFilter, setCodesStatusFilter] = useState('')
+  const [codesSyncing, setCodesSyncing] = useState(false)
 
   // Operations
   const [operations, setOperations] = useState<TeksherOperation[]>([])
   const [operationsTotal, setOperationsTotal] = useState(0)
+  const [operationsPage, setOperationsPage] = useState(0)
   const [operationsLoading, setOperationsLoading] = useState(false)
+  const [operationsSyncing, setOperationsSyncing] = useState(false)
+  const [listSyncNote, setListSyncNote] = useState('')
 
   // Emit modal
   const [emitModal, setEmitModal] = useState(false)
@@ -515,35 +514,80 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     if (tab === 'products' && activeStore?.id) void loadProducts(0, productsSearch)
   }, [tab, activeStore?.id, loadProducts, productsSearch])
 
-  // ── Загрузка кодов ───────────────────────────────────────────────────────
-  const loadCodes = useCallback(async (statusFilter = '') => {
+  // ── Коды и операции читаются из базы. Teksher вызывается только «Обновить».
+  const loadCodes = useCallback(async (page = codesPage, statusFilter = codesStatusFilter) => {
     if (!activeStore?.id) return
     setCodesLoading(true)
-    const { data, error } = await invoke({ store_id: activeStore.id, action: 'codes', page: 0, size: 50, status: statusFilter })
-    setCodesLoading(false)
-    if (error) { showAction('err', error); return }
-    setCodes((data?.items as TeksherCode[]) ?? [])
-    setCodesTotal(Number(data?.total ?? 0))
-  }, [activeStore?.id])
+    try {
+      const result = await fetchCachedCodes(activeStore.id, page, statusFilter)
+      setCodes(result.items)
+      setCodesTotal(result.total)
+    } catch (reason) {
+      showAction('err', reason instanceof Error ? reason.message : 'Не удалось прочитать коды из базы.')
+    } finally {
+      setCodesLoading(false)
+    }
+  }, [activeStore?.id, codesPage, codesStatusFilter])
 
   useEffect(() => {
-    if (tab === 'codes' && stats) void loadCodes(codesStatusFilter)
-  }, [tab, stats, loadCodes, codesStatusFilter])
+    if (tab === 'codes' && activeStore?.id && stats) void loadCodes(codesPage, codesStatusFilter)
+  }, [tab, activeStore?.id, stats, loadCodes, codesPage, codesStatusFilter])
 
-  // ── Загрузка операций ────────────────────────────────────────────────────
-  const loadOperations = useCallback(async () => {
+  const loadOperations = useCallback(async (page = operationsPage) => {
     if (!activeStore?.id) return
     setOperationsLoading(true)
-    const { data, error } = await invoke({ store_id: activeStore.id, action: 'operations', page: 0, size: 20 })
-    setOperationsLoading(false)
-    if (error) { showAction('err', error); return }
-    setOperations((data?.items as TeksherOperation[]) ?? [])
-    setOperationsTotal(Number(data?.total ?? 0))
-  }, [activeStore?.id])
+    try {
+      const result = await fetchCachedOperations(activeStore.id, page)
+      setOperations(result.items)
+      setOperationsTotal(result.total)
+    } catch (reason) {
+      showAction('err', reason instanceof Error ? reason.message : 'Не удалось прочитать операции из базы.')
+    } finally {
+      setOperationsLoading(false)
+    }
+  }, [activeStore?.id, operationsPage])
 
   useEffect(() => {
-    if (tab === 'operations' && stats) void loadOperations()
-  }, [tab, stats, loadOperations])
+    if (tab === 'operations' && activeStore?.id && stats) void loadOperations(operationsPage)
+  }, [tab, activeStore?.id, stats, loadOperations, operationsPage])
+
+  const refreshCodes = async () => {
+    if (!activeStore?.id || codesSyncing) return
+    setCodesSyncing(true)
+    setListSyncNote('Забираем коды из Teksher…')
+    try {
+      await syncCachedCodes(activeStore.id, (page, total) => {
+        setListSyncNote(total ? `Коды: страница ${page}, всего ${total}` : `Коды: страница ${page}`)
+      })
+      setCodesPage(0)
+      await loadCodes(0, codesStatusFilter)
+      showAction('ok', 'Коды записаны в базу')
+    } catch (reason) {
+      showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить коды.')
+    } finally {
+      setCodesSyncing(false)
+      setListSyncNote('')
+    }
+  }
+
+  const refreshOperations = async () => {
+    if (!activeStore?.id || operationsSyncing) return
+    setOperationsSyncing(true)
+    setListSyncNote('Забираем операции из Teksher…')
+    try {
+      await syncCachedOperations(activeStore.id, (page, total) => {
+        setListSyncNote(total ? `Операции: страница ${page}, всего ${total}` : `Операции: страница ${page}`)
+      })
+      setOperationsPage(0)
+      await loadOperations(0)
+      showAction('ok', 'Операции записаны в базу')
+    } catch (reason) {
+      showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить операции.')
+    } finally {
+      setOperationsSyncing(false)
+      setListSyncNote('')
+    }
+  }
 
   // ── Подключить Teksher ───────────────────────────────────────────────────
   const handleConnect = async (e: React.FormEvent) => {
@@ -582,8 +626,14 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
         await syncStoreTeksherCatalog(activeStore.id)
         await loadProducts(0, productsSearch)
       }
-      if (tab === 'codes') void loadCodes(codesStatusFilter)
-      if (tab === 'operations') void loadOperations()
+      if (tab === 'codes') {
+        await refreshCodes()
+        return
+      }
+      if (tab === 'operations') {
+        await refreshOperations()
+        return
+      }
       showAction('ok', tab === 'products' ? 'Товары Teksher записаны в базу' : 'Данные обновлены')
     } catch (syncFailure: unknown) {
       showAction('err', syncFailure instanceof Error ? syncFailure.message : 'Не удалось обновить товары Teksher.')
@@ -841,11 +891,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
             <button
               type="button"
               onClick={() => void handleSync()}
-              disabled={statsLoading}
+              disabled={statsLoading || codesSyncing || operationsSyncing}
               className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
-              <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${statsLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
-              Обновить
+              <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${statsLoading || codesSyncing || operationsSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+              {listSyncNote || 'Обновить'}
             </button>
           </div>
         )}
@@ -889,7 +939,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
       )}
 
       {/* Контент */}
-      <div className="flex-1 overflow-y-auto p-4 min-h-0">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
 
         {/* ══════ ГЛАВНАЯ ══════ */}
         {tab === 'main' && (
@@ -1086,7 +1136,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
         {/* ══════ ТОВАРЫ (GTIN) ══════ */}
         {tab === 'products' && (
-          <div className="space-y-3 max-w-5xl">
+          <div className="w-full min-w-0 space-y-3">
             {!isConnected ? (
               <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
@@ -1162,8 +1212,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     sub={productsSearch || linkFilter !== 'all' ? 'Смените поиск или фильтр связки.' : 'Нажмите «Обновить», чтобы забрать каталог из Teksher и записать его в базу.'}
                   />
                 ) : (
-                  <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-                    <table className="w-full text-sm">
+                  <div className="w-full overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
+                    <table className="w-full min-w-[960px] text-sm">
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50">
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">#</th>
@@ -1184,7 +1234,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                             <td className="px-4 py-3 text-xs text-slate-400">{productsPage * 20 + idx + 1}</td>
                             <td className="px-4 py-2"><PhotoThumb url={linked ? linkFaces[p.gtin] : null} /></td>
                             <td className="px-4 py-3 font-mono text-xs text-slate-700">{p.gtin}</td>
-                            <td className="px-4 py-3 text-xs text-slate-700 max-w-[200px] truncate" title={p.fullName ?? p.name ?? ''}>
+                            <td className="px-4 py-3 text-xs text-slate-700" title={p.fullName ?? p.name ?? ''}>
                               {p.fullName ?? p.name ?? '—'}
                             </td>
                             <td className="px-4 py-3">
@@ -1258,7 +1308,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       <button
                         key={val}
                         type="button"
-                        onClick={() => setCodesStatusFilter(val)}
+                        onClick={() => { setCodesPage(0); setCodesStatusFilter(val) }}
                         className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                           codesStatusFilter === val
                             ? 'bg-blue-600 text-white'
@@ -1270,12 +1320,23 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     ))}
                   </div>
                   <span className="ml-auto text-xs text-slate-400">Всего: {codesTotal}</span>
+                  <button
+                    type="button"
+                    onClick={() => void refreshCodes()}
+                    disabled={codesSyncing}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Обновить
+                  </button>
                 </div>
 
                 {codesLoading ? (
                   <Skeleton rows={8} />
                 ) : codes.length === 0 ? (
-                  <EmptyState text="Коды не найдены" sub="Закажите КИЗ-коды на вкладке «Операции»" />
+                  <EmptyState
+                    text={codesStatusFilter ? 'По этому статусу кодов нет' : 'В базе нет кодов'}
+                    sub={codesStatusFilter ? 'Снимите фильтр или обновите список из Teksher.' : 'Нажмите «Обновить», чтобы забрать коды из Teksher. Пока кнопка не нажата, страница не обращается к Teksher.'}
+                  />
                 ) : (
                   <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
                     <table className="w-full text-sm">
@@ -1291,7 +1352,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       <tbody className="divide-y divide-slate-50">
                         {codes.map((c, idx) => (
                           <tr key={String(c.id)} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-4 py-3 text-xs text-slate-400">{idx + 1}</td>
+                            <td className="px-4 py-3 text-xs text-slate-400">{codesPage * 20 + idx + 1}</td>
                             <td className="px-4 py-3 font-mono text-xs text-slate-700 max-w-[220px] truncate" title={c.barcode ?? c.code ?? ''}>
                               {c.barcode ?? c.code ?? String(c.id)}
                             </td>
@@ -1302,11 +1363,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                         ))}
                       </tbody>
                     </table>
-                    {codesTotal > codes.length && (
-                      <div className="border-t border-slate-100 p-3 text-center text-xs text-slate-400">
-                        Показано {codes.length} из {codesTotal}
-                      </div>
-                    )}
+                    <ListPager page={codesPage} pageSize={20} total={codesTotal} onPage={setCodesPage} />
                   </div>
                 )}
               </>
@@ -1316,7 +1373,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
         {/* ══════ ОПЕРАЦИИ ══════ */}
         {tab === 'operations' && (
-          <div className="space-y-3 max-w-5xl">
+          <div className="w-full min-w-0 space-y-3">
             {!isConnected ? (
               <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
@@ -1326,11 +1383,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                   <div className="ml-auto flex gap-2">
                     <button
                       type="button"
-                      onClick={() => void loadOperations()}
-                      disabled={operationsLoading}
+                      onClick={() => void refreshOperations()}
+                      disabled={operationsLoading || operationsSyncing}
                       className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
                     >
-                      <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${operationsLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+                      <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${operationsSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
                       Обновить
                     </button>
                     <button
@@ -1343,14 +1400,15 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     </button>
                   </div>
                 </div>
+                <p className="text-xs text-slate-400">Печать сохраняет файл на этом компьютере и не отправляет в Teksher отчёт о нанесении. CSV не открывайте в Excel.</p>
 
                 {operationsLoading ? (
                   <Skeleton rows={6} />
                 ) : operations.length === 0 ? (
-                  <EmptyState text="Операций нет" sub="Нажмите «Заказать КИЗы» чтобы создать первую операцию" />
+                  <EmptyState text="В базе нет операций" sub="Нажмите «Обновить», чтобы забрать операции из Teksher. Открытие вкладки читает только базу." />
                 ) : (
-                  <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-                    <table className="w-full text-sm">
+                  <div className="w-full overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
+                    <table className="w-full min-w-[1100px] text-sm">
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50">
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">#</th>
@@ -1369,36 +1427,48 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                           const opType = op.operationType ?? op.type
                           return (
                             <tr key={String(opId)} className="hover:bg-slate-50/50 transition-colors">
-                              <td className="px-4 py-3 text-xs text-slate-400">{idx + 1}</td>
+                              <td className="px-4 py-3 text-xs text-slate-400">{operationsPage * 20 + idx + 1}</td>
                               <td className="px-4 py-3 font-mono text-xs text-slate-600 max-w-[120px] truncate" title={String(opId)}>
                                 {String(opId).slice(0, 14)}…
                               </td>
-                              <td className="px-4 py-3 text-xs text-slate-700">{opTypeLabel(opType)}</td>
-                              <td className="px-4 py-3"><StatusBadge status={op.status} /></td>
+                              <td className="px-4 py-3 text-xs text-slate-700">{teksherTypeLabel(opType)}</td>
+                              <td className="px-4 py-3">
+                                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${teksherStatusClass(op.status)}`} title={op.status ?? ''}>
+                                  {teksherStatusLabel(op.status)}
+                                </span>
+                              </td>
                               <td className="px-4 py-3 text-right text-xs text-slate-700">{op.kmsCount ?? op.codesCount ?? '—'}</td>
                               <td className="px-4 py-3 font-mono text-xs text-slate-500">{op.gtin ?? '—'}</td>
                               <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(op.createdAt ?? op.createdDate)}</td>
                               <td className="px-4 py-3">
-                                {op.status === 'COMPLETED' && opType === 'EMISSION' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleUtilise(opId)}
-                                    className="text-xs font-medium text-blue-600 hover:underline"
-                                  >
-                                    Нанести
-                                  </button>
-                                )}
+                                <div className="flex items-center gap-3">
+                                  {activeStore?.id && operationCanPrint(opType) && (
+                                    <KizOperationPrint
+                                      storeId={activeStore.id}
+                                      operationId={String(opId)}
+                                      gtin={op.gtin}
+                                      product={op.product}
+                                      onError={(message) => showAction('err', message)}
+                                      onDone={(message) => showAction('ok', message)}
+                                    />
+                                  )}
+                                  {op.status === 'COMPLETED' && opType === 'EMISSION' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleUtilise(opId)}
+                                      className="text-xs font-medium text-blue-600 hover:underline"
+                                    >
+                                      Нанести
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           )
                         })}
                       </tbody>
                     </table>
-                    {operationsTotal > operations.length && (
-                      <div className="border-t border-slate-100 p-3 text-center text-xs text-slate-400">
-                        Показано {operations.length} из {operationsTotal}
-                      </div>
-                    )}
+                    <ListPager page={operationsPage} pageSize={20} total={operationsTotal} onPage={setOperationsPage} />
                   </div>
                 )}
               </>
