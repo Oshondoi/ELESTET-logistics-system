@@ -5,7 +5,8 @@ import { supabase } from '../lib/supabase'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { KizLinkCard } from '../components/kiz/KizLinkCard'
-import { fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
+import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
+import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
 import { TransgranPanel } from '../components/kiz/TransgranPanel'
 import { getStoreSelectorLabel } from '../lib/storeDisplay'
@@ -347,6 +348,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [productsPage, setProductsPage] = useState(0)
   const [productsLoading, setProductsLoading] = useState(false)
   const [productsSearch, setProductsSearch] = useState('')
+  const [linkFilter, setLinkFilter] = useState<'all' | 'yes' | 'no'>('all')
+  const [linkFaces, setLinkFaces] = useState<Record<string, string | null>>({})
 
   // Codes
   const [codes, setCodes] = useState<TeksherCode[]>([])
@@ -487,7 +490,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     if (!activeStore?.id) return
     setProductsLoading(true)
     try {
-      const result = await fetchTeksherCatalog(activeStore.id, page, search)
+      const result = await fetchTeksherCatalog(activeStore.id, page, search, linkFilter, Object.keys(linkFaces))
       if (page === 0) setProducts(result.items)
       else setProducts((prev) => [...prev, ...result.items])
       setProductsTotal(result.total)
@@ -497,7 +500,16 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     } finally {
       setProductsLoading(false)
     }
-  }, [activeStore?.id])
+  }, [activeStore?.id, linkFilter, linkFaces])
+
+  useEffect(() => {
+    if (tab !== 'products' || !activeStore?.id) return
+    let active = true
+    void fetchGtinLinkFaces(activeStore.id)
+      .then((faces) => { if (active) setLinkFaces(faces) })
+      .catch(() => { if (active) setLinkFaces({}) })
+    return () => { active = false }
+  }, [tab, activeStore?.id])
 
   useEffect(() => {
     if (tab === 'products' && activeStore?.id) void loadProducts(0, productsSearch)
@@ -1087,6 +1099,22 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     placeholder="Поиск по названию…"
                     className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 w-52"
                   />
+                  <div className="flex gap-1.5">
+                    {([
+                      { id: 'all', label: 'Все' },
+                      { id: 'yes', label: 'Есть связка' },
+                      { id: 'no', label: 'Нет связки' },
+                    ] as const).map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setLinkFilter(item.id)}
+                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${linkFilter === item.id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
                   <div className="ml-auto flex gap-2">
                     <button
                       type="button"
@@ -1129,27 +1157,38 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 {productsLoading && products.length === 0 ? (
                   <Skeleton rows={6} />
                 ) : products.length === 0 ? (
-                  <EmptyState text="Товаров пока нет" sub="Нажмите «Обновить», чтобы забрать каталог из Teksher и записать его в базу." />
+                  <EmptyState
+                    text={productsSearch || linkFilter !== 'all' ? 'Ничего не найдено' : 'Товаров пока нет'}
+                    sub={productsSearch || linkFilter !== 'all' ? 'Смените поиск или фильтр связки.' : 'Нажмите «Обновить», чтобы забрать каталог из Teksher и записать его в базу.'}
+                  />
                 ) : (
                   <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50">
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">#</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Фото</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">GTIN</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Название</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Связка</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Статус</th>
                           <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500">Коды</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Действия</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {products.map((p, idx) => (
+                        {products.map((p, idx) => {
+                          const linked = Object.prototype.hasOwnProperty.call(linkFaces, p.gtin)
+                          return (
                           <tr key={String(p.id ?? p.gtin)} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-4 py-3 text-xs text-slate-400">{idx + 1}</td>
+                            <td className="px-4 py-3 text-xs text-slate-400">{productsPage * 20 + idx + 1}</td>
+                            <td className="px-4 py-2"><PhotoThumb url={linked ? linkFaces[p.gtin] : null} /></td>
                             <td className="px-4 py-3 font-mono text-xs text-slate-700">{p.gtin}</td>
                             <td className="px-4 py-3 text-xs text-slate-700 max-w-[200px] truncate" title={p.fullName ?? p.name ?? ''}>
                               {p.fullName ?? p.name ?? '—'}
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`text-xs font-semibold ${linked ? 'text-emerald-700' : 'text-slate-400'}`}>{linked ? 'Есть' : 'Нет'}</span>
                             </td>
                             <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
                             <td className="px-4 py-3 text-right text-xs text-slate-600">{p.codesCount ?? '—'}</td>
@@ -1172,7 +1211,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                               </div>
                             </td>
                           </tr>
-                        ))}
+                          )
+                        })}
                       </tbody>
                     </table>
                     {products.length < productsTotal && (

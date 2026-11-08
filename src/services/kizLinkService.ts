@@ -129,8 +129,52 @@ export type TeksherCatalogItem = {
   codesCount?: number
 }
 
-export async function fetchTeksherCatalog(storeId: string, page: number, search: string): Promise<{ items: TeksherCatalogItem[]; total: number }> {
+export async function fetchGtinLinkFaces(storeId: string): Promise<Record<string, string | null>> {
   const client = db()
+  const links: Array<{ gtin: string; wb_barcode: string }> = []
+  for (let from = 0; from < 100000; from += 1000) {
+    const { data, error } = await client.from('fulfillment_product_gtin_links')
+      .select('gtin,wb_barcode')
+      .eq('store_id', storeId)
+      .eq('active', true)
+      .range(from, from + 999)
+    if (error) throw new Error('Не удалось загрузить связки.')
+    links.push(...((data ?? []) as Array<{ gtin: string; wb_barcode: string }>))
+    if (!data || data.length < 1000) break
+  }
+  const photoByBarcode = new Map<string, string | null>()
+  for (let from = 0; from < 100000; from += 1000) {
+    const { data, error } = await client.from('products').select('barcodes,photos,sizes').eq('store_id', storeId).range(from, from + 999)
+    if (error) throw new Error('Не удалось загрузить фото товаров.')
+    for (const product of (data ?? []) as KizWbProduct[]) {
+      const photo = kizPhotoUrl(product.photos)
+      const barcodes = [
+        ...(product.barcodes ?? []),
+        ...((product.sizes ?? []) as Array<{ skus?: string[] }>).flatMap((size) => size.skus ?? []),
+      ]
+      barcodes.forEach((barcode) => {
+        if (barcode && !photoByBarcode.has(barcode)) photoByBarcode.set(barcode, photo)
+      })
+    }
+    if (!data || data.length < 1000) break
+  }
+  const faces: Record<string, string | null> = {}
+  links.forEach((link) => {
+    if (!link.gtin) return
+    faces[link.gtin] = photoByBarcode.get(link.wb_barcode) ?? null
+  })
+  return faces
+}
+
+export async function fetchTeksherCatalog(
+  storeId: string,
+  page: number,
+  search: string,
+  link: 'all' | 'yes' | 'no' = 'all',
+  linkedGtins: string[] = [],
+): Promise<{ items: TeksherCatalogItem[]; total: number }> {
+  const client = db()
+  if (link === 'yes' && linkedGtins.length === 0) return { items: [], total: 0 }
   const size = 20
   const from = page * size
   let query = client.from('teksher_products')
@@ -140,6 +184,8 @@ export async function fetchTeksherCatalog(storeId: string, page: number, search:
     .order('full_name')
   const needle = catalogNeedle(search)
   if (needle) query = query.or(`name.ilike.%${needle}%,full_name.ilike.%${needle}%,gtin.ilike.%${needle}%`)
+  if (link === 'yes') query = query.in('gtin', linkedGtins)
+  if (link === 'no' && linkedGtins.length > 0) query = query.not('gtin', 'in', `(${linkedGtins.map((gtin) => `"${gtin}"`).join(',')})`)
   const { data, error, count } = await query.range(from, from + size - 1)
   if (error) throw new Error('Не удалось загрузить товары Teksher.')
   const items = ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({

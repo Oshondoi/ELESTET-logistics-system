@@ -43,6 +43,7 @@ function GtinField({
   onClose: () => void
 }) {
   const anchorRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const [place, setPlace] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null)
   useLayoutEffect(() => {
@@ -94,6 +95,7 @@ function GtinField({
   return (
     <div ref={anchorRef} className="relative">
       <input
+        ref={inputRef}
         value={open ? query : shown}
         disabled={disabled}
         onFocus={onOpen}
@@ -120,7 +122,10 @@ function GtinField({
               key={card.gtin}
               type="button"
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onPick(card.gtin)}
+              onClick={() => {
+                onPick(card.gtin)
+                inputRef.current?.blur()
+              }}
               className="flex w-full flex-col border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50"
             >
               <span className="truncate text-sm text-slate-800">{card.full_name || card.name || 'Без названия'}</span>
