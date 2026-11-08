@@ -38,6 +38,19 @@ const items = [
     ),
   },
   {
+    key: 'calendar',
+    label: 'Календарь',
+    permKey: null,
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3" y="5" width="18" height="16" rx="2" />
+        <path d="M3 10h18" />
+        <path d="M8 3v4" />
+        <path d="M16 3v4" />
+      </svg>
+    ),
+  },
+  {
     key: 'fulfillment',
     label: 'Фулфилмент',
     permKey: 'shipments_view' as keyof import('../../types').RolePermissions,
@@ -60,19 +73,6 @@ const items = [
         <circle cx="5.5" cy="20.5" r="1.5" />
         <circle cx="18.5" cy="20.5" r="1.5" />
         <path d="M15 9V5H1" />
-      </svg>
-    ),
-  },
-  {
-    key: 'calendar',
-    label: 'Календарь',
-    permKey: null,
-    icon: (
-      <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <rect x="3" y="5" width="18" height="16" rx="2" />
-        <path d="M3 10h18" />
-        <path d="M8 3v4" />
-        <path d="M16 3v4" />
       </svg>
     ),
   },
