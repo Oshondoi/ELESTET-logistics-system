@@ -28,6 +28,7 @@ function GtinField({
   onQuery,
   onPick,
   onClear,
+  onClose,
 }: {
   open: boolean
   query: string
@@ -39,6 +40,7 @@ function GtinField({
   onQuery: (value: string) => void
   onPick: (gtin: string) => void
   onClear?: () => void
+  onClose: () => void
 }) {
   const anchorRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -76,6 +78,18 @@ function GtinField({
     return () => window.removeEventListener('wheel', onWheel, { capture: true })
   }, [open, place])
 
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (anchorRef.current?.contains(target) || listRef.current?.contains(target)) return
+      onClose()
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [open, onClose])
+
   const shown = draft ?? saved ?? ''
   return (
     <div ref={anchorRef} className="relative">
@@ -83,6 +97,12 @@ function GtinField({
         value={open ? query : shown}
         disabled={disabled}
         onFocus={onOpen}
+        onBlur={(event) => {
+          const next = event.relatedTarget
+          if (!(next instanceof Node)) return
+          if (anchorRef.current?.contains(next) || listRef.current?.contains(next)) return
+          onClose()
+        }}
         onChange={(event) => onQuery(event.target.value)}
         placeholder="Выберите GTIN"
         className={`w-full rounded-xl border px-3 py-2 font-mono text-sm outline-none placeholder:font-sans placeholder:text-slate-300 focus:border-emerald-400 disabled:bg-slate-50 ${saved && !draft ? 'pr-16' : ''} ${draft && draft !== saved ? 'border-amber-300 bg-amber-50' : saved ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-200'}`}
@@ -366,6 +386,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
                                     disabled={!canManage || saving}
                                     choices={choosing ? gtinChoices : []}
                                     onOpen={() => { setOpenGtinBarcode(row.barcode); setGtinQuery('') }}
+                                    onClose={() => setOpenGtinBarcode((current) => current === row.barcode ? null : current)}
                                     onQuery={(value) => { setOpenGtinBarcode(row.barcode); setGtinQuery(value) }}
                                     onPick={(gtin) => { setPending((current) => ({ ...current, [row.barcode]: gtin })); setOpenGtinBarcode(null); setGtinQuery('') }}
                                     onClear={linked ? () => void remove(row.barcode) : undefined}

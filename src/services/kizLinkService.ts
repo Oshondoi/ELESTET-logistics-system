@@ -36,6 +36,18 @@ export type KizSizeRow = {
   rowKey: string
 }
 
+const KIZ_LETTER_SIZE_ORDER: Record<string, number> = {
+  XXS: 1, XS: 2, S: 3, M: 4, L: 5, XL: 6,
+  '2XL': 7, XXL: 7, '3XL': 8, XXXL: 8, '4XL': 9, '5XL': 10, '6XL': 11,
+}
+
+function kizSizeWeight(techSize: string): number {
+  const normalized = techSize.trim().toUpperCase().replace(/\s+/g, '')
+  if (KIZ_LETTER_SIZE_ORDER[normalized] !== undefined) return KIZ_LETTER_SIZE_ORDER[normalized]
+  const numeric = Number.parseFloat(normalized.replace(',', '.'))
+  return Number.isFinite(numeric) ? numeric : Number.POSITIVE_INFINITY
+}
+
 export function kizPhotoUrl(photos: unknown): string | null {
   const list = photos as Array<{ c246x328?: string; big?: string }> | null
   return list?.[0]?.c246x328 ?? list?.[0]?.big ?? null
@@ -58,6 +70,9 @@ export function kizSizeRows(product: KizWbProduct): KizSizeRow[] {
     })
   })
   return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => kizSizeWeight(a.row.techSize) - kizSizeWeight(b.row.techSize) || a.index - b.index)
+    .map((item) => item.row)
 }
 
 export function kizProductMatches(product: KizWbProduct, query: string): boolean {
