@@ -41,6 +41,7 @@ function GtinField({
   onClear?: () => void
 }) {
   const anchorRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const [place, setPlace] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null)
   useLayoutEffect(() => {
     if (!open) return
@@ -57,6 +58,23 @@ function GtinField({
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
   }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const onWheel = (event: WheelEvent) => {
+      const list = listRef.current
+      if (!list || event.ctrlKey || event.deltaY === 0) return
+      const rect = list.getBoundingClientRect()
+      const over = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom
+      if (!over) return
+      event.preventDefault()
+      event.stopPropagation()
+      const line = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientHeight : 1
+      list.scrollTop += event.deltaY * line
+    }
+    window.addEventListener('wheel', onWheel, { capture: true, passive: false })
+    return () => window.removeEventListener('wheel', onWheel, { capture: true })
+  }, [open, place])
 
   const shown = draft ?? saved ?? ''
   return (
@@ -75,7 +93,7 @@ function GtinField({
         </button>
       )}
       {open && place && createPortal(
-        <div className="fixed z-[80] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl" style={{ left: place.left, top: place.top, width: place.width, maxHeight: place.maxHeight }}>
+        <div ref={listRef} className="fixed z-[80] overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white shadow-xl" style={{ left: place.left, top: place.top, width: place.width, maxHeight: place.maxHeight }}>
           {choices.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">GTIN не найден</p>}
           {choices.map((card) => (
             <button
@@ -111,16 +129,26 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
   const [excelOpen, setExcelOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [catalogReady, setCatalogReady] = useState(false)
+  const loadSeq = useRef(0)
 
   async function reload() {
-    const [sources, storeGtins] = await Promise.all([
-      fetchKizOrderSources(storeId),
-      fetchStoreTeksherProducts(storeId),
-    ])
-    setProducts(sources.products)
-    setLinks(sources.links)
-    setGtins(storeGtins)
-    setCount(sources.links.length)
+    const seq = ++loadSeq.current
+    try {
+      const [sources, storeGtins] = await Promise.all([
+        fetchKizOrderSources(storeId),
+        fetchStoreTeksherProducts(storeId),
+      ])
+      if (seq !== loadSeq.current) return
+      setProducts(sources.products)
+      setLinks(sources.links)
+      setGtins(storeGtins)
+      setCount(sources.links.length)
+      setCatalogReady(true)
+    } catch (loadFailure) {
+      if (seq !== loadSeq.current) return
+      throw loadFailure
+    }
   }
 
   useEffect(() => {
@@ -132,6 +160,8 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
 
   useEffect(() => {
     if (!open) return
+    let active = true
+    setCatalogReady(false)
     setError(null)
     setQuery('')
     setListOpen(false)
@@ -141,8 +171,14 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
     setPending({})
     setExcelOpen(false)
     void reload().catch((loadFailure: unknown) => {
+      if (!active) return
+      setCatalogReady(true)
       setError(loadFailure instanceof Error ? loadFailure.message : 'Не удалось открыть связки.')
     })
+    return () => {
+      active = false
+      loadSeq.current += 1
+    }
   }, [open, storeId])
 
   const linkByBarcode = useMemo(() => new Map(links.map((link) => [link.wb_barcode, link.gtin])), [links])
@@ -200,7 +236,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Связка</p>
         <p className="mt-1 text-lg font-bold text-slate-800">{count === null ? '—' : count}</p>
         <p className="text-xs text-slate-400">баркодов с GTIN</p>
-        <button type="button" onClick={() => setOpen(true)} className="mt-3 text-xs font-semibold text-emerald-700 hover:underline">
+        <button type="button" onClick={() => { setCatalogReady(false); setError(null); setOpen(true) }} className="mt-3 text-xs font-semibold text-emerald-700 hover:underline">
           {canManage ? 'Настроить' : 'Смотреть'}
         </button>
       </div>
@@ -237,13 +273,13 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
         )}
       >
         <div className="flex min-h-0 flex-1 flex-col">
-          {(error || linkPlan.errors.length > 0 || !canManage || products.length === 0 || gtins.length === 0) && (
+          {(error || linkPlan.errors.length > 0 || !canManage || (catalogReady && (products.length === 0 || gtins.length === 0))) && (
             <div className="shrink-0 space-y-2 border-b border-slate-100 px-4 py-3">
               {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
               {linkPlan.errors.length > 0 && <div className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">{linkPlan.errors.map((problem) => <p key={problem}>{problem}</p>)}</div>}
               {!canManage && <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">Менять связку может владелец или администратор.</p>}
-              {products.length === 0 && <p className="text-sm text-slate-500">В этом магазине нет товаров WB. Сначала обновите их на странице товаров.</p>}
-              {gtins.length === 0 && <p className="text-sm text-slate-500">У этого магазина нет товаров Teksher.</p>}
+              {catalogReady && !error && products.length === 0 && <p className="text-sm text-slate-500">В этом магазине нет товаров WB. Сначала обновите их на странице товаров.</p>}
+              {catalogReady && !error && gtins.length === 0 && <p className="text-sm text-slate-500">У этого магазина нет товаров Teksher.</p>}
             </div>
           )}
           <div className="flex min-h-0 flex-1">
