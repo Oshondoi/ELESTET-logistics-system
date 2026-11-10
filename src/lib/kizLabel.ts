@@ -1,5 +1,6 @@
 import bwipjs from 'bwip-js/browser'
 import jsPDF from 'jspdf'
+import { kizHasCryptoTail, normalizeKizCode } from './kizCode'
 import type { LabelGoods, PrintCode } from '../services/kizCacheService'
 
 export type LabelLayout = 'vertical' | 'horizontal'
@@ -16,15 +17,30 @@ function parts(item: PrintCode): { gtin: string; serial: string } {
   }
 }
 
-function matrix(code: string): HTMLCanvasElement {
-  const canvas = document.createElement('canvas')
-  const text = code.startsWith('^FNC1') ? code : `^FNC1${code.replace(/\u001d/g, '^GS')}`
-  try {
-    bwipjs.toCanvas(canvas, { bcid: 'gs1datamatrix', text, scale: 6, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
-  } catch {
-    bwipjs.toCanvas(canvas, { bcid: 'datamatrix', text: code, scale: 6, paddingwidth: 0, paddingheight: 0 })
+function gs1Text(code: string): string {
+  const normalized = normalizeKizCode(code)
+  if (!kizHasCryptoTail(normalized)) {
+    throw new Error('КИЗ нельзя печатать: в коде нет криптохвоста 91/92. Без него DataMatrix короткий и не пройдёт Честный знак.')
   }
+  return `^FNC1${normalized.replace(/\u001d/g, '^GS')}`
+}
+
+function matrix(code: string, maxPixels: number): HTMLCanvasElement {
+  const text = gs1Text(code)
+  const probe = document.createElement('canvas')
+  bwipjs.toCanvas(probe, { bcid: 'gs1datamatrix', text, scale: 1, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
+  const scale = Math.max(1, Math.floor(maxPixels / probe.width))
+  if (scale === 1) return probe
+  const canvas = document.createElement('canvas')
+  bwipjs.toCanvas(canvas, { bcid: 'gs1datamatrix', text, scale, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
   return canvas
+}
+
+function placeMatrix(ctx: CanvasRenderingContext2D, code: string, x: number, y: number, maxSize: number): number {
+  const source = matrix(code, maxSize)
+  ctx.imageSmoothingEnabled = false
+  ctx.drawImage(source, x, y)
+  return source.width
 }
 
 function attributeValue(product: Record<string, unknown> | null, needles: string[]): string {
@@ -81,11 +97,14 @@ function drawVertical(item: PrintCode, number: number): HTMLCanvasElement {
   if (!ctx) throw new Error('Браузер не смог подготовить лист печати')
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, width, height)
-  const code = matrix(item.code)
-  const size = Math.round(2.35 * dpi)
-  ctx.drawImage(code, (width - size) / 2, Math.round(0.55 * dpi), size, size)
-  const { gtin, serial } = parts(item)
+  const maxSize = Math.round(2.35 * dpi)
+  const codeY = Math.round(0.55 * dpi)
+  const source = matrix(item.code, maxSize)
+  const codeX = Math.round((width - source.width) / 2)
+  ctx.imageSmoothingEnabled = false
+  ctx.drawImage(source, codeX, codeY)
   ctx.fillStyle = '#000000'
+  const { gtin, serial } = parts(item)
   ctx.textAlign = 'center'
   ctx.font = `700 ${Math.round(0.22 * dpi)}px Arial`
   ctx.fillText(gtin, width / 2, Math.round(3.25 * dpi))
@@ -138,11 +157,10 @@ function drawHorizontal(item: PrintCode, goods: LabelGoods, number: number): HTM
     ctx.fillText(value || '—', left, y)
     y += Math.round(0.4 * dpi)
   })
-  const code = matrix(item.code)
-  const size = Math.round(1.7 * dpi)
+  const maxSize = Math.round(1.7 * dpi)
   const codeX = Math.round(3.85 * dpi)
   const codeY = Math.round(0.35 * dpi)
-  ctx.drawImage(code, codeX, codeY, size, size)
+  const size = placeMatrix(ctx, item.code, codeX, codeY, maxSize)
   const { gtin, serial } = parts(item)
   ctx.font = `700 ${Math.round(0.16 * dpi)}px Arial`
   ctx.fillText(gtin, codeX, codeY + size + Math.round(0.28 * dpi))

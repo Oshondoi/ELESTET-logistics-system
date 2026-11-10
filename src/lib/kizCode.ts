@@ -75,6 +75,17 @@ export function kizValidationError(value: string): string | null {
   return null
 }
 
+export function kizHasCryptoTail(value: string): boolean {
+  const code = normalizeKizCode(value)
+  const parts = code.split(GS)
+  if (parts.length > 1) {
+    const key = parts.find((part) => /^91[!-~]{4}$/.test(part))
+    const signature = parts.find((part) => /^92[!-~]+$/.test(part))
+    return Boolean(key && signature && parts.indexOf(key) < parts.indexOf(signature))
+  }
+  return /^01\d{14}21[!-~]{13}91[!-~]{4}92[!-~]+$/.test(code)
+}
+
 export function kizGtin(value: string): string | null {
   const match = /^01(\d{14})21/.exec(normalizeKizCode(value))
   return match?.[1] ?? null
