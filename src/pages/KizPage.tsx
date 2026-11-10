@@ -8,7 +8,7 @@ import { KizLinkCard } from '../components/kiz/KizLinkCard'
 import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
 import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
 import { parsePrintFileBytes } from '../lib/kizPrintFile'
-import { fetchCachedCodes, fetchCachedOperations, loadPrintCodeCoverage, savePrintCodes, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
+import { fetchCachedCodes, fetchCachedOperations, linkPrintCodesOnPage, loadPrintCodeCoverage, savePrintCodes, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
@@ -379,6 +379,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [printFileBusy, setPrintFileBusy] = useState(false)
   const [printOperationIds, setPrintOperationIds] = useState<Set<string>>(new Set())
   const [printSavedCount, setPrintSavedCount] = useState(0)
+  const [printGateway, setPrintGateway] = useState(false)
+  const [printSearching, setPrintSearching] = useState(false)
   const printFileRef = useRef<HTMLInputElement>(null)
   const [listSyncNote, setListSyncNote] = useState('')
   const [syncPageSize, setSyncPageSize] = useState<TeksherPageSize>(20)
@@ -573,29 +575,40 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     if (tab === 'operations' && activeStore?.id && stats) void loadOperations(operationsPage)
   }, [tab, activeStore?.id, stats, loadOperations, operationsPage])
 
-  const refreshPrintCoverage = useCallback(async (storeId: string) => {
-    const coverage = await loadPrintCodeCoverage(storeId)
-    setPrintSavedCount(coverage.saved)
-    setPrintOperationIds(new Set(coverage.operationIds))
-    return coverage
+  const refreshPrintCoverage = useCallback(async (storeId: string, operationIds: string[]) => {
+    setPrintSearching(true)
+    try {
+      const coverage = await loadPrintCodeCoverage(storeId)
+      setPrintSavedCount(coverage.saved)
+      const known = new Set(coverage.operationIds)
+      setPrintOperationIds(known)
+      if (coverage.saved === 0 || operationIds.length === 0) {
+        setPrintGateway(false)
+        return { saved: coverage.saved, operationIds: [...known], gateway: false }
+      }
+      const linked = await linkPrintCodesOnPage(storeId, operationIds)
+      const ids = new Set(linked.operationIds)
+      setPrintOperationIds(ids)
+      setPrintGateway(linked.gateway && ids.size === 0)
+      return { saved: coverage.saved, operationIds: [...ids], gateway: linked.gateway }
+    } finally {
+      setPrintSearching(false)
+    }
   }, [])
 
   useEffect(() => {
     if (tab !== 'operations' || !activeStore?.id) return
     let cancel = false
-    void loadPrintCodeCoverage(activeStore.id)
-      .then((coverage) => {
-        if (cancel) return
-        setPrintSavedCount(coverage.saved)
-        setPrintOperationIds(new Set(coverage.operationIds))
-      })
+    const operationIds = operations.map((op) => String(op.operationId ?? op.id))
+    void refreshPrintCoverage(activeStore.id, operationIds)
       .catch(() => {
         if (cancel) return
         setPrintSavedCount(0)
         setPrintOperationIds(new Set())
+        setPrintGateway(false)
       })
     return () => { cancel = true }
-  }, [tab, activeStore?.id])
+  }, [tab, activeStore?.id, operations, refreshPrintCoverage])
 
   const refreshCodes = async () => {
     if (!activeStore?.id || codesSyncing) return
@@ -1454,11 +1467,12 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                               return
                             }
                             const storeName = getStoreSelectorLabel(activeStore)
+                            const operationIds = operations.map((op) => String(op.operationId ?? op.id))
                             return savePrintCodes(activeStore.account_id, activeStore.id, parsed.full)
-                              .then(() => refreshPrintCoverage(activeStore.id))
-                              .then((coverage) => showAction(coverage.operationIds.length > 0 ? 'ok' : 'err', coverage.operationIds.length > 0
-                                ? `Файл совпал с операциями магазина «${storeName}»: ${coverage.operationIds.length}. Эти строки подсвечены.`
-                                : `Файл сохранён в магазине «${storeName}», но в его списке такой операции нет. Это другой магазин: переключи его и загрузи файл ещё раз.`))
+                              .then(() => refreshPrintCoverage(activeStore.id, operationIds))
+                              .then((coverage) => showAction('ok', coverage.operationIds.length > 0
+                                ? `Файл сохранён в магазине «${storeName}». Совпавшие строки подсвечены: ${coverage.operationIds.length}.`
+                                : `Файл сохранён в магазине «${storeName}». Это тот же магазин. Строка подсветится, когда Текшер отдаст коды операции.`))
                           })
                           .catch((reason) => showAction('err', reason instanceof Error ? reason.message : 'Не удалось прочитать файл.'))
                           .finally(() => setPrintFileBusy(false))
@@ -1493,10 +1507,14 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 </div>
                 <p className="text-xs text-slate-400">Сначала загрузите файл печати Текшера с полным кодом. Печать берёт сохранённую копию и не отправляет в Teksher отчёт о нанесении. Короткий список из кабинета не подходит.</p>
                 {activeStore && printSavedCount > 0 && (
-                  printOperationIds.size > 0 ? (
+                  printSearching && printOperationIds.size === 0 ? (
+                    <p className="text-xs font-medium text-slate-500">Полный код сохранён. Ищем его строку в этом списке…</p>
+                  ) : printOperationIds.size > 0 ? (
                     <p className="text-xs font-medium text-emerald-700">В магазине «{getStoreSelectorLabel(activeStore)}» полный код есть у операций: {printOperationIds.size}. Такие строки подсвечены.</p>
+                  ) : printGateway ? (
+                    <p className="text-xs font-medium text-amber-700">Полный код сохранён в магазине «{getStoreSelectorLabel(activeStore)}»: {printSavedCount}. Текшер не ответил, поэтому строка пока без подсветки. Нажмите печать на нужной операции ещё раз.</p>
                   ) : (
-                    <p className="text-xs font-medium text-amber-700">В магазине «{getStoreSelectorLabel(activeStore)}» сохранено полных кодов: {printSavedCount}. Ни одна операция списка с ними не совпала. Файл от другого магазина: переключи его и загрузи ещё раз.</p>
+                    <p className="text-xs font-medium text-amber-700">Полный код сохранён в магазине «{getStoreSelectorLabel(activeStore)}»: {printSavedCount}. На этой странице списка его операция не нашлась.</p>
                   )
                 )}
 
@@ -1551,9 +1569,18 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                                       storeId={activeStore.id}
                                       operationId={String(opId)}
                                       gtin={op.gtin}
+                                      expectedCount={op.kmsCount ?? op.codesCount ?? 0}
                                       product={op.product}
                                       onError={(message) => showAction('err', message)}
-                                      onDone={(message) => showAction('ok', message)}
+                                      onDone={(message) => {
+                                        showAction('ok', message)
+                                        if (!activeStore?.id) return
+                                        void loadPrintCodeCoverage(activeStore.id).then((coverage) => {
+                                          setPrintSavedCount(coverage.saved)
+                                          setPrintOperationIds(new Set(coverage.operationIds))
+                                          setPrintGateway(false)
+                                        })
+                                      }}
                                     />
                                   )}
                                   {op.status === 'COMPLETED' && opType === 'EMISSION' && (

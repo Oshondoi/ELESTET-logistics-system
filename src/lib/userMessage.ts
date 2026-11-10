@@ -7,6 +7,7 @@ export const USER_MESSAGE_DURATION: Record<UserMessageKind, number> = {
 }
 
 const translations: Array<[RegExp, string]> = [
+  [/bad gateway|nginx\/|edge function returned a non-2xx|\b50[234]\b/i, 'Текшер сейчас не отвечает. Заказ не изменён. Нажмите печать ещё раз.'],
   [/invalid login credentials/i, 'Неверная почта или пароль.'],
   [/email not confirmed/i, 'Почта ещё не подтверждена. Откройте письмо и подтвердите регистрацию.'],
   [/user already registered|already been registered/i, 'Пользователь с такой почтой уже зарегистрирован.'],

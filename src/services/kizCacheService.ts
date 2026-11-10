@@ -46,7 +46,11 @@ function db() {
   return supabase as any
 }
 
-async function teksherInvoke(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+function teksherGateway(message: string): boolean {
+  return /502|503|504|bad gateway|nginx\/|edge function returned a non-2xx/i.test(message)
+}
+
+async function teksherInvokeOnce(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const client = db()
   const { data: { session } } = await client.auth.getSession()
   if (!session) throw new Error('Сессия истекла. Войдите снова.')
@@ -68,6 +72,20 @@ async function teksherInvoke(body: Record<string, unknown>): Promise<Record<stri
   const payload = (data ?? {}) as Record<string, unknown>
   if (typeof payload.error === 'string' && payload.error) throw new Error(payload.error)
   return payload
+}
+
+async function teksherInvoke(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  let last: Error | null = null
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await teksherInvokeOnce(body)
+    } catch (reason) {
+      last = reason instanceof Error ? reason : new Error('Не удалось обратиться к Teksher')
+      if (!teksherGateway(last.message) || attempt === 2) throw last
+      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)))
+    }
+  }
+  throw last ?? new Error('Не удалось обратиться к Teksher')
 }
 
 export const TEKSHER_PAGE_SIZES = [10, 20, 50, 100] as const
@@ -172,9 +190,40 @@ export type PrintCodeCoverage = {
   operationIds: string[]
 }
 
+function printLinkKey(storeId: string): string {
+  return `elestet-kiz-print-links:${storeId}`
+}
+
+function readPrintLinks(storeId: string): Record<string, string[]> {
+  if (typeof localStorage === 'undefined') return {}
+  try {
+    const parsed = JSON.parse(localStorage.getItem(printLinkKey(storeId)) ?? '{}') as Record<string, string[]>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writePrintLinks(storeId: string, links: Record<string, string[]>): void {
+  if (typeof localStorage === 'undefined') return
+  localStorage.setItem(printLinkKey(storeId), JSON.stringify(links))
+}
+
+function linkedOperationIds(storeId: string): string[] {
+  return Object.entries(readPrintLinks(storeId))
+    .filter(([, serials]) => serials.length > 0)
+    .map(([operationId]) => operationId)
+}
+
+function rememberPrintLink(storeId: string, operationId: string, serials: string[]): void {
+  if (serials.length === 0) return
+  const links = readPrintLinks(storeId)
+  links[operationId] = [...new Set([...(links[operationId] ?? []), ...serials])]
+  writePrintLinks(storeId, links)
+}
+
 export async function loadPrintCodeCoverage(storeId: string): Promise<PrintCodeCoverage> {
   const client = db()
-  const gtins = new Set<string>()
   let saved = 0
   for (let from = 0; from < 20000; from += 1000) {
     const { data, error } = await client.from('kiz_print_codes')
@@ -182,37 +231,60 @@ export async function loadPrintCodeCoverage(storeId: string): Promise<PrintCodeC
       .eq('store_id', storeId)
       .range(from, from + 999)
     if (error) throw new Error('Не удалось прочитать сохранённые коды печати.')
-    const rows = (data ?? []) as Array<{ gtin?: string | null }>
+    const rows = (data ?? []) as unknown[]
     saved += rows.length
+    if (rows.length < 1000) break
+  }
+  return { saved, operationIds: linkedOperationIds(storeId) }
+}
+
+async function savedPrintIdentities(storeId: string): Promise<Map<string, string>> {
+  const client = db()
+  const found = new Map<string, string>()
+  for (let from = 0; from < 20000; from += 1000) {
+    const { data, error } = await client.from('kiz_print_codes')
+      .select('gtin, serial')
+      .eq('store_id', storeId)
+      .range(from, from + 999)
+    if (error) throw new Error('Не удалось прочитать сохранённые коды печати.')
+    const rows = (data ?? []) as Array<{ gtin?: string | null; serial?: string | null }>
     for (const row of rows) {
-      if (row.gtin) gtins.add(row.gtin)
+      if (row.gtin && row.serial) found.set(row.serial, row.gtin)
     }
     if (rows.length < 1000) break
   }
+  return found
+}
 
-  const operationIds = new Set<string>()
-  const list = [...gtins]
-  for (let index = 0; index < list.length; index += 100) {
-    const chunk = list.slice(index, index + 100)
-    const { data, error } = await client.from('teksher_operations')
-      .select('operation_id')
-      .eq('store_id', storeId)
-      .in('gtin', chunk)
-    if (error) throw new Error('Не удалось сверить коды со списком операций.')
-    for (const row of (data ?? []) as Array<{ operation_id?: string | null }>) {
-      if (row.operation_id) operationIds.add(row.operation_id)
+export async function linkPrintCodesOnPage(storeId: string, operationIds: string[]): Promise<{ operationIds: string[]; gateway: boolean }> {
+  const saved = await savedPrintIdentities(storeId)
+  const links = readPrintLinks(storeId)
+  let gateway = false
+  if (saved.size > 0 && saved.size <= 50) {
+    for (const operationId of operationIds) {
+      if (Object.prototype.hasOwnProperty.call(links, operationId)) continue
+      let listed: PrintCode[]
+      try {
+        listed = await fetchOperationCodes(storeId, operationId)
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : ''
+        if (teksherGateway(message)) {
+          gateway = true
+          break
+        }
+        continue
+      }
+      const hits: string[] = []
+      for (const item of listed) {
+        const identity = kizIdentity(item.code) ?? (item.gtin && item.serial ? { gtin: item.gtin, serial: item.serial } : null)
+        if (!identity || saved.get(identity.serial) !== identity.gtin) continue
+        hits.push(identity.serial)
+      }
+      links[operationId] = [...new Set(hits)]
     }
-    const nested = chunk.map((gtin) => `product->>gtin.eq.${gtin}`).join(',')
-    const { data: nestedRows, error: nestedError } = await client.from('teksher_operations')
-      .select('operation_id')
-      .eq('store_id', storeId)
-      .or(nested)
-    if (nestedError) throw new Error('Не удалось сверить коды со списком операций.')
-    for (const row of (nestedRows ?? []) as Array<{ operation_id?: string | null }>) {
-      if (row.operation_id) operationIds.add(row.operation_id)
-    }
+    writePrintLinks(storeId, links)
   }
-  return { saved, operationIds: [...operationIds] }
+  return { operationIds: linkedOperationIds(storeId), gateway }
 }
 
 export async function savePrintCodes(accountId: string, storeId: string, codes: string[]): Promise<number> {
@@ -255,7 +327,24 @@ async function loadPrintCodes(storeId: string, serials: string[]): Promise<Map<s
   return found
 }
 
-export async function resolvePrintCodes(storeId: string, operationId: string): Promise<PrintCode[]> {
+function readyLinkedCodes(stored: Map<string, string>, serials: string[]): PrintCode[] {
+  const ready: PrintCode[] = []
+  for (const serial of serials) {
+    const match = [...stored.entries()].find(([key, code]) => key.endsWith(`:${serial}`) && kizHasCryptoTail(code))
+    if (!match) continue
+    const [gtin] = match[0].split(':')
+    ready.push({ code: match[1], gtin, serial })
+  }
+  return ready
+}
+
+export async function resolvePrintCodes(storeId: string, operationId: string, expectedCount = 0): Promise<PrintCode[]> {
+  const linkedSerials = readPrintLinks(storeId)[operationId] ?? []
+  if (expectedCount > 0 && linkedSerials.length >= expectedCount) {
+    const stored = await loadPrintCodes(storeId, linkedSerials)
+    const ready = readyLinkedCodes(stored, linkedSerials)
+    if (ready.length >= expectedCount) return ready
+  }
   const listed = await fetchOperationCodes(storeId, operationId)
   if (listed.length === 0) return []
   const identities = listed.map((item) => kizIdentity(item.code) ?? (item.gtin && item.serial ? { gtin: item.gtin, serial: item.serial } : null))
@@ -273,6 +362,7 @@ export async function resolvePrintCodes(storeId: string, operationId: string): P
   if (missing > 0) {
     throw new Error(`Нельзя печатать: полного кода нет у ${missing} из ${listed.length}. Загрузите файл печати Текшера, в котором есть хвост 91/92.`)
   }
+  rememberPrintLink(storeId, operationId, ready.map((item) => item.serial))
   return ready
 }
 

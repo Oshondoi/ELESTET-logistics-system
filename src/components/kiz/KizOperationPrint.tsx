@@ -18,6 +18,7 @@ export function KizOperationPrint({
   operationId,
   gtin,
   product,
+  expectedCount = 0,
   onError,
   onDone,
 }: {
@@ -25,6 +26,7 @@ export function KizOperationPrint({
   operationId: string
   gtin?: string
   product: Record<string, unknown> | null
+  expectedCount?: number
   onError: (message: string) => void
   onDone: (message: string) => void
 }) {
@@ -66,7 +68,7 @@ export function KizOperationPrint({
     setMenu(null)
     setBusy(true)
     try {
-      const codes = await resolvePrintCodes(storeId, operationId)
+      const codes = await resolvePrintCodes(storeId, operationId, expectedCount)
       if (codes.length === 0) {
         onError('В этой операции нет кодов для печати.')
         return
