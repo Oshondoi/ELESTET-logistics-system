@@ -64,7 +64,7 @@ function renderPage(
   const titleHeight = contentHeight * 0.22
   const info = [
     ['ИП/ОсОО', source.legalName || '—'],
-    ['Код получателя', source.recipientCode || '—'],
+    ['Код Отправителя', source.recipientCode || '—'],
     ['Склад назначения', source.warehouseName || '—'],
     ['Сдача на', source.handoverTo || '—'],
     ['Партия', `${source.batchNumber != null ? `P-${source.batchNumber}` : source.batchName || '—'} · Поставка S-${source.supplyNumber}`],

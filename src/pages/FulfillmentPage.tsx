@@ -598,7 +598,23 @@ const todayIsoDate = () => {
 
 const formatSheetDate = (value: string) => {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
-  return match ? `${match[3]}.${match[2]}.${match[1]}` : value;
+  if (!match) return value;
+  const months = [
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+  ];
+  const month = months[Number(match[2]) - 1];
+  return month ? `${match[3]}/${month}/${match[1]}` : value;
 };
 
 const linkedSupplyTrip = (
@@ -780,7 +796,6 @@ const buildBoxInfoSources = async ({
       const trip = tripFactForSupply(supply, trips, tripLinks);
       return [...supply.boxes]
         .sort((left, right) => left.box_number - right.box_number)
-        .filter((box) => box.items.length > 0)
         .map((box) => {
           const categories = [
             ...new Set(
@@ -1028,7 +1043,7 @@ function BoxContentsFormatModal({
         </div>
         <label className="mt-5 block">
           <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Код получателя
+            Код Отправителя
           </span>
           <input
             value={recipientCode}
@@ -12586,12 +12601,12 @@ const BatchDetailModal = ({
                               </button>
                               <button
                                 type="button"
-                                disabled={totalItems === 0}
+                                disabled={totalBoxes === 0}
                                 onClick={() => openSupplyBoxContents(supply)}
                                 className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
                                 title={
-                                  totalItems === 0
-                                    ? "В коробах нет товаров"
+                                  totalBoxes === 0
+                                    ? "В поставке нет коробов"
                                     : "Распечатать инфо коробов поставки"
                                 }
                               >
@@ -13813,8 +13828,7 @@ const BatchDetailModal = ({
                                           </svg>
                                         </button>
                                       )}
-                                      {box.items.length > 0 && (
-                                        <button
+                                      <button
                                           type="button"
                                           title="Распечатать инфо этого короба"
                                           onClick={() =>
@@ -13833,7 +13847,6 @@ const BatchDetailModal = ({
                                             <path d="M14 2v6h6M8 13h8M8 17h8" />
                                           </svg>
                                         </button>
-                                      )}
                                       {/* Авто-добавление (если есть право) */}
                                       {canPackingAutoAdd &&
                                         canManageStageData && (
@@ -21461,7 +21474,7 @@ export const FulfillmentPage = ({
     supply: FulfillmentSupplyWithBoxes,
     action: "excel" | "qr" | "contents" = "excel",
   ) =>
-    action === "qr"
+    action === "qr" || action === "contents"
       ? supply.boxes.length === 0
       : !supply.boxes.some((box) => box.items.length > 0);
 
