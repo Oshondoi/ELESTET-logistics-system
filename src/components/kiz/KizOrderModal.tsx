@@ -90,7 +90,15 @@ export function KizOrderModal({
   const selected = selectedIds
     .map((id) => products.find((product) => product.id === id))
     .filter((product): product is KizWbProduct => Boolean(product))
-  const found = products.filter((product) => !selectedIds.includes(product.id) && kizProductMatches(product, query)).slice(0, 40)
+  const found = products
+    .map((product, index) => ({
+      product,
+      index,
+      linked: kizSizeRows(product).some((row) => linkByBarcode.has(row.barcode)),
+    }))
+    .filter((item) => !selectedIds.includes(item.product.id) && kizProductMatches(item.product, query))
+    .sort((a, b) => Number(b.linked) - Number(a.linked) || a.index - b.index)
+    .slice(0, 40)
 
   const draft = useMemo(() => {
     const lines: KizOrderLine[] = []
@@ -241,9 +249,7 @@ export function KizOrderModal({
                 <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-white">
                   {loading && <p className="px-3 py-2 text-sm text-slate-400">Загружаем товары…</p>}
                   {!loading && found.length === 0 && <p className="px-3 py-2 text-sm text-slate-400">Ничего не найдено</p>}
-                  {found.map((product) => {
-                    const hasLink = kizSizeRows(product).some((row) => linkByBarcode.has(row.barcode))
-                    return (
+                  {found.map(({ product, linked }) => (
                       <button
                         key={product.id}
                         type="button"
@@ -253,17 +259,18 @@ export function KizOrderModal({
                           setQuery('')
                           setListOpen(false)
                         }}
-                        className="flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50"
+                        className={`flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 ${linked ? 'bg-emerald-50 hover:bg-emerald-100' : 'hover:bg-slate-50'}`}
                       >
                         <PhotoThumb url={kizPhotoUrl(product.photos)} previewZIndex={80} />
                         <span className="min-w-0">
                           <span className="block truncate text-sm font-medium text-slate-800">{product.name || 'Без названия'}</span>
                           <span className="block truncate text-xs text-slate-400">{product.nm_id} · {product.vendor_code || 'без артикула продавца'}</span>
-                          {!hasLink && <span className="block text-xs font-medium text-amber-700">Нет связки с GTIN</span>}
+                          {linked
+                            ? <span className="block text-xs font-medium text-emerald-700">Есть связка</span>
+                            : <span className="block text-xs font-medium text-amber-700">Нет связки с GTIN</span>}
                         </span>
                       </button>
-                    )
-                  })}
+                  ))}
                 </div>
               )}
             </div>
