@@ -94,17 +94,20 @@ function getSizeRows(product: Product): SizeRow[] {
 
 function getProductExportSizeRows(product: Product): SizeRow[] {
   const sizeRows = getSizeRows(product)
-  const sizeByBarcode = new Map(sizeRows.filter((row) => row.barcode !== '—').map((row) => [row.barcode, row.techSize]))
-  const barcodes = [...new Set([
-    ...product.barcodes.filter(Boolean),
-    ...sizeRows.map((row) => row.barcode).filter((barcode) => barcode !== '—'),
-  ])]
-  if (barcodes.length === 0) return [{ techSize: sizeRows[0]?.techSize ?? '—', barcode: '—', rowKey: `${product.id}-export-0` }]
-  return barcodes.map((barcode, index) => ({
-    techSize: sizeByBarcode.get(barcode) ?? '—',
-    barcode,
-    rowKey: `${product.id}-export-${index}`,
-  }))
+  const seen = new Set<string>()
+  const rows: SizeRow[] = []
+  sizeRows.forEach((row) => {
+    if (!row.barcode || row.barcode === '—' || seen.has(row.barcode)) return
+    seen.add(row.barcode)
+    rows.push(row)
+  })
+  product.barcodes.filter(Boolean).forEach((barcode, index) => {
+    if (seen.has(barcode)) return
+    seen.add(barcode)
+    rows.push({ techSize: '—', barcode, rowKey: `${product.id}-export-extra-${index}` })
+  })
+  if (rows.length === 0) return [{ techSize: '—', barcode: '—', rowKey: `${product.id}-export-0` }]
+  return rows
 }
 
 const PRODUCT_EXPORT_COLUMNS = [
