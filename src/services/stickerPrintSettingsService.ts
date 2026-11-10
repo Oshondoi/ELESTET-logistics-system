@@ -17,6 +17,7 @@ export interface StickerPrintPreferences {
   icon_no_bleach: boolean
   icon_no_tumble_dry: boolean
   icon_eac: boolean
+  apply_to_all: boolean
 }
 
 export interface StickerProductPrintOverride {
@@ -25,8 +26,19 @@ export interface StickerProductPrintOverride {
   seller_article?: string
   brand?: string
   color?: string
+  multi_color?: boolean
   country?: string
   sizes?: Record<string, string>
+  show_wb_article?: boolean
+  show_seller_article?: boolean
+  supplier?: string
+  supplier_address?: string
+  production_date?: string
+  icon_wash?: boolean
+  icon_iron?: boolean
+  icon_no_bleach?: boolean
+  icon_no_tumble_dry?: boolean
+  icon_eac?: boolean
 }
 
 export const defaultStickerPrintPreferences = (): StickerPrintPreferences => ({
@@ -41,6 +53,7 @@ export const defaultStickerPrintPreferences = (): StickerPrintPreferences => ({
   icon_no_bleach: false,
   icon_no_tumble_dry: false,
   icon_eac: true,
+  apply_to_all: false,
 })
 
 export async function fetchStickerPrintPreferences(accountId: string, storeId: string): Promise<StickerPrintPreferences> {
@@ -98,5 +111,17 @@ export async function saveStickerProductOverride(
     overrides,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'account_id,store_id,product_id' })
+  if (error) throw error
+}
+
+export async function deleteStickerProductOverride(accountId: string, storeId: string, productId: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const db = supabase as any
+  const { error } = await db
+    .from('sticker_product_print_overrides')
+    .delete()
+    .eq('account_id', accountId)
+    .eq('store_id', storeId)
+    .eq('product_id', productId)
   if (error) throw error
 }

@@ -16,6 +16,7 @@ export interface StickerPrintGroupDraft {
   productId?: string
   wbProductMissing?: boolean
   availableColors: string[]
+  multiColor: boolean
   name: string
   article: string
   sellerArticle: string
@@ -42,8 +43,11 @@ interface Props {
   groups: StickerPrintGroupDraft[]
   showColorTabs?: boolean
   allowCreateBundle?: boolean
+  applyToAll?: boolean
+  isBundle?: boolean
+  hasOwnSettings?: boolean
   onClose: () => void
-  onRemember: (groups: StickerPrintGroupDraft[]) => Promise<void>
+  onRemember: (groups: StickerPrintGroupDraft[], action: 'product' | 'all' | 'release-own' | 'release-all') => Promise<void>
   onPrint: (stickers: StickerTemplate[]) => void
   onCreateBundle?: (stickers: StickerTemplate[]) => void
 }
@@ -82,7 +86,12 @@ const localToday = () => {
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
 }
 
-export function StickerPrintSettingsModal({ open, title, groups: initialGroups, showColorTabs = false, allowCreateBundle = false, onClose, onRemember, onPrint, onCreateBundle }: Props) {
+function chosenColors(group: StickerPrintGroupDraft): string[] {
+  const picked = new Set(group.color.split(',').map((color) => color.trim().toLocaleLowerCase('ru-RU')).filter(Boolean))
+  return group.availableColors.filter((color) => picked.has(color.toLocaleLowerCase('ru-RU')))
+}
+
+export function StickerPrintSettingsModal({ open, title, groups: initialGroups, showColorTabs = false, allowCreateBundle = false, applyToAll = false, isBundle = false, hasOwnSettings = false, onClose, onRemember, onPrint, onCreateBundle }: Props) {
   const [groups, setGroups] = useState<StickerPrintGroupDraft[]>(initialGroups)
   const [activeKey, setActiveKey] = useState(initialGroups[0]?.key ?? '')
   const [isRemembering, setIsRemembering] = useState(false)
@@ -111,13 +120,17 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
     patchGroup({ sizes: group.sizes.map((size) => size.key === key ? { ...size, ...patch } : size) })
   }
 
-  const remember = async () => {
+  const remember = async (action: 'product' | 'all' | 'release-own' | 'release-all') => {
     setIsRemembering(true)
     setRememberError(null)
-    try { await onRemember(groups) }
+    try { await onRemember(groups, action) }
     catch (error) { setRememberError(error instanceof Error ? error.message : 'Не удалось сохранить настройки') }
     finally { setIsRemembering(false) }
   }
+
+  const allSizesChecked = group.sizes.length > 0 && group.sizes.every((size) => size.checked)
+  const someSizesChecked = group.sizes.some((size) => size.checked)
+  const pickedColors = chosenColors(group)
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4" onClick={onClose}>
@@ -156,7 +169,55 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
 
             <label><span className="mb-1 block text-xs font-medium text-slate-500">Бренд</span><input className={fieldClass} value={group.brand} onChange={(e) => patchGroup({ brand: e.target.value })} /></label>
             {group.availableColors.length > 0 ? (
-              <label><span className="mb-1 block text-xs font-medium text-slate-500">Цвет</span><select className={fieldClass} value={group.color} onChange={(e) => patchGroup({ color: e.target.value })}><option value="">Выберите цвет</option>{group.availableColors.map((color) => <option key={color} value={color}>{color}</option>)}</select></label>
+              <div>
+                <span className="mb-1 flex items-center justify-between gap-2 text-xs font-medium text-slate-500">
+                  Цвет
+                  <label className="flex items-center gap-1.5 font-normal text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={group.multiColor}
+                      onChange={(event) => {
+                        const enabled = event.target.checked
+                        const current = chosenColors({ ...group, multiColor: true })
+                        const next = enabled
+                          ? (current.length > 0 ? current : (group.color ? [group.color] : []))
+                          : current.slice(0, 1)
+                        patchGroup({ multiColor: enabled, color: next.join(', ') })
+                      }}
+                      className="accent-blue-600"
+                    />
+                    Несколько
+                  </label>
+                </span>
+                {group.multiColor ? (
+                  <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto rounded-xl border border-slate-200 px-3 py-2">
+                    {group.availableColors.map((color) => {
+                      const checked = pickedColors.some((item) => item.toLocaleLowerCase('ru-RU') === color.toLocaleLowerCase('ru-RU'))
+                      return (
+                        <label key={color} className="flex items-center gap-1.5 text-sm text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(event) => {
+                              const next = event.target.checked
+                                ? [...pickedColors, color]
+                                : pickedColors.filter((item) => item.toLocaleLowerCase('ru-RU') !== color.toLocaleLowerCase('ru-RU'))
+                              patchGroup({ color: next.join(', ') })
+                            }}
+                            className="accent-blue-600"
+                          />
+                          {color}
+                        </label>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <select className={fieldClass} value={pickedColors[0] ?? ''} onChange={(event) => patchGroup({ color: event.target.value })}>
+                    <option value="">Выберите цвет</option>
+                    {group.availableColors.map((color) => <option key={color} value={color}>{color}</option>)}
+                  </select>
+                )}
+              </div>
             ) : (
               <label><span className="mb-1 block text-xs font-medium text-slate-500">Цвет</span><input className={fieldClass} value={group.color} onChange={(e) => patchGroup({ color: e.target.value })} /></label>
             )}
@@ -169,7 +230,19 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
           </div>
 
           <div className="mt-5 rounded-2xl border border-slate-200">
-            <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-800">Размеры и количество</div>
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+              <span className="text-sm font-semibold text-slate-800">Размеры и количество</span>
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={allSizesChecked}
+                  ref={(input) => { if (input) input.indeterminate = someSizesChecked && !allSizesChecked }}
+                  onChange={(event) => patchGroup({ sizes: group.sizes.map((size) => ({ ...size, checked: event.target.checked })) })}
+                  className="h-4 w-4 accent-blue-600"
+                />
+                Все размеры
+              </label>
+            </div>
             <div className="divide-y divide-slate-100">
               {group.sizes.map((size) => (
                 <div key={size.key} className={`grid grid-cols-[auto_minmax(70px,1fr)_minmax(150px,2fr)_90px] items-center gap-3 px-4 py-3 ${size.checked ? 'bg-blue-50/40' : ''}`}>
@@ -203,7 +276,10 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
           <span className={`text-sm ${rememberError ? 'text-rose-600' : 'text-slate-500'}`}>{rememberError ?? <>Выбрано размеров: <b className="text-slate-900">{selectedCount}</b></>}</span>
           <div className="flex flex-wrap justify-end gap-2">
             <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50">Отмена</button>
-            <button type="button" disabled={isRemembering} onClick={() => void remember()} className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50">{isRemembering ? 'Сохранение…' : 'Запомнить настройки'}</button>
+            <button type="button" disabled={isRemembering} onClick={() => void remember('product')} className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50">{isRemembering ? 'Сохранение…' : isBundle ? 'Запомнить' : 'Запомнить для товара'}</button>
+            {!isBundle && <button type="button" disabled={isRemembering} onClick={() => void remember('all')} className="rounded-xl border border-blue-200 px-4 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Запомнить для всех</button>}
+            {!isBundle && applyToAll && <button type="button" disabled={isRemembering} onClick={() => void remember('release-all')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Выключить для всех</button>}
+            {!isBundle && hasOwnSettings && <button type="button" disabled={isRemembering} onClick={() => void remember('release-own')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Выключить свою</button>}
             {allowCreateBundle && onCreateBundle && <button type="button" disabled={selectedCount === 0} onClick={() => onCreateBundle(groupsToStickers(groups))} className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 disabled:opacity-40">Создать набор</button>}
             <button type="button" disabled={selectedCount === 0} onClick={() => onPrint(groupsToStickers(groups))} className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">Печать</button>
           </div>

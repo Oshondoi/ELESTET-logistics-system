@@ -19,6 +19,7 @@ import {
   fetchStickerProductOverrides,
   saveStickerPrintPreferences,
   saveStickerProductOverride,
+  deleteStickerProductOverride,
   type StickerPrintPreferences,
   type StickerProductPrintOverride,
 } from '../services/stickerPrintSettingsService'
@@ -249,6 +250,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
     openPrintSettings(toPrint, {
       title: `Печать набора «${bundle.name}»`,
       showColorTabs: true,
+      isBundle: true,
       onPrint: (configured) => previewWithCheck(configured, downloadStickerPdf),
     })
   }
@@ -262,6 +264,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
     openPrintSettings(toPrint, {
       title: `Печать набора «${bundle.name}»`,
       showColorTabs: true,
+      isBundle: true,
       onPrint: (configured) => previewWithCheck(configured, previewStickerPdf),
     })
   }
@@ -360,6 +363,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
     groups: StickerPrintGroupDraft[]
     showColorTabs: boolean
     allowCreateBundle: boolean
+    isBundle: boolean
     onPrint: (stickers: StickerTemplate[]) => void
   } | null
   const [printSetup, setPrintSetup] = useState<PrintSetupState>(null)
@@ -554,19 +558,27 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
     return importProducts.find((product) => getSizeRowsImp(product).some((row) => row.barcode === sticker.barcode))
   }
 
-  const buildPrintGroups = (templates: StickerTemplate[], startUnchecked = false): StickerPrintGroupDraft[] => {
+  const buildPrintGroups = (templates: StickerTemplate[], startUnchecked = false, isBundle = false): StickerPrintGroupDraft[] => {
     const groups = new Map<string, StickerPrintGroupDraft>()
+    const globalOn = printPreferences.apply_to_all && !isBundle
     for (const template of templates) {
       const product = findProductForSticker(template)
       const productId = product?.id ?? template.product_id ?? undefined
       const override = productId ? productPrintOverrides.get(productId) : undefined
+      const own = Boolean(override)
+      const takeGlobal = isBundle ? !printPreferences.apply_to_all : globalOn ? !own : true
       const colors = getWbColors(product?.color)
+      const multiColor = Boolean(override?.multi_color) && colors.length > 1
       const rememberedColor = override?.color ?? template.color ?? ''
+      const rememberedParts = rememberedColor.split(',').map((color) => color.trim().toLocaleLowerCase('ru-RU')).filter(Boolean)
+      const matchedColors = colors.filter((color) => rememberedParts.includes(color.toLocaleLowerCase('ru-RU')))
       const selectedColor = colors.length === 0
         ? rememberedColor
-        : colors.some((color) => color.toLocaleLowerCase('ru-RU') === rememberedColor.toLocaleLowerCase('ru-RU'))
-          ? colors.find((color) => color.toLocaleLowerCase('ru-RU') === rememberedColor.toLocaleLowerCase('ru-RU')) ?? ''
-          : colors.length === 1 ? colors[0] : ''
+        : multiColor
+          ? matchedColors.join(', ')
+          : matchedColors.length === 1 && rememberedParts.length === 1
+            ? matchedColors[0]
+            : colors.length === 1 ? colors[0] : ''
       const key = productId ?? `custom:${template.article ?? template.name}:${template.color ?? ''}`
       let group = groups.get(key)
       if (!group) {
@@ -576,23 +588,32 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
           productId,
           wbProductMissing: !product && Boolean(template.product_id || template.nm_id),
           availableColors: colors,
+          multiColor,
           name: (productId ? importCustomNames.get(productId) : undefined) ?? override?.name ?? product?.name ?? template.name,
           article: String(product?.nm_id ?? template.nm_id ?? template.article ?? ''),
           sellerArticle: override?.seller_article ?? product?.vendor_code ?? template.seller_article ?? '',
-          showWbArticle: printPreferences.show_wb_article,
-          showSellerArticle: printPreferences.show_seller_article,
+          showWbArticle: takeGlobal ? printPreferences.show_wb_article : (override?.show_wb_article ?? template.show_wb_article ?? true),
+          showSellerArticle: takeGlobal ? printPreferences.show_seller_article : (override?.show_seller_article ?? template.show_seller_article ?? true),
           brand: override?.brand ?? product?.brand ?? template.brand ?? '',
           composition: override?.composition ?? product?.composition ?? template.composition ?? '',
           color: selectedColor,
-          supplier: printPreferences.supplier || importStore?.supplier_full || importStore?.supplier || template.supplier || '',
-          supplierAddress: printPreferences.supplier_address || importStore?.address || template.supplier_address || '',
-          productionDate: globalProductionDate || printPreferences.production_date || localToday(),
-          country: override?.country ?? product?.country ?? importStore?.country ?? (product ? '' : template.country ?? ''),
-          iconWash: globalIcons.wash,
-          iconIron: globalIcons.iron,
-          iconNoBleach: globalIcons.no_bleach,
-          iconNoTumbleDry: globalIcons.no_tumble_dry,
-          iconEac: globalIcons.eac,
+          supplier: takeGlobal
+            ? (printPreferences.supplier || importStore?.supplier_full || importStore?.supplier || template.supplier || '')
+            : (override?.supplier || template.supplier || importStore?.supplier_full || importStore?.supplier || ''),
+          supplierAddress: takeGlobal
+            ? (printPreferences.supplier_address || importStore?.address || template.supplier_address || '')
+            : (override?.supplier_address || template.supplier_address || importStore?.address || ''),
+          productionDate: takeGlobal
+            ? (globalProductionDate || printPreferences.production_date || localToday())
+            : (override?.production_date || template.production_date || localToday()),
+          country: takeGlobal
+            ? (override?.country ?? (printPreferences.country || product?.country || importStore?.country || (product ? '' : template.country ?? '')))
+            : (override?.country ?? product?.country ?? template.country ?? importStore?.country ?? ''),
+          iconWash: takeGlobal ? globalIcons.wash : (override?.icon_wash ?? template.icon_wash),
+          iconIron: takeGlobal ? globalIcons.iron : (override?.icon_iron ?? template.icon_iron),
+          iconNoBleach: takeGlobal ? globalIcons.no_bleach : (override?.icon_no_bleach ?? template.icon_no_bleach),
+          iconNoTumbleDry: takeGlobal ? globalIcons.no_tumble_dry : (override?.icon_no_tumble_dry ?? template.icon_no_tumble_dry),
+          iconEac: takeGlobal ? globalIcons.eac : (override?.icon_eac ?? template.icon_eac),
           sizes: [],
         }
         groups.set(key, group)
@@ -623,39 +644,70 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
       showColorTabs?: boolean
       startUnchecked?: boolean
       allowCreateBundle?: boolean
+      isBundle?: boolean
       onPrint: (stickers: StickerTemplate[]) => void
     },
   ) => {
     if (templates.length === 0) return
+    const isBundle = Boolean(options.isBundle)
     setPrintSetup({
       title: options.title ?? 'Настройка печати',
-      groups: buildPrintGroups(templates, options.startUnchecked),
+      groups: buildPrintGroups(templates, options.startUnchecked, isBundle),
       showColorTabs: Boolean(options.showColorTabs),
       allowCreateBundle: Boolean(options.allowCreateBundle),
+      isBundle,
       onPrint: options.onPrint,
     })
   }
 
-  const rememberPrintGroups = async (groups: StickerPrintGroupDraft[]) => {
+  const rememberPrintGroups = async (groups: StickerPrintGroupDraft[], action: 'product' | 'all' | 'release-own' | 'release-all') => {
     const first = groups[0]
     if (!first || !activeAccountId || !selectedStoreId) return
-    const nextPreferences: StickerPrintPreferences = {
-      show_wb_article: first.showWbArticle,
-      show_seller_article: first.showSellerArticle,
-      supplier: first.supplier,
-      supplier_address: first.supplierAddress,
-      production_date: first.productionDate,
-      country: first.country,
-      icon_wash: first.iconWash,
-      icon_iron: first.iconIron,
-      icon_no_bleach: first.iconNoBleach,
-      icon_no_tumble_dry: first.iconNoTumbleDry,
-      icon_eac: first.iconEac,
+    const isBundle = Boolean(printSetup?.isBundle)
+    const saveGlobal = async (applyToAll: boolean, fromForm: boolean) => {
+      const nextPreferences: StickerPrintPreferences = fromForm ? {
+        show_wb_article: first.showWbArticle,
+        show_seller_article: first.showSellerArticle,
+        supplier: first.supplier,
+        supplier_address: first.supplierAddress,
+        production_date: first.productionDate,
+        country: first.country,
+        icon_wash: first.iconWash,
+        icon_iron: first.iconIron,
+        icon_no_bleach: first.iconNoBleach,
+        icon_no_tumble_dry: first.iconNoTumbleDry,
+        icon_eac: first.iconEac,
+        apply_to_all: applyToAll,
+      } : { ...printPreferences, apply_to_all: applyToAll }
+      await saveStickerPrintPreferences(activeAccountId, selectedStoreId, nextPreferences)
+      setPrintPreferences(nextPreferences)
+      if (fromForm) {
+        setGlobalProductionDate(nextPreferences.production_date)
+        setGlobalIcons({ wash: first.iconWash, iron: first.iconIron, no_bleach: first.iconNoBleach, no_tumble_dry: first.iconNoTumbleDry, eac: first.iconEac })
+      }
     }
-    await saveStickerPrintPreferences(activeAccountId, selectedStoreId, nextPreferences)
-    setPrintPreferences(nextPreferences)
-    setGlobalProductionDate(nextPreferences.production_date)
-    setGlobalIcons({ wash: first.iconWash, iron: first.iconIron, no_bleach: first.iconNoBleach, no_tumble_dry: first.iconNoTumbleDry, eac: first.iconEac })
+    if (!isBundle && action === 'all') {
+      await saveGlobal(true, true)
+      showToast('Настройки печати сохранены для всех товаров', 'success')
+      return
+    }
+    if (!isBundle && action === 'release-all') {
+      await saveGlobal(false, false)
+      showToast('Настройки для всех выключены', 'success')
+      return
+    }
+    if (!isBundle && action === 'release-own') {
+      const nextOverrides = new Map(productPrintOverrides)
+      for (const group of groups) {
+        if (!group.productId) continue
+        await deleteStickerProductOverride(activeAccountId, selectedStoreId, group.productId)
+        nextOverrides.delete(group.productId)
+      }
+      setProductPrintOverrides(nextOverrides)
+      setImportCustomNames(new Map([...nextOverrides.entries()].flatMap(([productId, value]) => value.name ? [[productId, value.name] as const] : [])))
+      showToast('Своя настройка выключена', 'success')
+      return
+    }
 
     const nextOverrides = new Map(productPrintOverrides)
     for (const group of groups) {
@@ -672,6 +724,17 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
         ...(group.sellerArticle !== (product?.vendor_code ?? '') ? { seller_article: group.sellerArticle } : {}),
         ...(group.brand !== (product?.brand ?? '') ? { brand: group.brand } : {}),
         color: group.color,
+        multi_color: group.multiColor,
+        show_wb_article: group.showWbArticle,
+        show_seller_article: group.showSellerArticle,
+        supplier: group.supplier,
+        supplier_address: group.supplierAddress,
+        production_date: group.productionDate,
+        icon_wash: group.iconWash,
+        icon_iron: group.iconIron,
+        icon_no_bleach: group.iconNoBleach,
+        icon_no_tumble_dry: group.iconNoTumbleDry,
+        icon_eac: group.iconEac,
         ...(group.country !== automaticCountry ? { country: group.country } : {}),
         ...(Object.keys(customSizes).length > 0 ? { sizes: customSizes } : {}),
       }
@@ -704,7 +767,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
     }
     setProductPrintOverrides(nextOverrides)
     setImportCustomNames(new Map([...nextOverrides.entries()].flatMap(([productId, value]) => value.name ? [[productId, value.name] as const] : [])))
-    showToast('Настройки печати сохранены', 'success')
+    showToast(isBundle ? 'Настройки набора сохранены' : 'Настройки этого товара сохранены', 'success')
   }
 
   const openBundleCreatorFromPrint = (templates: StickerTemplate[]) => {
@@ -893,6 +956,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
           groups={printSetup.groups}
           showColorTabs={printSetup.showColorTabs}
           allowCreateBundle={printSetup.allowCreateBundle}
+          applyToAll={printPreferences.apply_to_all}
+          isBundle={printSetup.isBundle}
+          hasOwnSettings={printSetup.groups.some((group) => Boolean(group.productId && productPrintOverrides.has(group.productId)))}
           onClose={() => setPrintSetup(null)}
           onRemember={rememberPrintGroups}
           onCreateBundle={openBundleCreatorFromPrint}
@@ -979,7 +1045,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
                       country: first?.country ?? group.country,
                     }))
                     setIsRememberingMissing(true)
-                    void rememberPrintGroups(groups)
+                    void rememberPrintGroups(groups, 'product')
                       .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось сохранить настройки', 'error'))
                       .finally(() => setIsRememberingMissing(false))
                   }}
