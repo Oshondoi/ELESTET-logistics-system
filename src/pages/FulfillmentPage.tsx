@@ -142,6 +142,7 @@ import {
   fetchWorkTariffs,
   fetchConsumables,
   fetchConsumableCatalog,
+  fetchCarriers,
 } from "../services/directoriesService";
 import { Card } from "../components/ui/Card";
 import { InvoicePhotoCell } from "../components/ui/InvoicePhotoCell";
@@ -182,10 +183,10 @@ import {
   type OptionalBoxExportColumnKey,
 } from "../lib/fulfillmentBoxExportConfig";
 import {
-  buildFulfillmentBoxContentsPdf,
+  buildFulfillmentBoxInfoPdf,
   type FulfillmentBoxContentsFormat,
   type FulfillmentBoxContentsOrientation,
-  type FulfillmentBoxContentsPageSource,
+  type FulfillmentBoxInfoPageSource,
 } from "../lib/fulfillmentBoxContentsPdf";
 
 interface CatalogSizeRow {
@@ -588,34 +589,161 @@ const getBatchExcelExportFilename = ({
   return `C${accountShortId ?? "unknown"}_P${batchShortId ?? "unknown"}_${safeBoxExportFilenamePart(storeName ?? "unknown")}_${selectionMode}_${date}_${getExcelModeFilenameSuffix(exportMode)}.xlsx`;
 };
 
-const formatCargoDate = (value: string) => {
+const todayIsoDate = () => {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+};
+
+const formatSheetDate = (value: string) => {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
   return match ? `${match[3]}.${match[2]}.${match[1]}` : value;
 };
 
-const cargoHandoverDate = (
+const linkedSupplyTrip = (
   supply: FulfillmentSupplyWithBoxes,
   trips: TripWithLines[],
+) =>
+  (supply.trip_id
+    ? trips.find((item) => item.id === supply.trip_id)
+    : undefined) ??
+  trips.find((item) =>
+    item.lines.some(
+      (line) =>
+        line.id === supply.trip_line_id ||
+        line.fulfillment_supply_id === supply.id,
+    ),
+  );
+
+const boxTripLabel = (
+  trip: { trip_number: string | null; draft_number: number } | undefined,
 ) => {
-  const trip =
-    trips.find((item) => item.id === supply.trip_id) ??
-    trips.find((item) =>
-      item.lines.some((line) => line.id === supply.trip_line_id),
-    );
-  const line =
-    trip?.lines.find((item) => item.id === supply.trip_line_id) ??
-    trip?.lines.find((item) => item.fulfillment_supply_id === supply.id);
-  const raw = line?.shipped_date || line?.transit_at || trip?.departure_date || "";
-  return raw ? formatCargoDate(raw) : "";
+  if (!trip) return "—";
+  if (trip.trip_number) return `Рейс ${trip.trip_number}`;
+  return `Черновик-${trip.draft_number}`;
 };
 
-const buildBoxContentsSources = async ({
+type TripSheetFact = {
+  carrier: string;
+  trip_number: string | null;
+  draft_number: number;
+};
+
+const loadSupplyTripFacts = async (
+  accountId: string,
+  supplies: FulfillmentSupplyWithBoxes[],
+  trips: TripWithLines[],
+  batchTripId: string | null,
+) => {
+  const primaryBySupply = new Map<string, string>();
+  const lineIds = supplies
+    .map((supply) => supply.trip_line_id)
+    .filter((id): id is string => Boolean(id));
+  const supplyIds = supplies.map((supply) => supply.id);
+  let lineRows: Array<{
+    id: string;
+    trip_id: string;
+    fulfillment_supply_id: string | null;
+  }> = [];
+  if (supabase && (supplyIds.length > 0 || lineIds.length > 0)) {
+    const db = supabase as unknown as {
+      from: (table: string) => {
+        select: (columns: string) => {
+          in: (
+            column: string,
+            values: string[],
+          ) => Promise<{
+            data: Array<{
+              id: string;
+              trip_id: string;
+              fulfillment_supply_id?: string | null;
+            }> | null;
+          }>;
+        };
+      };
+    };
+    const [bySupply, byLine] = await Promise.all([
+      supplyIds.length
+        ? db
+            .from("trip_lines")
+            .select("id, trip_id, fulfillment_supply_id")
+            .in("fulfillment_supply_id", supplyIds)
+        : Promise.resolve({ data: [] }),
+      lineIds.length
+        ? db.from("trip_lines").select("id, trip_id").in("id", lineIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+    lineRows = [...(bySupply.data ?? []), ...(byLine.data ?? [])].map(
+      (row) => ({
+        id: row.id,
+        trip_id: row.trip_id,
+        fulfillment_supply_id: row.fulfillment_supply_id ?? null,
+      }),
+    );
+  }
+  supplies.forEach((supply) => {
+    const linkedLine = lineRows.find(
+      (row) =>
+        row.fulfillment_supply_id === supply.id ||
+        row.id === supply.trip_line_id,
+    );
+    const id =
+      supply.trip_id ||
+      linkedLine?.trip_id ||
+      linkedSupplyTrip(supply, trips)?.id ||
+      batchTripId ||
+      "";
+    if (id) primaryBySupply.set(supply.id, id);
+  });
+  const facts = new Map<string, TripSheetFact>();
+  const tripIds = [...new Set(primaryBySupply.values())];
+  if (supabase && tripIds.length > 0) {
+    const { data } = await supabase
+      .from("trips")
+      .select("id, carrier, trip_number, draft_number")
+      .in("id", tripIds);
+    (data ?? []).forEach((row) => {
+      facts.set(row.id, {
+        carrier: (row.carrier ?? "").trim(),
+        trip_number: row.trip_number,
+        draft_number: row.draft_number,
+      });
+    });
+  }
+  return { primaryBySupply, facts };
+};
+
+const tripFactForSupply = (
+  supply: FulfillmentSupplyWithBoxes,
+  trips: TripWithLines[],
+  links: {
+    primaryBySupply: Map<string, string>;
+    facts: Map<string, TripSheetFact>;
+  },
+) => {
+  const tripId = links.primaryBySupply.get(supply.id);
+  const fresh = tripId ? links.facts.get(tripId) : undefined;
+  const memory =
+    (tripId ? trips.find((trip) => trip.id === tripId) : undefined) ??
+    linkedSupplyTrip(supply, trips);
+  return {
+    carrier: fresh?.carrier || memory?.carrier?.trim() || "",
+    trip_number: fresh?.trip_number ?? memory?.trip_number ?? null,
+    draft_number: fresh?.draft_number ?? memory?.draft_number ?? 0,
+    found: Boolean(fresh || memory),
+  };
+};
+
+const buildBoxInfoSources = async ({
   accountId,
   batch,
   supplies,
   legalName,
   recipientCode,
   trips,
+  handoverTo,
+  handoverDate,
 }: {
   accountId: string;
   batch: FulfillmentBatchWithItems;
@@ -623,7 +751,15 @@ const buildBoxContentsSources = async ({
   legalName: string;
   recipientCode: string;
   trips: TripWithLines[];
-}): Promise<FulfillmentBoxContentsPageSource[]> => {
+  handoverTo: string | null;
+  handoverDate: string;
+}): Promise<FulfillmentBoxInfoPageSource[]> => {
+  const tripLinks = await loadSupplyTripFacts(
+    accountId,
+    supplies,
+    trips,
+    batch.trip_id,
+  );
   const boxes = supplies.flatMap((supply) => supply.boxes);
   const barcodes = [
     ...new Set(
@@ -640,32 +776,38 @@ const buildBoxContentsSources = async ({
 
   return [...supplies]
     .sort((left, right) => left.supply_number - right.supply_number)
-    .flatMap((supply) =>
-      [...supply.boxes]
+    .flatMap((supply) => {
+      const trip = tripFactForSupply(supply, trips, tripLinks);
+      return [...supply.boxes]
         .sort((left, right) => left.box_number - right.box_number)
         .filter((box) => box.items.length > 0)
-        .map((box) => ({
-          batchNumber: batch.short_id,
-          batchName: batch.name,
-          legalName,
-          recipientCode,
-          supplyNumber: supply.supply_number,
-          warehouseName:
-            supply.wb_warehouse_name?.trim() || supply.warehouse_name,
-          cargoDate: cargoHandoverDate(supply, trips),
-          boxNumber: box.box_number,
-          rows: box.items.map((item) => {
-            const info = productInfo[item.barcode];
-            return {
-              barcode: item.barcode,
-              wbArticle: String(info?.nm_id ?? item._info?.nm_id ?? "—"),
-              sellerArticle: info?.vendor_code || item._info?.vendor_code || "—",
-              productName: info?.name || item.product_name || item._info?.name || "—",
-              quantity: item.qty,
-            };
-          }),
-        })),
-    );
+        .map((box) => {
+          const categories = [
+            ...new Set(
+              box.items
+                .map((item) => {
+                  const info = productInfo[item.barcode];
+                  return (info?.category || item._info?.category || "").trim();
+                })
+                .filter(Boolean),
+            ),
+          ];
+          return {
+            batchNumber: batch.short_id,
+            batchName: batch.name,
+            legalName,
+            recipientCode,
+            supplyNumber: supply.supply_number,
+            warehouseName:
+              supply.wb_warehouse_name?.trim() || supply.warehouse_name,
+            handoverTo: handoverTo?.trim() || trip.carrier || "—",
+            category: categories.join(", ") || "—",
+            handoverDate,
+            tripLabel: trip.found ? boxTripLabel(trip) : "—",
+            boxNumber: box.box_number,
+          };
+        });
+    });
 };
 
 const openBoxContentsPdf = async (
@@ -678,6 +820,9 @@ const openBoxContentsPdf = async (
     legalName: string;
     recipientCode: string;
     trips: TripWithLines[];
+    half: boolean;
+    handoverTo: string | null;
+    handoverDate: string;
   },
 ) => {
   const preview = window.open("", "_blank");
@@ -687,16 +832,18 @@ const openBoxContentsPdf = async (
     );
   }
   try {
-    const sources = await buildBoxContentsSources({
+    const sources = await buildBoxInfoSources({
       accountId,
       batch,
       supplies,
       legalName: details.legalName,
       recipientCode: details.recipientCode,
       trips: details.trips,
+      handoverTo: details.handoverTo,
+      handoverDate: details.handoverDate,
     });
     const url = URL.createObjectURL(
-      buildFulfillmentBoxContentsPdf(sources, format, orientation),
+      buildFulfillmentBoxInfoPdf(sources, format, orientation, details.half),
     );
     preview.location.href = url;
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
@@ -709,23 +856,46 @@ const openBoxContentsPdf = async (
 function BoxContentsFormatModal({
   accountId,
   description,
+  supplies,
+  trips,
+  batchTripId,
   onClose,
   onPrint,
 }: {
   accountId: string;
   description: string;
+  supplies: FulfillmentSupplyWithBoxes[];
+  trips: TripWithLines[];
+  batchTripId: string | null;
   onClose: () => void;
   onPrint: (
     format: FulfillmentBoxContentsFormat,
     orientation: FulfillmentBoxContentsOrientation,
     recipientCode: string,
+    half: boolean,
+    details: { handoverTo: string | null; handoverDate: string },
   ) => Promise<void>;
 }) {
   const recipientKey = `elestet-box-recipient-code:${accountId}`;
+  const orientationKey = `elestet-box-print-orientation:${accountId}`;
+  const formatKey = `elestet-box-print-format:${accountId}`;
   const [busy, setBusy] = useState<FulfillmentBoxContentsFormat | null>(null);
   const [error, setError] = useState("");
-  const [orientation, setOrientation] =
-    useState<FulfillmentBoxContentsOrientation>("portrait");
+  const [orientation, setOrientation] = useState<FulfillmentBoxContentsOrientation | "half">(() => {
+    try {
+      const stored = localStorage.getItem(orientationKey);
+      return stored === "landscape" || stored === "half" ? stored : "portrait";
+    } catch {
+      return "portrait";
+    }
+  });
+  const [format, setFormat] = useState<FulfillmentBoxContentsFormat>(() => {
+    try {
+      return localStorage.getItem(formatKey) === "120x75" ? "120x75" : "a4";
+    } catch {
+      return "a4";
+    }
+  });
   const [recipientCode, setRecipientCode] = useState(() => {
     try {
       return localStorage.getItem(recipientKey) ?? "";
@@ -733,8 +903,67 @@ function BoxContentsFormatModal({
       return "";
     }
   });
-  const print = async (format: FulfillmentBoxContentsFormat) => {
+  const [handoverMode, setHandoverMode] = useState<"trip" | "manual">("trip");
+  const [manualCarrier, setManualCarrier] = useState("");
+  const [dateMode, setDateMode] = useState<"print" | "manual">("print");
+  const [manualDate, setManualDate] = useState(todayIsoDate);
+  const [carrierNames, setCarrierNames] = useState<string[]>([]);
+  const [tripLinks, setTripLinks] = useState<{
+    primaryBySupply: Map<string, string>;
+    facts: Map<string, TripSheetFact>;
+  }>({ primaryBySupply: new Map(), facts: new Map() });
+  const tripCarriers = useMemo(
+    () => [
+      ...new Set(
+        supplies
+          .map((supply) => tripFactForSupply(supply, trips, tripLinks).carrier)
+          .filter(Boolean),
+      ),
+    ],
+    [supplies, trips, tripLinks],
+  );
+  const carrierOptions = useMemo(
+    () => [...new Set([...carrierNames, ...tripCarriers])].sort((left, right) => left.localeCompare(right, "ru")),
+    [carrierNames, tripCarriers],
+  );
+  useEffect(() => {
+    let active = true;
+    fetchCarriers(accountId)
+      .then((rows) => {
+        if (active) setCarrierNames(rows.map((row) => row.name.trim()).filter(Boolean));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [accountId]);
+  useEffect(() => {
+    let active = true;
+    loadSupplyTripFacts(accountId, supplies, trips, batchTripId)
+      .then((links) => {
+        if (active) setTripLinks(links);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [accountId, supplies, trips, batchTripId]);
+  const chooseFormat = (value: FulfillmentBoxContentsFormat) => {
+    setFormat(value);
+    try { localStorage.setItem(formatKey, value); } catch { /* the print button still uses the choice */ }
+  };
+  const print = async () => {
     if (busy) return;
+    const chosenCarrier = manualCarrier.trim();
+    if (handoverMode === "manual" && !chosenCarrier) {
+      setError("Выберите, куда сдаётся груз");
+      return;
+    }
+    const chosenDate = dateMode === "print" ? todayIsoDate() : manualDate;
+    if (!chosenDate) {
+      setError("Укажите дату сдачи");
+      return;
+    }
     setBusy(format);
     setError("");
     try {
@@ -744,8 +973,12 @@ function BoxContentsFormatModal({
       } catch {
         /* the print still uses the typed code */
       }
-      await onPrint(format, orientation, code);
-      onClose();
+      const half = orientation === "half" && format === "a4";
+      const pageOrientation = orientation === "half" ? (format === "a4" ? "portrait" : "landscape") : orientation;
+      await onPrint(format, pageOrientation, code, half, {
+        handoverTo: handoverMode === "manual" ? chosenCarrier : null,
+        handoverDate: formatSheetDate(chosenDate),
+      });
     } catch (printError) {
       setError(
         printError instanceof Error
@@ -765,13 +998,13 @@ function BoxContentsFormatModal({
       }}
     >
       <div
-        className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl"
+        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-base font-semibold text-slate-800">
-              Печать содержимого коробов
+              Печать инфо короба
             </p>
             <p className="mt-1 text-sm text-slate-400">{description}</p>
           </div>
@@ -805,21 +1038,109 @@ function BoxContentsFormatModal({
           />
         </label>
         <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Ориентация
+          Сдача на
         </p>
-        <div className="mt-2 grid grid-cols-2 gap-3">
+        <div className="mt-2 grid grid-cols-2 gap-2">
           {(
             [
-              ["portrait", "Книжная"],
-              ["landscape", "Альбомная"],
+              ["trip", "Из рейса"],
+              ["manual", "Вручную"],
             ] as const
           ).map(([value, label]) => (
             <button
               key={value}
               type="button"
               disabled={Boolean(busy)}
-              onClick={() => setOrientation(value)}
-              className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition disabled:opacity-50 ${orientation === value ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-700 hover:border-blue-300"}`}
+              onClick={() => {
+                setHandoverMode(value);
+                if (value === "manual" && !manualCarrier && tripCarriers.length === 1) {
+                  setManualCarrier(tripCarriers[0]);
+                }
+              }}
+              className={`rounded-2xl border px-2 py-3 text-center text-sm font-semibold transition disabled:opacity-50 ${handoverMode === value ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-700 hover:border-blue-300"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {handoverMode === "trip" ? (
+          <p className="mt-2 text-sm text-slate-500">
+            {tripCarriers.length === 0
+              ? "В рейсе перевозчик не указан"
+              : tripCarriers.length === 1
+                ? tripCarriers[0]
+                : "У поставок разные перевозчики — на каждом листе свой"}
+          </p>
+        ) : (
+          <select
+            value={manualCarrier}
+            disabled={Boolean(busy)}
+            onChange={(event) => setManualCarrier(event.target.value)}
+            className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-blue-400 disabled:opacity-50"
+          >
+            <option value="">Выберите перевозчика</option>
+            {carrierOptions.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
+        <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Дата сдачи
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {(
+            [
+              ["print", "Дата распечатки"],
+              ["manual", "Вручную"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => setDateMode(value)}
+              className={`rounded-2xl border px-2 py-3 text-center text-sm font-semibold transition disabled:opacity-50 ${dateMode === value ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-700 hover:border-blue-300"}`}
+            >
+              {label}
+              {value === "print" && (
+                <span className="mt-1 block text-xs font-medium text-slate-500">
+                  {formatSheetDate(todayIsoDate())}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        {dateMode === "manual" && (
+          <input
+            type="date"
+            value={manualDate}
+            disabled={Boolean(busy)}
+            onChange={(event) => setManualDate(event.target.value)}
+            className="mt-2 h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-800 outline-none focus:border-blue-400 disabled:opacity-50"
+          />
+        )}
+        <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Ориентация
+        </p>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          {(
+            [
+              ["portrait", "Книжная"],
+              ["landscape", "Альбомная"],
+              ["half", "На половину"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              disabled={Boolean(busy) || (value === "half" && format !== "a4")}
+              onClick={() => {
+                setOrientation(value);
+                try { localStorage.setItem(orientationKey, value); } catch { /* the current print still uses the choice */ }
+              }}
+              className={`rounded-2xl border px-2 py-3 text-center text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${orientation === value ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-700 hover:border-blue-300"}`}
             >
               {label}
             </button>
@@ -832,24 +1153,19 @@ function BoxContentsFormatModal({
           <button
             type="button"
             disabled={Boolean(busy)}
-            onClick={() => void print("a4")}
-            className="rounded-2xl border border-slate-200 px-4 py-5 text-left transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+            onClick={() => chooseFormat("a4")}
+            className={`rounded-2xl border px-4 py-5 text-left transition disabled:opacity-50 ${format === "a4" ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-300 hover:bg-blue-50"}`}
           >
             <span className="block text-lg font-bold text-slate-900">A4</span>
             <span className="mt-1 block text-xs text-slate-500">
-              Лист для обычного принтера
+              {orientation === "half" ? "Два короба на одном листе" : "Лист для обычного принтера"}
             </span>
-            {busy === "a4" && (
-              <span className="mt-2 block text-xs font-semibold text-blue-600">
-                Подготовка…
-              </span>
-            )}
           </button>
           <button
             type="button"
             disabled={Boolean(busy)}
-            onClick={() => void print("120x75")}
-            className="rounded-2xl border border-slate-200 px-4 py-5 text-left transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+            onClick={() => chooseFormat("120x75")}
+            className={`rounded-2xl border px-4 py-5 text-left transition disabled:opacity-50 ${format === "120x75" ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-blue-300 hover:bg-blue-50"}`}
           >
             <span className="block text-lg font-bold text-slate-900">
               120×75
@@ -857,11 +1173,6 @@ function BoxContentsFormatModal({
             <span className="mt-1 block text-xs text-slate-500">
               Стикер для термопринтера
             </span>
-            {busy === "120x75" && (
-              <span className="mt-2 block text-xs font-semibold text-blue-600">
-                Подготовка…
-              </span>
-            )}
           </button>
         </div>
         {error && (
@@ -869,6 +1180,24 @@ function BoxContentsFormatModal({
             {error}
           </p>
         )}
+        <div className="mt-5 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
+          <button
+            type="button"
+            disabled={Boolean(busy)}
+            onClick={onClose}
+            className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            disabled={Boolean(busy)}
+            onClick={() => void print()}
+            className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {busy ? "Подготовка…" : "Печать"}
+          </button>
+        </div>
       </div>
     </div>,
     document.body,
@@ -12263,7 +12592,7 @@ const BatchDetailModal = ({
                                 title={
                                   totalItems === 0
                                     ? "В коробах нет товаров"
-                                    : "Распечатать содержимое коробов поставки"
+                                    : "Распечатать инфо коробов поставки"
                                 }
                               >
                                 <svg
@@ -12666,8 +12995,11 @@ const BatchDetailModal = ({
                   <BoxContentsFormatModal
                     accountId={accountId}
                     description={boxContentsDialog.description}
+                    supplies={boxContentsDialog.supplies}
+                    trips={trips}
+                    batchTripId={batch.trip_id}
                     onClose={() => setBoxContentsDialog(null)}
-                    onPrint={(format, orientation, recipientCode) =>
+                    onPrint={(format, orientation, recipientCode, half, sheet) =>
                       openBoxContentsPdf(
                         accountId,
                         { ...batch, items },
@@ -12681,6 +13013,9 @@ const BatchDetailModal = ({
                             "",
                           recipientCode,
                           trips,
+                          half,
+                          handoverTo: sheet.handoverTo,
+                          handoverDate: sheet.handoverDate,
                         },
                       )
                     }
@@ -13481,7 +13816,7 @@ const BatchDetailModal = ({
                                       {box.items.length > 0 && (
                                         <button
                                           type="button"
-                                          title="Распечатать содержимое этого короба"
+                                          title="Распечатать инфо этого короба"
                                           onClick={() =>
                                             openSingleBoxContents(supply, box)
                                           }
@@ -21642,8 +21977,11 @@ export const FulfillmentPage = ({
             <BoxContentsFormatModal
               accountId={accountId}
               description={batchContentsDialog.description}
+              supplies={batchContentsDialog.supplies}
+              trips={trips}
+              batchTripId={batchContentsDialog.batch.trip_id}
               onClose={() => setBatchContentsDialog(null)}
-              onPrint={(format, orientation, recipientCode) => {
+              onPrint={(format, orientation, recipientCode, half, sheet) => {
                 const batchStore = stores.find(
                   (candidate) =>
                     candidate.id === batchContentsDialog.batch.store_id,
@@ -21661,6 +21999,9 @@ export const FulfillmentPage = ({
                       "",
                     recipientCode,
                     trips,
+                    half,
+                    handoverTo: sheet.handoverTo,
+                    handoverDate: sheet.handoverDate,
                   },
                 );
               }}
@@ -21691,7 +22032,7 @@ export const FulfillmentPage = ({
                         {batchExportSource.action === "qr"
                           ? "Выберите поставки для печати QR"
                           : batchExportSource.action === "contents"
-                            ? "Выберите поставки для печати содержимого"
+                            ? "Выберите поставки для печати инфо короба"
                             : "Выберите поставки"}
                       </p>
                       <p className="mt-0.5 flex items-baseline gap-1.5 text-xs">
@@ -23368,7 +23709,7 @@ export const FulfillmentPage = ({
                                   </button>
                                   <button
                                     type="button"
-                                    title="Распечатать содержимое коробов партии"
+                                    title="Распечатать инфо коробов партии"
                                     disabled={isPreparingBatchExportId != null}
                                     onClick={() =>
                                       void handleOpenBatchBoxesExport(
@@ -24531,7 +24872,7 @@ export const FulfillmentPage = ({
                                         </button>
                                         <button
                                           type="button"
-                                          title="Распечатать содержимое коробов партии"
+                                          title="Распечатать инфо коробов партии"
                                           disabled={
                                             isPreparingBatchExportId != null
                                           }
