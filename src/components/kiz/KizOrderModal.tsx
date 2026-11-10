@@ -259,7 +259,7 @@ export function KizOrderModal({
                           setQuery('')
                           setListOpen(false)
                         }}
-                        className={`flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 ${linked ? 'bg-emerald-50 hover:bg-emerald-100' : 'hover:bg-slate-50'}`}
+                        className={`flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 ${linked ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-rose-50 hover:bg-rose-100'}`}
                       >
                         <PhotoThumb url={kizPhotoUrl(product.photos)} previewZIndex={80} />
                         <span className="min-w-0">
@@ -267,7 +267,7 @@ export function KizOrderModal({
                           <span className="block truncate text-xs text-slate-400">{product.nm_id} · {product.vendor_code || 'без артикула продавца'}</span>
                           {linked
                             ? <span className="block text-xs font-medium text-emerald-700">Есть связка</span>
-                            : <span className="block text-xs font-medium text-amber-700">Нет связки с GTIN</span>}
+                            : <span className="block text-xs font-medium text-rose-700">Нет связки с GTIN</span>}
                         </span>
                       </button>
                   ))}
@@ -282,13 +282,15 @@ export function KizOrderModal({
                 const rows = kizSizeRows(product)
                 const linkedCount = rows.filter((row) => linkByBarcode.has(row.barcode)).length
                 return (
-                  <section key={product.id} className="rounded-2xl border border-slate-200 p-3">
+                  <section key={product.id} className={`rounded-2xl border p-3 ${linkedCount > 0 ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'}`}>
                     <div className="flex items-start gap-3">
                       <PhotoThumb url={kizPhotoUrl(product.photos)} className="h-14 w-11 rounded-lg" previewZIndex={80} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-slate-800">{product.name || 'Без названия'}</p>
                         <p className="truncate text-xs text-slate-400">{product.nm_id} · {product.vendor_code || '—'} · {product.color || 'цвет не указан'}</p>
-                        {linkedCount === 0 && <p className="mt-1 text-xs font-medium text-amber-700">Нет связки с GTIN</p>}
+                        {linkedCount === 0
+                          ? <p className="mt-1 text-xs font-medium text-rose-700">Нет связки с GTIN</p>
+                          : <p className="mt-1 text-xs font-medium text-emerald-700">Есть связка</p>}
                       </div>
                       <button
                         type="button"
@@ -309,7 +311,7 @@ export function KizOrderModal({
                               <span className="ml-2 font-mono text-xs text-slate-400">{row.barcode}</span>
                               {gtin
                                 ? <span className="mt-0.5 block font-mono text-xs text-emerald-700">{gtin}</span>
-                                : <span className="mt-0.5 block text-xs text-amber-700">Нет связки с GTIN</span>}
+                                : <span className="mt-0.5 block text-xs text-rose-700">Нет связки с GTIN</span>}
                             </div>
                             <input
                               value={quantities[row.rowKey] ?? ''}

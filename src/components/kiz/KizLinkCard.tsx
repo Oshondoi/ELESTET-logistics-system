@@ -207,6 +207,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
   }, [open, storeId])
 
   const linkByBarcode = useMemo(() => new Map(links.map((link) => [link.wb_barcode, link.gtin])), [links])
+  const productLinked = (product: KizWbProduct) => kizSizeRows(product).some((row) => linkByBarcode.has(row.barcode))
   const found = products.filter((product) => !selectedIds.includes(product.id) && kizProductMatches(product, query)).slice(0, 40)
   const selected = selectedIds
     .map((id) => products.find((product) => product.id === id))
@@ -320,7 +321,9 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
               {listOpen && (
                 <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-white">
                   {found.length === 0 && <p className="px-3 py-2 text-sm text-slate-400">Ничего не найдено</p>}
-                  {found.map((product) => (
+                  {found.map((product) => {
+                    const linked = productLinked(product)
+                    return (
                     <button
                       key={product.id}
                       type="button"
@@ -330,15 +333,19 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
                         setQuery('')
                         setListOpen(false)
                       }}
-                      className="flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50"
+                      className={`flex w-full items-center gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 ${linked ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-rose-50 hover:bg-rose-100'}`}
                     >
                       <PhotoThumb url={kizPhotoUrl(product.photos)} previewZIndex={80} />
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium text-slate-800">{product.name || 'Без названия'}</span>
                         <span className="block truncate text-xs text-slate-400">{product.nm_id} · {product.vendor_code || 'без артикула продавца'}</span>
+                        {linked
+                          ? <span className="block text-xs font-medium text-emerald-700">Есть связка</span>
+                          : <span className="block text-xs font-medium text-rose-700">Нет связки с GTIN</span>}
                       </span>
                     </button>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -347,13 +354,15 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
               <div className="space-y-3">
                 {selected.map((product) => {
                   const rows = kizSizeRows(product)
+                  const linked = productLinked(product)
                   return (
-                    <section key={product.id} className="rounded-2xl border border-slate-200 p-3">
+                    <section key={product.id} className={`rounded-2xl border p-3 ${linked ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'}`}>
                       <div className="flex items-start gap-3">
                         <PhotoThumb url={kizPhotoUrl(product.photos)} className="h-14 w-11 rounded-lg" previewZIndex={80} />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-semibold text-slate-800">{product.name || 'Без названия'}</p>
                           <p className="truncate text-xs text-slate-400">{product.nm_id} · {product.vendor_code || '—'} · {product.color || 'цвет не указан'}</p>
+                          <p className={`mt-1 text-xs font-medium ${linked ? 'text-emerald-700' : 'text-rose-700'}`}>{linked ? 'Есть связка' : 'Нет связки с GTIN'}</p>
                         </div>
                         <button
                           type="button"
