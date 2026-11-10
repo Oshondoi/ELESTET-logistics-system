@@ -87,6 +87,11 @@ export function kizHasCryptoTail(value: string): boolean {
 }
 
 export function kizGtin(value: string): string | null {
-  const match = /^01(\d{14})21/.exec(normalizeKizCode(value))
-  return match?.[1] ?? null
+  return kizIdentity(value)?.gtin ?? null
+}
+
+export function kizIdentity(value: string): { gtin: string; serial: string } | null {
+  const match = /^01(\d{14})21([!-~]{13})/.exec(normalizeKizCode(value))
+  if (!match) return null
+  return { gtin: match[1], serial: match[2] }
 }

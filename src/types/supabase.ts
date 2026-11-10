@@ -501,6 +501,26 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['wb_unload_tariffs']['Insert']>
         Relationships: []
       }
+      kiz_print_codes: {
+        Row: {
+          store_id: string
+          account_id: string
+          gtin: string
+          serial: string
+          code: string
+          updated_at: string
+        }
+        Insert: {
+          store_id: string
+          account_id: string
+          gtin: string
+          serial: string
+          code: string
+          updated_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['kiz_print_codes']['Insert']>
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

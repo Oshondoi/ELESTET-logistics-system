@@ -7,7 +7,8 @@ import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { KizLinkCard } from '../components/kiz/KizLinkCard'
 import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
 import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
-import { fetchCachedCodes, fetchCachedOperations, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
+import { parsePrintFileBytes } from '../lib/kizPrintFile'
+import { fetchCachedCodes, fetchCachedOperations, savePrintCodes, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
@@ -375,6 +376,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [operationsPage, setOperationsPage] = useState(0)
   const [operationsLoading, setOperationsLoading] = useState(false)
   const [operationsSyncing, setOperationsSyncing] = useState(false)
+  const [printFileBusy, setPrintFileBusy] = useState(false)
+  const printFileRef = useRef<HTMLInputElement>(null)
   const [listSyncNote, setListSyncNote] = useState('')
   const [syncPageSize, setSyncPageSize] = useState<TeksherPageSize>(20)
 
@@ -1405,6 +1408,42 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                   <span className="text-xs text-slate-500">Всего: {operationsTotal}</span>
                   <div className="ml-auto flex items-center gap-2">
                     <PageSizeSelect value={syncPageSize} disabled={operationsSyncing} onChange={setSyncPageSize} />
+                    <input
+                      ref={printFileRef}
+                      type="file"
+                      accept=".csv,.txt,.pdf,text/csv,text/plain,application/pdf"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0]
+                        event.target.value = ''
+                        if (!file || !activeStore) return
+                        setPrintFileBusy(true)
+                        void file.arrayBuffer()
+                          .then((buffer) => {
+                            const parsed = parsePrintFileBytes(new Uint8Array(buffer))
+                            if (parsed.full.length === 0) {
+                              showAction('err', parsed.short > 0
+                                ? `В файле ${parsed.short} коротких кодов и ни одного с хвостом 91/92. Нужен файл печати, а не список из кабинета.`
+                                : 'В файле нет кода маркировки с хвостом 91/92.')
+                              return
+                            }
+                            return savePrintCodes(activeStore.account_id, activeStore.id, parsed.full)
+                              .then((saved) => showAction('ok', parsed.short > 0
+                                ? `Сохранено ${saved} полных кодов. Ещё ${parsed.short} коротких пропущены.`
+                                : `Сохранено ${saved} полных кодов. Печать возьмёт их из базы.`))
+                          })
+                          .catch((reason) => showAction('err', reason instanceof Error ? reason.message : 'Не удалось прочитать файл.'))
+                          .finally(() => setPrintFileBusy(false))
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={printFileBusy}
+                      onClick={() => printFileRef.current?.click()}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {printFileBusy ? 'Читаем файл…' : 'Загрузить файл кодов'}
+                    </button>
                     <button
                       type="button"
                       onClick={() => void refreshOperations()}
@@ -1424,7 +1463,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     </button>
                   </div>
                 </div>
-                <p className="text-xs text-slate-400">Печать сохраняет файл на этом компьютере и не отправляет в Teksher отчёт о нанесении. CSV не открывайте в Excel.</p>
+                <p className="text-xs text-slate-400">Сначала загрузите файл печати Текшера с полным кодом. Печать берёт сохранённую копию и не отправляет в Teksher отчёт о нанесении. Короткий список из кабинета не подходит.</p>
 
                 {operationsLoading ? (
                   <Skeleton rows={6} />

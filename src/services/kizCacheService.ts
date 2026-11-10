@@ -1,3 +1,4 @@
+import { kizHasCryptoTail, kizIdentity } from '../lib/kizCode'
 import { supabase } from '../lib/supabase'
 
 export type CachedCode = {
@@ -160,6 +161,71 @@ export async function fetchCachedOperations(
     product: (row.product as Record<string, unknown> | null) ?? null,
   }))
   return { items, total: count ?? items.length }
+}
+
+function printKey(gtin: string, serial: string): string {
+  return `${gtin}:${serial}`
+}
+
+export async function savePrintCodes(accountId: string, storeId: string, codes: string[]): Promise<number> {
+  const rows = codes.flatMap((value) => {
+    const identity = kizIdentity(value)
+    if (!identity || !kizHasCryptoTail(value)) return []
+    return [{
+      account_id: accountId,
+      store_id: storeId,
+      gtin: identity.gtin,
+      serial: identity.serial,
+      code: value,
+      updated_at: new Date().toISOString(),
+    }]
+  })
+  const client = db()
+  for (let index = 0; index < rows.length; index += 200) {
+    const chunk = rows.slice(index, index + 200)
+    const { error } = await client.from('kiz_print_codes').upsert(chunk, { onConflict: 'store_id,gtin,serial' })
+    if (error) throw new Error('Не удалось сохранить полные коды. Таблица печати ещё не создана в базе.')
+  }
+  return rows.length
+}
+
+async function loadPrintCodes(storeId: string, serials: string[]): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  const unique = [...new Set(serials)]
+  const client = db()
+  for (let index = 0; index < unique.length; index += 100) {
+    const chunk = unique.slice(index, index + 100)
+    const { data, error } = await client.from('kiz_print_codes')
+      .select('gtin, serial, code')
+      .eq('store_id', storeId)
+      .in('serial', chunk)
+    if (error) throw new Error('Не удалось прочитать сохранённые коды печати.')
+    for (const row of data ?? []) {
+      found.set(printKey(row.gtin, row.serial), row.code)
+    }
+  }
+  return found
+}
+
+export async function resolvePrintCodes(storeId: string, operationId: string): Promise<PrintCode[]> {
+  const listed = await fetchOperationCodes(storeId, operationId)
+  if (listed.length === 0) return []
+  const identities = listed.map((item) => kizIdentity(item.code) ?? (item.gtin && item.serial ? { gtin: item.gtin, serial: item.serial } : null))
+  const stored = await loadPrintCodes(storeId, identities.flatMap((item) => item ? [item.serial] : []))
+  let missing = 0
+  const ready = listed.map((item, index) => {
+    const identity = identities[index]
+    const full = identity ? stored.get(printKey(identity.gtin, identity.serial)) : undefined
+    if (!identity || !full || !kizHasCryptoTail(full)) {
+      missing += 1
+      return item
+    }
+    return { code: full, gtin: identity.gtin, serial: identity.serial }
+  })
+  if (missing > 0) {
+    throw new Error(`Нельзя печатать: полного кода нет у ${missing} из ${listed.length}. Загрузите файл печати Текшера, в котором есть хвост 91/92.`)
+  }
+  return ready
 }
 
 export async function fetchOperationCodes(storeId: string, operationId: string): Promise<PrintCode[]> {

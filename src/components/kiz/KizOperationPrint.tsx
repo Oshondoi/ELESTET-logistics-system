@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { buildKizPdf, downloadKizCsv, openKizPdf, type LabelLayout } from '../../lib/kizLabel'
-import { fetchLabelGoods, fetchOperationCodes } from '../../services/kizCacheService'
+import { fetchLabelGoods, resolvePrintCodes } from '../../services/kizCacheService'
 
 type PrintKind = 'csv' | 'pdf-vertical' | 'pdf-horizontal' | 'print-vertical' | 'print-horizontal'
 
@@ -66,7 +66,7 @@ export function KizOperationPrint({
     setMenu(null)
     setBusy(true)
     try {
-      const codes = await fetchOperationCodes(storeId, operationId)
+      const codes = await resolvePrintCodes(storeId, operationId)
       if (codes.length === 0) {
         onError('В этой операции нет кодов для печати.')
         return
