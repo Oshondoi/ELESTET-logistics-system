@@ -53,17 +53,22 @@ interface SizeRow {
   rowKey: string
 }
 
-// Возвращает числовое значение размера для сортировки (больше = крупнее)
-const LETTER_SIZE_ORDER: Record<string, number> = {
-  'XXS': 1, 'XS': 2, 'S': 3, 'M': 4, 'L': 5, 'XL': 6,
-  '2XL': 7, 'XXL': 7, '3XL': 8, 'XXXL': 8, '4XL': 9, '5XL': 10, '6XL': 11,
-}
-function sizeWeight(techSize: string): number {
-  const s = techSize.trim().toUpperCase()
-  if (LETTER_SIZE_ORDER[s] !== undefined) return LETTER_SIZE_ORDER[s]
-  const n = parseFloat(s)
-  if (!isNaN(n)) return n
-  return -1
+// Меньшее число — меньший размер. «XS/42» и «3XL (52)» тоже разбираются.
+const LETTER_SIZE_ORDER: Array<[string, number]> = [
+  ['XXXL', 8], ['XXL', 7], ['XXS', 1],
+  ['6XL', 11], ['5XL', 10], ['4XL', 9], ['3XL', 8], ['2XL', 7],
+  ['XL', 6], ['XS', 2], ['S', 3], ['M', 4], ['L', 5],
+]
+function sizeRank(techSize: string): [number, number] {
+  const raw = techSize.trim().toUpperCase().replace(/\s+/g, '')
+  if (!raw || raw === '—') return [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]
+  const [head, tail = ''] = raw.split(/[/(]/)
+  const letter = LETTER_SIZE_ORDER.find(([token]) => head === token || head.startsWith(token))
+  const tailNumber = Number.parseFloat(tail.replace(',', '.'))
+  if (letter) return [letter[1], Number.isFinite(tailNumber) ? tailNumber : 0]
+  const number = Number.parseFloat(head.replace(',', '.'))
+  if (Number.isFinite(number)) return [1000 + number, 0]
+  return [Number.POSITIVE_INFINITY, 0]
 }
 
 function getSizeRows(product: Product): SizeRow[] {
@@ -80,8 +85,11 @@ function getSizeRows(product: Product): SizeRow[] {
       })
     }
   })
-  // Сортировка: крупные размеры сверху, мелкие снизу
-  return rows.sort((a, b) => sizeWeight(a.techSize) - sizeWeight(b.techSize))
+  return rows.sort((a, b) => {
+    const [aRank, aTie] = sizeRank(a.techSize)
+    const [bRank, bTie] = sizeRank(b.techSize)
+    return aRank - bRank || aTie - bTie
+  })
 }
 
 function getProductExportSizeRows(product: Product): SizeRow[] {
