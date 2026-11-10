@@ -191,20 +191,49 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
   if (tpl.show_seller_article !== false && tpl.seller_article) articleParts.push({ label: 'Арт. продавца: ', value: tpl.seller_article })
   if (articleParts.length > 0) {
     const articleFontSize = articleParts.length > 1 ? 18 : 22
-    const columnWidth = (maxX - PAD) / articleParts.length
-    articleParts.forEach((part, index) => {
-      let cx = PAD + columnWidth * index
+    const labelFont = `400 ${articleFontSize}px Arial, sans-serif`
+    const valueFont = `700 ${articleFontSize}px Arial, sans-serif`
+    const fit = (text: string, font: string, width: number) => {
+      ctx.font = font
+      if (ctx.measureText(text).width <= width) return text
+      let next = text
+      while (next.length > 1 && ctx.measureText(`${next}…`).width > width) next = next.slice(0, -1)
+      return next.length > 1 ? `${next}…` : ''
+    }
+    ctx.font = labelFont
+    const space = ctx.measureText(' ').width
+    const drawn = articleParts.map((part) => {
+      ctx.font = labelFont
+      const labelWidth = ctx.measureText(part.label).width
+      ctx.font = valueFont
+      return { ...part, labelWidth, valueWidth: ctx.measureText(part.value).width }
+    })
+    const lineWidth = () => drawn.reduce((sum, part) => sum + part.labelWidth + part.valueWidth, 0) + space * Math.max(0, drawn.length - 1)
+    let overflow = PAD + lineWidth() - maxX
+    if (overflow > 0 && drawn.length > 1) {
+      const seller = drawn[drawn.length - 1]
+      seller.value = fit(seller.value, valueFont, Math.max(0, seller.valueWidth - overflow))
+      ctx.font = valueFont
+      seller.valueWidth = ctx.measureText(seller.value).width
+      overflow = PAD + lineWidth() - maxX
+    }
+    if (overflow > 0) {
+      const wb = drawn[0]
+      wb.value = fit(wb.value, valueFont, Math.max(0, wb.valueWidth - overflow))
+      ctx.font = valueFont
+      wb.valueWidth = ctx.measureText(wb.value).width
+    }
+    let cx = PAD
+    drawn.forEach((part, index) => {
+      if (index > 0) cx += space
       ctx.fillStyle = '#000000'
-      ctx.font = `400 ${articleFontSize}px Arial, sans-serif`
+      ctx.font = labelFont
       ctx.fillText(part.label, cx, y)
-      cx += ctx.measureText(part.label).width
+      cx += part.labelWidth
       ctx.fillStyle = '#020617'
-      ctx.font = `700 ${articleFontSize}px Arial, sans-serif`
-      let value = part.value
-      const remaining = Math.max(45, PAD + columnWidth * (index + 1) - cx - 8)
-      while (ctx.measureText(value).width > remaining && value.length > 2) value = value.slice(0, -1)
-      if (value !== part.value) value += '…'
-      ctx.fillText(value, cx, y)
+      ctx.font = valueFont
+      ctx.fillText(part.value, cx, y)
+      cx += part.valueWidth
     })
     y += Math.round(articleFontSize * 1.45)
   }
