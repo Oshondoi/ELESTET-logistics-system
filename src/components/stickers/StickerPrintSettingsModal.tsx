@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { StickerTemplate } from '../../types'
 
 export interface StickerPrintSizeDraft {
@@ -96,13 +96,26 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
   const [activeKey, setActiveKey] = useState(initialGroups[0]?.key ?? '')
   const [isRemembering, setIsRemembering] = useState(false)
   const [rememberError, setRememberError] = useState<string | null>(null)
+  const [colorListOpen, setColorListOpen] = useState(false)
+  const colorMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     setGroups(initialGroups)
     setActiveKey(initialGroups[0]?.key ?? '')
+    setColorListOpen(false)
     setRememberError(null)
   }, [open, initialGroups])
+
+  useEffect(() => {
+    if (!colorListOpen) return
+    const close = (event: PointerEvent) => {
+      if (colorMenuRef.current?.contains(event.target as Node)) return
+      setColorListOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [colorListOpen])
 
   const activeIndex = Math.max(0, groups.findIndex((group) => group.key === activeKey))
   const group = groups[activeIndex]
@@ -147,7 +160,7 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
         {showColorTabs && groups.length > 1 && (
           <div className="flex gap-2 overflow-x-auto border-b border-slate-100 px-6 py-3">
             {groups.map((item) => (
-              <button key={item.key} type="button" onClick={() => setActiveKey(item.key)} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-medium transition ${item.key === group.key ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+              <button key={item.key} type="button" onClick={() => { setActiveKey(item.key); setColorListOpen(false) }} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-medium transition ${item.key === group.key ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
                 {item.color || 'Без цвета'} · {item.article || item.label}
               </button>
             ))}
@@ -183,6 +196,7 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
                           ? (current.length > 0 ? current : (group.color ? [group.color] : []))
                           : current.slice(0, 1)
                         patchGroup({ multiColor: enabled, color: next.join(', ') })
+                        setColorListOpen(enabled)
                       }}
                       className="accent-blue-600"
                     />
@@ -190,26 +204,34 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
                   </label>
                 </span>
                 {group.multiColor ? (
-                  <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto rounded-xl border border-slate-200 px-3 py-2">
-                    {group.availableColors.map((color) => {
-                      const checked = pickedColors.some((item) => item.toLocaleLowerCase('ru-RU') === color.toLocaleLowerCase('ru-RU'))
-                      return (
-                        <label key={color} className="flex items-center gap-1.5 text-sm text-slate-700">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(event) => {
-                              const next = event.target.checked
-                                ? [...pickedColors, color]
-                                : pickedColors.filter((item) => item.toLocaleLowerCase('ru-RU') !== color.toLocaleLowerCase('ru-RU'))
-                              patchGroup({ color: next.join(', ') })
-                            }}
-                            className="accent-blue-600"
-                          />
-                          {color}
-                        </label>
-                      )
-                    })}
+                  <div ref={colorMenuRef} className="relative">
+                    <button type="button" onClick={() => setColorListOpen((openList) => !openList)} className={`${fieldClass} flex items-center justify-between text-left`}>
+                      <span className="truncate">{pickedColors.length > 0 ? pickedColors.join(', ') : 'Выберите цвет'}</span>
+                      <span className="text-slate-400">▾</span>
+                    </button>
+                    {colorListOpen && (
+                      <div className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                        {group.availableColors.map((color) => {
+                          const checked = pickedColors.some((item) => item.toLocaleLowerCase('ru-RU') === color.toLocaleLowerCase('ru-RU'))
+                          return (
+                            <label key={color} className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  const next = event.target.checked
+                                    ? [...pickedColors, color]
+                                    : pickedColors.filter((item) => item.toLocaleLowerCase('ru-RU') !== color.toLocaleLowerCase('ru-RU'))
+                                  patchGroup({ color: next.join(', ') })
+                                }}
+                                className="accent-blue-600"
+                              />
+                              {color}
+                            </label>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <select className={fieldClass} value={pickedColors[0] ?? ''} onChange={(event) => patchGroup({ color: event.target.value })}>

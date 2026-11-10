@@ -568,17 +568,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
       const own = Boolean(override)
       const takeGlobal = isBundle ? !printPreferences.apply_to_all : globalOn ? !own : true
       const colors = getWbColors(product?.color)
-      const multiColor = Boolean(override?.multi_color) && colors.length > 1
-      const rememberedColor = override?.color ?? template.color ?? ''
-      const rememberedParts = rememberedColor.split(',').map((color) => color.trim().toLocaleLowerCase('ru-RU')).filter(Boolean)
-      const matchedColors = colors.filter((color) => rememberedParts.includes(color.toLocaleLowerCase('ru-RU')))
-      const selectedColor = colors.length === 0
-        ? rememberedColor
-        : multiColor
-          ? matchedColors.join(', ')
-          : matchedColors.length === 1 && rememberedParts.length === 1
-            ? matchedColors[0]
-            : colors.length === 1 ? colors[0] : ''
+      const selectedColor = colors.length === 1 ? colors[0] : colors.length === 0 ? (template.color ?? '') : ''
       const key = productId ?? `custom:${template.article ?? template.name}:${template.color ?? ''}`
       let group = groups.get(key)
       if (!group) {
@@ -588,7 +578,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
           productId,
           wbProductMissing: !product && Boolean(template.product_id || template.nm_id),
           availableColors: colors,
-          multiColor,
+          multiColor: false,
           name: (productId ? importCustomNames.get(productId) : undefined) ?? override?.name ?? product?.name ?? template.name,
           article: String(product?.nm_id ?? template.nm_id ?? template.article ?? ''),
           sellerArticle: override?.seller_article ?? product?.vendor_code ?? template.seller_article ?? '',
@@ -618,11 +608,10 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
         }
         groups.set(key, group)
       }
-      const rememberedSize = override?.sizes?.[template.barcode]
       group.sizes.push({
         key: `${key}:${template.barcode}`,
         barcode: template.barcode,
-        size: rememberedSize ?? template.size ?? '',
+        size: template.size ?? '',
         checked: !startUnchecked,
         copies: Math.max(1, template.copies || 1),
         source: {
@@ -713,18 +702,12 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
     for (const group of groups) {
       if (!group.productId) continue
       const product = importProducts.find((item) => item.id === group.productId)
-      const automaticSizes = new Map(product ? getSizeRowsImp(product).map((size) => [size.barcode, size.techSize]) : [])
-      const customSizes = Object.fromEntries(group.sizes
-        .filter((size) => size.size !== (automaticSizes.get(size.barcode) ?? size.source.size ?? ''))
-        .map((size) => [size.barcode, size.size]))
       const automaticCountry = product?.country ?? importStore?.country ?? ''
       const override: StickerProductPrintOverride = {
         ...(group.name !== (product?.name ?? '') ? { name: group.name } : {}),
         ...(group.composition !== (product?.composition ?? '') ? { composition: group.composition } : {}),
         ...(group.sellerArticle !== (product?.vendor_code ?? '') ? { seller_article: group.sellerArticle } : {}),
         ...(group.brand !== (product?.brand ?? '') ? { brand: group.brand } : {}),
-        color: group.color,
-        multi_color: group.multiColor,
         show_wb_article: group.showWbArticle,
         show_seller_article: group.showSellerArticle,
         supplier: group.supplier,
@@ -736,14 +719,14 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
         icon_no_tumble_dry: group.iconNoTumbleDry,
         icon_eac: group.iconEac,
         ...(group.country !== automaticCountry ? { country: group.country } : {}),
-        ...(Object.keys(customSizes).length > 0 ? { sizes: customSizes } : {}),
       }
       await saveStickerProductOverride(activeAccountId, selectedStoreId, group.productId, override)
       nextOverrides.set(group.productId, override)
     }
-    const existingIds = new Set(stickers.map((sticker) => sticker.id))
+    const existingById = new Map(stickers.map((sticker) => [sticker.id, sticker]))
     for (const configured of groupsToStickers(groups)) {
-      if (configured.product_id || !existingIds.has(configured.id)) continue
+      const original = existingById.get(configured.id)
+      if (configured.product_id || !original) continue
       await onEdit(configured.id, {
         barcode: configured.barcode,
         name: configured.name,
@@ -751,13 +734,13 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
         article: configured.article ?? '',
         seller_article: configured.seller_article ?? '',
         brand: configured.brand ?? '',
-        size: configured.size ?? '',
-        color: configured.color ?? '',
+        size: original.size ?? '',
+        color: original.color ?? '',
         supplier: configured.supplier ?? '',
         supplier_address: configured.supplier_address ?? '',
         production_date: configured.production_date ?? '',
         country: configured.country,
-        copies: configured.copies,
+        copies: original.copies,
         icon_wash: configured.icon_wash,
         icon_iron: configured.icon_iron,
         icon_no_bleach: configured.icon_no_bleach,
