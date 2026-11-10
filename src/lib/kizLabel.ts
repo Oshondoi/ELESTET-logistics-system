@@ -27,13 +27,18 @@ function gs1Text(code: string): string {
 
 function matrix(code: string, maxPixels: number): HTMLCanvasElement {
   const text = gs1Text(code)
-  const probe = document.createElement('canvas')
-  bwipjs.toCanvas(probe, { bcid: 'gs1datamatrix', text, scale: 1, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
-  const scale = Math.max(1, Math.floor(maxPixels / probe.width))
-  if (scale === 1) return probe
-  const canvas = document.createElement('canvas')
-  bwipjs.toCanvas(canvas, { bcid: 'gs1datamatrix', text, scale, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
-  return canvas
+  try {
+    const probe = document.createElement('canvas')
+    bwipjs.toCanvas(probe, { bcid: 'gs1datamatrix', text, scale: 1, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
+    const scale = Math.max(1, Math.floor(maxPixels / probe.width))
+    if (scale === 1) return probe
+    const canvas = document.createElement('canvas')
+    bwipjs.toCanvas(canvas, { bcid: 'gs1datamatrix', text, scale, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
+    return canvas
+  } catch (reason) {
+    const detail = reason instanceof Error ? reason.message : ''
+    throw new Error(detail ? `Не удалось нарисовать DataMatrix: ${detail}` : 'Не удалось нарисовать DataMatrix.')
+  }
 }
 
 function placeMatrix(ctx: CanvasRenderingContext2D, code: string, x: number, y: number, maxSize: number): number {
@@ -197,16 +202,22 @@ export function downloadKizCsv(items: PrintCode[], operationId: string): void {
   window.setTimeout(() => URL.revokeObjectURL(link.href), 30_000)
 }
 
-export function openKizPdf(pdf: jsPDF, operationId: string, layout: LabelLayout, print: boolean): void {
+export function openKizPdf(pdf: jsPDF, operationId: string, layout: LabelLayout, print: boolean): boolean {
+  const fileName = `kiz-${operationId}-${layout === 'vertical' ? 'vertical' : 'horizontal'}.pdf`
   if (!print) {
-    pdf.save(`kiz-${operationId}-${layout === 'vertical' ? 'vertical' : 'horizontal'}.pdf`)
-    return
+    pdf.save(fileName)
+    return true
   }
   const url = URL.createObjectURL(pdf.output('blob'))
   const win = window.open(url)
-  if (!win) throw new Error('Браузер заблокировал окно печати. Разрешите всплывающие окна.')
+  if (!win) {
+    pdf.save(fileName)
+    URL.revokeObjectURL(url)
+    return false
+  }
   window.setTimeout(() => {
     try { win.print() } catch { /* the PDF viewer still has its own print button */ }
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }, 700)
+  return true
 }

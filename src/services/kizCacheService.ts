@@ -327,23 +327,30 @@ async function loadPrintCodes(storeId: string, serials: string[]): Promise<Map<s
   return found
 }
 
-function readyLinkedCodes(stored: Map<string, string>, serials: string[]): PrintCode[] {
-  const ready: PrintCode[] = []
-  for (const serial of serials) {
-    const match = [...stored.entries()].find(([key, code]) => key.endsWith(`:${serial}`) && kizHasCryptoTail(code))
-    if (!match) continue
-    const [gtin] = match[0].split(':')
-    ready.push({ code: match[1], gtin, serial })
+async function loadStorePrintCodes(storeId: string): Promise<PrintCode[]> {
+  const client = db()
+  const rows: PrintCode[] = []
+  for (let from = 0; from < 5000; from += 1000) {
+    const { data, error } = await client.from('kiz_print_codes')
+      .select('gtin, serial, code')
+      .eq('store_id', storeId)
+      .range(from, from + 999)
+    if (error) throw new Error('Не удалось прочитать сохранённые коды печати.')
+    for (const row of (data ?? []) as Array<{ gtin?: string | null; serial?: string | null; code?: string | null }>) {
+      if (!row.gtin || !row.serial || !row.code || !kizHasCryptoTail(row.code)) continue
+      rows.push({ gtin: row.gtin, serial: row.serial, code: row.code })
+    }
+    if (!data || data.length < 1000) break
   }
-  return ready
+  return rows
 }
 
-export async function resolvePrintCodes(storeId: string, operationId: string, expectedCount = 0): Promise<PrintCode[]> {
-  const linkedSerials = readPrintLinks(storeId)[operationId] ?? []
-  if (expectedCount > 0 && linkedSerials.length >= expectedCount) {
-    const stored = await loadPrintCodes(storeId, linkedSerials)
-    const ready = readyLinkedCodes(stored, linkedSerials)
-    if (ready.length >= expectedCount) return ready
+export async function resolvePrintCodes(storeId: string, operationId: string, _expectedCount = 0): Promise<PrintCode[]> {
+  const linkedSerials = new Set(readPrintLinks(storeId)[operationId] ?? [])
+  if (linkedSerials.size > 0) {
+    const ready = (await loadStorePrintCodes(storeId)).filter((item) => linkedSerials.has(item.serial))
+    if (ready.length > 0) return ready
+    throw new Error('Строка с полным кодом есть, но сам код из базы не прочитался. Загрузите файл печати ещё раз.')
   }
   const listed = await fetchOperationCodes(storeId, operationId)
   if (listed.length === 0) return []

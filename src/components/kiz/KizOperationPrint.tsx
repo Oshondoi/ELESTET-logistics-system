@@ -81,10 +81,12 @@ export function KizOperationPrint({
       const layout: LabelLayout = kind.endsWith('vertical') ? 'vertical' : 'horizontal'
       const linked = await fetchLabelGoods(storeId, gtin ?? codes[0]?.gtin ?? '')
       const { pdf, limited } = buildKizPdf(codes, layout, product, linked)
-      openKizPdf(pdf, operationId, layout, kind.startsWith('print'))
+      const opened = openKizPdf(pdf, operationId, layout, kind.startsWith('print'))
       onDone(limited
         ? 'В PDF первые 1000 кодов: так ограничивает печатную форму Teksher. Полный список — в CSV.'
-        : kind.startsWith('print') ? 'Открыто окно печати.' : 'PDF сохранён.')
+        : kind.startsWith('print')
+          ? (opened ? 'Открыто окно печати.' : 'Браузер не открыл окно. PDF сохранён в загрузки.')
+          : 'PDF сохранён.')
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : 'Не удалось подготовить печать.')
     } finally {
