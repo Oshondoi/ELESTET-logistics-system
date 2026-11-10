@@ -590,9 +590,9 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
           supplier: takeGlobal
             ? (printPreferences.supplier || importStore?.supplier_full || importStore?.supplier || template.supplier || '')
             : (override?.supplier || template.supplier || importStore?.supplier_full || importStore?.supplier || ''),
-          supplierAddress: takeGlobal
-            ? (printPreferences.supplier_address || importStore?.address || template.supplier_address || '')
-            : (override?.supplier_address || template.supplier_address || importStore?.address || ''),
+          supplierAddress: override && Object.prototype.hasOwnProperty.call(override, 'supplier_address')
+            ? (override.supplier_address ?? '')
+            : ((isBundle && printPreferences.apply_to_all ? '' : printPreferences.supplier_address) || importStore?.address || template.supplier_address || ''),
           productionDate: takeGlobal
             ? (globalProductionDate || printPreferences.production_date || localToday())
             : (override?.production_date || template.production_date || localToday()),
