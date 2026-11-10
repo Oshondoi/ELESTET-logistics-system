@@ -184,6 +184,7 @@ import {
 import {
   buildFulfillmentBoxContentsPdf,
   type FulfillmentBoxContentsFormat,
+  type FulfillmentBoxContentsOrientation,
   type FulfillmentBoxContentsPageSource,
 } from "../lib/fulfillmentBoxContentsPdf";
 
@@ -587,16 +588,41 @@ const getBatchExcelExportFilename = ({
   return `C${accountShortId ?? "unknown"}_P${batchShortId ?? "unknown"}_${safeBoxExportFilenamePart(storeName ?? "unknown")}_${selectionMode}_${date}_${getExcelModeFilenameSuffix(exportMode)}.xlsx`;
 };
 
+const formatCargoDate = (value: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : value;
+};
+
+const cargoHandoverDate = (
+  supply: FulfillmentSupplyWithBoxes,
+  trips: TripWithLines[],
+) => {
+  const trip =
+    trips.find((item) => item.id === supply.trip_id) ??
+    trips.find((item) =>
+      item.lines.some((line) => line.id === supply.trip_line_id),
+    );
+  const line =
+    trip?.lines.find((item) => item.id === supply.trip_line_id) ??
+    trip?.lines.find((item) => item.fulfillment_supply_id === supply.id);
+  const raw = line?.shipped_date || line?.transit_at || trip?.departure_date || "";
+  return raw ? formatCargoDate(raw) : "";
+};
+
 const buildBoxContentsSources = async ({
   accountId,
   batch,
   supplies,
-  storeName,
+  legalName,
+  recipientCode,
+  trips,
 }: {
   accountId: string;
   batch: FulfillmentBatchWithItems;
   supplies: FulfillmentSupplyWithBoxes[];
-  storeName: string;
+  legalName: string;
+  recipientCode: string;
+  trips: TripWithLines[];
 }): Promise<FulfillmentBoxContentsPageSource[]> => {
   const boxes = supplies.flatMap((supply) => supply.boxes);
   const barcodes = [
@@ -621,17 +647,23 @@ const buildBoxContentsSources = async ({
         .map((box) => ({
           batchNumber: batch.short_id,
           batchName: batch.name,
-          storeName,
+          legalName,
+          recipientCode,
           supplyNumber: supply.supply_number,
-          warehouseName: supply.warehouse_name,
+          warehouseName:
+            supply.wb_warehouse_name?.trim() || supply.warehouse_name,
+          cargoDate: cargoHandoverDate(supply, trips),
           boxNumber: box.box_number,
-          rows: box.items.map((item) => ({
-            barcode: item.barcode,
-            wbArticle: String(
-              productInfo[item.barcode]?.nm_id ?? item._info?.nm_id ?? "—",
-            ),
-            quantity: item.qty,
-          })),
+          rows: box.items.map((item) => {
+            const info = productInfo[item.barcode];
+            return {
+              barcode: item.barcode,
+              wbArticle: String(info?.nm_id ?? item._info?.nm_id ?? "—"),
+              sellerArticle: info?.vendor_code || item._info?.vendor_code || "—",
+              productName: info?.name || item.product_name || item._info?.name || "—",
+              quantity: item.qty,
+            };
+          }),
         })),
     );
 };
@@ -641,7 +673,12 @@ const openBoxContentsPdf = async (
   batch: FulfillmentBatchWithItems,
   supplies: FulfillmentSupplyWithBoxes[],
   format: FulfillmentBoxContentsFormat,
-  storeName: string,
+  orientation: FulfillmentBoxContentsOrientation,
+  details: {
+    legalName: string;
+    recipientCode: string;
+    trips: TripWithLines[];
+  },
 ) => {
   const preview = window.open("", "_blank");
   if (!preview) {
@@ -654,10 +691,12 @@ const openBoxContentsPdf = async (
       accountId,
       batch,
       supplies,
-      storeName,
+      legalName: details.legalName,
+      recipientCode: details.recipientCode,
+      trips: details.trips,
     });
     const url = URL.createObjectURL(
-      buildFulfillmentBoxContentsPdf(sources, format),
+      buildFulfillmentBoxContentsPdf(sources, format, orientation),
     );
     preview.location.href = url;
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
@@ -668,22 +707,44 @@ const openBoxContentsPdf = async (
 };
 
 function BoxContentsFormatModal({
+  accountId,
   description,
   onClose,
   onPrint,
 }: {
+  accountId: string;
   description: string;
   onClose: () => void;
-  onPrint: (format: FulfillmentBoxContentsFormat) => Promise<void>;
+  onPrint: (
+    format: FulfillmentBoxContentsFormat,
+    orientation: FulfillmentBoxContentsOrientation,
+    recipientCode: string,
+  ) => Promise<void>;
 }) {
+  const recipientKey = `elestet-box-recipient-code:${accountId}`;
   const [busy, setBusy] = useState<FulfillmentBoxContentsFormat | null>(null);
   const [error, setError] = useState("");
+  const [orientation, setOrientation] =
+    useState<FulfillmentBoxContentsOrientation>("portrait");
+  const [recipientCode, setRecipientCode] = useState(() => {
+    try {
+      return localStorage.getItem(recipientKey) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const print = async (format: FulfillmentBoxContentsFormat) => {
     if (busy) return;
     setBusy(format);
     setError("");
     try {
-      await onPrint(format);
+      const code = recipientCode.trim();
+      try {
+        localStorage.setItem(recipientKey, code);
+      } catch {
+        /* the print still uses the typed code */
+      }
+      await onPrint(format, orientation, code);
       onClose();
     } catch (printError) {
       setError(
@@ -731,6 +792,38 @@ function BoxContentsFormatModal({
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
+        </div>
+        <label className="mt-5 block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Код получателя
+          </span>
+          <input
+            value={recipientCode}
+            onChange={(event) => setRecipientCode(event.target.value)}
+            placeholder="Код клиента у перевозчика"
+            className="mt-2 h-10 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-800 outline-none focus:border-blue-400"
+          />
+        </label>
+        <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Ориентация
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-3">
+          {(
+            [
+              ["portrait", "Книжная"],
+              ["landscape", "Альбомная"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => setOrientation(value)}
+              className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition disabled:opacity-50 ${orientation === value ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-700 hover:border-blue-300"}`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">
           Размер печати
@@ -12571,15 +12664,24 @@ const BatchDetailModal = ({
                 {/* QR-код системного ШК короба */}
                 {boxContentsDialog && (
                   <BoxContentsFormatModal
+                    accountId={accountId}
                     description={boxContentsDialog.description}
                     onClose={() => setBoxContentsDialog(null)}
-                    onPrint={(format) =>
+                    onPrint={(format, orientation, recipientCode) =>
                       openBoxContentsPdf(
                         accountId,
                         { ...batch, items },
                         boxContentsDialog.supplies,
                         format,
-                        store?.name ?? "",
+                        orientation,
+                        {
+                          legalName:
+                            store?.supplier_full?.trim() ||
+                            store?.supplier?.trim() ||
+                            "",
+                          recipientCode,
+                          trips,
+                        },
                       )
                     }
                   />
@@ -21538,20 +21640,30 @@ export const FulfillmentPage = ({
           )}
           {batchContentsDialog && (
             <BoxContentsFormatModal
+              accountId={accountId}
               description={batchContentsDialog.description}
               onClose={() => setBatchContentsDialog(null)}
-              onPrint={(format) =>
-                openBoxContentsPdf(
+              onPrint={(format, orientation, recipientCode) => {
+                const batchStore = stores.find(
+                  (candidate) =>
+                    candidate.id === batchContentsDialog.batch.store_id,
+                );
+                return openBoxContentsPdf(
                   accountId,
                   batchContentsDialog.batch,
                   batchContentsDialog.supplies,
                   format,
-                  stores.find(
-                    (candidate) =>
-                      candidate.id === batchContentsDialog.batch.store_id,
-                  )?.name ?? "",
-                )
-              }
+                  orientation,
+                  {
+                    legalName:
+                      batchStore?.supplier_full?.trim() ||
+                      batchStore?.supplier?.trim() ||
+                      "",
+                    recipientCode,
+                    trips,
+                  },
+                );
+              }}
             />
           )}
           {batchPrintSupplyIds && (

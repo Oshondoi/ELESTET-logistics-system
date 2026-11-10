@@ -1,27 +1,55 @@
 import jsPDF from 'jspdf'
 
 export type FulfillmentBoxContentsFormat = 'a4' | '120x75'
+export type FulfillmentBoxContentsOrientation = 'portrait' | 'landscape'
 
 export interface FulfillmentBoxContentsRow {
   barcode: string
   wbArticle: string
+  sellerArticle: string
+  productName: string
   quantity: number
 }
 
 export interface FulfillmentBoxContentsPageSource {
   batchNumber: number | null
   batchName: string
-  storeName: string
+  legalName: string
+  recipientCode: string
   supplyNumber: number
   warehouseName: string
+  cargoDate: string
   boxNumber: number
   rows: FulfillmentBoxContentsRow[]
 }
 
-const pageSettings = {
-  a4: { width: 210, height: 297, scale: 5, rowsPerPage: 30, margin: 12 },
-  '120x75': { width: 120, height: 75, scale: 6, rowsPerPage: 7, margin: 5 },
-} as const
+interface PageGeometry {
+  width: number
+  height: number
+  scale: number
+  rowsPerPage: number
+  margin: number
+}
+
+function pageGeometry(format: FulfillmentBoxContentsFormat, orientation: FulfillmentBoxContentsOrientation): PageGeometry {
+  const landscape = orientation === 'landscape'
+  if (format === 'a4') {
+    return {
+      width: landscape ? 297 : 210,
+      height: landscape ? 210 : 297,
+      scale: 5,
+      margin: 12,
+      rowsPerPage: landscape ? 12 : 24,
+    }
+  }
+  return {
+    width: landscape ? 120 : 75,
+    height: landscape ? 75 : 120,
+    scale: 6,
+    margin: 4,
+    rowsPerPage: landscape ? 4 : 8,
+  }
+}
 
 function fitText(context: CanvasRenderingContext2D, value: string, maxWidth: number): string {
   if (context.measureText(value).width <= maxWidth) return value
@@ -36,8 +64,9 @@ function renderPage(
   page: number,
   pages: number,
   format: FulfillmentBoxContentsFormat,
+  orientation: FulfillmentBoxContentsOrientation,
 ): string {
-  const settings = pageSettings[format]
+  const settings = pageGeometry(format, orientation)
   const canvas = document.createElement('canvas')
   canvas.width = Math.round(settings.width * settings.scale)
   canvas.height = Math.round(settings.height * settings.scale)
@@ -54,35 +83,68 @@ function renderPage(
   context.fillStyle = '#0f172a'
   context.textBaseline = 'top'
 
-  context.font = `700 ${px(isA4 ? 6.2 : 4.2)}px Arial, sans-serif`
-  context.fillText(`Короб №${source.boxNumber}`, margin, margin)
+  const titleSize = px(isA4 ? 5.2 : 3.2)
+  const numberSize = px(isA4 ? 9.2 : 5.8)
+  context.font = `800 ${titleSize}px Arial, sans-serif`
+  context.fillText('Короб', margin, margin)
+  const titleWidth = context.measureText('Короб ').width
+  context.font = `900 ${numberSize}px Arial, sans-serif`
+  context.fillText(`№${source.boxNumber}`, margin + titleWidth, margin - px(isA4 ? 1.2 : 0.7))
   context.textAlign = 'right'
-  context.font = `700 ${px(isA4 ? 4 : 3)}px Arial, sans-serif`
-  context.fillText(`${page}/${pages}`, canvas.width - margin, margin + px(0.8))
+  context.font = `700 ${px(isA4 ? 4 : 2.8)}px Arial, sans-serif`
+  context.fillText(`${page}/${pages}`, canvas.width - margin, margin + px(1.2))
   context.textAlign = 'left'
 
-  const batchLabel = `${source.storeName || 'Магазин не указан'} · ${source.batchNumber != null ? `P-${source.batchNumber}` : source.batchName || 'Партия'} · S-${source.supplyNumber} · ${source.warehouseName || 'Склад не указан'}`
-  context.font = `600 ${px(isA4 ? 3.8 : 2.7)}px Arial, sans-serif`
-  context.fillStyle = '#334155'
-  context.fillText(fitText(context, batchLabel, contentWidth), margin, margin + px(isA4 ? 8.5 : 6.3))
+  const info = [
+    ['ИП/ОсОО', source.legalName || '—'],
+    ['Код получателя', source.recipientCode || '—'],
+    ['Склад назначения', source.warehouseName || '—'],
+    ['Сдача на склад/карго (РЕД ЭКСПРЕС), Бишкек', source.cargoDate || '—'],
+    ['Партия', `${source.batchNumber != null ? `P-${source.batchNumber}` : source.batchName || '—'} · Поставка S-${source.supplyNumber}`],
+  ]
+  const infoSize = px(isA4 ? 3.3 : 2.15)
+  const infoStep = px(isA4 ? 4.6 : 3.15)
+  let infoY = margin + px(isA4 ? 11 : 7.2)
+  info.forEach(([label, value]) => {
+    context.font = `600 ${infoSize}px Arial, sans-serif`
+    context.fillStyle = '#334155'
+    const labelText = `${label}: `
+    context.fillText(labelText, margin, infoY)
+    const labelWidth = context.measureText(labelText).width
+    context.font = `700 ${infoSize}px Arial, sans-serif`
+    context.fillStyle = '#0f172a'
+    context.fillText(fitText(context, value, Math.max(20, contentWidth - labelWidth)), margin + labelWidth, infoY)
+    infoY += infoStep
+  })
 
-  const tableTop = margin + px(isA4 ? 17 : 12)
-  const headerHeight = px(isA4 ? 9 : 6.5)
-  const rowHeight = px(isA4 ? 8 : 6.7)
-  const barcodeWidth = contentWidth * 0.46
-  const articleWidth = contentWidth * 0.34
-  const quantityWidth = contentWidth - barcodeWidth - articleWidth
+  const tableTop = infoY + px(isA4 ? 2.2 : 1.2)
+  const headerHeight = px(isA4 ? 8 : 5.4)
+  const rowHeight = px(isA4 ? 7.2 : 5.6)
+  const barcodeWidth = contentWidth * 0.22
+  const wbWidth = contentWidth * 0.14
+  const sellerWidth = contentWidth * 0.18
+  const nameWidth = contentWidth * 0.36
+  const quantityWidth = contentWidth - barcodeWidth - wbWidth - sellerWidth - nameWidth
+  const columns = [
+    { label: 'Баркод', width: barcodeWidth, align: 'left' as const },
+    { label: 'Артикул WB', width: wbWidth, align: 'left' as const },
+    { label: 'Артикул продавца', width: sellerWidth, align: 'left' as const },
+    { label: 'Наименование', width: nameWidth, align: 'left' as const },
+    { label: 'Кол-во', width: quantityWidth, align: 'right' as const },
+  ]
 
   context.fillStyle = '#f1f5f9'
   context.fillRect(margin, tableTop, contentWidth, headerHeight)
   context.fillStyle = '#334155'
-  context.font = `700 ${px(isA4 ? 3.5 : 2.55)}px Arial, sans-serif`
+  context.font = `700 ${px(isA4 ? 3.1 : 2.05)}px Arial, sans-serif`
   context.textBaseline = 'middle'
-  context.fillText('Баркод', margin + px(2), tableTop + headerHeight / 2)
-  context.fillText('Артикул WB', margin + barcodeWidth + px(2), tableTop + headerHeight / 2)
-  context.textAlign = 'right'
-  context.fillText('Кол-во', margin + contentWidth - px(2), tableTop + headerHeight / 2)
-  context.textAlign = 'left'
+  let columnX = margin
+  columns.forEach((column) => {
+    context.textAlign = column.align
+    const textX = column.align === 'right' ? columnX + column.width - px(1.4) : columnX + px(1.4)
+    context.fillText(column.label, textX, tableTop + headerHeight / 2)
+    columnX += column.width
+  })
 
   rows.forEach((row, index) => {
     const y = tableTop + headerHeight + rowHeight * index
@@ -95,13 +157,16 @@ function renderPage(
     context.lineTo(margin + contentWidth, y + rowHeight)
     context.stroke()
 
+    const values = [row.barcode || '—', row.wbArticle || '—', row.sellerArticle || '—', row.productName || '—', String(row.quantity)]
     context.fillStyle = '#0f172a'
-    context.font = `600 ${px(isA4 ? 3.65 : 2.65)}px Arial, sans-serif`
-    context.textBaseline = 'middle'
-    context.fillText(fitText(context, row.barcode || '—', barcodeWidth - px(4)), margin + px(2), y + rowHeight / 2)
-    context.fillText(fitText(context, row.wbArticle || '—', articleWidth - px(4)), margin + barcodeWidth + px(2), y + rowHeight / 2)
-    context.textAlign = 'right'
-    context.fillText(String(row.quantity), margin + barcodeWidth + articleWidth + quantityWidth - px(2), y + rowHeight / 2)
+    context.font = `600 ${px(isA4 ? 3.2 : 2.15)}px Arial, sans-serif`
+    let cellX = margin
+    columns.forEach((column, cellIndex) => {
+      context.textAlign = column.align
+      const textX = column.align === 'right' ? cellX + column.width - px(1.4) : cellX + px(1.4)
+      context.fillText(fitText(context, values[cellIndex], column.width - px(2.8)), textX, y + rowHeight / 2)
+      cellX += column.width
+    })
     context.textAlign = 'left'
   })
 
@@ -111,16 +176,16 @@ function renderPage(
 export function buildFulfillmentBoxContentsPdf(
   sources: FulfillmentBoxContentsPageSource[],
   format: FulfillmentBoxContentsFormat,
+  orientation: FulfillmentBoxContentsOrientation,
 ): Blob {
   const printable = sources.filter((source) => source.rows.length > 0)
   if (printable.length === 0) throw new Error('В выбранных коробах нет товаров')
 
-  const settings = pageSettings[format]
-  const orientation = settings.width > settings.height ? 'landscape' : 'portrait'
+  const settings = pageGeometry(format, orientation)
   const pdf = new jsPDF({
-    orientation,
+    orientation: 'portrait',
     unit: 'mm',
-    format: format === 'a4' ? 'a4' : [settings.width, settings.height],
+    format: [settings.width, settings.height],
     compress: true,
     putOnlyUsedFonts: true,
   })
@@ -132,9 +197,9 @@ export function buildFulfillmentBoxContentsPdf(
       chunks.push(source.rows.slice(index, index + settings.rowsPerPage))
     }
     chunks.forEach((rows, index) => {
-      if (documentPage > 0) pdf.addPage(format === 'a4' ? 'a4' : [settings.width, settings.height], orientation)
+      if (documentPage > 0) pdf.addPage([settings.width, settings.height], 'portrait')
       pdf.addImage(
-        renderPage(source, rows, index + 1, chunks.length, format),
+        renderPage(source, rows, index + 1, chunks.length, format, orientation),
         'PNG',
         0,
         0,
