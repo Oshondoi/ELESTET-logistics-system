@@ -36,16 +36,22 @@ export type KizSizeRow = {
   rowKey: string
 }
 
-const KIZ_LETTER_SIZE_ORDER: Record<string, number> = {
-  XXS: 1, XS: 2, S: 3, M: 4, L: 5, XL: 6,
-  '2XL': 7, XXL: 7, '3XL': 8, XXXL: 8, '4XL': 9, '5XL': 10, '6XL': 11,
-}
+const KIZ_LETTER_SIZE_ORDER: Array<[string, number]> = [
+  ['XXXL', 8], ['XXL', 7], ['XXS', 1],
+  ['6XL', 11], ['5XL', 10], ['4XL', 9], ['3XL', 8], ['2XL', 7],
+  ['XL', 6], ['XS', 2], ['S', 3], ['M', 4], ['L', 5],
+]
 
-function kizSizeWeight(techSize: string): number {
-  const normalized = techSize.trim().toUpperCase().replace(/\s+/g, '')
-  if (KIZ_LETTER_SIZE_ORDER[normalized] !== undefined) return KIZ_LETTER_SIZE_ORDER[normalized]
-  const numeric = Number.parseFloat(normalized.replace(',', '.'))
-  return Number.isFinite(numeric) ? numeric : Number.POSITIVE_INFINITY
+function kizSizeRank(techSize: string): [number, number] {
+  const raw = techSize.trim().toUpperCase().replace(/\s+/g, '')
+  if (!raw || raw === '—') return [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]
+  const [head, tail = ''] = raw.split(/[/(]/)
+  const letter = KIZ_LETTER_SIZE_ORDER.find(([token]) => head === token || head.startsWith(token))
+  const tailNumber = Number.parseFloat(tail.replace(',', '.'))
+  if (letter) return [letter[1], Number.isFinite(tailNumber) ? tailNumber : 0]
+  const number = Number.parseFloat(head.replace(',', '.'))
+  if (Number.isFinite(number)) return [1000 + number, 0]
+  return [Number.POSITIVE_INFINITY, 0]
 }
 
 export function kizPhotoUrl(photos: unknown): string | null {
@@ -71,7 +77,11 @@ export function kizSizeRows(product: KizWbProduct): KizSizeRow[] {
   })
   return rows
     .map((row, index) => ({ row, index }))
-    .sort((a, b) => kizSizeWeight(a.row.techSize) - kizSizeWeight(b.row.techSize) || a.index - b.index)
+    .sort((a, b) => {
+      const [aRank, aTie] = kizSizeRank(a.row.techSize)
+      const [bRank, bTie] = kizSizeRank(b.row.techSize)
+      return aRank - bRank || aTie - bTie || a.index - b.index
+    })
     .map((item) => item.row)
 }
 
