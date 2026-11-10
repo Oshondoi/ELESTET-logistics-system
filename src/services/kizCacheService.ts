@@ -167,6 +167,54 @@ function printKey(gtin: string, serial: string): string {
   return `${gtin}:${serial}`
 }
 
+export type PrintCodeCoverage = {
+  saved: number
+  operationIds: string[]
+}
+
+export async function loadPrintCodeCoverage(storeId: string): Promise<PrintCodeCoverage> {
+  const client = db()
+  const gtins = new Set<string>()
+  let saved = 0
+  for (let from = 0; from < 20000; from += 1000) {
+    const { data, error } = await client.from('kiz_print_codes')
+      .select('gtin')
+      .eq('store_id', storeId)
+      .range(from, from + 999)
+    if (error) throw new Error('Не удалось прочитать сохранённые коды печати.')
+    const rows = (data ?? []) as Array<{ gtin?: string | null }>
+    saved += rows.length
+    for (const row of rows) {
+      if (row.gtin) gtins.add(row.gtin)
+    }
+    if (rows.length < 1000) break
+  }
+
+  const operationIds = new Set<string>()
+  const list = [...gtins]
+  for (let index = 0; index < list.length; index += 100) {
+    const chunk = list.slice(index, index + 100)
+    const { data, error } = await client.from('teksher_operations')
+      .select('operation_id')
+      .eq('store_id', storeId)
+      .in('gtin', chunk)
+    if (error) throw new Error('Не удалось сверить коды со списком операций.')
+    for (const row of (data ?? []) as Array<{ operation_id?: string | null }>) {
+      if (row.operation_id) operationIds.add(row.operation_id)
+    }
+    const nested = chunk.map((gtin) => `product->>gtin.eq.${gtin}`).join(',')
+    const { data: nestedRows, error: nestedError } = await client.from('teksher_operations')
+      .select('operation_id')
+      .eq('store_id', storeId)
+      .or(nested)
+    if (nestedError) throw new Error('Не удалось сверить коды со списком операций.')
+    for (const row of (nestedRows ?? []) as Array<{ operation_id?: string | null }>) {
+      if (row.operation_id) operationIds.add(row.operation_id)
+    }
+  }
+  return { saved, operationIds: [...operationIds] }
+}
+
 export async function savePrintCodes(accountId: string, storeId: string, codes: string[]): Promise<number> {
   const rows = codes.flatMap((value) => {
     const identity = kizIdentity(value)

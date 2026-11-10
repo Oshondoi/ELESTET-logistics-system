@@ -8,7 +8,7 @@ import { KizLinkCard } from '../components/kiz/KizLinkCard'
 import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
 import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
 import { parsePrintFileBytes } from '../lib/kizPrintFile'
-import { fetchCachedCodes, fetchCachedOperations, savePrintCodes, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
+import { fetchCachedCodes, fetchCachedOperations, loadPrintCodeCoverage, savePrintCodes, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
@@ -377,6 +377,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [operationsLoading, setOperationsLoading] = useState(false)
   const [operationsSyncing, setOperationsSyncing] = useState(false)
   const [printFileBusy, setPrintFileBusy] = useState(false)
+  const [printOperationIds, setPrintOperationIds] = useState<Set<string>>(new Set())
+  const [printSavedCount, setPrintSavedCount] = useState(0)
   const printFileRef = useRef<HTMLInputElement>(null)
   const [listSyncNote, setListSyncNote] = useState('')
   const [syncPageSize, setSyncPageSize] = useState<TeksherPageSize>(20)
@@ -570,6 +572,30 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   useEffect(() => {
     if (tab === 'operations' && activeStore?.id && stats) void loadOperations(operationsPage)
   }, [tab, activeStore?.id, stats, loadOperations, operationsPage])
+
+  const refreshPrintCoverage = useCallback(async (storeId: string) => {
+    const coverage = await loadPrintCodeCoverage(storeId)
+    setPrintSavedCount(coverage.saved)
+    setPrintOperationIds(new Set(coverage.operationIds))
+    return coverage
+  }, [])
+
+  useEffect(() => {
+    if (tab !== 'operations' || !activeStore?.id) return
+    let cancel = false
+    void loadPrintCodeCoverage(activeStore.id)
+      .then((coverage) => {
+        if (cancel) return
+        setPrintSavedCount(coverage.saved)
+        setPrintOperationIds(new Set(coverage.operationIds))
+      })
+      .catch(() => {
+        if (cancel) return
+        setPrintSavedCount(0)
+        setPrintOperationIds(new Set())
+      })
+    return () => { cancel = true }
+  }, [tab, activeStore?.id])
 
   const refreshCodes = async () => {
     if (!activeStore?.id || codesSyncing) return
@@ -1427,10 +1453,12 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                                 : 'В файле нет кода маркировки с хвостом 91/92.')
                               return
                             }
+                            const storeName = getStoreSelectorLabel(activeStore)
                             return savePrintCodes(activeStore.account_id, activeStore.id, parsed.full)
-                              .then((saved) => showAction('ok', parsed.short > 0
-                                ? `Сохранено ${saved} полных кодов. Ещё ${parsed.short} коротких пропущены.`
-                                : `Сохранено ${saved} полных кодов. Печать возьмёт их из базы.`))
+                              .then(() => refreshPrintCoverage(activeStore.id))
+                              .then((coverage) => showAction(coverage.operationIds.length > 0 ? 'ok' : 'err', coverage.operationIds.length > 0
+                                ? `Файл совпал с операциями магазина «${storeName}»: ${coverage.operationIds.length}. Эти строки подсвечены.`
+                                : `Файл сохранён в магазине «${storeName}», но в его списке такой операции нет. Это другой магазин: переключи его и загрузи файл ещё раз.`))
                           })
                           .catch((reason) => showAction('err', reason instanceof Error ? reason.message : 'Не удалось прочитать файл.'))
                           .finally(() => setPrintFileBusy(false))
@@ -1464,6 +1492,13 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                   </div>
                 </div>
                 <p className="text-xs text-slate-400">Сначала загрузите файл печати Текшера с полным кодом. Печать берёт сохранённую копию и не отправляет в Teksher отчёт о нанесении. Короткий список из кабинета не подходит.</p>
+                {activeStore && printSavedCount > 0 && (
+                  printOperationIds.size > 0 ? (
+                    <p className="text-xs font-medium text-emerald-700">В магазине «{getStoreSelectorLabel(activeStore)}» полный код есть у операций: {printOperationIds.size}. Такие строки подсвечены.</p>
+                  ) : (
+                    <p className="text-xs font-medium text-amber-700">В магазине «{getStoreSelectorLabel(activeStore)}» сохранено полных кодов: {printSavedCount}. Ни одна операция списка с ними не совпала. Файл от другого магазина: переключи его и загрузи ещё раз.</p>
+                  )
+                )}
 
                 {operationsLoading ? (
                   <Skeleton rows={6} />
@@ -1486,13 +1521,19 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       </thead>
                       <tbody className="divide-y divide-slate-50">
                         {operations.map((op, idx) => {
-                          const opId = op.operationId ?? op.id
+                          const opId = String(op.operationId ?? op.id)
                           const opType = op.operationType ?? op.type
+                          const hasPrintCode = printOperationIds.has(opId)
                           return (
-                            <tr key={String(opId)} className="hover:bg-slate-50/50 transition-colors">
+                            <tr key={opId} className={hasPrintCode ? 'bg-emerald-50' : 'hover:bg-slate-50/50 transition-colors'}>
                               <td className="px-4 py-3 text-xs text-slate-400">{operationsPage * 20 + idx + 1}</td>
-                              <td className="px-4 py-3 font-mono text-xs text-slate-600 max-w-[120px] truncate" title={String(opId)}>
-                                {String(opId).slice(0, 14)}…
+                              <td className="px-4 py-3" title={opId}>
+                                <div className="flex items-center gap-2">
+                                  <span className="max-w-[120px] truncate font-mono text-xs text-slate-600">{opId.slice(0, 14)}…</span>
+                                  {hasPrintCode && (
+                                    <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">Полный код</span>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-4 py-3 text-xs text-slate-700">{teksherTypeLabel(opType)}</td>
                               <td className="px-4 py-3">
