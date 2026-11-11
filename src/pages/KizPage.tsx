@@ -8,7 +8,7 @@ import { KizLinkCard } from '../components/kiz/KizLinkCard'
 import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
 import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
 import { parsePrintFileBytes } from '../lib/kizPrintFile'
-import { fetchCachedCodes, fetchCachedOperations, linkPrintCodesOnPage, loadPrintCodeCoverage, savePrintCodes, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
+import { fetchCachedCodes, fetchCachedOperations, fetchPrintCsv, linkPrintCodesOnPage, loadPrintCodeCoverage, savePrintCodes, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
@@ -377,6 +377,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [operationsLoading, setOperationsLoading] = useState(false)
   const [operationsSyncing, setOperationsSyncing] = useState(false)
   const [printFileBusy, setPrintFileBusy] = useState(false)
+  const [captureOperationId, setCaptureOperationId] = useState<string | null>(null)
   const [printOperationIds, setPrintOperationIds] = useState<Set<string>>(new Set())
   const [printSavedCount, setPrintSavedCount] = useState(0)
   const [printGateway, setPrintGateway] = useState(false)
@@ -632,16 +633,15 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
   const refreshOperations = async () => {
     if (!activeStore?.id || operationsSyncing) return
-    const size = syncPageSize
     setOperationsSyncing(true)
-    setListSyncNote(`Забираем операции из Teksher по ${size}…`)
+    setListSyncNote('Обновляем 100 операций…')
     try {
-      await syncCachedOperations(activeStore.id, size, (page, total) => {
-        setListSyncNote(total ? `Операции: по ${size}, страница ${page}, всего ${total}` : `Операции: по ${size}, страница ${page}`)
-      })
+      const count = await syncCachedOperations(activeStore.id)
       setOperationsPage(0)
       await loadOperations(0)
-      showAction('ok', 'Операции записаны в базу')
+      showAction('ok', count > 0
+        ? `Обновлено операций: ${count}. Закрытые повторно не запрашивались.`
+        : 'Новых и незакрытых операций нет. Закрытые повторно не запрашивались.')
     } catch (reason) {
       showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить операции.')
     } finally {
@@ -737,13 +737,36 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     void loadProducts(productsPage, productsSearch)
   }
 
-  // ── Нанести коды ─────────────────────────────────────────────────────────
-  const handleUtilise = async (orderId: string | number) => {
-    if (!activeStore?.id) return
-    const { error } = await invoke({ store_id: activeStore.id, action: 'utilise', orderId: String(orderId) })
-    if (error) { showAction('err', error); return }
-    showAction('ok', 'Нанесение зарегистрировано')
-    void loadOperations()
+  const capturePrintFile = async (operationId: string) => {
+    if (!activeStore?.id || captureOperationId) return
+    setCaptureOperationId(operationId)
+    try {
+      let result = await fetchPrintCsv(activeStore.id, operationId, false)
+      if (result.needsApply) {
+        const agreed = window.confirm('Нанесения по этому заказу ещё не было. Забрать CSV и отправить нанесение на все коды заказа?')
+        if (!agreed) return
+        result = await fetchPrintCsv(activeStore.id, operationId, true)
+      }
+      const binary = atob(result.file)
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+      const parsed = parsePrintFileBytes(bytes)
+      if (parsed.full.length === 0) {
+        showAction('err', parsed.short > 0
+          ? 'Teksher отдал короткие коды без хвоста 91/92. Файл в базу не записан.'
+          : 'В файле печати нет полного кода.')
+        return
+      }
+      await savePrintCodes(activeStore.account_id, activeStore.id, parsed.full, operationId)
+      const operationIds = operations.map((op) => String(op.operationId ?? op.id))
+      const coverage = await refreshPrintCoverage(activeStore.id, operationIds)
+      showAction('ok', coverage.operationIds.length > 0
+        ? `Полный файл сохранён: ${parsed.full.length}. Печать в строке включена.`
+        : `Полный файл сохранён: ${parsed.full.length}. Строка подсветится, когда список операций отдаст эти коды.`)
+    } catch (reason) {
+      showAction('err', reason instanceof Error ? reason.message : 'Не удалось забрать CSV.')
+    } finally {
+      setCaptureOperationId(null)
+    }
   }
 
   // ── Заказать КИЗы ────────────────────────────────────────────────────────
@@ -949,8 +972,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
               <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${tnvedSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
               {tnvedSyncing ? 'Загрузка ТН ВЭД…' : 'Обновить ТН ВЭД'}
             </button>
-            {(tab === 'codes' || tab === 'operations') && (
-              <PageSizeSelect value={syncPageSize} disabled={codesSyncing || operationsSyncing} onChange={setSyncPageSize} />
+            {tab === 'codes' && (
+              <PageSizeSelect value={syncPageSize} disabled={codesSyncing} onChange={setSyncPageSize} />
             )}
             <button
               type="button"
@@ -1446,7 +1469,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs text-slate-500">Всего: {operationsTotal}</span>
                   <div className="ml-auto flex items-center gap-2">
-                    <PageSizeSelect value={syncPageSize} disabled={operationsSyncing} onChange={setSyncPageSize} />
                     <input
                       ref={printFileRef}
                       type="file"
@@ -1505,7 +1527,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     </button>
                   </div>
                 </div>
-                <p className="text-xs text-slate-400">Сначала загрузите файл печати Текшера с полным кодом. Печать берёт сохранённую копию и не отправляет в Teksher отчёт о нанесении. Короткий список из кабинета не подходит.</p>
+                <p className="text-xs text-slate-400">Печать в строке включится, когда полный файл уже в базе. «Забрать CSV» скачивает его из Текшера. Если нанесения ещё не было, этот клик отправляет нанесение на весь заказ. Ручная загрузка файла тоже подходит.</p>
                 {activeStore && printSavedCount > 0 && (
                   printSearching && printOperationIds.size === 0 ? (
                     <p className="text-xs font-medium text-slate-500">Полный код сохранён. Ищем его строку в этом списке…</p>
@@ -1521,7 +1543,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 {operationsLoading ? (
                   <Skeleton rows={6} />
                 ) : operations.length === 0 ? (
-                  <EmptyState text="В базе нет операций" sub="Нажмите «Обновить», чтобы забрать операции из Teksher. Открытие вкладки читает только базу." />
+                  <EmptyState text="В базе нет операций" sub="Нажмите «Обновить», чтобы забрать 100 операций из Teksher. Открытие вкладки читает только базу." />
                 ) : (
                   <div className="w-full overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
                     <table className="w-full min-w-[860px] text-sm">
@@ -1565,32 +1587,36 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                               <td className="px-4 py-3">
                                 <div className="flex items-center gap-3">
                                   {activeStore?.id && operationCanPrint(opType) && (
-                                    <KizOperationPrint
-                                      storeId={activeStore.id}
-                                      operationId={String(opId)}
-                                      gtin={op.gtin}
-                                      expectedCount={op.kmsCount ?? op.codesCount ?? 0}
-                                      product={op.product}
-                                      onError={(message) => showAction('err', message)}
-                                      onDone={(message) => {
-                                        showAction('ok', message)
-                                        if (!activeStore?.id) return
-                                        void loadPrintCodeCoverage(activeStore.id).then((coverage) => {
-                                          setPrintSavedCount(coverage.saved)
-                                          setPrintOperationIds(new Set(coverage.operationIds))
-                                          setPrintGateway(false)
-                                        })
-                                      }}
-                                    />
-                                  )}
-                                  {op.status === 'COMPLETED' && opType === 'EMISSION' && (
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleUtilise(opId)}
-                                      className="text-xs font-medium text-blue-600 hover:underline"
-                                    >
-                                      Нанести
-                                    </button>
+                                    <>
+                                      <KizOperationPrint
+                                        storeId={activeStore.id}
+                                        operationId={String(opId)}
+                                        gtin={op.gtin}
+                                        expectedCount={op.kmsCount ?? op.codesCount ?? 0}
+                                        product={op.product}
+                                        enabled={hasPrintCode}
+                                        onError={(message) => showAction('err', message)}
+                                        onDone={(message) => {
+                                          showAction('ok', message)
+                                          if (!activeStore?.id) return
+                                          void loadPrintCodeCoverage(activeStore.id).then((coverage) => {
+                                            setPrintSavedCount(coverage.saved)
+                                            setPrintOperationIds(new Set(coverage.operationIds))
+                                            setPrintGateway(false)
+                                          })
+                                        }}
+                                      />
+                                      {!hasPrintCode && (
+                                        <button
+                                          type="button"
+                                          disabled={captureOperationId !== null}
+                                          onClick={() => void capturePrintFile(opId)}
+                                          className="text-xs font-medium text-blue-600 hover:underline disabled:text-slate-300"
+                                        >
+                                          {captureOperationId === opId ? 'Забираем…' : 'Забрать CSV'}
+                                        </button>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                               </td>

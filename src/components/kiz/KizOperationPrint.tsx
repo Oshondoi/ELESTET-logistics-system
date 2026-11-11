@@ -19,6 +19,7 @@ export function KizOperationPrint({
   gtin,
   product,
   expectedCount = 0,
+  enabled = true,
   onError,
   onDone,
 }: {
@@ -27,6 +28,7 @@ export function KizOperationPrint({
   gtin?: string
   product: Record<string, unknown> | null
   expectedCount?: number
+  enabled?: boolean
   onError: (message: string) => void
   onDone: (message: string) => void
 }) {
@@ -99,10 +101,10 @@ export function KizOperationPrint({
       <button
         ref={buttonRef}
         type="button"
-        disabled={busy}
+        disabled={busy || !enabled}
         onClick={() => menu ? setMenu(null) : openMenu()}
         className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
-        title="Печать"
+        title={enabled ? 'Печать' : 'Сначала заберите CSV'}
         aria-label="Печать"
       >
         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">

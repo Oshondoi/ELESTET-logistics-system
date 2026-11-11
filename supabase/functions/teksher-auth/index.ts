@@ -164,6 +164,48 @@ function codeRow(storeId: string, item: JsonObject, syncedAt: string): JsonObjec
   }
 }
 
+const OPERATION_SYNC_LIMIT = 100
+const CLOSED_OPERATION_STATUSES = new Set([
+  'ACCEPTED', 'COMPLETED', 'REJECTED', 'DECLINED', 'FAILED', 'CANCELED', 'CANCELLED',
+])
+
+function operationStatus(value: unknown): string | null {
+  return codeOf(value)
+}
+
+function isClosedOperation(status: string | null): boolean {
+  return CLOSED_OPERATION_STATUSES.has((status ?? '').toUpperCase())
+}
+
+function operationStageRank(operationType: string | null, type: string | null): number {
+  const values = [operationType, type].map((value) => (value ?? '').toUpperCase())
+  const has = (...names: string[]) => values.some((value) => names.includes(value))
+  if (has('MARK_CODE_ORDER', 'EMISSION')) return 0
+  if (has('MARKING', 'UTILISATION')) return 1
+  if (has('TRANSGRAN_REGISTRATION', 'TRANSGRAN', 'IMPORT', 'IMPORT_REGISTRATION', 'SHIPMENT')) return 2
+  return 3
+}
+
+function operationStatusRank(status: string | null): number {
+  const value = (status ?? '').toUpperCase()
+  if (value === 'CREATED') return 0
+  if (value === 'PROGRESS' || value === 'IN_PROGRESS' || value === 'PROCESSING') return 1
+  if (value === 'WAITING') return 2
+  return 3
+}
+
+function operationMoment(item: JsonObject): number {
+  const time = Date.parse(String(item.createdAt ?? item.createdDate ?? ''))
+  return Number.isNaN(time) ? 0 : time
+}
+
+function operationFromPayload(raw: unknown): JsonObject {
+  const unwrapped = asObject(unwrapTeksher(raw))
+  if (firstText(unwrapped.operationId, unwrapped.id)) return unwrapped
+  const nested = asObject(unwrapped.operation ?? unwrapped.content)
+  return firstText(nested.operationId, nested.id) ? nested : unwrapped
+}
+
 function operationRow(storeId: string, item: JsonObject, syncedAt: string): JsonObject | null {
   const operationId = firstText(item.operationId, item.id)
   if (!operationId) return null
@@ -235,6 +277,78 @@ function operationExtension(operation: JsonObject): string | null {
     typeof operation.productGroup === 'string' ? operation.productGroup : '',
   ).toLowerCase()
   return isExtensionAlias(extension) ? extension : null
+}
+
+async function emissionAwaitingApply(token: string, operationId: string): Promise<boolean> {
+  const response = await fetch(`${BASE}/operations/${encodeURIComponent(operationId)}/ready`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) return false
+  const text = (await response.text()).trim()
+  if (text === 'true') return true
+  if (!text || text === 'false' || text === 'null') return false
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (parsed === true) return true
+    if (!parsed || typeof parsed !== 'object') return false
+    const row = parsed as Record<string, unknown>
+    if ('ready' in row) return row.ready === true
+    if (row.data === true) return true
+    if (row.data && typeof row.data === 'object' && 'ready' in (row.data as Record<string, unknown>)) {
+      return (row.data as Record<string, unknown>).ready === true
+    }
+  } catch { /* the ready body is not JSON */ }
+  return false
+}
+
+function createdOperationId(payload: Record<string, unknown>): string {
+  const data = payload.data
+  if (typeof data === 'string') return data.trim()
+  if (data && typeof data === 'object') {
+    const row = data as Record<string, unknown>
+    return firstText(row.operationId, row.id, row.orderId)
+  }
+  return firstText(payload.operationId, payload.id)
+}
+
+async function downloadMarkingCsv(token: string, operationId: string): Promise<string> {
+  const response = await fetch(`${BASE}/marking_codes/csv?${new URLSearchParams({ operationId })}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) throw new Error(`Teksher не отдал файл печати (${response.status})`)
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
+function csvHasCryptoTail(file: string): boolean {
+  let binary = ''
+  try { binary = atob(file) } catch { return false }
+  return /01\d{14}21[!-~]{13}(?:\u001d91[!-~]{4}\u001d92|91[!-~]{4}92)/.test(binary)
+}
+
+async function extensionForOperation(
+  token: string,
+  svc: ReturnType<typeof createClient>,
+  storeId: string,
+  operationId: string,
+): Promise<string> {
+  const { data: savedOperation } = await svc.from('teksher_emission_operations')
+    .select('extension').eq('store_id', storeId).eq('operation_id', operationId).maybeSingle()
+  let extension = firstText((savedOperation as { extension?: string } | null)?.extension).toLowerCase()
+  if (isExtensionAlias(extension)) return extension
+  try {
+    const raw = await teksherJson(`${BASE}/operations/${encodeURIComponent(operationId)}`, token)
+    extension = operationExtension(asObject(unwrapTeksher(raw))) ?? ''
+  } catch { /* the order card may only be available through the list */ }
+  if (isExtensionAlias(extension)) return extension
+  try {
+    const raw = await teksherJson(`${BASE}/operations/filter?page=0&size=200`, token)
+    const operation = arrayFromResponse(raw).find((item) => firstText(item.operationId, item.id) === operationId)
+    extension = operation ? operationExtension(operation) ?? '' : ''
+  } catch { /* the caller reports that the group is unknown */ }
+  return isExtensionAlias(extension) ? extension : ''
 }
 
 type EmissionProduct = {
@@ -459,7 +573,7 @@ Deno.serve(async (req: Request) => {
   // Проверяем доступ к магазину
   const { data: storeAccess } = await userClient.from('stores').select('id').eq('id', store_id).single()
   if (!storeAccess) return err('Магазин не найден или нет доступа', 403)
-  const writeActions = new Set(['connect','disconnect','emit','utilise','create_product','refresh_countries','publish_product','topup_qr','transgran_submit','transgran_cancel'])
+  const writeActions = new Set(['connect','disconnect','emit','utilise','capture_print_csv','create_product','refresh_countries','publish_product','topup_qr','transgran_submit','transgran_cancel'])
   const permission = action === 'connect' || action === 'disconnect' ? 'stores_manage' : writeActions.has(action) ? 'stickers_manage' : 'stickers_view'
   const { data: allowed } = await svc.rpc('server_user_has_store_permission', { p_user_id: user.id, p_store_id: store_id, p_permission: permission })
   if (!allowed) return err('Нет права на операцию TEKSHER', 403)
@@ -715,9 +829,150 @@ Deno.serve(async (req: Request) => {
     })
   }
 
+  // Ordinary operations refresh. One hundred rows, newest page first.
+  // New numbers are kept. Open rows follow: emission, then marking, then transgran.
+  // Inside a stage: created, then in progress, then waiting for Russia.
+  // Accepted, rejected and canceled rows already stored are not requested again.
+  // Nothing outside this hundred is deleted.
+  if (action === 'sync_operations_recent') {
+    const startedAt = new Date().toISOString()
+    const params = new URLSearchParams({ page: '0', size: String(OPERATION_SYNC_LIMIT) })
+    let response: Response | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      response = await fetch(`${BASE}/operations/filter?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      if (response.status !== 502 && response.status !== 503 && response.status !== 504) break
+      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)))
+    }
+    if (!response?.ok) return err(`Teksher не отдал список операций (${response?.status ?? 0})`)
+    const pageItems = arrayFromResponse(await response.json())
+    const pageRows = pageItems
+      .map((item) => operationRow(store_id, item, startedAt))
+      .filter((row): row is JsonObject => Boolean(row))
+    const seenPage = new Set<string>()
+    const uniquePage = pageRows.filter((row) => {
+      const id = String(row.operation_id)
+      if (seenPage.has(id)) return false
+      seenPage.add(id)
+      return true
+    })
+
+    const known = new Map<string, { status: string | null; operation_type: string | null; type: string | null; created_at_teksher: string | null }>()
+    for (let from = 0; from < 50000; from += 1000) {
+      const { data, error } = await svc.from('teksher_operations')
+        .select('id, operation_id, status, operation_type, type, created_at_teksher')
+        .eq('store_id', store_id)
+        .order('id', { ascending: true })
+        .range(from, from + 999)
+      if (error) return err(`Не удалось прочитать операции: ${error.message}`)
+      for (const row of data ?? []) {
+        const id = String(row.operation_id ?? '')
+        if (!id) continue
+        known.set(id, {
+          status: row.status == null ? null : String(row.status),
+          operation_type: row.operation_type == null ? null : String(row.operation_type),
+          type: row.type == null ? null : String(row.type),
+          created_at_teksher: row.created_at_teksher == null ? null : String(row.created_at_teksher),
+        })
+      }
+      if ((data ?? []).length < 1000) break
+    }
+
+    type Candidate = {
+      id: string
+      row: JsonObject | null
+      isNew: boolean
+      stage: number
+      statusRank: number
+      created: number
+    }
+    const candidates: Candidate[] = []
+    const chosenIds = new Set<string>()
+    const add = (candidate: Candidate) => {
+      if (chosenIds.has(candidate.id)) return
+      chosenIds.add(candidate.id)
+      candidates.push(candidate)
+    }
+
+    for (const row of uniquePage) {
+      const id = String(row.operation_id)
+      const previous = known.get(id)
+      const status = operationStatus(row.status)
+      const created = Date.parse(String(row.created_at_teksher ?? '')) || 0
+      const stage = operationStageRank(
+        row.operation_type == null ? null : String(row.operation_type),
+        row.type == null ? null : String(row.type),
+      )
+      if (!previous) {
+        add({ id, row, isNew: true, stage, statusRank: operationStatusRank(status), created })
+        continue
+      }
+      if (isClosedOperation(previous.status) && isClosedOperation(status)) continue
+      add({
+        id,
+        row,
+        isNew: false,
+        stage,
+        statusRank: isClosedOperation(status) ? 4 : operationStatusRank(status),
+        created,
+      })
+    }
+
+    for (const [id, previous] of known) {
+      if (chosenIds.has(id) || isClosedOperation(previous.status)) continue
+      const created = Date.parse(previous.created_at_teksher ?? '') || 0
+      add({
+        id,
+        row: null,
+        isNew: false,
+        stage: operationStageRank(previous.operation_type, previous.type),
+        statusRank: operationStatusRank(previous.status),
+        created,
+      })
+    }
+
+    candidates.sort((a, b) => {
+      if (a.isNew !== b.isNew) return a.isNew ? -1 : 1
+      if (a.stage !== b.stage) return a.stage - b.stage
+      if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank
+      return b.created - a.created
+    })
+    const chosen = candidates.slice(0, OPERATION_SYNC_LIMIT)
+    const writes: JsonObject[] = []
+    const missing: string[] = []
+    for (const candidate of chosen) {
+      if (candidate.row) writes.push(candidate.row)
+      else missing.push(candidate.id)
+    }
+
+    for (let index = 0; index < missing.length; index += 8) {
+      const chunk = missing.slice(index, index + 8)
+      const loaded = await Promise.all(chunk.map(async (operationId) => {
+        const url = `${BASE}/operations/${encodeURIComponent(operationId)}`
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const raw = await teksherJson(url, token)
+            return operationRow(store_id, operationFromPayload(raw), startedAt)
+          } catch (reason) {
+            const message = reason instanceof Error ? reason.message : ''
+            if (!/502|503|504/.test(message) || attempt === 1) return null
+            await new Promise((resolve) => setTimeout(resolve, 400))
+          }
+        }
+        return null
+      }))
+      for (const row of loaded) if (row) writes.push(row)
+    }
+
+    if (writes.length > 0) {
+      const { error: writeError } = await svc.from('teksher_operations').upsert(writes, { onConflict: 'store_id,operation_id' })
+      if (writeError) return err(`Не удалось записать операции: ${writeError.message}`)
+    }
+    return ok({ count: writes.length, limit: OPERATION_SYNC_LIMIT })
+  }
+
   // One page of codes or operations is written here. The screen reads the table.
   // The chosen size is sent to Teksher as-is: 10, 20, 50 or 100.
-  // The last page drops rows that were not in this refresh.
+  // A full codes walk drops rows that were not in this refresh. Operations are not dropped.
   if (action === 'sync_codes' || action === 'sync_operations') {
     const page = Number(body.page ?? 0)
     const requested = Number(body.size)
@@ -764,7 +1019,9 @@ Deno.serve(async (req: Request) => {
     }
     const info = pageLast(payload, items.length, size)
     const last = finished || info.last
-    if (last) {
+    // Operations stay. A short refresh must not delete rows that were not on this page.
+    // The codes list still drops rows missing from a full walk.
+    if (last && action === 'sync_codes') {
       const { error: dropError } = await svc.from(table).delete().eq('store_id', store_id).lt('synced_at', startedAt)
       if (dropError) return err(`Список записан, но старые строки не убрались: ${dropError.message}`)
     }
@@ -906,6 +1163,61 @@ Deno.serve(async (req: Request) => {
     const d = await r.json() as Record<string, unknown>
     if (!r.ok) return err((d?.message as string) ?? `Ошибка нанесения: ${r.status}`)
     return ok({ success: true })
+  }
+
+  // Download the print CSV. The first time Teksher still offers «Печать и нанесение»,
+  // the file is fetched only after that report, and only when the user confirmed it.
+  if (action === 'capture_print_csv') {
+    const operationId = firstText(body.operationId, body.orderId)
+    if (!operationId) return err('operationId обязателен')
+    try {
+      const awaitingApply = await emissionAwaitingApply(token, operationId)
+      if (awaitingApply && body.confirmApply !== true) return ok({ needsApply: true })
+
+      const fileIds = [operationId]
+      let applyError = ''
+      if (awaitingApply) {
+        const extension = await extensionForOperation(token, svc, store_id, operationId)
+        if (!extension) return err('Не удалось определить товарную группу. Нанесение не отправлено, файл не скачан.')
+        if (extension !== 'milk' && extension !== 'petfood') {
+          const applied = await fetch(`${ORDER_BASE}/operations/utilisation`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ extension, dataSupplier: 'AUTO', orderId: operationId }),
+          })
+          const appliedBody = await applied.json() as Record<string, unknown>
+          if (!applied.ok) applyError = firstText(appliedBody.message) || `Ошибка нанесения: ${applied.status}`
+          else {
+            const created = createdOperationId(appliedBody)
+            if (created) fileIds.unshift(created)
+          }
+        }
+      }
+
+      let file = ''
+      let downloadError = ''
+      for (const fileId of [...new Set(fileIds)]) {
+        try {
+          const candidate = await downloadMarkingCsv(token, fileId)
+          if (csvHasCryptoTail(candidate)) {
+            file = candidate
+            break
+          }
+          downloadError = 'Teksher отдал файл без хвоста 91/92.'
+        } catch (reason) {
+          downloadError = reason instanceof Error ? reason.message : 'Teksher не отдал файл печати.'
+        }
+      }
+      if (!file) {
+        if (applyError && fileIds.length === 1) return err(applyError)
+        return err(fileIds.length > 1
+          ? `Нанесение уже отправлено, но полный файл не прочитался. Нажмите «Забрать CSV» ещё раз: повторно нанесение не уйдёт. ${downloadError}`.trim()
+          : (downloadError || 'Teksher не отдал файл печати.'))
+      }
+      return ok({ file })
+    } catch (reason) {
+      return err(reason instanceof Error ? reason.message : 'Не удалось забрать файл печати.')
+    }
   }
 
   // ── action: create_product ──────────────────────────────────────────────────

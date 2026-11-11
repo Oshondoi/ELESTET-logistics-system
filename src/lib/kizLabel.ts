@@ -22,7 +22,18 @@ function gs1Text(code: string): string {
   if (!kizHasCryptoTail(normalized)) {
     throw new Error('КИЗ нельзя печатать: в коде нет криптохвоста 91/92. Без него DataMatrix короткий и не пройдёт Честный знак.')
   }
-  return `^FNC1${normalized.replace(/\u001d/g, '^GS')}`
+  const pieces = normalized.split('\u001d')
+  const head = /^01(\d{14})21([!-~]{13})$/.exec(pieces[0] ?? '')
+  const key = pieces.find((part) => /^91[!-~]{4}$/.test(part))
+  const signature = pieces.find((part) => /^92[!-~]+$/.test(part))
+  if (!head || !key || !signature) {
+    throw new Error('КИЗ нельзя печатать: не удалось разобрать хвост 91/92.')
+  }
+  const body = `${head[2]}${key.slice(2)}${signature.slice(2)}`
+  if (/[()]/.test(body)) {
+    throw new Error('КИЗ нельзя печатать: в серийном номере или хвосте есть скобки.')
+  }
+  return `(01)${head[1]}(21)${head[2]}(91)${key.slice(2)}(92)${signature.slice(2)}`
 }
 
 function matrix(code: string, maxPixels: number): HTMLCanvasElement {
@@ -102,8 +113,8 @@ function drawVertical(item: PrintCode, number: number): HTMLCanvasElement {
   if (!ctx) throw new Error('Браузер не смог подготовить лист печати')
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, width, height)
-  const maxSize = Math.round(2.35 * dpi)
-  const codeY = Math.round(0.55 * dpi)
+  const maxSize = Math.round(3.2 * dpi)
+  const codeY = Math.round(0.28 * dpi)
   const source = matrix(item.code, maxSize)
   const codeX = Math.round((width - source.width) / 2)
   ctx.imageSmoothingEnabled = false
@@ -112,8 +123,9 @@ function drawVertical(item: PrintCode, number: number): HTMLCanvasElement {
   const { gtin, serial } = parts(item)
   ctx.textAlign = 'center'
   ctx.font = `700 ${Math.round(0.22 * dpi)}px Arial`
-  ctx.fillText(gtin, width / 2, Math.round(3.25 * dpi))
-  ctx.fillText(serial, width / 2, Math.round(3.62 * dpi))
+  const textY = codeY + source.width + Math.round(0.36 * dpi)
+  ctx.fillText(gtin, width / 2, textY)
+  ctx.fillText(serial, width / 2, textY + Math.round(0.34 * dpi))
   ctx.textAlign = 'right'
   ctx.font = `700 ${Math.round(0.2 * dpi)}px Arial`
   ctx.fillText(String(number), width - Math.round(0.28 * dpi), height - Math.round(0.28 * dpi))
@@ -133,8 +145,8 @@ function drawHorizontal(item: PrintCode, goods: LabelGoods, number: number): HTM
   ctx.fillRect(0, 0, width, height)
   ctx.fillStyle = '#000000'
   ctx.textAlign = 'left'
-  const left = Math.round(0.28 * dpi)
-  const textWidth = Math.round(3.15 * dpi)
+  const left = Math.round(0.22 * dpi)
+  const textWidth = Math.round(2.85 * dpi)
   ctx.font = `700 ${Math.round(0.2 * dpi)}px Arial`
   let y = Math.round(0.48 * dpi)
   wrap(ctx, goods.name || '—', textWidth).forEach((line) => {
@@ -162,9 +174,9 @@ function drawHorizontal(item: PrintCode, goods: LabelGoods, number: number): HTM
     ctx.fillText(value || '—', left, y)
     y += Math.round(0.4 * dpi)
   })
-  const maxSize = Math.round(1.7 * dpi)
-  const codeX = Math.round(3.85 * dpi)
-  const codeY = Math.round(0.35 * dpi)
+  const maxSize = Math.round(2.45 * dpi)
+  const codeX = Math.round(3.4 * dpi)
+  const codeY = Math.round(0.18 * dpi)
   const size = placeMatrix(ctx, item.code, codeX, codeY, maxSize)
   const { gtin, serial } = parts(item)
   ctx.font = `700 ${Math.round(0.16 * dpi)}px Arial`

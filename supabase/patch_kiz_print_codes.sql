@@ -6,8 +6,9 @@ create table if not exists public.kiz_print_codes (
   gtin text not null,
   serial text not null,
   code text not null,
+  operation_id text not null default '',
   updated_at timestamptz not null default timezone('utc', now()),
-  primary key (store_id, gtin, serial)
+  primary key (store_id, operation_id, gtin, serial)
 );
 
 alter table public.kiz_print_codes enable row level security;

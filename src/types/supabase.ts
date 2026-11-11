@@ -508,6 +508,7 @@ export interface Database {
           gtin: string
           serial: string
           code: string
+          operation_id: string
           updated_at: string
         }
         Insert: {
@@ -516,6 +517,7 @@ export interface Database {
           gtin: string
           serial: string
           code: string
+          operation_id?: string
           updated_at?: string
         }
         Update: Partial<Database['public']['Tables']['kiz_print_codes']['Insert']>
