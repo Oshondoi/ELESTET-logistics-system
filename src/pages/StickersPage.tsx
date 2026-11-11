@@ -112,9 +112,10 @@ interface StickersPageProps {
   canImport?: boolean
   isAdmin?: boolean
   canManageLinks?: boolean
+  canDisconnectTeksher?: boolean
 }
 
-export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activeAccountId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true, isAdmin, canManageLinks = false }: StickersPageProps) => {
+export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activeAccountId, onStoreChange, onAdd, onEdit, onDelete, onAddBundle, onEditBundle, onDeleteBundle, canManage = true, canDelete = false, canImport = true, isAdmin, canManageLinks = false, canDisconnectTeksher = false }: StickersPageProps) => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingSticker, setEditingSticker] = useState<StickerTemplate | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<StickerTemplate | null>(null)
@@ -926,7 +927,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
       </div>
 
       {mainTab === 'stickers2' && (
-        <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} canManageLinks={canManageLinks} />
+        <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} canManageLinks={canManageLinks} canDisconnectTeksher={canDisconnectTeksher} />
       )}
 
       {isAdmin && mainTab === 'stickers3' && <KizGuidePage />}

@@ -33,7 +33,7 @@ function GtinField({
   open: boolean
   query: string
   saved: string | null
-  draft: string | null
+  draft: string | null | undefined
   disabled: boolean
   choices: Array<{ gtin: string; name: string | null; full_name: string | null }>
   onOpen: () => void
@@ -91,7 +91,8 @@ function GtinField({
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
   }, [open, onClose])
 
-  const shown = draft ?? saved ?? ''
+  const shown = draft === undefined ? (saved ?? '') : (draft ?? '')
+  const dirty = draft !== undefined && (draft ?? '') !== (saved ?? '')
   return (
     <div ref={anchorRef} className="relative">
       <input
@@ -107,9 +108,9 @@ function GtinField({
         }}
         onChange={(event) => onQuery(event.target.value)}
         placeholder="Выберите GTIN"
-        className={`w-full rounded-xl border px-3 py-2 font-mono text-sm outline-none placeholder:font-sans placeholder:text-slate-300 focus:border-emerald-400 disabled:bg-slate-50 ${saved && !draft ? 'pr-16' : ''} ${draft && draft !== saved ? 'border-amber-300 bg-amber-50' : saved ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-200'}`}
+        className={`w-full rounded-xl border px-3 py-2 font-mono text-sm outline-none placeholder:font-sans placeholder:text-slate-300 focus:border-emerald-400 disabled:bg-slate-50 ${shown && onClear ? 'pr-16' : ''} ${dirty ? 'border-amber-300 bg-amber-50' : shown && saved ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-200'}`}
       />
-      {saved && !draft && onClear && (
+      {shown && onClear && (
         <button type="button" disabled={disabled} onClick={onClear} className="absolute top-1/2 right-2 -translate-y-1/2 text-xs font-semibold text-red-600 hover:underline disabled:opacity-50">
           Снять
         </button>
@@ -139,7 +140,7 @@ function GtinField({
   )
 }
 
-export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage: boolean }) {
+export function KizLinkCard({ storeId, canManage, onOrder }: { storeId: string; canManage: boolean; onOrder?: () => void }) {
   const [open, setOpen] = useState(false)
   const [count, setCount] = useState<number | null>(null)
   const [products, setProducts] = useState<KizWbProduct[]>([])
@@ -150,7 +151,7 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [gtinQuery, setGtinQuery] = useState('')
   const [openGtinBarcode, setOpenGtinBarcode] = useState<string | null>(null)
-  const [pending, setPending] = useState<Record<string, string>>({})
+  const [pending, setPending] = useState<Record<string, string | null>>({})
   const [excelOpen, setExcelOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -207,7 +208,8 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
   }, [open, storeId])
 
   const linkByBarcode = useMemo(() => new Map(links.map((link) => [link.wb_barcode, link.gtin])), [links])
-  const productLinked = (product: KizWbProduct) => kizSizeRows(product).some((row) => linkByBarcode.has(row.barcode))
+  const gtinNow = (barcode: string) => (Object.prototype.hasOwnProperty.call(pending, barcode) ? pending[barcode] : linkByBarcode.get(barcode) ?? null)
+  const productLinked = (product: KizWbProduct) => kizSizeRows(product).some((row) => Boolean(gtinNow(row.barcode)))
   const found = products.filter((product) => !selectedIds.includes(product.id) && kizProductMatches(product, query)).slice(0, 40)
   const selected = selectedIds
     .map((id) => products.find((product) => product.id === id))
@@ -219,16 +221,23 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
   })
 
   const visibleBarcodes = new Set(selected.flatMap((product) => kizSizeRows(product).map((row) => row.barcode)))
-  const desired = Object.entries(pending)
-    .filter(([barcode, gtin]) => visibleBarcodes.has(barcode) && linkByBarcode.get(barcode) !== gtin)
+  const changed = Object.entries(pending).filter(([barcode, gtin]) => visibleBarcodes.has(barcode) && (linkByBarcode.get(barcode) ?? null) !== gtin)
+  const clears = changed.filter((entry) => entry[1] === null).map(([barcode]) => barcode)
+  const desired = changed
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
     .map(([barcode, gtin]) => ({ barcode, gtin }))
-  const linkPlan = planKizLinkWrites(desired, links.map((link) => ({ barcode: link.wb_barcode, gtin: link.gtin })))
+  const currentLinks = links
+    .filter((link) => !clears.includes(link.wb_barcode))
+    .map((link) => ({ barcode: link.wb_barcode, gtin: link.gtin }))
+  const linkPlan = planKizLinkWrites(desired, currentLinks)
+  const hasEdits = clears.length > 0 || linkPlan.order.length > 0
 
   async function applyPending() {
-    if (!canManage || saving || linkPlan.order.length === 0 || linkPlan.errors.length > 0) return
+    if (!canManage || saving || !hasEdits || linkPlan.errors.length > 0) return
     setSaving(true)
     setError(null)
     try {
+      for (const barcode of clears) await clearKizBarcodeLink(storeId, barcode)
       for (const row of linkPlan.order) await saveKizBarcodeLink(storeId, row.barcode, row.gtin)
       setPending({})
       setOpenGtinBarcode(null)
@@ -242,29 +251,24 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
     }
   }
 
-  async function remove(barcode: string) {
-    if (saving) return
-    setSaving(true)
-    setError(null)
-    try {
-      await clearKizBarcodeLink(storeId, barcode)
-      await reload()
-    } catch (saveFailure: unknown) {
-      setError(saveFailure instanceof Error ? saveFailure.message : 'Не удалось снять связку.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   return (
     <>
-      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Связка</p>
-        <p className="mt-1 text-lg font-bold text-slate-800">{count === null ? '—' : count}</p>
-        <p className="text-xs text-slate-400">баркодов с GTIN</p>
-        <button type="button" onClick={() => { setCatalogReady(false); setError(null); setOpen(true) }} className="mt-3 text-xs font-semibold text-emerald-700 hover:underline">
-          {canManage ? 'Настроить' : 'Смотреть'}
-        </button>
+      <div className="flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+        <div className="text-2xl">🔗</div>
+        <p className="mt-2 text-sm font-semibold text-slate-800">GTIN и КИЗы</p>
+        <p className="mt-1 text-xl font-bold text-slate-800">{count === null ? '—' : count}</p>
+        <p className="text-xs text-slate-500">баркодов с GTIN</p>
+        <div className="mt-3 flex flex-col gap-2">
+          <button type="button" onClick={() => { setCatalogReady(false); setError(null); setOpen(true) }} className="flex items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700">
+            {canManage ? 'Связать' : 'Смотреть'}
+          </button>
+          {onOrder && (
+            <button type="button" onClick={onOrder} className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700">
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12l7-7 7 7"/></svg>
+              Заказать КИЗы
+            </button>
+          )}
+        </div>
       </div>
       {open && createPortal(
       <>
@@ -290,8 +294,8 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
             <div className="flex gap-2">
               <button type="button" onClick={() => setOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Закрыть</button>
               {canManage && (
-                <button type="button" disabled={saving || linkPlan.order.length === 0 || linkPlan.errors.length > 0} onClick={() => void applyPending()} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
-                  {saving ? 'Связываем…' : 'Связать'}
+                <button type="button" disabled={saving || !hasEdits || linkPlan.errors.length > 0} onClick={() => void applyPending()} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                  {saving ? 'Сохраняем…' : 'Сохранить'}
                 </button>
               )}
             </div>
@@ -379,8 +383,8 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
                       </div>
                       <div className="mt-3 space-y-2">
                         {rows.map((row) => {
-                          const linked = linkByBarcode.get(row.barcode) ?? null
-                          const chosen = pending[row.barcode]
+                          const saved = linkByBarcode.get(row.barcode) ?? null
+                          const draft = Object.prototype.hasOwnProperty.call(pending, row.barcode) ? pending[row.barcode] : undefined
                           const choosing = openGtinBarcode === row.barcode
                           return (
                             <div key={row.rowKey} className="flex items-center gap-3">
@@ -394,16 +398,36 @@ export function KizLinkCard({ storeId, canManage }: { storeId: string; canManage
                                 ) : (
                                   <GtinField
                                     open={choosing}
-                                    query={choosing ? gtinQuery : (chosen ?? '')}
-                                    saved={linked}
-                                    draft={chosen ?? null}
+                                    query={choosing ? gtinQuery : ''}
+                                    saved={saved}
+                                    draft={draft}
                                     disabled={!canManage || saving}
                                     choices={choosing ? gtinChoices : []}
                                     onOpen={() => { setOpenGtinBarcode(row.barcode); setGtinQuery('') }}
                                     onClose={() => setOpenGtinBarcode((current) => current === row.barcode ? null : current)}
                                     onQuery={(value) => { setOpenGtinBarcode(row.barcode); setGtinQuery(value) }}
-                                    onPick={(gtin) => { setPending((current) => ({ ...current, [row.barcode]: gtin })); setOpenGtinBarcode(null); setGtinQuery('') }}
-                                    onClear={linked ? () => void remove(row.barcode) : undefined}
+                                    onPick={(gtin) => {
+                                      setPending((current) => {
+                                        if (gtin === saved) {
+                                          const next = { ...current }
+                                          delete next[row.barcode]
+                                          return next
+                                        }
+                                        return { ...current, [row.barcode]: gtin }
+                                      })
+                                      setOpenGtinBarcode(null)
+                                      setGtinQuery('')
+                                    }}
+                                    onClear={() => {
+                                      setPending((current) => {
+                                        if (!saved) {
+                                          const next = { ...current }
+                                          delete next[row.barcode]
+                                          return next
+                                        }
+                                        return { ...current, [row.barcode]: null }
+                                      })
+                                    }}
                                   />
                                 )}
                               </div>

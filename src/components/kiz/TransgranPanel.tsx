@@ -249,7 +249,7 @@ function DiagnosticModal({ shipment, items, loading, onClose }: { shipment: Ship
   )
 }
 
-export function TransgranPanel({ store, connected }: { store: Store; connected: boolean }) {
+export function TransgranPanel({ store, connected, reloadToken = 0 }: { store: Store; connected: boolean; reloadToken?: number }) {
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [counts, setCounts] = useState<Record<string, number>>({})
   const [fboSources, setFboSources] = useState<FboSource[]>([])
@@ -308,6 +308,7 @@ export function TransgranPanel({ store, connected }: { store: Store; connected: 
   }, [connected, selectedId, store.id])
 
   useEffect(() => { setSelectedId(null); void load() }, [store.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (reloadToken > 0) void load() }, [reloadToken]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadDetails = useCallback(async (shipmentId: string) => {
     if (!supabase) return

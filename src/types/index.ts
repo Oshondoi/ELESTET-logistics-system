@@ -147,6 +147,7 @@ export interface RolePermissions {
   stickers_manage: boolean;
   stickers_delete: boolean;
   stickers_import: boolean;
+  teksher_disconnect: boolean;
   // Отзывы
   reviews_view: boolean;
   reviews_manage: boolean;
@@ -203,6 +204,7 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   stickers_manage: false,
   stickers_delete: false,
   stickers_import: false,
+  teksher_disconnect: false,
   reviews_view: false,
   reviews_manage: false,
   reviews_ai: false,
@@ -254,6 +256,7 @@ export const FULL_PERMISSIONS: RolePermissions = {
   stickers_manage: true,
   stickers_delete: true,
   stickers_import: true,
+  teksher_disconnect: true,
   reviews_view: true,
   reviews_manage: true,
   reviews_ai: true,

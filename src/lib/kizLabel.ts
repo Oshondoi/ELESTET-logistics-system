@@ -79,7 +79,7 @@ function attributeValue(product: Record<string, unknown> | null, needles: string
 
 function goodsOf(product: Record<string, unknown> | null, linked: LabelGoods): LabelGoods {
   return {
-    name: attributeValue(product, ['fullName', 'full_name', 'name']) || linked.name,
+    name: linked.name || attributeValue(product, ['fullName', 'full_name', 'name']),
     article: attributeValue(product, ['article', 'model', 'vendorCode', 'sku']) || linked.article,
     color: attributeValue(product, ['color', 'colour']) || linked.color,
     size: attributeValue(product, ['size']) || linked.size,

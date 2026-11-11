@@ -427,19 +427,25 @@ export async function fetchLabelGoods(storeId: string, gtin: string): Promise<La
   const empty = { name: '', article: '', color: '', size: '' }
   if (!gtin) return empty
   const client = db()
+  const { data: catalog } = await client.from('teksher_products')
+    .select('name')
+    .eq('store_id', storeId)
+    .eq('gtin', gtin)
+    .limit(1)
+  const teksherName = String((catalog?.[0] as { name?: string | null } | undefined)?.name ?? '').trim()
   const { data: links, error: linkError } = await client.from('fulfillment_product_gtin_links')
     .select('wb_barcode')
     .eq('store_id', storeId)
     .eq('gtin', gtin)
     .eq('active', true)
     .limit(1)
-  if (linkError) return empty
+  if (linkError) return { ...empty, name: teksherName }
   const barcode = (links?.[0] as { wb_barcode?: string } | undefined)?.wb_barcode
-  if (!barcode) return empty
+  if (!barcode) return { ...empty, name: teksherName }
   const { data, error } = await client.from('products')
     .select('vendor_code, name, color, sizes, barcodes')
     .eq('store_id', storeId)
-  if (error) return empty
+  if (error) return { ...empty, name: teksherName }
   const products = (data ?? []) as Array<{
     vendor_code?: string | null
     name?: string | null
@@ -451,13 +457,13 @@ export async function fetchLabelGoods(storeId: string, gtin: string): Promise<La
     if (item.barcodes?.includes(barcode)) return true
     return (item.sizes ?? []).some((size) => size.skus?.includes(barcode))
   })
-  if (!product) return empty
+  if (!product) return { ...empty, name: teksherName }
   const size = (product.sizes ?? []).find((item) => item.skus?.includes(barcode))
   const tech = size?.techSize?.trim() ?? ''
   const wb = size?.wbSize?.trim() ?? ''
   const sizeText = tech && wb && tech !== wb ? `${tech} (${wb})` : tech || wb
   return {
-    name: product.name?.trim() ?? '',
+    name: teksherName || product.name?.trim() || '',
     article: product.vendor_code?.trim() ?? '',
     color: product.color?.trim() ?? '',
     size: sizeText,

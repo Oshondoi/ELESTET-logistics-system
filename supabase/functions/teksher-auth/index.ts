@@ -578,7 +578,11 @@ Deno.serve(async (req: Request) => {
   const { data: storeAccess } = await userClient.from('stores').select('id').eq('id', store_id).single()
   if (!storeAccess) return err('Магазин не найден или нет доступа', 403)
   const writeActions = new Set(['connect','disconnect','emit','utilise','capture_print_csv','create_product','refresh_countries','publish_product','topup_qr','transgran_submit','transgran_cancel'])
-  const permission = action === 'connect' || action === 'disconnect' ? 'stores_manage' : writeActions.has(action) ? 'stickers_manage' : 'stickers_view'
+  const permission = action === 'disconnect'
+    ? 'teksher_disconnect'
+    : action === 'connect'
+      ? 'stores_manage'
+      : writeActions.has(action) ? 'stickers_manage' : 'stickers_view'
   const { data: allowed } = await svc.rpc('server_user_has_store_permission', { p_user_id: user.id, p_store_id: store_id, p_permission: permission })
   if (!allowed) return err('Нет права на операцию TEKSHER', 403)
 

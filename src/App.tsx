@@ -1725,6 +1725,7 @@ function App() {
                   }
                   isAdmin={isAdmin}
                   canManageLinks={isOwnerOrAdmin && !isReadOnly}
+                  canDisconnectTeksher={(isOwnerOrAdmin || permissions.teksher_disconnect) && !isReadOnly}
                 />
               ) : effectivePage === "reviews" ? (
                 <ReviewsPage

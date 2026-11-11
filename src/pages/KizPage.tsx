@@ -111,6 +111,7 @@ interface KizPageProps {
   onStoreChange: (id: string) => void
   isAdmin?: boolean
   canManageLinks?: boolean
+  canDisconnectTeksher?: boolean
 }
 
 // ── Утилиты ───────────────────────────────────────────────────────────────────
@@ -331,7 +332,7 @@ function SearchableSelect({ value, options, placeholder = '— Выберите 
 
 // ── Основной компонент ────────────────────────────────────────────────────────
 
-export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks = false }: KizPageProps) => {
+export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks = false, canDisconnectTeksher = false }: KizPageProps) => {
   const sortedStores = [...stores].sort((a, b) => {
     const aConn = a.teksher_login ? 0 : 1
     const bConn = b.teksher_login ? 0 : 1
@@ -377,6 +378,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [codesStatusFilter, setCodesStatusFilter] = useState('')
   const [codesSyncing, setCodesSyncing] = useState(false)
   const [fullSyncing, setFullSyncing] = useState(false)
+  const [transgranReload, setTransgranReload] = useState(0)
 
   // Operations
   const [operations, setOperations] = useState<TeksherOperation[]>([])
@@ -500,13 +502,14 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
   // ── Загрузка статистики ──────────────────────────────────────────────────
   const loadStats = useCallback(async (storeId: string) => {
-    if (!storeId) return
+    if (!storeId) return false
     setStatsLoading(true)
     setStats(null)
     const { data, error } = await invoke({ store_id: storeId, action: 'stats' })
     setStatsLoading(false)
-    if (error || !data || data.connected === false) { setStats(null); return }
+    if (error || !data || data.connected === false) { setStats(null); return false }
     setStats(data as unknown as TeksherStats)
+    return true
   }, [])
 
   useEffect(() => {
@@ -730,6 +733,25 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     }
     if (tab === 'operations') {
       await refreshOperationsFull()
+      return
+    }
+    if (tab === 'main') {
+      setFullSyncing(true)
+      setListSyncNote('Полное обновление…')
+      try {
+        const connected = await loadStats(activeStore.id)
+        showAction(connected ? 'ok' : 'err', connected ? 'Данные главной обновлены' : 'Teksher не подключён')
+      } catch (syncFailure: unknown) {
+        showAction('err', syncFailure instanceof Error ? syncFailure.message : 'Не удалось обновить главную.')
+      } finally {
+        setFullSyncing(false)
+        setListSyncNote('')
+      }
+      return
+    }
+    if (tab === 'transgran') {
+      setTransgranReload((value) => value + 1)
+      showAction('ok', 'Список трансграна обновлён')
       return
     }
     if (tab !== 'products') return
@@ -1027,31 +1049,27 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
           </div>
         )}
 
-        {isConnected && (
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void handleTnvedSync()}
-              disabled={tnvedSyncing}
-              title="Обновить базу кодов ТН ВЭД из Teksher"
-              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
-            >
-              <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${tnvedSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
-              {tnvedSyncing ? 'Загрузка ТН ВЭД…' : 'Обновить ТН ВЭД'}
-            </button>
-            {(tab === 'products' || tab === 'codes' || tab === 'operations') && (
-              <button
-                type="button"
-                onClick={() => void handleFullSync()}
-                disabled={fullSyncing || codesSyncing || operationsSyncing}
-                className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
-              >
-                <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${fullSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
-                {listSyncNote || 'Полное обновление'}
-              </button>
-            )}
-          </div>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleTnvedSync()}
+            disabled={tnvedSyncing || !activeStore || (!statsLoading && !isConnected)}
+            title="Обновить базу кодов ТН ВЭД из Teksher"
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+          >
+            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${tnvedSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+            {tnvedSyncing ? 'Загрузка ТН ВЭД…' : 'Обновить ТН ВЭД'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleFullSync()}
+            disabled={fullSyncing || codesSyncing || operationsSyncing || !activeStore || (!statsLoading && !isConnected)}
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          >
+            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${fullSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+            {listSyncNote || 'Полное обновление'}
+          </button>
+        </div>
       </div>
 
       {/* Вкладки */}
@@ -1096,7 +1114,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
         {/* ══════ ГЛАВНАЯ ══════ */}
         {tab === 'main' && (
-          <div className="space-y-5 max-w-3xl">
+          <div className="w-full space-y-5">
             {!isConnected && !statsLoading && (
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="mb-5 flex items-center gap-3">
@@ -1185,25 +1203,26 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
             {isConnected && (
               <>
                 {/* Баланс */}
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                  <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                    <div className="mb-2 text-2xl">🎫</div>
-                    <p className="text-xl font-bold text-slate-800">{stats.balance.toLocaleString('ru-RU')}</p>
-                    <p className="text-xs text-slate-500">Баланс кодов</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">КИЗ-единиц</p>
+                <div className="grid w-full grid-cols-2 gap-3 lg:grid-cols-5">
+                  <div className="flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                    <div className="text-2xl">🎫</div>
+                    <p className="mt-2 text-sm font-semibold text-slate-800">Баланс кодов</p>
+                    <p className="mt-1 text-xl font-bold text-slate-800">{stats.balance.toLocaleString('ru-RU')}</p>
+                    <p className="text-xs text-slate-500">КИЗ-единиц</p>
                   </div>
-                  <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                    <div className="mb-2 text-2xl">💰</div>
-                    <p className="text-xl font-bold text-slate-800">
+                  <div className="flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                    <div className="text-2xl">💰</div>
+                    <p className="mt-2 text-sm font-semibold text-slate-800">Денежный баланс</p>
+                    <p className="mt-1 text-xl font-bold text-slate-800">
                       {stats.balanceMoney.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
-                    <p className="text-xs text-slate-500">Денежный баланс</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Сом</p>
+                    <p className="text-xs text-slate-500">Сом</p>
                   </div>
-                  <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                    <p className="text-xs text-slate-500 mb-1">Участник маркировки</p>
-                    <p className="text-sm font-semibold text-slate-800 break-words">{stats.participantName || '—'}</p>
-                    <p className="text-xs text-slate-400 break-all mt-0.5">ID: {stats.participantId || '—'}</p>
+                  <div className="flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                    <div className="text-2xl">👤</div>
+                    <p className="mt-2 text-sm font-semibold text-slate-800">Участник маркировки</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-800 break-words">{stats.participantName || '—'}</p>
+                    <p className="text-xs text-slate-400 break-all">ID: {stats.participantId || '—'}</p>
                     <div className="mt-3 flex gap-3 flex-wrap">
                       <button
                         type="button"
@@ -1211,15 +1230,17 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                         disabled={participantLoading}
                         className="text-xs font-medium text-blue-600 hover:underline disabled:opacity-50"
                       >
-                        {participantLoading ? 'Загрузка…' : '🔍 GCP / GLN'}
+                        {participantLoading ? 'Загрузка…' : 'GCP / GLN'}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleDisconnect()}
-                        className="text-xs text-red-500 hover:underline"
-                      >
-                        Отключить
-                      </button>
+                      {canDisconnectTeksher && (
+                        <button
+                          type="button"
+                          onClick={() => void handleDisconnect()}
+                          className="text-xs text-red-500 hover:underline"
+                        >
+                          Отключить
+                        </button>
+                      )}
                     </div>
                     {participantInfo && (
                       <div className="mt-2 text-xs text-slate-600 space-y-0.5 border-t border-slate-100 pt-2">
@@ -1228,17 +1249,20 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       </div>
                     )}
                   </div>
-                  {activeStore?.id && <KizLinkCard storeId={activeStore.id} canManage={canManageLinks} />}
-                  {/* Пополнить баланс */}
-                  <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm flex flex-col justify-between">
-                    <div>
-                      <div className="mb-2 text-2xl">💳</div>
-                      <p className="text-sm font-semibold text-slate-800">Пополнить баланс</p>
-                      <p className="text-xs text-slate-500 mt-0.5">Через Teksher</p>
-                      {stats.course ? (
-                        <p className="text-[11px] text-emerald-700 mt-1">1 сом = {stats.course} КИЗ</p>
-                      ) : null}
-                    </div>
+                  {activeStore?.id && (
+                    <KizLinkCard
+                      storeId={activeStore.id}
+                      canManage={canManageLinks}
+                      onOrder={() => { setEmitSeed(''); setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
+                    />
+                  )}
+                  <div className="flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                    <div className="text-2xl">💳</div>
+                    <p className="mt-2 text-sm font-semibold text-slate-800">Пополнить баланс</p>
+                    <p className="mt-1 text-xs text-slate-500">Через Teksher</p>
+                    {stats.course ? (
+                      <p className="text-[11px] text-emerald-700 mt-1">1 сом = {stats.course} КИЗ</p>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => { setTopupModal(true); setTopupAmount(''); setTopupQty(''); void loadTopupQr() }}
@@ -1248,39 +1272,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       Пополнить
                     </button>
                   </div>
-                </div>
-
-                {/* Быстрые действия */}
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setEmitSeed(''); setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
-                    className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 transition-colors shadow-sm"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12l7-7 7 7"/></svg>
-                    Заказать КИЗы
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetTab('products')}
-                    className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    📦 Товары (GTIN)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetTab('codes')}
-                    className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    🏷️ КИЗ-коды
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSetTab('operations')}
-                    className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    📊 Операции
-                  </button>
                 </div>
               </>
             )}
@@ -1449,7 +1440,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
         {tab === 'transgran' && activeStore && (
           statsLoading && !isConnected
             ? <ConnectionPending />
-            : <TransgranPanel store={activeStore} connected={isConnected} />
+            : <TransgranPanel store={activeStore} connected={isConnected} reloadToken={transgranReload} />
         )}
 
         {/* ══════ КИЗ-КОДЫ ══════ */}

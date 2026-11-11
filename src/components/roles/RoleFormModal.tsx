@@ -105,6 +105,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
     subItems: [
       { key: 'stickers_delete', label: 'Удаление шаблонов и наборов' },
       { key: 'stickers_import', label: 'Импорт стикеров из WB' },
+      { key: 'teksher_disconnect', label: 'Отключение кабинета Teksher' },
     ],
   },
   {

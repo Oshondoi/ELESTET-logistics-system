@@ -52,6 +52,7 @@ const permLabels: Record<string, string> = {
   stickers_manage: 'Стикеры (управление)',
   stickers_delete: 'Удаление стикеров',
   stickers_import: 'Импорт из WB',
+  teksher_disconnect: 'Отключение Teksher',
   reviews_view: 'Отзывы (просмотр)',
   reviews_manage: 'Отзывы (ответы)',
   reviews_ai: 'ИИ-ответы',
