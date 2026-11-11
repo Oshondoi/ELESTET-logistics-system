@@ -1033,13 +1033,14 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     <div className="flex h-full min-h-0 flex-col">
 
       {/* Магазин и общие действия — над вкладками, на каждом разделе */}
-      <div className="flex shrink-0 flex-wrap items-center gap-3 px-4 pb-3 pt-4">
+      <div className="mx-2 flex shrink-0 flex-wrap items-center gap-3 pb-3 pt-4">
         {/* Выбор магазина */}
         <FbsStoreSelect
           value={activeStore?.id ?? ''}
           stores={sortedStores}
           onChange={onStoreChange}
           groupConnected
+          labelOnBorder
         />
 
         {/* Статус */}
@@ -1082,7 +1083,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="px-4">
+      <div className="kiz-section-tabs mx-2 mt-2 rounded-t-xl bg-[#e8edf3] px-4 pt-[7px]">
         <ChromeTabs tabs={kizTabs.map((item) => ({ id: item.key, label: item.label }))} value={tab} onChange={handleSetTab} />
       </div>
 
@@ -1102,7 +1103,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
       )}
 
       {/* Лист активной вкладки */}
-      <div className="min-w-0 flex-1 border-t border-slate-200 px-4 py-4">
+      <div className="mx-2 min-w-0 flex-1 py-4">
 
         {/* ══════ ГЛАВНАЯ ══════ */}
         {tab === 'main' && (
@@ -1278,13 +1279,16 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
             ) : (
               <>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <input
-                    type="text"
-                    value={productsSearch}
-                    onChange={(e) => setProductsSearch(e.target.value)}
-                    placeholder="Поиск по названию…"
-                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 w-52"
-                  />
+                  <div className="relative w-52">
+                    <input
+                      type="text"
+                      value={productsSearch}
+                      onChange={(e) => setProductsSearch(e.target.value)}
+                      placeholder=" "
+                      className="peer w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm placeholder:text-transparent focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                    <span className="pointer-events-none absolute left-3 top-1/2 z-10 origin-left -translate-y-1/2 text-sm font-normal text-slate-400 transition-all duration-150 ease-[cubic-bezier(0.4,0,0.2,1)] peer-focus:left-2 peer-focus:top-0 peer-focus:bg-white peer-focus:px-1 peer-focus:text-xs peer-focus:font-semibold peer-focus:text-slate-600 peer-[:not(:placeholder-shown)]:left-2 peer-[:not(:placeholder-shown)]:top-0 peer-[:not(:placeholder-shown)]:bg-white peer-[:not(:placeholder-shown)]:px-1 peer-[:not(:placeholder-shown)]:text-xs peer-[:not(:placeholder-shown)]:font-semibold peer-[:not(:placeholder-shown)]:text-slate-600">Поиск</span>
+                  </div>
                   <div className="flex gap-1.5">
                     {([
                       { id: 'all', label: 'Все' },

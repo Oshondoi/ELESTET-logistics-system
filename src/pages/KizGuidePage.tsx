@@ -361,7 +361,7 @@ export const KizGuidePage = () => {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mx-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div><h1 className="text-xl font-bold text-slate-900">Гайд по КИЗам</h1><p className="mt-0.5 text-sm text-slate-500">Полный цикл Teksher: от GTIN до трансграна и WB</p></div>
         <button type="button" onClick={() => openStage(1)} className="rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">Открыть полный справочник</button>
       </div>

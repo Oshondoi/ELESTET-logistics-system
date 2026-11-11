@@ -26,9 +26,10 @@ interface TopbarProps {
   onProfileClick: () => void
   onSignOut: () => void
   onMenuClick?: () => void
+  hideBottomBorder?: boolean
 }
 
-export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onTestsClick, onGlossaryClick, onDiaryClick, onTzPromptsClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut, onMenuClick }: TopbarProps) => {
+export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAccountId, unreadCount, onNotificationClick: _onNotificationClick, onAdminClick, onTestsClick, onGlossaryClick, onDiaryClick, onTzPromptsClick, onFinanceReportClick, onPromotionClick, onHomeClick, onProfileClick, onSignOut, onMenuClick, hideBottomBorder }: TopbarProps) => {
   const initial = userName ? userName.charAt(0).toUpperCase() : (userEmail ? userEmail.charAt(0).toUpperCase() : '?')
   const displayName = userName || userEmail || 'Профиль'
   const [open, setOpen] = useState(false)
@@ -80,7 +81,7 @@ export const Topbar = ({ title, pageTabs, userName, userEmail, isAdmin, activeAc
   }, [open])
 
   return (
-    <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-4">
+    <div className={`flex h-12 items-center justify-between bg-white px-4 lg:px-4 ${hideBottomBorder ? '' : 'border-b border-slate-200'}`}>
       <div className="flex items-center gap-3">
         {onMenuClick && (
           <button type="button" onClick={onMenuClick} aria-label="Открыть меню" className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 lg:hidden">

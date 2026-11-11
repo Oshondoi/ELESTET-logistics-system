@@ -1351,6 +1351,7 @@ function App() {
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <Topbar
             title={pageTitles[effectivePage]}
+            hideBottomBorder={effectivePage === "stickers"}
             onMenuClick={
               hasSidebar ? () => setMobileSidebarOpen(true) : undefined
             }

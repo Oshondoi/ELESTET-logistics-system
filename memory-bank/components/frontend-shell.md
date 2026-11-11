@@ -32,7 +32,7 @@ Defines the application frame:
 - The App content wrapper owns outer padding and vertical scrolling.
 - Page roots should normally use layout gaps only, not duplicate `px-6/pt-*` and full-page `overflow-y-auto`.
 - `/tz-prompts` was aligned with Diary/Admin/Finance by removing its duplicate page padding and nested scroll.
-- С 11.11.2026 страница «Стикеры» сама без внешнего padding, чтобы лист вкладок доходил до постоянной прокрутки. Календарь и остальные страницы свои отступы сохраняют. Устройство вкладок: `memory-bank/components/kiz.md`.
+- С 11.11.2026 страница «Стикеры» сама без внешнего padding, чтобы лист доходил до постоянной прокрутки. Календарь и остальные страницы свои отступы сохраняют. Каркас вкладок и отступы: `memory-bank/components/elestet-design.md`.
 
 ## Why It Matters
 This shell is the UX backbone. If it becomes bloated or presentation-heavy, the app stops feeling like an operations system.
