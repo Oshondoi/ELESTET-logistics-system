@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getStoreSelectorLabel } from '../../lib/storeDisplay'
 import type { Store } from '../../types'
 
@@ -16,15 +17,41 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
   const connected = groupConnected ? stores.filter((store) => store.teksher_login).sort(byLabel) : []
   const disconnected = groupConnected ? stores.filter((store) => !store.teksher_login).sort(byLabel) : []
   const [open, setOpen] = useState(false)
+  const [box, setBox] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const placeMenu = () => {
+    const button = buttonRef.current
+    if (!button) return
+    const rect = button.getBoundingClientRect()
+    setBox({
+      left: rect.left,
+      top: rect.bottom + 4,
+      width: rect.width,
+      maxHeight: Math.max(160, Math.min(320, window.innerHeight - rect.bottom - 12)),
+    })
+  }
 
   useEffect(() => {
     if (!open) return
+    placeMenu()
     const onPointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
+    const onLayout = () => placeMenu()
     document.addEventListener('pointerdown', onPointer)
-    return () => document.removeEventListener('pointerdown', onPointer)
+    window.addEventListener('scroll', onLayout, true)
+    window.addEventListener('resize', onLayout)
+    return () => {
+      document.removeEventListener('pointerdown', onPointer)
+      window.removeEventListener('scroll', onLayout, true)
+      window.removeEventListener('resize', onLayout)
+    }
   }, [open])
 
   if (!groupConnected) {
@@ -58,29 +85,43 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
         key={store.id}
         type="button"
         onClick={() => pick(store.id)}
-        className={`block w-full px-3 py-1.5 text-left text-sm ${tone === 'emerald' ? 'text-emerald-700' : 'text-red-600'} ${current ? 'bg-slate-100 font-semibold' : 'hover:bg-slate-50'}`}
+        className={`block w-full whitespace-normal break-words px-3 py-1.5 text-left text-sm ${tone === 'emerald' ? 'text-emerald-700' : 'text-red-600'} ${current ? 'bg-slate-100 font-semibold' : 'hover:bg-slate-50'}`}
       >
         {getStoreSelectorLabel(store)}
       </button>
     )
   }
 
+  const label = selected ? getStoreSelectorLabel(selected) : 'Выберите магазин'
+
   return (
-    <div ref={rootRef} className="relative space-y-1.5 text-xs font-semibold text-slate-600">
+    <div ref={rootRef} className="w-72 shrink-0 space-y-1.5 text-xs font-semibold text-slate-600">
       <span className="block">Магазин</span>
       <button
+        ref={buttonRef}
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        className={`flex h-9 min-w-[220px] items-center rounded-xl border bg-white px-3 text-left text-sm font-normal outline-none transition disabled:bg-slate-50 disabled:text-slate-400 ${open ? 'border-violet-400' : 'border-slate-200'}`}
+        onClick={() => {
+          if (open) { setOpen(false); return }
+          placeMenu()
+          setOpen(true)
+        }}
+        className={`flex h-9 w-full items-center gap-2 rounded-xl border bg-white px-3 text-left text-sm font-normal outline-none transition-colors disabled:bg-slate-50 disabled:text-slate-400 ${open ? 'border-violet-400' : 'border-slate-200'}`}
       >
-        <span className={selected ? (selected.teksher_login ? 'text-emerald-700' : 'text-red-600') : 'text-slate-400'}>
-          {selected ? getStoreSelectorLabel(selected) : 'Выберите магазин'}
+        <span className={`min-w-0 flex-1 truncate ${selected ? (selected.teksher_login ? 'text-emerald-700' : 'text-red-600') : 'text-slate-400'}`}>
+          {label}
         </span>
+        <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0 text-slate-400" fill="currentColor" aria-hidden>
+          <path d="M5.5 7.5 10 12l4.5-4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       </button>
-      {open && (
-        <div className="absolute left-0 top-full z-30 mt-1 max-h-80 min-w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl">
-          <button type="button" onClick={() => pick('')} className="block w-full px-3 py-1.5 text-left text-sm font-normal text-slate-500 hover:bg-slate-50">
+      {open && box && createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-[80] overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white py-1 shadow-xl"
+          style={{ left: box.left, top: box.top, width: box.width, maxHeight: box.maxHeight }}
+        >
+          <button type="button" onClick={() => pick('')} className="block w-full whitespace-normal break-words px-3 py-1.5 text-left text-sm font-normal text-slate-500 hover:bg-slate-50">
             Выберите магазин
           </button>
           {connected.length > 0 && (
@@ -95,7 +136,8 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
               {disconnected.map((store) => row(store, 'red'))}
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
