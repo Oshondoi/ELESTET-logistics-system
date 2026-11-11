@@ -8,7 +8,7 @@ import { KizLinkCard } from '../components/kiz/KizLinkCard'
 import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
 import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
 import { parsePrintFileBytes } from '../lib/kizPrintFile'
-import { fetchCachedCodes, fetchCachedOperations, fetchPrintCsv, linkPrintCodesOnPage, loadPrintCodeCoverage, savePrintCodes, syncCachedCodes, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
+import { fetchCachedCodes, fetchCachedOperations, fetchPrintCsv, linkPrintCodesOnPage, loadPrintCodeCoverage, savePrintCodes, syncAllOperations, syncCachedCodes, syncCachedCodesQuick, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
@@ -376,6 +376,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [codesLoading, setCodesLoading] = useState(false)
   const [codesStatusFilter, setCodesStatusFilter] = useState('')
   const [codesSyncing, setCodesSyncing] = useState(false)
+  const [fullSyncing, setFullSyncing] = useState(false)
 
   // Operations
   const [operations, setOperations] = useState<TeksherOperation[]>([])
@@ -623,39 +624,71 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     return () => { cancel = true }
   }, [tab, activeStore?.id, operations, refreshPrintCoverage])
 
-  const refreshCodes = async () => {
-    if (!activeStore?.id || codesSyncing) return
+  const refreshCodesQuick = async () => {
+    if (!activeStore?.id || codesSyncing || fullSyncing) return
     const size = syncPageSize
     setCodesSyncing(true)
-    setListSyncNote(`Забираем коды из Teksher по ${size}…`)
     try {
-      await syncCachedCodes(activeStore.id, size, (page, total) => {
-        setListSyncNote(total ? `Коды: по ${size}, страница ${page}, всего ${total}` : `Коды: по ${size}, страница ${page}`)
-      })
+      const count = await syncCachedCodesQuick(activeStore.id, size)
       setCodesPage(0)
       await loadCodes(0, codesStatusFilter)
-      showAction('ok', 'Коды записаны в базу')
+      showAction('ok', `Быстрое обновление кодов: записано ${count}. Остальной список не трогался.`)
     } catch (reason) {
       showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить коды.')
     } finally {
       setCodesSyncing(false)
+    }
+  }
+
+  const refreshCodesFull = async () => {
+    if (!activeStore?.id || codesSyncing || fullSyncing) return
+    setFullSyncing(true)
+    setListSyncNote('Полное обновление кодов…')
+    try {
+      await syncCachedCodes(activeStore.id, 100, (page, total) => {
+        setListSyncNote(total ? `Полное обновление кодов: страница ${page}, всего ${total}` : `Полное обновление кодов: страница ${page}`)
+      })
+      setCodesPage(0)
+      await loadCodes(0, codesStatusFilter)
+      showAction('ok', 'Полный список кодов записан в базу')
+    } catch (reason) {
+      showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить коды.')
+    } finally {
+      setFullSyncing(false)
       setListSyncNote('')
     }
   }
 
   const refreshOperations = async () => {
-    if (!activeStore?.id || operationsSyncing) return
+    if (!activeStore?.id || operationsSyncing || fullSyncing) return
     setOperationsSyncing(true)
-    setListSyncNote('Обновляем свежую сотню и следующих живых…')
     try {
       const result = await syncCachedOperations(activeStore.id)
       setOperationsPage(0)
       await loadOperations(0)
-      showAction('ok', `Записано: ${result.written}. Живых проверено: ${result.checked}. Одинаковый статус не переписывался.`)
+      showAction('ok', `Быстрое обновление. Записано: ${result.written}. Живых проверено: ${result.checked}.`)
     } catch (reason) {
       showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить операции.')
     } finally {
       setOperationsSyncing(false)
+    }
+  }
+
+  const refreshOperationsFull = async () => {
+    if (!activeStore?.id || operationsSyncing || fullSyncing) return
+    setFullSyncing(true)
+    setListSyncNote('Полное обновление операций…')
+    try {
+      await syncAllOperations(activeStore.id, (page, total) => {
+        setListSyncNote(total ? `Полное обновление операций: страница ${page}, всего ${total}` : `Полное обновление операций: страница ${page}`)
+      })
+      setOperationsPage(0)
+      await loadOperations(0)
+      showAction('ok', 'Полный список операций записан. Старые строки не стирались.')
+    } catch (reason) {
+      showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить операции.')
+    } finally {
+      setFullSyncing(false)
       setListSyncNote('')
     }
   }
@@ -689,25 +722,28 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   }
 
   // ── Синхронизировать ─────────────────────────────────────────────────────
-  const handleSync = async () => {
-    if (!activeStore?.id) return
-    await loadStats(activeStore.id)
+  const handleFullSync = async () => {
+    if (!activeStore?.id || fullSyncing) return
+    if (tab === 'codes') {
+      await refreshCodesFull()
+      return
+    }
+    if (tab === 'operations') {
+      await refreshOperationsFull()
+      return
+    }
+    if (tab !== 'products') return
+    setFullSyncing(true)
+    setListSyncNote('Полное обновление товаров…')
     try {
-      if (tab === 'products') {
-        await syncStoreTeksherCatalog(activeStore.id)
-        await loadProducts(0, productsSearch)
-      }
-      if (tab === 'codes') {
-        await refreshCodes()
-        return
-      }
-      if (tab === 'operations') {
-        await refreshOperations()
-        return
-      }
-      showAction('ok', tab === 'products' ? 'Товары Teksher записаны в базу' : 'Данные обновлены')
+      await syncStoreTeksherCatalog(activeStore.id)
+      await loadProducts(0, productsSearch)
+      showAction('ok', 'Товары Teksher записаны в базу')
     } catch (syncFailure: unknown) {
       showAction('err', syncFailure instanceof Error ? syncFailure.message : 'Не удалось обновить товары Teksher.')
+    } finally {
+      setFullSyncing(false)
+      setListSyncNote('')
     }
   }
 
@@ -1003,18 +1039,17 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
               <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${tnvedSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
               {tnvedSyncing ? 'Загрузка ТН ВЭД…' : 'Обновить ТН ВЭД'}
             </button>
-            {tab === 'codes' && (
-              <PageSizeSelect value={syncPageSize} disabled={codesSyncing} onChange={setSyncPageSize} />
+            {(tab === 'products' || tab === 'codes' || tab === 'operations') && (
+              <button
+                type="button"
+                onClick={() => void handleFullSync()}
+                disabled={fullSyncing || codesSyncing || operationsSyncing}
+                className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${fullSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+                {listSyncNote || 'Полное обновление'}
+              </button>
             )}
-            <button
-              type="button"
-              onClick={() => void handleSync()}
-              disabled={statsLoading || codesSyncing || operationsSyncing}
-              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            >
-              <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${statsLoading || codesSyncing || operationsSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
-              {listSyncNote || 'Обновить'}
-            </button>
           </div>
         )}
       </div>
@@ -1286,6 +1321,14 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                   <div className="ml-auto flex gap-2">
                     <button
                       type="button"
+                      onClick={() => void loadProducts(0, productsSearch)}
+                      disabled={productsLoading || fullSyncing}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                    >
+                      Быстрое обновление
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => void loadParticipantInfo()}
                       disabled={participantLoading}
                       className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
@@ -1327,7 +1370,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 ) : products.length === 0 ? (
                   <EmptyState
                     text={productsSearch || linkFilter !== 'all' ? 'Ничего не найдено' : 'Товаров пока нет'}
-                    sub={productsSearch || linkFilter !== 'all' ? 'Смените поиск или фильтр связки.' : 'Нажмите «Обновить», чтобы забрать каталог из Teksher и записать его в базу.'}
+                    sub={productsSearch || linkFilter !== 'all' ? 'Смените поиск или фильтр связки.' : '«Быстрое обновление» читает эту страницу из базы. «Полное обновление» забирает весь каталог из Teksher.'}
                   />
                 ) : (
                   <div className="w-full overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
@@ -1440,14 +1483,14 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     ))}
                   </div>
                   <span className="ml-auto text-xs text-slate-400">Всего: {codesTotal}</span>
-                  <PageSizeSelect value={syncPageSize} disabled={codesSyncing} onChange={setSyncPageSize} />
+                  <PageSizeSelect value={syncPageSize} disabled={codesSyncing || fullSyncing} onChange={setSyncPageSize} />
                   <button
                     type="button"
-                    onClick={() => void refreshCodes()}
-                    disabled={codesSyncing}
+                    onClick={() => void refreshCodesQuick()}
+                    disabled={codesSyncing || fullSyncing}
                     className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                   >
-                    Обновить
+                    {codesSyncing ? 'Быстрое обновление…' : 'Быстрое обновление'}
                   </button>
                 </div>
 
@@ -1456,7 +1499,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 ) : codes.length === 0 ? (
                   <EmptyState
                     text={codesStatusFilter ? 'По этому статусу кодов нет' : 'В базе нет кодов'}
-                    sub={codesStatusFilter ? 'Снимите фильтр или обновите список из Teksher.' : 'Нажмите «Обновить», чтобы забрать коды из Teksher. Пока кнопка не нажата, страница не обращается к Teksher.'}
+                    sub={codesStatusFilter ? 'Снимите фильтр или обновите список из Teksher.' : '«Быстрое обновление» берёт одну свежую страницу. «Полное обновление» проходит весь список.'}
                   />
                 ) : (
                   <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
@@ -1550,11 +1593,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     <button
                       type="button"
                       onClick={() => void refreshOperations()}
-                      disabled={operationsLoading || operationsSyncing}
+                      disabled={operationsLoading || operationsSyncing || fullSyncing}
                       className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
                     >
                       <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${operationsSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
-                      Обновить
+                      {operationsSyncing ? 'Быстрое обновление…' : 'Быстрое обновление'}
                     </button>
                     <button
                       type="button"
@@ -1582,7 +1625,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 {operationsLoading ? (
                   <Skeleton rows={6} />
                 ) : operations.length === 0 ? (
-                  <EmptyState text="В базе нет операций" sub="Нажмите «Обновить», чтобы забрать 100 операций из Teksher. Открытие вкладки читает только базу." />
+                  <EmptyState text="В базе нет операций" sub="«Быстрое обновление» берёт свежую сотню и следующих живых. «Полное обновление» проходит весь список." />
                 ) : (
                   <div className="w-full overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
                     <table className="w-full min-w-[860px] text-sm">

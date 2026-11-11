@@ -1042,7 +1042,7 @@ Deno.serve(async (req: Request) => {
     const last = finished || info.last
     // Operations stay. A short refresh must not delete rows that were not on this page.
     // The codes list still drops rows missing from a full walk.
-    if (last && action === 'sync_codes') {
+    if (last && action === 'sync_codes' && body.partial !== true) {
       const { error: dropError } = await svc.from(table).delete().eq('store_id', store_id).lt('synced_at', startedAt)
       if (dropError) return err(`Список записан, но старые строки не убрались: ${dropError.message}`)
     }
