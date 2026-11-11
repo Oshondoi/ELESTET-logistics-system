@@ -106,3 +106,45 @@ button:focus,
 button:focus-visible {
   outline: none;
 }
+
+.chrome-tab {
+  position: relative;
+  z-index: 1;
+  margin: 0 12px -1px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.chrome-tab-face {
+  display: block;
+  padding: 8px 14px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  -webkit-mask:
+    linear-gradient(#000 0 0) left top / 1px calc(100% - 7px) no-repeat,
+    linear-gradient(#000 0 0) right top / 1px calc(100% - 7px) no-repeat,
+    linear-gradient(#000 0 0) center top / calc(100% - 2px) 100% no-repeat;
+  mask:
+    linear-gradient(#000 0 0) left top / 1px calc(100% - 7px) no-repeat,
+    linear-gradient(#000 0 0) right top / 1px calc(100% - 7px) no-repeat,
+    linear-gradient(#000 0 0) center top / calc(100% - 2px) 100% no-repeat;
+}
+
+.chrome-tab::after {
+  content: "";
+  position: absolute;
+  left: -14px;
+  right: -14px;
+  bottom: 0;
+  height: 16px;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-size: 16px 16px, 16px 16px;
+  background-position: left bottom, right bottom;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M14.5 1.5C14.5 9.23 8.23 15.5 0.5 15.5V16H16V0H14.5Z' fill='%23fff'/%3E%3Cpath d='M14.5 0V1.5C14.5 9.23 8.23 15.5 0.5 15.5H0' fill='none' stroke='%23e2e8f0' stroke-width='1'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 1.5C1.5 9.23 7.77 15.5 15.5 15.5V16H0V0H1.5Z' fill='%23fff'/%3E%3Cpath d='M1.5 0V1.5C1.5 9.23 7.77 15.5 15.5 15.5H16' fill='none' stroke='%23e2e8f0' stroke-width='1'/%3E%3C/svg%3E");
+}

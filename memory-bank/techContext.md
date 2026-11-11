@@ -348,7 +348,7 @@ Invoke-RestMethod -Uri "https://api.supabase.com/v1/projects/<PROJECT_REF>/datab
 - **tnved_codes**: ТН ВЭД справочник — `(code, teksher_id, sub_position_name, position, position_name, subgroup_id, ...)`
 
 ## Edge Functions
-- `supabase/functions/teksher-auth/index.ts` — все взаимодействия с Teksher API
+- `supabase/functions/teksher-auth/index.ts` — все взаимодействия с Teksher API. Правила страницы КИЗ на 11.11.2026: `memory-bank/components/kiz.md`. Отключение в этом файле уже смотрит `teksher_disconnect`, но развёрнутая функция всё ещё проверяет `stores_manage`.
 - Деплой: `npx supabase functions deploy teksher-auth --no-verify-jwt`
 - Actions: `connect`, `disconnect`, `stats`, `products`, `codes`, `operations`, `operation_ready`, `emit`, `utilise`, `create_product`, `publish_product`, `participant_info`, `topup_qr`, `countries`, `refresh_countries`, `tnved_list`, `tnved_sync`
 - Auth в edge function: `supabase.auth.getUser()` через заголовок `Authorization: Bearer {token}`

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { StickerFormValues, StickerTemplate, StickerBundle, StickerBundleItem, Store, Product } from '../types'
+import { ChromeTabs } from '../components/ui/ChromeTabs'
 import { KizPage } from './KizPage'
 import { KizGuidePage } from './KizGuidePage'
 import { StickerFormModal } from '../components/stickers/StickerFormModal'
@@ -891,48 +892,26 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
     )
   })
 
+  const mainTabs = [
+    { id: 'stickers' as const, label: 'Стикеры' },
+    { id: 'stickers2' as const, label: 'КИЗы' },
+    ...(isAdmin ? [{ id: 'stickers3' as const, label: 'Гайд' }] : []),
+  ]
+
   return (
-    <div className="flex flex-col gap-4">
-      {/* ── Главные табы страницы */}
-      <div className="flex gap-6 border-b border-slate-200">
-        <button
-          type="button"
-          onClick={() => handleMainTab('stickers')}
-          className={`pb-3 text-sm font-semibold transition-colors ${
-            mainTab === 'stickers' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-400 hover:text-slate-700'
-          }`}
-        >
-          Стикеры
-        </button>
-        <button
-          type="button"
-          onClick={() => handleMainTab('stickers2')}
-          className={`pb-3 text-sm font-semibold transition-colors ${
-            mainTab === 'stickers2' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-400 hover:text-slate-700'
-          }`}
-        >
-          КИЗы
-        </button>
-        {isAdmin && (
-        <button
-          type="button"
-          onClick={() => handleMainTab('stickers3')}
-          className={`pb-3 text-sm font-semibold transition-colors ${
-            mainTab === 'stickers3' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-400 hover:text-slate-700'
-          }`}
-        >
-          Гайд
-        </button>
-        )}
+    <div className="flex flex-col">
+      <div className="px-4">
+        <ChromeTabs tabs={mainTabs} value={mainTab} onChange={handleMainTab} />
       </div>
+      <div className="min-h-[calc(100vh-12rem)] border-t border-slate-200 bg-white">
 
       {mainTab === 'stickers2' && (
         <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} canManageLinks={canManageLinks} canDisconnectTeksher={canDisconnectTeksher} />
       )}
 
-      {isAdmin && mainTab === 'stickers3' && <KizGuidePage />}
+      {isAdmin && mainTab === 'stickers3' && <div className="px-4 py-4"><KizGuidePage /></div>}
 
-      {mainTab === 'stickers' && <div className="space-y-4">
+      {mainTab === 'stickers' && <div className="space-y-4 px-4 py-4">
       {printSetup && (
         <StickerPrintSettingsModal
           open
@@ -2140,6 +2119,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
         </div>
       )}
       </div>}
+      </div>
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { supabase } from '../lib/supabase'
 import { toUserMessage, USER_MESSAGE_DURATION } from '../lib/userMessage'
+import { ChromeTabs } from '../components/ui/ChromeTabs'
 import { FbsStoreSelect } from '../components/fbs/FbsStoreSelect'
 import { KizLinkCard } from '../components/kiz/KizLinkCard'
 import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
@@ -1032,7 +1033,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     <div className="flex h-full min-h-0 flex-col">
 
       {/* Магазин и общие действия — над вкладками, на каждом разделе */}
-      <div className="flex shrink-0 flex-wrap items-center gap-3 px-1 pb-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 px-4 pb-3 pt-4">
         {/* Выбор магазина */}
         <FbsStoreSelect
           value={activeStore?.id ?? ''}
@@ -1080,37 +1081,9 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
         </div>
       </div>
 
-      {/* Вкладки как в Хроме: активная сливается с белым листом */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-end gap-1 rounded-t-xl bg-slate-200 px-3 pt-2">
-        {kizTabs.map((item, index) => {
-          const active = tab === item.key
-          const nextActive = kizTabs[index + 1]?.key === tab
-          return (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => handleSetTab(item.key)}
-              className={`relative select-none px-4 py-2 text-sm font-medium ${
-                active
-                  ? 'z-10 bg-white text-slate-900 shadow-[0_1px_0_white]'
-                  : 'text-slate-600 hover:bg-white/70 hover:text-slate-800'
-              }`}
-              style={{ borderRadius: '10px 10px 0 0' }}
-            >
-              {active && (
-                <>
-                  <span aria-hidden className="pointer-events-none absolute -left-3 bottom-0 h-3 w-3 bg-[radial-gradient(circle_at_0_0,transparent_12px,white_12px)]" />
-                  <span aria-hidden className="pointer-events-none absolute -right-3 bottom-0 h-3 w-3 bg-[radial-gradient(circle_at_100%_0,transparent_12px,white_12px)]" />
-                </>
-              )}
-              {!active && !nextActive && index < kizTabs.length - 1 && (
-                <span aria-hidden className="absolute right-0 top-1/2 h-4 w-px -translate-y-1/2 bg-slate-400/50" />
-              )}
-              {item.label}
-            </button>
-          )
-        })}
+      <div className="px-4">
+        <ChromeTabs tabs={kizTabs.map((item) => ({ id: item.key, label: item.label }))} value={tab} onChange={handleSetTab} />
       </div>
 
       {/* Toast — fixed overlay, top-right, не двигает контент */}
@@ -1129,7 +1102,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
       )}
 
       {/* Лист активной вкладки */}
-      <div className="min-h-[calc(100vh-16rem)] min-w-0 flex-1 overflow-y-auto rounded-b-xl bg-white p-4 shadow-sm">
+      <div className="min-w-0 flex-1 border-t border-slate-200 px-4 py-4">
 
         {/* ══════ ГЛАВНАЯ ══════ */}
         {tab === 'main' && (
