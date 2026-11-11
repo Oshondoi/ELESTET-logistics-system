@@ -194,6 +194,10 @@ function operationStatusRank(status: string | null): number {
   return 3
 }
 
+function sameOperationStatus(left: string | null, right: string | null): boolean {
+  return (left ?? '').trim().toUpperCase() === (right ?? '').trim().toUpperCase()
+}
+
 function operationMoment(item: JsonObject): number {
   const time = Date.parse(String(item.createdAt ?? item.createdDate ?? ''))
   return Number.isNaN(time) ? 0 : time
@@ -829,11 +833,10 @@ Deno.serve(async (req: Request) => {
     })
   }
 
-  // Ordinary operations refresh. One hundred rows, newest page first.
-  // New numbers are kept. Open rows follow: emission, then marking, then transgran.
-  // Inside a stage: created, then in progress, then waiting for Russia.
-  // Accepted, rejected and canceled rows already stored are not requested again.
-  // Nothing outside this hundred is deleted.
+  // Ordinary operations refresh.
+  // The newest page is saved when the number is new here, including a finished one.
+  // Known open rows walk in priority order, 100 per click, and the place is remembered.
+  // An unchanged status is not rewritten. Closed rows already stored are left as they are.
   if (action === 'sync_operations_recent') {
     const startedAt = new Date().toISOString()
     const params = new URLSearchParams({ page: '0', size: String(OPERATION_SYNC_LIMIT) })
@@ -876,98 +879,116 @@ Deno.serve(async (req: Request) => {
       }
       if ((data ?? []).length < 1000) break
     }
+    const knownBefore = new Set(known.keys())
 
-    type Candidate = {
-      id: string
-      row: JsonObject | null
-      isNew: boolean
-      stage: number
-      statusRank: number
-      created: number
-    }
-    const candidates: Candidate[] = []
-    const chosenIds = new Set<string>()
-    const add = (candidate: Candidate) => {
-      if (chosenIds.has(candidate.id)) return
-      chosenIds.add(candidate.id)
-      candidates.push(candidate)
+    const freshById = new Map<string, JsonObject>()
+    const writes: JsonObject[] = []
+    const writtenIds = new Set<string>()
+    const rememberWrite = (row: JsonObject) => {
+      const id = String(row.operation_id ?? '')
+      if (!id || writtenIds.has(id)) return
+      writtenIds.add(id)
+      writes.push(row)
     }
 
     for (const row of uniquePage) {
       const id = String(row.operation_id)
+      freshById.set(id, row)
       const previous = known.get(id)
       const status = operationStatus(row.status)
-      const created = Date.parse(String(row.created_at_teksher ?? '')) || 0
-      const stage = operationStageRank(
-        row.operation_type == null ? null : String(row.operation_type),
-        row.type == null ? null : String(row.type),
-      )
       if (!previous) {
-        add({ id, row, isNew: true, stage, statusRank: operationStatusRank(status), created })
+        rememberWrite(row)
+        known.set(id, {
+          status,
+          operation_type: row.operation_type == null ? null : String(row.operation_type),
+          type: row.type == null ? null : String(row.type),
+          created_at_teksher: row.created_at_teksher == null ? null : String(row.created_at_teksher),
+        })
         continue
       }
-      if (isClosedOperation(previous.status) && isClosedOperation(status)) continue
-      add({
-        id,
-        row,
-        isNew: false,
-        stage,
-        statusRank: isClosedOperation(status) ? 4 : operationStatusRank(status),
-        created,
-      })
+      if (sameOperationStatus(previous.status, status)) continue
+      rememberWrite(row)
+      known.set(id, { ...previous, status })
     }
 
+    type LiveOperation = {
+      id: string
+      status: string | null
+      operation_type: string | null
+      type: string | null
+      created_at_teksher: string | null
+    }
+    const live: LiveOperation[] = []
     for (const [id, previous] of known) {
-      if (chosenIds.has(id) || isClosedOperation(previous.status)) continue
-      const created = Date.parse(previous.created_at_teksher ?? '') || 0
-      add({
-        id,
-        row: null,
-        isNew: false,
-        stage: operationStageRank(previous.operation_type, previous.type),
-        statusRank: operationStatusRank(previous.status),
-        created,
-      })
+      if (!knownBefore.has(id) || isClosedOperation(previous.status)) continue
+      live.push({ id, ...previous })
     }
-
-    candidates.sort((a, b) => {
-      if (a.isNew !== b.isNew) return a.isNew ? -1 : 1
-      if (a.stage !== b.stage) return a.stage - b.stage
-      if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank
-      return b.created - a.created
+    live.sort((a, b) => {
+      const stage = operationStageRank(a.operation_type, a.type) - operationStageRank(b.operation_type, b.type)
+      if (stage !== 0) return stage
+      const statusRank = operationStatusRank(a.status) - operationStatusRank(b.status)
+      if (statusRank !== 0) return statusRank
+      const created = (Date.parse(b.created_at_teksher ?? '') || 0) - (Date.parse(a.created_at_teksher ?? '') || 0)
+      if (created !== 0) return created
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
     })
-    const chosen = candidates.slice(0, OPERATION_SYNC_LIMIT)
-    const writes: JsonObject[] = []
-    const missing: string[] = []
-    for (const candidate of chosen) {
-      if (candidate.row) writes.push(candidate.row)
-      else missing.push(candidate.id)
-    }
 
-    for (let index = 0; index < missing.length; index += 8) {
-      const chunk = missing.slice(index, index + 8)
+    const { data: cursorRow, error: cursorReadError } = await svc.from('stores')
+      .select('teksher_ops_cursor')
+      .eq('id', store_id)
+      .maybeSingle()
+    if (cursorReadError) return err(`Не удалось прочитать место в очереди живых: ${cursorReadError.message}`)
+    const cursor = String((cursorRow as { teksher_ops_cursor?: string | null } | null)?.teksher_ops_cursor ?? '')
+    let start = 0
+    if (cursor) {
+      const at = live.findIndex((item) => item.id === cursor)
+      start = at >= 0 ? at + 1 : 0
+    }
+    const liveWindow = start >= live.length ? [] : live.slice(start, start + OPERATION_SYNC_LIMIT)
+    const fetched = new Map<string, JsonObject | null>()
+    const needFetch = liveWindow.filter((item) => !freshById.has(item.id)).map((item) => item.id)
+    for (let index = 0; index < needFetch.length; index += 8) {
+      const chunk = needFetch.slice(index, index + 8)
       const loaded = await Promise.all(chunk.map(async (operationId) => {
         const url = `${BASE}/operations/${encodeURIComponent(operationId)}`
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
             const raw = await teksherJson(url, token)
-            return operationRow(store_id, operationFromPayload(raw), startedAt)
+            return [operationId, operationRow(store_id, operationFromPayload(raw), startedAt)] as const
           } catch (reason) {
             const message = reason instanceof Error ? reason.message : ''
-            if (!/502|503|504/.test(message) || attempt === 1) return null
+            if (!/502|503|504/.test(message) || attempt === 1) return [operationId, null] as const
             await new Promise((resolve) => setTimeout(resolve, 400))
           }
         }
-        return null
+        return [operationId, null] as const
       }))
-      for (const row of loaded) if (row) writes.push(row)
+      for (const [operationId, row] of loaded) fetched.set(operationId, row)
     }
+
+    let checked = 0
+    for (const item of liveWindow) {
+      const row = freshById.get(item.id) ?? fetched.get(item.id) ?? null
+      if (!row) break
+      const status = operationStatus(row.status)
+      if (!sameOperationStatus(item.status, status)) rememberWrite(row)
+      checked += 1
+    }
+    const finishedWindow = checked === liveWindow.length
+    const reachedEnd = finishedWindow && (live.length === 0 || start + checked >= live.length)
+    const nextCursor = !finishedWindow
+      ? (checked > 0 ? liveWindow[checked - 1].id : cursor)
+      : reachedEnd ? '' : liveWindow[checked - 1].id
 
     if (writes.length > 0) {
       const { error: writeError } = await svc.from('teksher_operations').upsert(writes, { onConflict: 'store_id,operation_id' })
       if (writeError) return err(`Не удалось записать операции: ${writeError.message}`)
     }
-    return ok({ count: writes.length, limit: OPERATION_SYNC_LIMIT })
+    const { error: cursorWriteError } = await svc.from('stores')
+      .update({ teksher_ops_cursor: nextCursor })
+      .eq('id', store_id)
+    if (cursorWriteError) return err(`Операции записаны, но место в очереди живых не сохранилось: ${cursorWriteError.message}`)
+    return ok({ count: writes.length, checked, limit: OPERATION_SYNC_LIMIT })
   }
 
   // One page of codes or operations is written here. The screen reads the table.

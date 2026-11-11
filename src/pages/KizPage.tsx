@@ -165,6 +165,13 @@ const Skeleton = ({ rows = 5 }: { rows?: number }) => (
   </div>
 )
 
+const ConnectionPending = () => (
+  <div className="flex items-center justify-center gap-3 py-16 text-sm text-slate-400">
+    <svg viewBox="0 0 24 24" className="h-5 w-5 animate-spin text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+    Проверяем подключение…
+  </div>
+)
+
 const NotConnectedPlug = ({ onGoToMain }: { onGoToMain: () => void }) => (
   <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
@@ -345,7 +352,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
   // Connection / stats
   const [stats, setStats] = useState<TeksherStats | null>(null)
-  const [statsLoading, setStatsLoading] = useState(false)
+  const [statsLoading, setStatsLoading] = useState(true)
   const [connectForm, setConnectForm] = useState({ login: '', password: '' })
   const [connectLoading, setConnectLoading] = useState(false)
   const [connectError, setConnectError] = useState<string | null>(null)
@@ -378,6 +385,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const [operationsSyncing, setOperationsSyncing] = useState(false)
   const [printFileBusy, setPrintFileBusy] = useState(false)
   const [captureOperationId, setCaptureOperationId] = useState<string | null>(null)
+  const [applyConfirmOpen, setApplyConfirmOpen] = useState(false)
+  const applyConfirmRef = useRef<((agreed: boolean) => void) | null>(null)
   const [printOperationIds, setPrintOperationIds] = useState<Set<string>>(new Set())
   const [printSavedCount, setPrintSavedCount] = useState(0)
   const [printGateway, setPrintGateway] = useState(false)
@@ -500,13 +509,16 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   }, [])
 
   useEffect(() => {
-    if (activeStore?.id) {
-      setProducts([])
-      setCodes([])
-      setOperations([])
-      setParticipantInfo(null)
-      void loadStats(activeStore.id)
+    if (!activeStore?.id) {
+      setStatsLoading(false)
+      setStats(null)
+      return
     }
+    setProducts([])
+    setCodes([])
+    setOperations([])
+    setParticipantInfo(null)
+    void loadStats(activeStore.id)
   }, [activeStore?.id, loadStats])
 
   // ── Загрузка товаров ─────────────────────────────────────────────────────
@@ -527,7 +539,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   }, [activeStore?.id, linkFilter, linkFaces])
 
   useEffect(() => {
-    if (tab !== 'products' || !activeStore?.id) return
+    if (!activeStore?.id || (tab !== 'products' && tab !== 'codes' && tab !== 'operations')) return
     let active = true
     void fetchGtinLinkFaces(activeStore.id)
       .then((faces) => { if (active) setLinkFaces(faces) })
@@ -555,8 +567,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   }, [activeStore?.id, codesPage, codesStatusFilter])
 
   useEffect(() => {
-    if (tab === 'codes' && activeStore?.id && stats) void loadCodes(codesPage, codesStatusFilter)
-  }, [tab, activeStore?.id, stats, loadCodes, codesPage, codesStatusFilter])
+    if (tab === 'codes' && activeStore?.id) void loadCodes(codesPage, codesStatusFilter)
+  }, [tab, activeStore?.id, loadCodes, codesPage, codesStatusFilter])
 
   const loadOperations = useCallback(async (page = operationsPage) => {
     if (!activeStore?.id) return
@@ -573,8 +585,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   }, [activeStore?.id, operationsPage])
 
   useEffect(() => {
-    if (tab === 'operations' && activeStore?.id && stats) void loadOperations(operationsPage)
-  }, [tab, activeStore?.id, stats, loadOperations, operationsPage])
+    if (tab === 'operations' && activeStore?.id) void loadOperations(operationsPage)
+  }, [tab, activeStore?.id, loadOperations, operationsPage])
 
   const refreshPrintCoverage = useCallback(async (storeId: string, operationIds: string[]) => {
     setPrintSearching(true)
@@ -634,14 +646,12 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   const refreshOperations = async () => {
     if (!activeStore?.id || operationsSyncing) return
     setOperationsSyncing(true)
-    setListSyncNote('Обновляем 100 операций…')
+    setListSyncNote('Обновляем свежую сотню и следующих живых…')
     try {
-      const count = await syncCachedOperations(activeStore.id)
+      const result = await syncCachedOperations(activeStore.id)
       setOperationsPage(0)
       await loadOperations(0)
-      showAction('ok', count > 0
-        ? `Обновлено операций: ${count}. Закрытые повторно не запрашивались.`
-        : 'Новых и незакрытых операций нет. Закрытые повторно не запрашивались.')
+      showAction('ok', `Записано: ${result.written}. Живых проверено: ${result.checked}. Одинаковый статус не переписывался.`)
     } catch (reason) {
       showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить операции.')
     } finally {
@@ -737,13 +747,34 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     void loadProducts(productsPage, productsSearch)
   }
 
+  const askApplyConfirm = () => new Promise<boolean>((resolve) => {
+    applyConfirmRef.current = resolve
+    setApplyConfirmOpen(true)
+  })
+
+  const closeApplyConfirm = (agreed: boolean) => {
+    setApplyConfirmOpen(false)
+    const resolve = applyConfirmRef.current
+    applyConfirmRef.current = null
+    resolve?.(agreed)
+  }
+
+  useEffect(() => {
+    if (!applyConfirmOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeApplyConfirm(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [applyConfirmOpen])
+
   const capturePrintFile = async (operationId: string) => {
     if (!activeStore?.id || captureOperationId) return
     setCaptureOperationId(operationId)
     try {
       let result = await fetchPrintCsv(activeStore.id, operationId, false)
       if (result.needsApply) {
-        const agreed = window.confirm('Нанесения по этому заказу ещё не было. Забрать CSV и отправить нанесение на все коды заказа?')
+        const agreed = await askApplyConfirm()
         if (!agreed) return
         result = await fetchPrintCsv(activeStore.id, operationId, true)
       }
@@ -1224,7 +1255,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
         {/* ══════ ТОВАРЫ (GTIN) ══════ */}
         {tab === 'products' && (
           <div className="w-full min-w-0 space-y-3">
-            {!isConnected ? (
+            {!statsLoading && !isConnected ? (
               <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
@@ -1373,13 +1404,15 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
         {/* ══════ ТРАНСГРАН ══════ */}
         {tab === 'transgran' && activeStore && (
-          <TransgranPanel store={activeStore} connected={isConnected} />
+          statsLoading && !isConnected
+            ? <ConnectionPending />
+            : <TransgranPanel store={activeStore} connected={isConnected} />
         )}
 
         {/* ══════ КИЗ-КОДЫ ══════ */}
         {tab === 'codes' && (
-          <div className="space-y-3 max-w-5xl">
-            {!isConnected ? (
+          <div className="w-full min-w-0 space-y-3">
+            {!statsLoading && !isConnected ? (
               <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
@@ -1431,6 +1464,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50">
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">#</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Фото</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Код (DataMatrix)</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">GTIN</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Статус</th>
@@ -1438,17 +1472,22 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                        {codes.map((c, idx) => (
+                        {codes.map((c, idx) => {
+                          const gtin = c.gtin || (/^01(\d{14})/.exec(c.code ?? '')?.[1] ?? '')
+                          const linked = Boolean(gtin) && Object.prototype.hasOwnProperty.call(linkFaces, gtin)
+                          return (
                           <tr key={String(c.id)} className="hover:bg-slate-50/50 transition-colors">
                             <td className="px-4 py-3 text-xs text-slate-400">{codesPage * 20 + idx + 1}</td>
+                            <td className="px-4 py-2"><PhotoThumb url={linked ? linkFaces[gtin] : null} /></td>
                             <td className="px-4 py-3 font-mono text-xs text-slate-700 max-w-[220px] truncate" title={c.barcode ?? c.code ?? ''}>
                               {c.barcode ?? c.code ?? String(c.id)}
                             </td>
-                            <td className="px-4 py-3 font-mono text-xs text-slate-500">{c.gtin ?? '—'}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-slate-500">{gtin || '—'}</td>
                             <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
                             <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(c.issueDate ?? c.createdDate ?? c.emissionDate)}</td>
                           </tr>
-                        ))}
+                          )
+                        })}
                       </tbody>
                     </table>
                     <ListPager page={codesPage} pageSize={20} total={codesTotal} onPage={setCodesPage} />
@@ -1462,7 +1501,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
         {/* ══════ ОПЕРАЦИИ ══════ */}
         {tab === 'operations' && (
           <div className="w-full min-w-0 space-y-3">
-            {!isConnected ? (
+            {!statsLoading && !isConnected ? (
               <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
@@ -1550,6 +1589,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       <thead>
                         <tr className="border-b border-slate-100 bg-slate-50">
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">#</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Фото</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">ID операции</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Тип</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Статус</th>
@@ -1564,9 +1604,13 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                           const opId = String(op.operationId ?? op.id)
                           const opType = op.operationType ?? op.type
                           const hasPrintCode = printOperationIds.has(opId)
+                          const nestedGtin = typeof op.product?.gtin === 'string' ? op.product.gtin : ''
+                          const gtin = (op.gtin || nestedGtin).trim()
+                          const linked = Boolean(gtin) && Object.prototype.hasOwnProperty.call(linkFaces, gtin)
                           return (
                             <tr key={opId} className={hasPrintCode ? 'bg-emerald-50' : 'hover:bg-slate-50/50 transition-colors'}>
                               <td className="px-4 py-3 text-xs text-slate-400">{operationsPage * 20 + idx + 1}</td>
+                              <td className="px-4 py-2"><PhotoThumb url={linked ? linkFaces[gtin] : null} /></td>
                               <td className="px-4 py-3" title={opId}>
                                 <div className="flex items-center gap-2">
                                   <span className="max-w-[120px] truncate font-mono text-xs text-slate-600">{opId.slice(0, 14)}…</span>
@@ -1582,7 +1626,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                                 </span>
                               </td>
                               <td className="px-4 py-3 text-right text-xs text-slate-700">{op.kmsCount ?? op.codesCount ?? '—'}</td>
-                              <td className="px-4 py-3 font-mono text-xs text-slate-500">{op.gtin ?? '—'}</td>
+                              <td className="px-4 py-3 font-mono text-xs text-slate-500">{gtin || '—'}</td>
                               <td className="px-4 py-3 text-xs text-slate-500">{fmtDate(op.createdAt ?? op.createdDate)}</td>
                               <td className="px-4 py-3">
                                 <div className="flex items-center gap-3">
@@ -2135,6 +2179,40 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
             </div>{/* /grid */}
           </div>
         </div>
+      )}
+      {applyConfirmOpen && createPortal(
+        <div
+          className="fixed inset-0 z-[12000] flex items-center justify-center bg-slate-950/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="apply-confirm-title"
+          onClick={() => closeApplyConfirm(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="apply-confirm-title" className="text-lg font-semibold text-slate-900">Забрать CSV</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Нанесения по этому заказу ещё не было. Забрать CSV и отправить нанесение на все коды заказа?</p>
+            <div className="mt-6 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => closeApplyConfirm(false)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={() => closeApplyConfirm(true)}
+                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+              >
+                Забрать CSV
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

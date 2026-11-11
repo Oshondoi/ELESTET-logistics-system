@@ -122,12 +122,15 @@ export function syncCachedCodes(storeId: string, size: TeksherPageSize, onPage?:
   return syncList(storeId, 'sync_codes', size, onPage)
 }
 
-export async function syncCachedOperations(storeId: string): Promise<number> {
+export async function syncCachedOperations(storeId: string): Promise<{ written: number; checked: number }> {
   const payload = await teksherInvoke({
     store_id: storeId,
     action: 'sync_operations_recent',
   })
-  return Number(payload.count ?? 0)
+  return {
+    written: Number(payload.count ?? 0),
+    checked: Number(payload.checked ?? 0),
+  }
 }
 
 export async function fetchCachedCodes(
