@@ -43,6 +43,7 @@ export const createSticker = async (
       icon_iron: values.icon_iron,
       icon_no_bleach: values.icon_no_bleach,
       icon_no_tumble_dry: values.icon_no_tumble_dry,
+      icon_dry_clean: values.icon_dry_clean ?? false,
       icon_eac: values.icon_eac,
       store_id: values.store_id || null,
       product_id: values.product_id || null,
@@ -50,6 +51,34 @@ export const createSticker = async (
     })
     .select()
     .single()
+  if (error && /icon_dry_clean/i.test(String(error.message ?? ''))) {
+    const retry = await db.from('sticker_templates').insert({
+      account_id: accountId,
+      barcode,
+      name: values.name.trim(),
+      composition: values.composition.trim() || null,
+      article: values.article.trim() || null,
+      seller_article: values.seller_article?.trim() || null,
+      brand: values.brand.trim() || null,
+      size: values.size.trim() || null,
+      color: values.color.trim() || null,
+      supplier: values.supplier.trim() || null,
+      supplier_address: values.supplier_address.trim() || null,
+      production_date: values.production_date.trim() || null,
+      country: values.country.trim(),
+      copies: values.copies,
+      icon_wash: values.icon_wash,
+      icon_iron: values.icon_iron,
+      icon_no_bleach: values.icon_no_bleach,
+      icon_no_tumble_dry: values.icon_no_tumble_dry,
+      icon_eac: values.icon_eac,
+      store_id: values.store_id || null,
+      product_id: values.product_id || null,
+      nm_id: values.nm_id ?? null,
+    }).select().single()
+    if (retry.error) throw retry.error
+    return { ...(retry.data as StickerTemplate), icon_dry_clean: values.icon_dry_clean ?? false }
+  }
   if (error) throw error
   return data as StickerTemplate
 }
@@ -82,6 +111,7 @@ export const updateSticker = async (
       icon_iron: values.icon_iron,
       icon_no_bleach: values.icon_no_bleach,
       icon_no_tumble_dry: values.icon_no_tumble_dry,
+      icon_dry_clean: values.icon_dry_clean ?? false,
       icon_eac: values.icon_eac,
       store_id: values.store_id || null,
       product_id: values.product_id || null,
@@ -91,6 +121,33 @@ export const updateSticker = async (
     .eq('account_id', accountId)
     .select()
     .single()
+  if (error && /icon_dry_clean/i.test(String(error.message ?? ''))) {
+    const retry = await db.from('sticker_templates').update({
+      barcode: values.barcode.trim(),
+      name: values.name.trim(),
+      composition: values.composition.trim() || null,
+      article: values.article.trim() || null,
+      seller_article: values.seller_article?.trim() || null,
+      brand: values.brand.trim() || null,
+      size: values.size.trim() || null,
+      color: values.color.trim() || null,
+      supplier: values.supplier.trim() || null,
+      supplier_address: values.supplier_address.trim() || null,
+      production_date: values.production_date.trim() || null,
+      country: values.country.trim(),
+      copies: values.copies,
+      icon_wash: values.icon_wash,
+      icon_iron: values.icon_iron,
+      icon_no_bleach: values.icon_no_bleach,
+      icon_no_tumble_dry: values.icon_no_tumble_dry,
+      icon_eac: values.icon_eac,
+      store_id: values.store_id || null,
+      product_id: values.product_id || null,
+      nm_id: values.nm_id ?? null,
+    }).eq('id', stickerId).eq('account_id', accountId).select().single()
+    if (retry.error) throw retry.error
+    return { ...(retry.data as StickerTemplate), icon_dry_clean: values.icon_dry_clean ?? false }
+  }
   if (error) throw error
   return data as StickerTemplate
 }

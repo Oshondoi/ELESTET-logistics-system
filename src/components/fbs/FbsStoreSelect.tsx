@@ -5,18 +5,20 @@ import type { Store } from '../../types'
 
 interface FbsStoreSelectProps {
   value: string
-  stores: Array<Pick<Store, 'id' | 'name' | 'supplier' | 'supplier_full' | 'store_code'> & { teksher_login?: string | null }>
+  stores: Array<Pick<Store, 'id' | 'name' | 'supplier' | 'supplier_full' | 'store_code'> & { teksher_login?: string | null; api_key?: string | null }>
   onChange: (storeId: string) => void
   disabled?: boolean
   groupConnected?: boolean
+  connection?: 'teksher' | 'wb'
   labelOnBorder?: boolean
 }
 
-export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, groupConnected = false, labelOnBorder = false }: FbsStoreSelectProps) => {
+export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, groupConnected = false, connection = 'teksher', labelOnBorder = false }: FbsStoreSelectProps) => {
   const byLabel = (left: (typeof stores)[number], right: (typeof stores)[number]) =>
     getStoreSelectorLabel(left).localeCompare(getStoreSelectorLabel(right), 'ru')
-  const connected = groupConnected ? stores.filter((store) => store.teksher_login).sort(byLabel) : []
-  const disconnected = groupConnected ? stores.filter((store) => !store.teksher_login).sort(byLabel) : []
+  const linked = (store: (typeof stores)[number]) => connection === 'wb' ? Boolean(store.api_key) : Boolean(store.teksher_login)
+  const connected = groupConnected ? stores.filter((store) => linked(store)).sort(byLabel) : []
+  const disconnected = groupConnected ? stores.filter((store) => !linked(store)).sort(byLabel) : []
   const [open, setOpen] = useState(false)
   const [box, setBox] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -116,7 +118,7 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
         }}
         className={`elestet-store-button${open ? ' is-open' : ''}`}
       >
-        <span className={`elestet-store-name${!selected ? ' is-empty' : groupConnected ? (selected.teksher_login ? ' is-connected' : ' is-disconnected') : ''}`}>
+        <span className={`elestet-store-name${!selected ? ' is-empty' : groupConnected ? (linked(selected) ? ' is-connected' : ' is-disconnected') : ''}`}>
           {label}
         </span>
         <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0 text-slate-400" fill="currentColor" aria-hidden>

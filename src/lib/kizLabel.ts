@@ -3,9 +3,9 @@ import jsPDF from 'jspdf'
 import { kizHasCryptoTail, normalizeKizCode } from './kizCode'
 import type { LabelGoods, PrintCode } from '../services/kizCacheService'
 
-export type LabelLayout = 'vertical' | 'horizontal'
-
 const PDF_LIMIT = 1000
+const PAGE_W_MM = 58
+const PAGE_H_MM = 40
 
 function parts(item: PrintCode): { gtin: string; serial: string } {
   if (item.gtin && item.serial) return { gtin: item.gtin, serial: item.serial }
@@ -59,6 +59,10 @@ function placeMatrix(ctx: CanvasRenderingContext2D, code: string, x: number, y: 
   return source.width
 }
 
+export function kizMarkImage(code: string): { image: HTMLCanvasElement; gtin: string; serial: string } {
+  return { image: matrix(code, 480), ...parts({ code, gtin: '', serial: '' }) }
+}
+
 function attributeValue(product: Record<string, unknown> | null, needles: string[]): string {
   if (!product) return ''
   for (const needle of needles) {
@@ -100,36 +104,6 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): st
   })
   if (line) lines.push(line)
   return lines.slice(0, 3)
-}
-
-function drawVertical(item: PrintCode, number: number): HTMLCanvasElement {
-  const dpi = 120
-  const width = 4 * dpi
-  const height = 6 * dpi
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Браузер не смог подготовить лист печати')
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, width, height)
-  const maxSize = Math.round(3.2 * dpi)
-  const codeY = Math.round(0.28 * dpi)
-  const source = matrix(item.code, maxSize)
-  const codeX = Math.round((width - source.width) / 2)
-  ctx.imageSmoothingEnabled = false
-  ctx.drawImage(source, codeX, codeY)
-  ctx.fillStyle = '#000000'
-  const { gtin, serial } = parts(item)
-  ctx.textAlign = 'center'
-  ctx.font = `700 ${Math.round(0.22 * dpi)}px Arial`
-  const textY = codeY + source.width + Math.round(0.36 * dpi)
-  ctx.fillText(gtin, width / 2, textY)
-  ctx.fillText(serial, width / 2, textY + Math.round(0.34 * dpi))
-  ctx.textAlign = 'right'
-  ctx.font = `700 ${Math.round(0.2 * dpi)}px Arial`
-  ctx.fillText(String(number), width - Math.round(0.28 * dpi), height - Math.round(0.28 * dpi))
-  return canvas
 }
 
 function drawHorizontal(item: PrintCode, goods: LabelGoods, number: number): HTMLCanvasElement {
@@ -189,18 +163,16 @@ function drawHorizontal(item: PrintCode, goods: LabelGoods, number: number): HTM
 
 export function buildKizPdf(
   items: PrintCode[],
-  layout: LabelLayout,
   product: Record<string, unknown> | null,
   linked: LabelGoods,
 ): { pdf: jsPDF; limited: boolean } {
   const source = items.slice(0, PDF_LIMIT)
   const goods = goodsOf(product, linked)
-  const portrait = layout === 'vertical'
-  const pdf = new jsPDF({ unit: 'in', format: portrait ? [4, 6] : [6, 4], orientation: portrait ? 'portrait' : 'landscape' })
+  const pdf = new jsPDF({ unit: 'mm', format: [PAGE_W_MM, PAGE_H_MM], orientation: 'landscape' })
   source.forEach((item, index) => {
-    if (index > 0) pdf.addPage()
-    const canvas = portrait ? drawVertical(item, index + 1) : drawHorizontal(item, goods, index + 1)
-    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, portrait ? 4 : 6, portrait ? 6 : 4)
+    if (index > 0) pdf.addPage([PAGE_W_MM, PAGE_H_MM], 'landscape')
+    const canvas = drawHorizontal(item, goods, index + 1)
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, PAGE_W_MM, PAGE_H_MM)
   })
   return { pdf, limited: items.length > PDF_LIMIT }
 }
@@ -214,22 +186,6 @@ export function downloadKizCsv(items: PrintCode[], operationId: string): void {
   window.setTimeout(() => URL.revokeObjectURL(link.href), 30_000)
 }
 
-export function openKizPdf(pdf: jsPDF, operationId: string, layout: LabelLayout, print: boolean): boolean {
-  const fileName = `kiz-${operationId}-${layout === 'vertical' ? 'vertical' : 'horizontal'}.pdf`
-  if (!print) {
-    pdf.save(fileName)
-    return true
-  }
-  const url = URL.createObjectURL(pdf.output('blob'))
-  const win = window.open(url)
-  if (!win) {
-    pdf.save(fileName)
-    URL.revokeObjectURL(url)
-    return false
-  }
-  window.setTimeout(() => {
-    try { win.print() } catch { /* the PDF viewer still has its own print button */ }
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
-  }, 700)
-  return true
+export function openKizPdf(pdf: jsPDF, operationId: string): void {
+  pdf.save(`kiz-${operationId}.pdf`)
 }

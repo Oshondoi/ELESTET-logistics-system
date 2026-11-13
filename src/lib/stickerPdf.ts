@@ -93,7 +93,7 @@ const drawEAC = (ctx: CanvasRenderingContext2D, x: number, y: number, size: numb
 /* ── Иконки по уходу — PNG из public/icons/ ────────────────────
    Файлы грузятся один раз при старте, браузер кэширует.
 ────────────────────────────────────────────────────────────── */
-const _iconNames = ['wash-30', 'iron', 'no-bleach', 'no-tumble-dry'] as const
+const _iconNames = ['wash-30', 'iron', 'no-bleach', 'no-tumble-dry', 'dry-clean'] as const
 const _icons: Partial<Record<string, HTMLImageElement>> = {}
 if (typeof document !== 'undefined') {
   for (const name of _iconNames) {
@@ -282,6 +282,7 @@ const renderStickerToCanvas = (tpl: StickerTemplate): string => {
     'iron':          tpl.icon_iron,
     'no-bleach':     tpl.icon_no_bleach,
     'no-tumble-dry': tpl.icon_no_tumble_dry,
+    'dry-clean': Boolean(tpl.icon_dry_clean),
   }
   const activeIcons = _iconNames.filter((n) => iconFlags[n])
   const iconSize = 44

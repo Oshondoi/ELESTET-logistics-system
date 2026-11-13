@@ -33,6 +33,7 @@ export interface StickerPrintGroupDraft {
   iconIron: boolean
   iconNoBleach: boolean
   iconNoTumbleDry: boolean
+  iconDryClean: boolean
   iconEac: boolean
   sizes: StickerPrintSizeDraft[]
 }
@@ -48,7 +49,8 @@ interface Props {
   hasOwnSettings?: boolean
   onClose: () => void
   onRemember: (groups: StickerPrintGroupDraft[], action: 'product' | 'all' | 'release-own' | 'release-all') => Promise<void>
-  onPrint: (stickers: StickerTemplate[]) => void
+  onPrint: (stickers: StickerTemplate[], sheetId: string | null) => void
+  sheets?: Array<{ id: string; name: string }>
   onCreateBundle?: (stickers: StickerTemplate[]) => void
 }
 
@@ -76,6 +78,7 @@ export function groupsToStickers(groups: StickerPrintGroupDraft[]): StickerTempl
       icon_iron: group.iconIron,
       icon_no_bleach: group.iconNoBleach,
       icon_no_tumble_dry: group.iconNoTumbleDry,
+      icon_dry_clean: group.iconDryClean,
       icon_eac: group.iconEac,
     })))
 }
@@ -91,12 +94,13 @@ function chosenColors(group: StickerPrintGroupDraft): string[] {
   return group.availableColors.filter((color) => picked.has(color.toLocaleLowerCase('ru-RU')))
 }
 
-export function StickerPrintSettingsModal({ open, title, groups: initialGroups, showColorTabs = false, allowCreateBundle = false, applyToAll = false, isBundle = false, hasOwnSettings = false, onClose, onRemember, onPrint, onCreateBundle }: Props) {
+export function StickerPrintSettingsModal({ open, title, groups: initialGroups, showColorTabs = false, allowCreateBundle = false, applyToAll = false, isBundle = false, hasOwnSettings = false, onClose, onRemember, onPrint, sheets = [], onCreateBundle }: Props) {
   const [groups, setGroups] = useState<StickerPrintGroupDraft[]>(initialGroups)
   const [activeKey, setActiveKey] = useState(initialGroups[0]?.key ?? '')
   const [isRemembering, setIsRemembering] = useState(false)
   const [rememberError, setRememberError] = useState<string | null>(null)
   const [colorListOpen, setColorListOpen] = useState(false)
+  const [sheetId, setSheetId] = useState<string | null>(null)
   const colorMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -105,6 +109,7 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
     setActiveKey(initialGroups[0]?.key ?? '')
     setColorListOpen(false)
     setRememberError(null)
+    setSheetId(null)
   }, [open, initialGroups])
 
   useEffect(() => {
@@ -285,6 +290,7 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
                 ['iconIron', '/icons/iron.svg', 'Разрешено гладить'],
                 ['iconNoBleach', '/icons/no-bleach.svg', 'Не отбеливать'],
                 ['iconNoTumbleDry', '/icons/no-tumble-dry.svg', 'Не сушить в барабане'],
+                ['iconDryClean', '/icons/dry-clean.svg', 'Химчистка'],
                 ['iconEac', '/eac.svg', 'Знак соответствия ЕАЭС'],
               ] as const).map(([key, src, titleText]) => {
                 const checked = group[key]
@@ -293,6 +299,18 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
             </div>
           </div>
         </div>
+
+        {sheets.length > 0 && (
+          <div className="border-t border-slate-100 px-6 py-4">
+            <p className="text-sm font-semibold text-slate-900">Какой лист печатать?</p>
+            <div className="mt-2 flex flex-col gap-1">
+              <button type="button" onClick={() => setSheetId(null)} className={`rounded-xl px-3 py-2 text-left text-sm ${sheetId === null ? 'bg-blue-50 font-medium text-blue-700' : 'hover:bg-slate-50'}`}>Наш лист</button>
+              {sheets.map((sheet) => (
+                <button key={sheet.id} type="button" onClick={() => setSheetId(sheet.id)} className={`rounded-xl px-3 py-2 text-left text-sm ${sheetId === sheet.id ? 'bg-blue-50 font-medium text-blue-700' : 'hover:bg-slate-50'}`}>{sheet.name}</button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-6 py-4">
           <span className={`text-sm ${rememberError ? 'text-rose-600' : 'text-slate-500'}`}>{rememberError ?? <>Выбрано размеров: <b className="text-slate-900">{selectedCount}</b></>}</span>
@@ -303,7 +321,7 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
             {!isBundle && applyToAll && <button type="button" disabled={isRemembering} onClick={() => void remember('release-all')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Выключить для всех</button>}
             {!isBundle && hasOwnSettings && <button type="button" disabled={isRemembering} onClick={() => void remember('release-own')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Выключить свою</button>}
             {allowCreateBundle && onCreateBundle && <button type="button" disabled={selectedCount === 0} onClick={() => onCreateBundle(groupsToStickers(groups))} className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 disabled:opacity-40">Создать набор</button>}
-            <button type="button" disabled={selectedCount === 0} onClick={() => onPrint(groupsToStickers(groups))} className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">Печать</button>
+            <button type="button" disabled={selectedCount === 0} onClick={() => onPrint(groupsToStickers(groups), sheetId)} className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">Печать</button>
           </div>
         </div>
       </div>

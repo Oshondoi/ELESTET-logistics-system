@@ -1665,6 +1665,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                                   {activeStore?.id && operationCanPrint(opType) && (
                                     <>
                                       <KizOperationPrint
+                                        accountId={activeStore.account_id}
                                         storeId={activeStore.id}
                                         operationId={String(opId)}
                                         gtin={op.gtin}

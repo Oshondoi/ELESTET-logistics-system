@@ -16,6 +16,7 @@ export interface StickerPrintPreferences {
   icon_iron: boolean
   icon_no_bleach: boolean
   icon_no_tumble_dry: boolean
+  icon_dry_clean: boolean
   icon_eac: boolean
   apply_to_all: boolean
 }
@@ -38,6 +39,7 @@ export interface StickerProductPrintOverride {
   icon_iron?: boolean
   icon_no_bleach?: boolean
   icon_no_tumble_dry?: boolean
+  icon_dry_clean?: boolean
   icon_eac?: boolean
 }
 
@@ -52,6 +54,7 @@ export const defaultStickerPrintPreferences = (): StickerPrintPreferences => ({
   icon_iron: false,
   icon_no_bleach: false,
   icon_no_tumble_dry: false,
+  icon_dry_clean: false,
   icon_eac: true,
   apply_to_all: false,
 })

@@ -14318,6 +14318,7 @@ const BatchDetailModal = ({
                                                         icon_iron: false,
                                                         icon_no_bleach: false,
                                                         icon_no_tumble_dry: false,
+                                                        icon_dry_clean: false,
                                                         icon_eac: false,
                                                         created_at: "",
                                                         show_wb_article: Boolean(wbArticle),

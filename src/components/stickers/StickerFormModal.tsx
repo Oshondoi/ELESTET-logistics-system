@@ -24,6 +24,7 @@ const defaultValues = (): StickerFormValues => ({
   icon_iron: true,
   icon_no_bleach: true,
   icon_no_tumble_dry: true,
+  icon_dry_clean: false,
   icon_eac: true,
 })
 
@@ -62,6 +63,7 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
           icon_iron: initialValues.icon_iron,
           icon_no_bleach: initialValues.icon_no_bleach,
           icon_no_tumble_dry: initialValues.icon_no_tumble_dry,
+          icon_dry_clean: initialValues.icon_dry_clean ?? false,
           icon_eac: initialValues.icon_eac,
         })
       } else {
@@ -200,6 +202,7 @@ export const StickerFormModal = ({ open, onClose, onSubmit, initialValues }: Sti
               { key: 'icon_iron',          src: '/icons/iron.svg', label: 'Разрешено гладить' },
               { key: 'icon_no_bleach',     src: '/icons/no-bleach.svg', label: 'Не отбеливать' },
               { key: 'icon_no_tumble_dry', src: '/icons/no-tumble-dry.svg', label: 'Не сушить в барабане' },
+              { key: 'icon_dry_clean', src: '/icons/dry-clean.svg', label: 'Химчистка' },
               { key: 'icon_eac',           src: '/eac.svg', label: 'Знак соответствия ЕАЭС' },
             ] as { key: keyof StickerFormValues; src: string; label: string }[]).map(({ key, src, label }) => (
               <label

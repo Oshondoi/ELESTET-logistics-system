@@ -726,6 +726,7 @@ export interface StickerTemplate {
   icon_iron: boolean;
   icon_no_bleach: boolean;
   icon_no_tumble_dry: boolean;
+  icon_dry_clean?: boolean;
   icon_eac: boolean;
   created_at: string;
   store_id?: string | null;
@@ -767,6 +768,7 @@ export interface StickerFormValues {
   icon_iron: boolean;
   icon_no_bleach: boolean;
   icon_no_tumble_dry: boolean;
+  icon_dry_clean?: boolean;
   icon_eac: boolean;
   store_id?: string;
   product_id?: string;
