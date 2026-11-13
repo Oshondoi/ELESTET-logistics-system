@@ -24,6 +24,7 @@ interface Props {
   batchNumber: number | null
   auditContext: FulfillmentKizAuditContext
   canManage: boolean
+  canUploadWb?: boolean
   exportContent: ReactNode
   onClose: () => void
   onImported: () => void | Promise<void>
@@ -105,7 +106,7 @@ const wbPreviewPresentation = (entry: WbBoxCodePreview) => {
   return { label: 'Новая привязка', colors: 'border-violet-200 bg-violet-50 text-violet-700' }
 }
 
-export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, auditContext, canManage, exportContent, onClose, onImported }: Props) {
+export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, auditContext, canManage, canUploadWb = false, exportContent, onClose, onImported }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const wbCodesInputRef = useRef<HTMLInputElement>(null)
   const [activeTab, setActiveTab] = useState<ExcelTab>(canManage ? 'contents' : 'export')
@@ -158,8 +159,10 @@ export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, audi
   const wbIsReplacement = wbMappedPreview.some((entry) => entry.oldCode || entry.oldExternalCode)
   const widePreview = showHistory || (activeTab === 'wb' && (wbCodePreview.length > 0 || wbCodesApplied !== null))
 
+  const tabLocked = (tab: ExcelTab) => !canManage && tab !== 'export' && tab !== 'constructor' && !(canUploadWb && tab === 'wb')
+
   const changeTab = (tab: ExcelTab) => {
-    if (busyAction || (!canManage && tab !== 'export')) return
+    if (busyAction || tabLocked(tab)) return
     setShowHistory(false)
     setActiveTab(tab)
     setErrors([])
@@ -201,7 +204,7 @@ export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, audi
     try {
       const parsed = await parseWbBoxCodesImportFile(file)
       const nextErrors = [...parsed.errors]
-      if (!supply.wb_supply_id?.trim()) nextErrors.push('Сначала привяжите цифровой ID поставки WB.')
+      if (!String(supply.wb_supply_id ?? '').trim()) nextErrors.push('Сначала привяжите цифровой ID поставки WB.')
       if (nextErrors.length > 0) { setErrors(nextErrors); return }
 
       const boxesByNumber = new Map(supply.boxes.map((box) => [box.box_number, box]))
@@ -355,7 +358,7 @@ export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, audi
           </div>
         </div>
         <div className="grid shrink-0 grid-cols-2 border-b border-slate-100 px-6 pt-2 sm:grid-cols-4">
-          {([['contents', 'Содержимое коробов'], ['wb', 'Загрузить WB ШК'], ['export', 'Экспорт'], ['constructor', 'Конструктор']] as const).map(([tab, label]) => <button key={tab} type="button" disabled={Boolean(busyAction) || (!canManage && tab !== 'export' && tab !== 'constructor')} title={!canManage && tab !== 'export' && tab !== 'constructor' ? 'Нет права изменять данные коробов' : undefined} onClick={() => changeTab(tab)} className={`border-b-2 px-2 py-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-sm ${!showHistory && activeTab === tab ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{label}</button>)}
+          {([['contents', 'Содержимое коробов'], ['wb', 'Загрузить WB ШК'], ['export', 'Экспорт'], ['constructor', 'Конструктор']] as const).map(([tab, label]) => <button key={tab} type="button" disabled={Boolean(busyAction) || tabLocked(tab)} title={tabLocked(tab) ? 'Нет права изменять данные коробов' : undefined} onClick={() => changeTab(tab)} className={`border-b-2 px-2 py-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-sm ${!showHistory && activeTab === tab ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain p-6 [scrollbar-gutter:stable]">
           {!showHistory && errors.length > 0 && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"><p className="font-bold">Excel не применён</p><ul className="mt-1 list-disc space-y-1 pl-5">{errors.map((error, index) => <li key={`${index}-${error}`}>{error}</li>)}</ul></div>}
