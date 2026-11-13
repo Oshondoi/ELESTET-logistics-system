@@ -377,6 +377,14 @@ button:focus-visible {
   color: #94a3b8;
 }
 
+.elestet-store-name.is-connected {
+  color: #10b981;
+}
+
+.elestet-store-name.is-disconnected {
+  color: #dc2626;
+}
+
 .elestet-store-row {
   display: flex;
   width: 100%;

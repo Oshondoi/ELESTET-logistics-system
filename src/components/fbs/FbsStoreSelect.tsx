@@ -116,7 +116,7 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
         }}
         className={`elestet-store-button${open ? ' is-open' : ''}`}
       >
-        <span className={`elestet-store-name${selected ? '' : ' is-empty'}`}>
+        <span className={`elestet-store-name${!selected ? ' is-empty' : groupConnected ? (selected.teksher_login ? ' is-connected' : ' is-disconnected') : ''}`}>
           {label}
         </span>
         <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0 text-slate-400" fill="currentColor" aria-hidden>
