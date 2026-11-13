@@ -149,25 +149,47 @@ button:focus-visible {
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 1.5C1.5 9.23 7.77 15.5 15.5 15.5V16H0V0H1.5Z' fill='%23fff'/%3E%3Cpath d='M1.5 0V1.5C1.5 9.23 7.77 15.5 15.5 15.5H16' fill='none' stroke='%23e2e8f0' stroke-width='1'/%3E%3C/svg%3E");
 }
 
-.stickers-main-tabs .chrome-tab {
+.elestet-main-tabs,
+.elestet-section-tabs {
+  background: #e8edf3;
+  padding: 7px 16px 0;
+}
+
+.elestet-section-tabs {
+  margin-left: 8px;
+  margin-right: 8px;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+
+.elestet-inset {
+  margin-left: 8px;
+  margin-right: 8px;
+}
+
+.elestet-main-tabs .chrome-tab,
+.elestet-section-tabs .chrome-tab {
   margin-bottom: 0;
   margin-left: 5px;
   margin-right: 5px;
 }
 
-.stickers-main-tabs .chrome-tab-face {
+.elestet-main-tabs .chrome-tab-face,
+.elestet-section-tabs .chrome-tab-face {
   border-width: 0;
   padding-top: calc(0.5rem - 3.5px);
   padding-bottom: calc(0.5rem + 3.5px);
 }
 
-.stickers-main-tabs .chrome-tab::after {
+.elestet-main-tabs .chrome-tab::after,
+.elestet-section-tabs .chrome-tab::after {
   background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M14.5 1.5C14.5 9.23 8.23 15.5 0.5 15.5V16H16V0H14.5Z' fill='%23fff'/%3E%3C/svg%3E"),
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 1.5C1.5 9.23 7.77 15.5 15.5 15.5V16H0V0H1.5Z' fill='%23fff'/%3E%3C/svg%3E");
 }
 
-.stickers-main-tabs button:not(.chrome-tab) {
+.elestet-main-tabs button:not(.chrome-tab),
+.elestet-section-tabs button:not(.chrome-tab) {
   position: relative;
   z-index: 0;
   margin-left: 5px;
@@ -178,7 +200,8 @@ button:focus-visible {
   transition: color 0.12s ease;
 }
 
-.stickers-main-tabs button:not(.chrome-tab)::before {
+.elestet-main-tabs button:not(.chrome-tab)::before,
+.elestet-section-tabs button:not(.chrome-tab)::before {
   content: "";
   position: absolute;
   z-index: -1;
@@ -192,61 +215,253 @@ button:focus-visible {
   transition: opacity 0.12s ease;
 }
 
-.stickers-main-tabs button:not(.chrome-tab):hover {
+.elestet-main-tabs button:not(.chrome-tab):hover,
+.elestet-section-tabs button:not(.chrome-tab):hover {
   color: #0f172a;
 }
 
-.stickers-main-tabs button:not(.chrome-tab):hover::before {
+.elestet-main-tabs button:not(.chrome-tab):hover::before,
+.elestet-section-tabs button:not(.chrome-tab):hover::before {
   opacity: 1;
 }
 
-.kiz-section-tabs .chrome-tab {
-  margin-bottom: 0;
-  margin-left: 5px;
-  margin-right: 5px;
+.elestet-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  color: #475569;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.kiz-section-tabs .chrome-tab-face {
-  border-width: 0;
-  padding-top: calc(0.5rem - 3.5px);
-  padding-bottom: calc(0.5rem + 3.5px);
+.elestet-btn:hover {
+  background: #f8fafc;
 }
 
-.kiz-section-tabs .chrome-tab::after {
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M14.5 1.5C14.5 9.23 8.23 15.5 0.5 15.5V16H16V0H14.5Z' fill='%23fff'/%3E%3C/svg%3E"),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 1.5C1.5 9.23 7.77 15.5 15.5 15.5V16H0V0H1.5Z' fill='%23fff'/%3E%3C/svg%3E");
+.elestet-btn:disabled {
+  opacity: 0.5;
 }
 
-.kiz-section-tabs button:not(.chrome-tab) {
+.elestet-btn.elestet-btn-compact {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.elestet-btn.is-on {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed7;
+}
+
+.elestet-btn.is-on:hover {
+  background: #dbeafe;
+}
+
+.elestet-btn.elestet-btn-primary {
+  border-color: transparent;
+  background: #2563eb;
+  font-weight: 600;
+  color: #fff;
+}
+
+.elestet-btn.elestet-btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.elestet-status {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.elestet-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  stroke-width: 2.5;
+}
+
+.elestet-row,
+.elestet-main-header,
+.elestet-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.elestet-main-header {
+  flex-shrink: 0;
+  margin: 0 8px 16px;
+  padding-top: 16px;
+}
+
+.elestet-store {
   position: relative;
-  z-index: 0;
-  margin-left: 5px;
-  margin-right: 5px;
-  border-radius: 12px;
-  padding-top: calc(0.5rem - 3.5px);
-  padding-bottom: calc(0.5rem + 3.5px);
-  transition: color 0.12s ease;
+  width: 288px;
+  flex-shrink: 0;
 }
 
-.kiz-section-tabs button:not(.chrome-tab)::before {
-  content: "";
+.elestet-store-label {
   position: absolute;
-  z-index: -1;
-  left: 0;
-  right: 0;
+  z-index: 10;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.elestet-store-label,
+.elestet-search-input:focus + .elestet-search-label,
+.elestet-search-input:not(:placeholder-shown) + .elestet-search-label {
+  left: 8px;
   top: 0;
-  bottom: 7px;
-  border-radius: 12px;
-  background: #f9fbfc;
-  opacity: 0;
-  transition: opacity 0.12s ease;
+  padding: 0 4px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  color: #475569;
 }
 
-.kiz-section-tabs button:not(.chrome-tab):hover {
-  color: #0f172a;
+.elestet-store-label.is-disabled {
+  background: #f8fafc;
 }
 
-.kiz-section-tabs button:not(.chrome-tab):hover::before {
-  opacity: 1;
+.elestet-store-button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px 12px;
+  text-align: left;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.elestet-store-button:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.elestet-store-button.is-open {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+.elestet-store-name,
+.elestet-store-option {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.elestet-store-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #000;
+}
+
+.elestet-store-name.is-empty {
+  color: #94a3b8;
+}
+
+.elestet-store-row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 12px;
+  text-align: left;
+  color: #000;
+}
+
+.elestet-store-row:hover,
+.elestet-store-row.is-current {
+  background: #f1f5f9;
+}
+
+.elestet-store-row .elestet-store-option {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.elestet-store-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  margin-top: 6px;
+  border-radius: 999px;
+}
+
+.elestet-store-dot.is-connected {
+  background: #10b981;
+}
+
+.elestet-store-dot.is-disconnected {
+  background: #dc2626;
+}
+
+.elestet-search {
+  position: relative;
+}
+
+.elestet-search-input {
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  color: #334155;
+}
+
+.elestet-search-input::placeholder {
+  color: transparent;
+}
+
+.elestet-search-input:focus {
+  border-color: #3b82f6;
+  outline: none;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+.elestet-search-input.has-clear {
+  padding-right: 2.5rem;
+}
+
+.elestet-search-label {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  z-index: 10;
+  transform: translateY(-50%);
+  transform-origin: left center;
+  pointer-events: none;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  color: #94a3b8;
+  transition:
+    top 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    left 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    padding 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    font-size 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    font-weight 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }

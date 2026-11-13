@@ -898,19 +898,19 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
   ]
 
   return (
-    <div className="flex flex-col">
-      <div className="stickers-main-tabs bg-[#e8edf3] px-4 pt-[7px]">
+    <div className="flex min-h-full flex-1 flex-col">
+      <div className="elestet-main-tabs">
         <ChromeTabs tabs={mainTabs} value={mainTab} onChange={handleMainTab} />
       </div>
-      <div className="min-h-[calc(100vh-12rem)] bg-white">
+      <div className="flex min-h-0 flex-1 flex-col bg-white">
 
       {mainTab === 'stickers2' && (
         <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} canManageLinks={canManageLinks} canDisconnectTeksher={canDisconnectTeksher} />
       )}
 
-      {isAdmin && mainTab === 'stickers3' && <div className="py-4"><KizGuidePage /></div>}
+      {isAdmin && mainTab === 'stickers3' && <div className="elestet-inset flex min-h-0 flex-1 flex-col py-4"><KizGuidePage /></div>}
 
-      {mainTab === 'stickers' && <div className="space-y-4 py-4">
+      {mainTab === 'stickers' && <div className="pb-4">
       {printSetup && (
         <StickerPrintSettingsModal
           open
@@ -1047,8 +1047,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
         </div>
       )}
       {/* ── Верхняя панель ─────────────────────────────────── */}
-      <div className="mx-2">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="elestet-main-header">
           {/* Левая часть: поиск или дропдаун магазина */}
           {activeTab === 'import' ? (
             <div className="flex flex-1 items-center gap-3">
@@ -1064,7 +1063,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
               )}
               <button
                 type="button"
-                className="flex items-center justify-center rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-slate-600 hover:bg-slate-50 transition-colors"
+                className="elestet-btn elestet-btn-compact"
                 onClick={handleImportToggleAll}
                 aria-pressed={importAnyExpanded}
                 aria-label={importAnyExpanded ? 'Свернуть список' : 'Развернуть список'}
@@ -1072,10 +1071,8 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
               >
                 <svg
                   viewBox="0 0 24 24"
-                  className="h-3.5 w-3.5 shrink-0"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="2.5"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 >
@@ -1092,15 +1089,15 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
                   )}
                 </svg>
               </button>
-              <div className="relative min-w-[240px] flex-1">
+              <div className="elestet-search min-w-[240px] flex-1">
                 <input
                   type="text"
                   placeholder=" "
                   value={importSearch}
                   onChange={(event) => setImportSearch(event.target.value)}
-                  className="peer h-9 w-full rounded-lg border border-slate-200 bg-white px-3 pr-10 text-xs font-medium text-slate-600 placeholder:text-transparent focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="elestet-search-input has-clear"
                 />
-                <span className="pointer-events-none absolute left-3 top-1/2 z-10 origin-left -translate-y-1/2 text-xs font-medium text-slate-400 transition-all duration-150 ease-[cubic-bezier(0.4,0,0.2,1)] peer-focus:left-2 peer-focus:top-0 peer-focus:bg-white peer-focus:px-1 peer-focus:text-slate-600 peer-[:not(:placeholder-shown)]:left-2 peer-[:not(:placeholder-shown)]:top-0 peer-[:not(:placeholder-shown)]:bg-white peer-[:not(:placeholder-shown)]:px-1 peer-[:not(:placeholder-shown)]:text-slate-600">Поиск</span>
+                <span className="elestet-search-label">Поиск</span>
                 {importSearch && (
                   <button
                     type="button"
@@ -1119,15 +1116,15 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
               {importError && <span className="text-xs text-rose-500">{importError}</span>}
             </div>
           ) : (
-            <div className="relative flex-1">
+            <div className="elestet-search flex-1">
               <input
                 type="text"
                 placeholder=" "
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="peer h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 placeholder:text-transparent focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="elestet-search-input"
               />
-              <span className="pointer-events-none absolute left-3 top-1/2 z-10 origin-left -translate-y-1/2 text-xs font-medium text-slate-400 transition-all duration-150 ease-[cubic-bezier(0.4,0,0.2,1)] peer-focus:left-2 peer-focus:top-0 peer-focus:bg-white peer-focus:px-1 peer-focus:text-slate-600 peer-[:not(:placeholder-shown)]:left-2 peer-[:not(:placeholder-shown)]:top-0 peer-[:not(:placeholder-shown)]:bg-white peer-[:not(:placeholder-shown)]:px-1 peer-[:not(:placeholder-shown)]:text-slate-600">Поиск</span>
+              <span className="elestet-search-label">Поиск</span>
             </div>
           )}
 
@@ -1142,16 +1139,16 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
                   stickers.filter((s) => selected.has(s.id)).forEach((s) => { init[s.id] = { checked: true, copies: 1 } })
                   setBundleItems(init); setBundleName(''); setEditingBundle(null); setBundleSaveError(null); setBundleModalOpen(true)
                 }}
-                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                className="elestet-btn"
               >
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
                   <polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" />
                 </svg>
                 Создать набор
               </button>
-              <button type="button" disabled={isPrinting || stickers.length === 0} onClick={handlePrint} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors">
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <button type="button" disabled={isPrinting || stickers.length === 0} onClick={handlePrint} className="elestet-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
                 </svg>
                 {isPrinting ? 'Генерация…' : `Скачать PDF${selected.size > 0 ? ` (${printCount})` : ''}`}
@@ -1163,20 +1160,20 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
             <div className="flex shrink-0 items-center gap-2.5">
               <button
                 type="button"
-                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                className="elestet-btn"
                 disabled={!selectedStoreId || isSyncingImport}
                 onClick={() => void handleImportSync()}
               >
                 {isSyncingImport ? (
                   <>
-                    <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <svg className="animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                       <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                     </svg>
                     Синхронизация...
                   </>
                 ) : (
                   <>
-                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                       <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
                       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
                       <path d="M21 8v-4" />
@@ -1194,7 +1191,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
             <button
               type="button"
               onClick={() => dateInputRef.current?.showPicker()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+              className="elestet-btn"
             >
               <span>Дата производства:</span>
               <span className={`inline-block w-[5.5rem] tabular-nums ${globalProductionDate ? '' : 'text-slate-400'}`}>
@@ -1219,18 +1216,13 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
               type="button"
               onClick={() => setIconsDropdownOpen((o) => !o)}
               title="Иконки на стикере"
-              className={[
-                'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
-                Object.values(globalIcons).some(Boolean)
-                  ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
-                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
-              ].join(' ')}
+              className={`elestet-btn${Object.values(globalIcons).some(Boolean) ? ' is-on' : ''}`}
             >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
               </svg>
               Иконки
-              <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 shrink-0 transition-transform ${iconsDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m6 9 6 6 6-6" /></svg>
+              <svg viewBox="0 0 24 24" className={`transition-transform ${iconsDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor"><path d="m6 9 6 6 6-6" /></svg>
             </button>
             {iconsDropdownOpen && (
               <div className="absolute right-0 top-full z-30 mt-1.5 w-52 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
@@ -1272,35 +1264,34 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
                 stickers.forEach((s) => { init[s.id] = { checked: true, copies: 1 } })
                 setBundleItems(init); setBundleName(''); setEditingBundle(null); setBundleSaveError(null); setBundleModalOpen(true)
               }}
-              className="flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors"
+              className="elestet-btn elestet-btn-primary"
             >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path d="M12 5v14" /><path d="M5 12h14" />
               </svg>
               Создать набор
             </button>
           )}
           {activeTab === 'import' && (
-            <button type="button" className="flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors" disabled={isImporting || importSelected.size === 0} onClick={() => handleImportCreate()}>
+            <button type="button" className="elestet-btn elestet-btn-primary" disabled={isImporting || importSelected.size === 0} onClick={() => handleImportCreate()}>
               {isImporting ? 'Создание…' : `Создать набор${importSelected.size > 0 ? ` (${importSelected.size})` : ''}`}
             </button>
           )}
 
           {/* + Создать стикер — крайняя правая */}
           {activeTab === 'stickers' && canManage && (
-            <button type="button" onClick={() => { setEditingSticker(null); setModalOpen(true) }} className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">
+            <button type="button" onClick={() => { setEditingSticker(null); setModalOpen(true) }} className="elestet-btn elestet-btn-primary">
               + Создать стикер
             </button>
           )}
-        </div>
-        {activeTab === 'import' && importSyncError && (
-          <p className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-600">{importSyncError}</p>
-        )}
       </div>
+      {activeTab === 'import' && importSyncError && (
+        <p className="elestet-inset mb-4 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-600">{importSyncError}</p>
+      )}
 
       {/* ── Основной блок ──────────────────────────────────── */}
       <div>
-        <div className="kiz-section-tabs mx-2 rounded-t-xl bg-[#e8edf3] px-4 pt-[7px]">
+        <div className="elestet-section-tabs">
           <ChromeTabs
             tabs={[
               { id: 'stickers' as const, label: `Кастомная ${stickers.length}` },
@@ -1314,7 +1305,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
             }}
           />
         </div>
-        <div className="mx-2 min-w-0">
+        <div className="elestet-inset min-w-0">
         {activeTab === 'import' ? (
           <div className="flex flex-col">
             {/* Products table */}

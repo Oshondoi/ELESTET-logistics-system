@@ -56,7 +56,7 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
   }, [open])
 
   const borderLabel = (
-    <span className={`pointer-events-none absolute left-2 top-0 z-10 -translate-y-1/2 px-1 text-xs font-semibold text-slate-600 ${disabled ? 'bg-slate-50' : 'bg-white'}`}>
+    <span className={`elestet-store-label${disabled ? ' is-disabled' : ''}`}>
       Магазин
     </span>
   )
@@ -92,9 +92,10 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
         key={store.id}
         type="button"
         onClick={() => pick(store.id)}
-        className={`block w-full whitespace-normal break-words px-3 py-1.5 text-left ${tone === 'emerald' ? 'text-emerald-700' : 'text-red-600'} ${current ? 'bg-slate-100' : 'hover:bg-slate-50'}`}
+        className={`elestet-store-row${current ? ' is-current' : ''}`}
       >
-        <span className="text-xs font-semibold">{getStoreSelectorLabel(store)}</span>
+        <span className={`elestet-store-dot ${tone === 'emerald' ? 'is-connected' : 'is-disconnected'}`} />
+        <span className="elestet-store-option">{getStoreSelectorLabel(store)}</span>
       </button>
     )
   }
@@ -102,7 +103,7 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
   const label = selected ? getStoreSelectorLabel(selected) : 'Выберите магазин'
 
   return (
-    <div ref={rootRef} className={labelOnBorder ? 'relative w-72 shrink-0' : 'w-72 shrink-0 space-y-1.5 text-xs font-semibold text-slate-600'}>
+    <div ref={rootRef} className={labelOnBorder ? 'elestet-store' : 'w-72 shrink-0 space-y-1.5 text-xs font-semibold text-slate-600'}>
       {labelOnBorder ? borderLabel : <span className="block">Магазин</span>}
       <button
         ref={buttonRef}
@@ -113,9 +114,9 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
           placeMenu()
           setOpen(true)
         }}
-        className={`flex h-9 w-full items-center gap-2 rounded-xl border bg-white px-3 text-left text-sm font-normal outline-none transition-colors disabled:bg-slate-50 disabled:text-slate-400 ${open ? 'border-violet-400' : 'border-slate-200'}`}
+        className={`elestet-store-button${open ? ' is-open' : ''}`}
       >
-        <span className={`min-w-0 flex-1 truncate text-xs font-semibold ${groupConnected ? (selected ? (selected.teksher_login ? 'text-emerald-700' : 'text-red-600') : 'text-slate-400') : (selected ? 'text-slate-800' : 'text-slate-400')}`}>
+        <span className={`elestet-store-name${selected ? '' : ' is-empty'}`}>
           {label}
         </span>
         <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0 text-slate-400" fill="currentColor" aria-hidden>
@@ -128,8 +129,8 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
           className="fixed z-[80] overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white py-1 shadow-xl"
           style={{ left: box.left, top: box.top, width: box.width, maxHeight: box.maxHeight }}
         >
-          <button type="button" onClick={() => pick('')} className="block w-full whitespace-normal break-words px-3 py-1.5 text-left text-slate-500 hover:bg-slate-50">
-            <span className="text-xs font-semibold">Выберите магазин</span>
+          <button type="button" onClick={() => pick('')} className={`block w-full whitespace-normal break-words px-3 py-1.5 text-left hover:bg-slate-50 ${groupConnected ? 'text-black' : 'text-slate-500'}`}>
+            <span className="elestet-store-option">Выберите магазин</span>
           </button>
           {!groupConnected && [...stores].sort(byLabel).map((store) => {
             const current = store.id === value
@@ -140,22 +141,12 @@ export const FbsStoreSelect = ({ value, stores, onChange, disabled = false, grou
                 onClick={() => pick(store.id)}
                 className={`block w-full whitespace-normal break-words px-3 py-1.5 text-left text-slate-800 ${current ? 'bg-slate-100' : 'hover:bg-slate-50'}`}
               >
-                <span className="text-xs font-semibold">{getStoreSelectorLabel(store)}</span>
+                <span className="elestet-store-option">{getStoreSelectorLabel(store)}</span>
               </button>
             )
           })}
-          {groupConnected && connected.length > 0 && (
-            <>
-              <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Подключены к Teksher</p>
-              {connected.map((store) => row(store, 'emerald'))}
-            </>
-          )}
-          {groupConnected && disconnected.length > 0 && (
-            <>
-              <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-red-600">Без Teksher</p>
-              {disconnected.map((store) => row(store, 'red'))}
-            </>
-          )}
+          {groupConnected && connected.map((store) => row(store, 'emerald'))}
+          {groupConnected && disconnected.map((store) => row(store, 'red'))}
         </div>,
         document.body,
       )}

@@ -168,7 +168,7 @@ const Skeleton = ({ rows = 5 }: { rows?: number }) => (
 )
 
 const ConnectionPending = () => (
-  <div className="flex items-center justify-center gap-3 py-16 text-sm text-slate-400">
+  <div className="flex w-full flex-1 items-center justify-center gap-3 text-sm text-slate-400">
     <svg viewBox="0 0 24 24" className="h-5 w-5 animate-spin text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
     Проверяем подключение…
   </div>
@@ -1019,6 +1019,10 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   }, [participantInfo, cpHasMfr])
 
   const isConnected = stats !== null
+  const storesForSelect = sortedStores.map((store) => {
+    if (store.id !== activeStore?.id || statsLoading) return store
+    return { ...store, teksher_login: isConnected ? (store.teksher_login || '__configured__') : null }
+  })
 
   // ── Render ────────────────────────────────────────────────────────────────
   const kizTabs = [
@@ -1030,14 +1034,14 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   ]
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex min-h-0 w-full flex-1 flex-col">
 
       {/* Магазин и общие действия — над вкладками, на каждом разделе */}
-      <div className="mx-2 flex shrink-0 flex-wrap items-center gap-3 pb-3 pt-4">
+      <div className="elestet-main-header">
         {/* Выбор магазина */}
         <FbsStoreSelect
           value={activeStore?.id ?? ''}
-          stores={sortedStores}
+          stores={storesForSelect}
           onChange={onStoreChange}
           groupConnected
           labelOnBorder
@@ -1045,17 +1049,17 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
         {/* Статус */}
         {statsLoading ? (
-          <span className="text-xs text-slate-400 animate-pulse">Проверяем…</span>
+          <span className="elestet-status text-slate-400 animate-pulse">Проверяем…</span>
         ) : isConnected ? (
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            <span className="text-xs font-medium text-emerald-700">Teksher подключён</span>
-            {stats.participantName && <span className="text-xs text-slate-400">· {stats.participantName}</span>}
+            <span className="elestet-status text-emerald-700">Teksher подключён</span>
+            {stats.participantName && <span className="elestet-status text-slate-400">· {stats.participantName}</span>}
           </div>
         ) : (
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-slate-300" />
-            <span className="text-xs text-slate-500">Не подключён</span>
+            <span className="elestet-status text-slate-500">Не подключён</span>
           </div>
         )}
 
@@ -1065,25 +1069,25 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
             onClick={() => void handleTnvedSync()}
             disabled={tnvedSyncing || !activeStore || (!statsLoading && !isConnected)}
             title="Обновить базу кодов ТН ВЭД из Teksher"
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+            className="elestet-btn"
           >
-            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${tnvedSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+            <svg viewBox="0 0 24 24" className={tnvedSyncing ? 'animate-spin' : undefined} fill="none" stroke="currentColor"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
             {tnvedSyncing ? 'Загрузка ТН ВЭД…' : 'Обновить ТН ВЭД'}
           </button>
           <button
             type="button"
             onClick={() => void handleFullSync()}
             disabled={fullSyncing || codesSyncing || operationsSyncing || !activeStore || (!statsLoading && !isConnected)}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="elestet-btn elestet-btn-primary"
           >
-            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${fullSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+            <svg viewBox="0 0 24 24" className={fullSyncing ? 'animate-spin' : undefined} fill="none" stroke="currentColor"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
             {listSyncNote || 'Полное обновление'}
           </button>
         </div>
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="kiz-section-tabs mx-2 mt-2 rounded-t-xl bg-[#e8edf3] px-4 pt-[7px]">
+      <div className="elestet-section-tabs">
         <ChromeTabs tabs={kizTabs.map((item) => ({ id: item.key, label: item.label }))} value={tab} onChange={handleSetTab} />
       </div>
 
@@ -1103,7 +1107,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
       )}
 
       {/* Лист активной вкладки */}
-      <div className="mx-2 min-w-0 flex-1 py-4">
+      <div className="elestet-inset flex min-w-0 flex-1 flex-col py-4">
+        {statsLoading && !isConnected ? <ConnectionPending /> : <>
 
         {/* ══════ ГЛАВНАЯ ══════ */}
         {tab === 'main' && (
@@ -1183,13 +1188,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     <li>Введите логин и пароль выше</li>
                   </ol>
                 </div>
-              </div>
-            )}
-
-            {statsLoading && !isConnected && (
-              <div className="flex items-center gap-3 py-8 text-sm text-slate-400">
-                <svg viewBox="0 0 24 24" className="h-5 w-5 animate-spin text-blue-500" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
-                Проверяем подключение…
               </div>
             )}
 
@@ -1278,16 +1276,16 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
               <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <div className="relative w-52">
+                <div className="elestet-section-header">
+                  <div className="elestet-search w-52">
                     <input
                       type="text"
                       value={productsSearch}
                       onChange={(e) => setProductsSearch(e.target.value)}
                       placeholder=" "
-                      className="peer w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm placeholder:text-transparent focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="elestet-search-input"
                     />
-                    <span className="pointer-events-none absolute left-3 top-1/2 z-10 origin-left -translate-y-1/2 text-sm font-normal text-slate-400 transition-all duration-150 ease-[cubic-bezier(0.4,0,0.2,1)] peer-focus:left-2 peer-focus:top-0 peer-focus:bg-white peer-focus:px-1 peer-focus:text-xs peer-focus:font-semibold peer-focus:text-slate-600 peer-[:not(:placeholder-shown)]:left-2 peer-[:not(:placeholder-shown)]:top-0 peer-[:not(:placeholder-shown)]:bg-white peer-[:not(:placeholder-shown)]:px-1 peer-[:not(:placeholder-shown)]:text-xs peer-[:not(:placeholder-shown)]:font-semibold peer-[:not(:placeholder-shown)]:text-slate-600">Поиск</span>
+                    <span className="elestet-search-label">Поиск</span>
                   </div>
                   <div className="flex gap-1.5">
                     {([
@@ -1310,7 +1308,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       type="button"
                       onClick={() => void loadProducts(0, productsSearch)}
                       disabled={productsLoading || fullSyncing}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                      className="elestet-btn"
                     >
                       Быстрое обновление
                     </button>
@@ -1318,7 +1316,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       type="button"
                       onClick={() => void loadParticipantInfo()}
                       disabled={participantLoading}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                      className="elestet-btn"
                     >
                       {participantLoading ? '…' : 'Инфо об участнике'}
                     </button>
@@ -1336,9 +1334,9 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                         if (!participantInfo) void loadParticipantInfo()
                         void loadCountries()
                       }}
-                      className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors"
+                      className="elestet-btn elestet-btn-primary"
                     >
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>
                       Новый товар
                     </button>
                   </div>
@@ -1434,9 +1432,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
         {/* ══════ ТРАНСГРАН ══════ */}
         {tab === 'transgran' && activeStore && (
-          statsLoading && !isConnected
-            ? <ConnectionPending />
-            : <TransgranPanel store={activeStore} connected={isConnected} reloadToken={transgranReload} />
+          <TransgranPanel store={activeStore} connected={isConnected} reloadToken={transgranReload} />
         )}
 
         {/* ══════ КИЗ-КОДЫ ══════ */}
@@ -1446,7 +1442,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
               <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="elestet-section-header">
                   <div className="flex gap-1.5 flex-wrap">
                     {[
                       { val: '', label: 'Все' },
@@ -1475,7 +1471,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     type="button"
                     onClick={() => void refreshCodesQuick()}
                     disabled={codesSyncing || fullSyncing}
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    className="elestet-btn"
                   >
                     {codesSyncing ? 'Быстрое обновление…' : 'Быстрое обновление'}
                   </button>
@@ -1535,7 +1531,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
               <NotConnectedPlug onGoToMain={() => handleSetTab('main')} />
             ) : (
               <>
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="elestet-section-header">
                   <span className="text-xs text-slate-500">Всего: {operationsTotal}</span>
                   <div className="ml-auto flex items-center gap-2">
                     <input
@@ -1573,7 +1569,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       type="button"
                       disabled={printFileBusy}
                       onClick={() => printFileRef.current?.click()}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      className="elestet-btn"
                     >
                       {printFileBusy ? 'Читаем файл…' : 'Загрузить файл кодов'}
                     </button>
@@ -1581,17 +1577,17 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                       type="button"
                       onClick={() => void refreshOperations()}
                       disabled={operationsLoading || operationsSyncing || fullSyncing}
-                      className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                      className="elestet-btn"
                     >
-                      <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${operationsSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
+                      <svg viewBox="0 0 24 24" className={operationsSyncing ? 'animate-spin' : undefined} fill="none" stroke="currentColor"><path d="M21 12a9 9 0 1 1-6-8.485"/><path d="M21 3v5h-5"/></svg>
                       {operationsSyncing ? 'Быстрое обновление…' : 'Быстрое обновление'}
                     </button>
                     <button
                       type="button"
                       onClick={() => { setEmitSeed(''); setEmitModal(true); setEmitError(null); setEmitSuccess(null) }}
-                      className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors"
+                      className="elestet-btn elestet-btn-primary"
                     >
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>
                       Заказать КИЗы
                     </button>
                   </div>
@@ -1706,6 +1702,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
             )}
           </div>
         )}
+        </>}
       </div>
       </div>
 

@@ -1490,7 +1490,7 @@ function App() {
               );
             })()}
 
-          <div className={effectivePage === "calendar" ? "flex min-h-0 flex-1 flex-col overflow-hidden p-2 sm:p-3 lg:p-4" : effectivePage === "stickers" ? "flex-1 overflow-y-scroll" : "flex-1 overflow-y-scroll p-2 sm:p-3 lg:p-4"}>
+          <div className={effectivePage === "calendar" ? "flex min-h-0 flex-1 flex-col overflow-hidden p-2 sm:p-3 lg:p-4" : effectivePage === "stickers" ? "flex min-h-0 flex-1 flex-col overflow-y-scroll" : "flex-1 overflow-y-scroll p-2 sm:p-3 lg:p-4"}>
             {!isLoading && !error ? (
               effectivePage === "home" ? (
                 <HomePage
