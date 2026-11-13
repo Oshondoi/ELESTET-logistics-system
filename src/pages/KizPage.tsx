@@ -355,6 +355,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   // Connection / stats
   const [stats, setStats] = useState<TeksherStats | null>(null)
   const [statsLoading, setStatsLoading] = useState(true)
+  const [channelByStore, setChannelByStore] = useState<Record<string, boolean>>({})
   const [connectForm, setConnectForm] = useState({ login: '', password: '' })
   const [connectLoading, setConnectLoading] = useState(false)
   const [connectError, setConnectError] = useState<string | null>(null)
@@ -508,7 +509,9 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     setStats(null)
     const { data, error } = await invoke({ store_id: storeId, action: 'stats' })
     setStatsLoading(false)
-    if (error || !data || data.connected === false) { setStats(null); return false }
+    const connected = !error && !!data && data.connected !== false
+    setChannelByStore((current) => ({ ...current, [storeId]: connected }))
+    if (!connected) { setStats(null); return false }
     setStats(data as unknown as TeksherStats)
     return true
   }, [])
@@ -722,6 +725,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
     const { error } = await invoke({ store_id: activeStore.id, action: 'disconnect' })
     if (error) { showAction('err', error); return }
     setStats(null)
+    setChannelByStore((current) => ({ ...current, [activeStore.id]: false }))
     showAction('ok', 'Teksher отключён')
   }
 
@@ -1020,8 +1024,10 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
 
   const isConnected = stats !== null
   const storesForSelect = sortedStores.map((store) => {
-    if (store.id !== activeStore?.id || statsLoading) return store
-    return { ...store, teksher_login: isConnected ? (store.teksher_login || '__configured__') : null }
+    const known = channelByStore[store.id]
+    const connected = store.id === activeStore?.id && !statsLoading ? isConnected : known
+    if (connected === undefined) return store
+    return { ...store, teksher_login: connected ? (store.teksher_login || '__configured__') : null }
   })
 
   // ── Render ────────────────────────────────────────────────────────────────
