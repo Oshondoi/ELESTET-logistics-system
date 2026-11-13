@@ -17,7 +17,10 @@ try {
     const body = route.request().postDataJSON();
     calls.push({path,body,url:route.request().url()});
     let result = {}, status = 200;
-    if(path.endsWith('/reserve_email_delivery_number')) result={number:String(calls.filter(c=>c.path.endsWith('/reserve_email_delivery_number')).length),requested_at:'2026-10-05T12:00:00Z'};
+    if(path.endsWith('/reserve_email_delivery_number')) {
+      if(body?.p_purpose==='recovery' && body?.p_email==='unknown@example.invalid') { status=400; result={code:'P0001',message:'Эта почта не зарегистрирована. Проверьте адрес.'}; }
+      else result={number:String(calls.filter(c=>c.path.endsWith('/reserve_email_delivery_number') && c.body?.p_email!=='unknown@example.invalid').length),requested_at:'2026-10-05T12:00:00Z',sender_name:'ELESTET'};
+    }
     if(path.endsWith('/verify')) {
       if(body.token === '123456' && body.email === user.email) result={access_token:access,refresh_token:'fixture-refresh',token_type:'bearer',expires_in:3600,user};
       else {status=403;result={code:'otp_expired',msg:'Token has expired or is invalid'};}
@@ -30,10 +33,16 @@ try {
     await page.getByRole('button',{name:'Забыли пароль?'}).click();
     await page.getByLabel('Email',{exact:true}).fill(email);
     await page.getByRole('button',{name:'Отправить код',exact:true}).click();
-    await page.getByPlaceholder('Шестизначный код').waitFor();
-    return page.getByText('Если аккаунт с этой почтой существует, мы отправили код.',{exact:false}).innerText();
   }
-  const unknown = await open('unknown@example.invalid');
+  await open('unknown@example.invalid');
+  await page.getByRole('alert').waitFor();
+  assert.match(await page.getByRole('alert').innerText(), /Эта почта не зарегистрирована/);
+  assert.equal(await page.getByPlaceholder('Шестизначный код').count(), 0);
+  assert.equal(calls.filter(c=>c.path.endsWith('/recover')).length, 0);
+  await page.getByLabel('Email',{exact:true}).fill(user.email);
+  await page.getByRole('button',{name:'Отправить код',exact:true}).click();
+  await page.getByPlaceholder('Шестизначный код').waitFor();
+  const sent = await page.getByText('Если аккаунт с этой почтой существует, мы отправили код.',{exact:false}).innerText();
   const initialRequest = await assertEmailRequestTime(page, calls.find(c=>c.path.endsWith('/recover')));
   assert.equal(await page.getByLabel('Новый пароль',{exact:true}).count(),0);
   await page.getByPlaceholder('Шестизначный код').fill('999999');
@@ -46,7 +55,7 @@ try {
   assert.equal(await page.getByRole('button',{name:/Отправить код через/}).isDisabled(),true);
   await page.clock.fastForward(61_000);
   await page.getByRole('button',{name:'Отправить код',exact:true}).click();
-  assert.equal(await page.getByText('Если аккаунт с этой почтой существует, мы отправили код.',{exact:false}).innerText(),unknown);
+  assert.equal(await page.getByText('Если аккаунт с этой почтой существует, мы отправили код.',{exact:false}).innerText(),sent);
   assert.notEqual(await assertEmailRequestTime(page, calls.filter(c=>c.path.endsWith('/recover')).at(-1)), initialRequest);
   await page.getByPlaceholder('Шестизначный код').fill('123456');
   await page.getByRole('button',{name:'Подтвердить код'}).click();
@@ -73,5 +82,5 @@ try {
   await page.getByText('Auth session established',{exact:true}).waitFor();
   assert.equal(calls.filter(c=>c.url.includes('grant_type=password')).length,0,'no second password login');
   assert.deepEqual(errors,[]);
-  console.log('password_recovery_browser_ok: neutral response, no signup, cooldown, edit email, invalid/valid recovery OTP, isolated session, password save');
+  console.log('password_recovery_browser_ok: unknown email rejected, no signup, cooldown, edit email, invalid/valid recovery OTP, isolated session, password save');
 } finally { await browser.close(); }

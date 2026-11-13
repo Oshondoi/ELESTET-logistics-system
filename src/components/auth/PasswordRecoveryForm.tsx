@@ -40,15 +40,17 @@ export function PasswordRecoveryForm({ initialEmail = '', onBack }: { initialEma
     inFlight.current = true
     setBusy(true)
     setError('')
-    try { await action() } catch { setError('Не удалось выполнить запрос. Проверьте соединение и повторите попытку.') }
+    try { await action() } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      setError(/[А-Яа-яЁё]/.test(message) ? message : 'Не удалось выполнить запрос. Проверьте соединение и повторите попытку.')
+    }
     finally { inFlight.current = false; setBusy(false) }
   }
 
   async function sendCode() {
     if (Date.now() < retryAt) return
     await run(async () => {
-      // /recover deliberately returns the same response for missing accounts;
-      // unlike /otp it never signs an unknown email up.
+      // Unknown addresses stop here. /recover itself never creates an account.
       const request = await createEmailCodeRequest(email, 'recovery')
       const { error: sendError } = await client.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: request.redirectTo,
