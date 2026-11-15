@@ -165,6 +165,9 @@ import { showScanSuccess } from "../components/ui/ScanSuccessOverlay";
 import { FulfillmentKizPairsModal } from "../components/fulfillment/FulfillmentKizPairsModal";
 import { FulfillmentElestetScanner } from "../components/fulfillment/FulfillmentElestetScanner";
 import { FulfillmentBoxExcelDialog } from "../components/fulfillment/FulfillmentBoxExcelDialog";
+import { WorkshopCollectionsPanel } from "../components/fulfillment/WorkshopCollectionsPanel";
+import { WorkshopPacking } from "../components/fulfillment/WorkshopPacking";
+import { fetchWorkshopCollections } from "../services/workshopService";
 import { lookupStoreBarcode } from "../services/phoneBoxCamera";
 import { ServiceRequestsPanel } from "../components/fulfillment/ServiceRequestsPanel";
 import { PhoneBoxCamera } from "../components/fulfillment/PhoneBoxCamera";
@@ -3786,6 +3789,7 @@ const BatchDetailModal = ({
     const onKeyDown = (e: KeyboardEvent) => {
       // Если уже в barcode-поле — пусть оно само обрабатывает
       if (document.activeElement === barcodeInputRef.current) return;
+      if ((document.activeElement as HTMLElement | null)?.dataset.workshopScan === "1") return;
       // Системные комбинации не трогаем
       if (e.ctrlKey || e.altKey || e.metaKey) return;
 
@@ -19654,7 +19658,8 @@ const CreateBatchModal = ({
   onClose,
   onSubmit,
   onStoreCreated,
-}: CreateBatchModalProps) => {
+  heading = "Новая партия",
+}: CreateBatchModalProps & { heading?: string }) => {
   const [name, setName] = useState(todayName);
   const [storeId, setStoreId] = useState("");
   const [pendingStore, setPendingStore] = useState<Store | null>(null);
@@ -19924,7 +19929,7 @@ const CreateBatchModal = ({
               <path d="M12 5v14M5 12h14" />
             </svg>
           </div>
-          <p className="text-base font-semibold text-slate-800">Новая партия</p>
+          <p className="text-base font-semibold text-slate-800">{heading}</p>
         </div>
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6 p-8">
           {error && (
@@ -21241,14 +21246,21 @@ export const FulfillmentPage = ({
   onBatchUrlConsumed,
 }: FulfillmentPageProps) => {
   const navigate = useNavigate();
-  const [workspaceTab, setWorkspaceTab] = useState<"requests" | "batches">(
-    () => {
-      const stored = localStorage.getItem(
-        FULFILLMENT_WORKSPACE_TAB_STORAGE_KEY,
-      );
-      return stored === "requests" || stored === "batches" ? stored : "batches";
-    },
-  );
+  const [workspaceTab, setWorkspaceTab] = useState<
+    "requests" | "batches" | "workshop"
+  >(() => {
+    const stored = localStorage.getItem(FULFILLMENT_WORKSPACE_TAB_STORAGE_KEY);
+    return stored === "requests" || stored === "batches" || stored === "workshop"
+      ? stored
+      : "batches";
+  });
+  const [workshopReloadKey, setWorkshopReloadKey] = useState(0);
+  const [workshopSession, setWorkshopSession] = useState<{
+    batchId: string;
+    storeId: string | null;
+    pipelineStageId: string | null;
+    mode: "scan" | "plan";
+  } | null>(null);
   const [phoneCameraOpen, setPhoneCameraOpen] = useState(false);
   const [batches, setBatches] = useState<FulfillmentBatch[]>([]);
   const [settings, setSettings] = useState<FulfillmentSettings | null>(null);
@@ -21354,13 +21366,15 @@ export const FulfillmentPage = ({
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [bs, s, pipelineStgs, partnerBs] = await Promise.all([
+      const [bs, s, pipelineStgs, partnerBs, workshopCollections] = await Promise.all([
         fetchBatches(accountId),
         fetchFulfillmentSettings(accountId),
         fetchAccountPipeline(accountId).catch(() => []),
         fetchPartnerBatches(accountId).catch(() => []),
+        fetchWorkshopCollections(accountId).catch(() => []),
       ]);
-      setBatches(bs);
+      const workshopBatchIds = new Set(workshopCollections.map((item) => item.batchId));
+      setBatches(bs.filter((batch) => !workshopBatchIds.has(batch.id)));
       setSettings(s);
       setHasPipeline(pipelineStgs.length > 0);
       setAccountPipelineStages(pipelineStgs);
@@ -21920,6 +21934,13 @@ export const FulfillmentPage = ({
               className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "batches" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
             >
               Партии
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkspaceTab("workshop")}
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "workshop" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              Сбор в цехе
             </button>
           </div>
           <button
@@ -22609,6 +22630,32 @@ export const FulfillmentPage = ({
             </div>
           )}
 
+          {workspaceTab === "workshop" ? (
+            <WorkshopCollectionsPanel
+              accountId={accountId}
+              stores={stores}
+              canManage={canManage}
+              reloadKey={workshopReloadKey}
+              onOpen={(collection) => {
+                setWorkshopReloadKey((key) => key + 1);
+                setWorkshopSession({
+                  batchId: collection.batchId,
+                  storeId: collection.storeId,
+                  pipelineStageId: null,
+                  mode: "scan",
+                });
+              }}
+              onPlan={(collection) => {
+                setWorkshopSession({
+                  batchId: collection.batchId,
+                  storeId: collection.storeId,
+                  pipelineStageId: null,
+                  mode: "plan",
+                });
+              }}
+            />
+          ) : (
+          <>
           {/* Header */}
           <Card className="rounded-3xl p-3">
             <div className="flex flex-wrap items-center gap-2.5">
@@ -25033,7 +25080,29 @@ export const FulfillmentPage = ({
               </>
             )}
           </Card>
+          </>
+          )}
         </>
+      )}
+      {workshopSession && (
+        <WorkshopPacking
+          showLauncher={false}
+          batchId={workshopSession.batchId}
+          storeId={workshopSession.storeId}
+          pipelineStageId={workshopSession.pipelineStageId}
+          mode={workshopSession.mode}
+          warehouses={warehouses
+            .filter((warehouse) => warehouse.is_system)
+            .map((warehouse) => ({ id: warehouse.id, name: warehouse.name }))}
+          enabled
+          onClose={() => {
+            setWorkshopSession(null);
+            setWorkshopReloadKey((key) => key + 1);
+          }}
+          onSupplyCreated={() => {
+            setWorkshopReloadKey((key) => key + 1);
+          }}
+        />
       )}
     </div>
   );
