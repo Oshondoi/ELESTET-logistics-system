@@ -153,6 +153,7 @@ export const createBatch = async (
     stage_packing: boolean
     stage_logistics: boolean
     comment?: string
+    workshop_only?: boolean
   },
 ): Promise<FulfillmentBatch> => {
   if (!supabase) throw new Error('Supabase is not configured')

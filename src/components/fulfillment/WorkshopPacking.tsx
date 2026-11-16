@@ -81,7 +81,6 @@ export function WorkshopPacking({
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
-  const [jump, setJump] = useState('')
   const [scan, setScan] = useState('')
   const [gaps, setGaps] = useState<number[] | null>(null)
   const [products, setProducts] = useState<KizWbProduct[]>([])
@@ -94,6 +93,7 @@ export function WorkshopPacking({
   const [warehouseId, setWarehouseId] = useState('')
   const scanRef = useRef<HTMLInputElement>(null)
   const scanQueue = useRef(Promise.resolve())
+  const gapsRef = useRef<number[] | null>(null)
 
   const reload = async () => {
     const next = await fetchWorkshop(batchId)
@@ -160,7 +160,13 @@ export function WorkshopPacking({
     return state.boxes
       .filter((box) => box.items.length > 0)
       .map((box) => box.box_number)
+      .sort((a, b) => a - b)
   }, [state])
+
+  useEffect(() => {
+    if (!open || mode !== 'scan' || numbers.length === 0) return
+    setSelected((current) => (current != null && numbers.includes(current) ? current : numbers[0]))
+  }, [open, mode, numbers])
 
   const filledNumbers = useMemo(
     () => state.boxes.filter((box) => box.items.length > 0).map((box) => box.box_number),
@@ -210,20 +216,23 @@ export function WorkshopPacking({
     }
   }
 
+  gapsRef.current = gaps
+
+  const focusScan = () => {
+    if (gapsRef.current) return
+    scanRef.current?.focus()
+  }
+
+  useEffect(() => {
+    if (!open || mode !== 'scan' || gaps) return
+    const timer = window.setTimeout(focusScan, 0)
+    return () => window.clearTimeout(timer)
+  }, [open, mode, gaps, loading])
+
   const chooseBox = (number: number) => {
     setSelected(number)
     setNotice(null)
-    setTimeout(() => scanRef.current?.focus(), 0)
-  }
-
-  const stepBox = (delta: number) => {
-    if (numbers.length === 0) return
-    if (selected == null) {
-      chooseBox(delta > 0 ? numbers[0] : numbers[numbers.length - 1])
-      return
-    }
-    const next = numbers[numbers.indexOf(selected) + delta]
-    if (next != null) chooseBox(next)
+    setTimeout(focusScan, 0)
   }
 
   const submitScan = (raw: string) => {
@@ -246,8 +255,10 @@ export function WorkshopPacking({
         await reload()
         setNotice(productName ? `${productName} · 1 шт.` : `${barcode} · 1 шт.`)
         setError(null)
+        focusScan()
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : 'Не получилось записать скан')
+        focusScan()
       }
     })
   }
@@ -327,99 +338,172 @@ export function WorkshopPacking({
           </button>
         </div>
       </div>}
-      {open && createPortal(
-        <div className="fixed inset-0 z-[160] flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4">
-          <div className={`my-4 w-full rounded-2xl bg-white shadow-xl ${mode === 'scan' ? 'max-w-lg' : 'max-w-5xl'}`}>
-            <div className="flex items-center justify-end gap-2 px-4 pt-4">
-              {mode === 'plan' && <div className="mr-auto text-base font-semibold text-slate-800">Поставка</div>}
-              {mode === 'scan' && !state.pool && (
-                <button type="button" className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600" disabled={busy} onClick={() => void run(() => startWorkshop(batchId))}>
-                  100 коробов
-                </button>
-              )}
-              {mode === 'scan' && state.pool?.active && (
-                <>
-                  <button type="button" className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600" disabled={busy} onClick={() => void run(() => addWorkshopShells(batchId))}>
-                    +50
+      {open && mode === 'scan' && createPortal(
+        <>
+          <div className="fixed inset-0 z-[160] flex items-center justify-center overflow-hidden bg-slate-950/40">
+            <div className="absolute inset-0" onClick={close} />
+            <div className="relative z-10 flex h-[90vh] max-h-[90vh] w-[90vw] max-w-[90vw] min-w-0 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="shrink-0 border-b border-slate-200">
+                <div className="flex min-w-0 items-start justify-between gap-4 px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-5">
+                  <h2 className="text-xl font-semibold text-slate-900">Сбор</h2>
+                  <button type="button" className="mt-0.5 shrink-0 text-sm text-slate-500 transition hover:text-slate-800" onClick={close}>
+                    Закрыть
                   </button>
-                  <button type="button" className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600" disabled={busy} onClick={askComplete}>
-                    Завершить
-                  </button>
-                </>
-              )}
-              {mode === 'scan' && state.pool && !state.pool.active && (
-                <button type="button" className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600" disabled={busy} onClick={() => void run(() => reopenWorkshop(batchId))}>
-                  Продолжить
-                </button>
-              )}
-              <button type="button" className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600" onClick={close}>Закрыть</button>
-            </div>
-
-            {error && <div className="mx-4 mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
-            {loading && <div className="px-5 py-6 text-sm text-slate-500">Загрузка…</div>}
-
-            {!loading && mode === 'scan' && state.pool && (
-              <div className="px-6 pb-6 pt-2">
-                <div className="flex items-center justify-center gap-6">
-                  <button type="button" className="flex h-12 w-12 items-center justify-center rounded-full text-3xl text-slate-400 hover:bg-slate-100" onClick={() => stepBox(-1)} aria-label="Предыдущий короб">‹</button>
-                  <div className="min-w-[7rem] text-center text-7xl font-semibold leading-none text-slate-900">{selected ?? '—'}</div>
-                  <button type="button" className="flex h-12 w-12 items-center justify-center rounded-full text-3xl text-slate-400 hover:bg-slate-100" onClick={() => stepBox(1)} aria-label="Следующий короб">›</button>
-                </div>
-                {selectedBox?.supply_id && (
-                  <div className="mt-2 text-center text-sm text-amber-700">
-                    Поставка {selectedBox.supply_number ?? '—'}{selectedBox.supply_box_number ? `, короб ${selectedBox.supply_box_number}` : ''}
-                  </div>
-                )}
-                <form
-                  className="mt-4 flex justify-center"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    const number = Number(jump)
-                    if (!Number.isInteger(number) || !numbers.includes(number)) {
-                      setNotice('Такого короба нет')
-                      return
-                    }
-                    chooseBox(number)
-                    setJump('')
-                  }}
-                >
-                  <input
-                    data-workshop-scan="1"
-                    className="h-10 w-28 rounded-xl border border-slate-200 text-center text-sm outline-none focus:border-blue-300"
-                    inputMode="numeric"
-                    placeholder="Номер"
-                    value={jump}
-                    onChange={(event) => setJump(event.target.value.replace(/\D/g, ''))}
-                  />
-                </form>
-                <input
-                  ref={scanRef}
-                  data-workshop-scan="1"
-                  className="mt-4 h-12 w-full rounded-xl border border-slate-200 px-3 text-center text-lg outline-none focus:border-blue-300"
-                  placeholder="Скан"
-                  value={scan}
-                  disabled={!state.pool.active || selectedTaken}
-                  onChange={(event) => setScan(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      submitScan(scan)
-                    }
-                  }}
-                />
-                {notice && <div className="mt-2 text-center text-sm text-slate-600">{notice}</div>}
-                <div className="mt-4 space-y-1">
-                  {(selectedBox?.items ?? []).map((item) => (
-                    <div key={item.barcode} className="flex items-center justify-between gap-3 text-sm">
-                      <span className="text-slate-700">{item.product_name || item.barcode}</span>
-                      <span className="font-medium text-slate-800">{item.qty}</span>
-                    </div>
-                  ))}
                 </div>
               </div>
-            )}
-
-            {!loading && mode === 'plan' && (
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                {(error || loading) && (
+                  <div className="shrink-0 space-y-2 border-b border-slate-100 px-4 py-3">
+                    {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+                    {loading && <p className="text-sm text-slate-400">Загрузка…</p>}
+                  </div>
+                )}
+                <div className="flex min-h-0 flex-1">
+                  <div className="flex w-[30%] min-w-0 flex-col gap-2 overflow-hidden border-r border-slate-200 p-4">
+                    <p className="shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-500">Коробки</p>
+                    <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200">
+                      {numbers.length === 0 && <p className="px-3 py-2 text-sm text-slate-400">Коробов пока нет</p>}
+                      {numbers.map((number) => {
+                        const box = boxByNumber.get(number)
+                        const pieces = box?.items.reduce((sum, item) => sum + item.qty, 0) ?? 0
+                        const taken = Boolean(box?.supply_id)
+                        return (
+                          <button
+                            key={number}
+                            type="button"
+                            onClick={() => chooseBox(number)}
+                            className={`flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 text-left last:border-0 ${selected === number ? 'bg-emerald-50' : 'hover:bg-slate-50'}`}
+                          >
+                            <span className="text-sm font-medium text-slate-800">{number}</span>
+                            <span className={`text-xs ${taken ? 'text-amber-700' : 'text-slate-400'}`}>
+                              {taken ? `Поставка ${box?.supply_number ?? '—'}` : pieces > 0 ? `${pieces} шт.` : ''}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4">
+                    <p className="shrink-0 text-lg font-semibold text-slate-900">{selected == null ? 'Короб' : `Короб №${selected}`}</p>
+                    <label className="mt-4 block shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Скан
+                      <input
+                        ref={scanRef}
+                        data-workshop-scan="1"
+                        value={scan}
+                        disabled={!state.pool?.active}
+                        placeholder={selected == null ? 'Сначала выберите короб' : 'Штрихкод'}
+                        onChange={(event) => setScan(event.target.value)}
+                        onBlur={() => {
+                          window.setTimeout(focusScan, 0)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            submitScan(scan)
+                          }
+                        }}
+                        className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400 disabled:bg-slate-50"
+                      />
+                    </label>
+                    {selectedBox?.supply_id && (
+                      <p className="mt-3 shrink-0 text-sm text-amber-700">
+                        Поставка {selectedBox.supply_number ?? '—'}{selectedBox.supply_box_number ? `, короб ${selectedBox.supply_box_number}` : ''}
+                      </p>
+                    )}
+                    <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
+                      {selected == null && <p className="text-sm text-slate-400">Выберите короб слева</p>}
+                      {selected != null && (selectedBox?.items.length ?? 0) === 0 && <p className="text-sm text-slate-400">Товары появятся здесь</p>}
+                      <div className="space-y-3">
+                        {(selectedBox?.items ?? []).map((item) => (
+                          <section key={item.barcode} className="rounded-2xl border border-slate-200 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-slate-800">{item.product_name || item.barcode}</p>
+                                {item.product_name && <p className="truncate font-mono text-xs text-slate-400">{item.barcode}</p>}
+                              </div>
+                              <p className="shrink-0 text-sm font-medium text-slate-800">{item.qty}</p>
+                            </div>
+                          </section>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="border-t border-slate-200 bg-white px-4 pb-3 pt-3 sm:px-6">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="min-w-0 text-xs text-slate-500">
+                    {notice && <p>{notice}</p>}
+                    {selected != null && <p>Короб {selected}</p>}
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    {!state.pool && (
+                      <button type="button" disabled={busy} onClick={() => void run(async () => { await startWorkshop(batchId) })} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                        100 коробов
+                      </button>
+                    )}
+                    {state.pool?.active && (
+                      <button type="button" disabled={busy} onClick={() => void run(() => addWorkshopShells(batchId))} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+                        +50
+                      </button>
+                    )}
+                    {state.pool && !state.pool.active && (
+                      <button type="button" disabled={busy} onClick={() => void run(() => reopenWorkshop(batchId))} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                        Продолжить
+                      </button>
+                    )}
+                    {state.pool?.active && (
+                      <button type="button" disabled={busy} onClick={askComplete} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                        Завершить
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          {gaps && (
+            <div className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-900/40 p-4">
+              <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+                <div className="text-base font-semibold text-slate-800">Есть пропуски</div>
+                <p className="mt-2 text-sm text-slate-600">
+                  Пропущены короба: {gaps.slice(0, 20).join(', ')}{gaps.length > 20 ? ` и ещё ${gaps.length - 20}` : ''}.
+                  Пустые не сохранятся, номера заполненных не изменятся. Завершить всё равно?
+                </p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button type="button" className="elestet-btn" onClick={() => setGaps(null)}>Вернуться</button>
+                  <button
+                    type="button"
+                    className="elestet-btn elestet-btn-primary"
+                    disabled={busy}
+                    onClick={() => {
+                      setGaps(null)
+                      void run(async () => {
+                        await completeWorkshop(batchId)
+                        setNotice('Сбор завершён. Пустые короба убраны, номера заполненных на месте.')
+                      })
+                    }}
+                  >
+                    Всё равно завершить
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>,
+        document.body,
+      )}
+      {open && mode === 'plan' && createPortal(
+        <div className="fixed inset-0 z-[160] flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4">
+          <div className="my-4 w-full max-w-5xl rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-end gap-2 px-4 pt-4">
+              <div className="mr-auto text-base font-semibold text-slate-800">Поставка</div>
+              <button type="button" className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600" onClick={close}>Закрыть</button>
+            </div>
+            {error && <div className="mx-4 mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
+            {loading && <div className="px-5 py-6 text-sm text-slate-500">Загрузка…</div>}
+            {!loading && (
               <div className="space-y-4 px-5 py-4">
                 {notice && <div className="text-sm text-slate-600">{notice}</div>}
                 <input
@@ -606,34 +690,6 @@ export function WorkshopPacking({
               </div>
             )}
           </div>
-          {gaps && (
-            <div className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-900/40 p-4">
-              <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
-                <div className="text-base font-semibold text-slate-800">Есть пропуски</div>
-                <p className="mt-2 text-sm text-slate-600">
-                  Пропущены короба: {gaps.slice(0, 20).join(', ')}{gaps.length > 20 ? ` и ещё ${gaps.length - 20}` : ''}.
-                  Пустые не сохранятся, номера заполненных не изменятся. Завершить всё равно?
-                </p>
-                <div className="mt-4 flex justify-end gap-2">
-                  <button type="button" className="elestet-btn" onClick={() => setGaps(null)}>Вернуться</button>
-                  <button
-                    type="button"
-                    className="elestet-btn elestet-btn-primary"
-                    disabled={busy}
-                    onClick={() => {
-                      setGaps(null)
-                      void run(async () => {
-                        await completeWorkshop(batchId)
-                        setNotice('Сбор завершён. Пустые короба убраны, номера заполненных на месте.')
-                      })
-                    }}
-                  >
-                    Всё равно завершить
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>,
         document.body,
       )}

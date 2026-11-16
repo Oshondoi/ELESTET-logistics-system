@@ -1293,7 +1293,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     />
                     <span className="elestet-search-label">Поиск</span>
                   </div>
-                  <div className="flex gap-1.5">
+                  <div className="flex gap-2">
                     {([
                       { id: 'all', label: 'Все' },
                       { id: 'yes', label: 'Есть связка' },
@@ -1303,7 +1303,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                         key={item.id}
                         type="button"
                         onClick={() => setLinkFilter(item.id)}
-                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${linkFilter === item.id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                        className={linkFilter === item.id ? 'elestet-btn elestet-btn-primary' : 'elestet-btn !border-transparent !bg-slate-100 !text-slate-500 hover:!bg-slate-200'}
                       >
                         {item.label}
                       </button>
@@ -1640,7 +1640,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                           const gtin = (op.gtin || nestedGtin).trim()
                           const linked = Boolean(gtin) && Object.prototype.hasOwnProperty.call(linkFaces, gtin)
                           return (
-                            <tr key={opId} className={hasPrintCode ? 'bg-emerald-50' : 'hover:bg-slate-50/50 transition-colors'}>
+                            <tr key={opId} className={hasPrintCode ? 'bg-emerald-50 transition-colors hover:bg-emerald-100' : 'transition-colors hover:bg-slate-50/50'}>
                               <td className="px-4 py-3 text-xs text-slate-400">{operationsPage * 20 + idx + 1}</td>
                               <td className="px-4 py-2"><PhotoThumb url={linked ? linkFaces[gtin] : null} /></td>
                               <td className="px-4 py-3" title={opId}>

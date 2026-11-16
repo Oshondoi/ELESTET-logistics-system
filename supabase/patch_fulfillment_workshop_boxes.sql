@@ -10,6 +10,7 @@ create table if not exists public.fulfillment_workshop_pools (
   batch_id uuid primary key references public.fulfillment_batches(id) on delete cascade,
   account_id uuid not null references public.accounts(id) on delete cascade,
   issued_count integer not null default 100 check (issued_count >= 0 and issued_count <= 2000),
+  short_id integer,
   active boolean not null default true,
   completed_at timestamptz
 );
@@ -136,13 +137,21 @@ begin
   end if;
   perform public.assert_workshop_member(v_account);
 
-  insert into public.fulfillment_workshop_pools (batch_id, account_id, issued_count, active)
-  values (p_batch_id, v_account, 100, true)
+  insert into public.fulfillment_workshop_pools (batch_id, account_id, issued_count, active, short_id)
+  values (p_batch_id, v_account, 100, true, public.next_account_number(v_account, 'group'))
   on conflict (batch_id) do nothing;
 
   select * into v_pool
   from public.fulfillment_workshop_pools
   where batch_id = p_batch_id;
+
+  if v_pool.short_id is null then
+    update public.fulfillment_workshop_pools
+    set short_id = public.next_account_number(v_account, 'group')
+    where batch_id = p_batch_id
+      and short_id is null
+    returning * into v_pool;
+  end if;
 
   if v_pool.active is distinct from true then
     raise exception 'Сбор уже был. Нажмите «Продолжить».';

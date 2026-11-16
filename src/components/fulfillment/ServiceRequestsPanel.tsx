@@ -505,48 +505,45 @@ export const ServiceRequestsPanel = ({
     );
 
   return (
-    <div className="space-y-4">
+    <div className="!mt-0 space-y-4 [&>.elestet-main-header+*]:!mt-0">
       {error && (
         <div className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-600">
           {error}
         </div>
       )}
-      <div className="flex items-center justify-between rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-100">
-        <div>
+      <div className="elestet-main-header">
+        <div className="min-w-0 flex-1">
           <p className="font-semibold text-slate-800">Заявки клиентов</p>
           <p className="text-xs text-slate-400">
             R — заявка, по одной P на каждый магазин
           </p>
         </div>
-        <div className="flex gap-2">
-          {onMyDrafts && <button type="button" onClick={onMyDrafts} className="rounded-2xl border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">Мои сохранённые черновики</button>}
-          {canCreateLink && !clientMode && (
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() =>
-                void act(async () => {
-                  const invite = await createServiceRequestInvite(accountId);
-                  const url = `${window.location.origin}/request-invite/${invite.token}`;
-                  setInviteCopied(false);
-                  setInviteUrl(url);
-                })
-              }
-              className="rounded-2xl border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-50"
-            >
-              Ссылка для клиента
-            </button>
-          )}
-          {canCreate && (
-            <button
-              type="button"
-              onClick={createDraft}
-              className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              + Новая заявка
-            </button>
-          )}
-        </div>
+        {onMyDrafts && <button type="button" onClick={onMyDrafts} className="elestet-btn">Мои сохранённые черновики</button>}
+        {canCreateLink && !clientMode && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() =>
+              void act(async () => {
+                const invite = await createServiceRequestInvite(accountId);
+                const url = `${window.location.origin}/request-invite/${invite.token}`;
+                setInviteCopied(false);
+                setInviteUrl(url);
+              })
+            }
+            className="elestet-btn"
+          >
+            Ссылка для клиента
+          </button>
+        )}
+        {canCreate && (
+          <button type="button" onClick={createDraft} className="elestet-btn elestet-btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Новая заявка
+          </button>
+        )}
       </div>
       {inviteUrl && (
         <div
@@ -639,8 +636,8 @@ export const ServiceRequestsPanel = ({
                     <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}>
                       {canCreate && isApplicant && request.status !== "cancelled" && <input type="checkbox" aria-label={`Выбрать заявку R-${request.short_id}`} checked={selectedRequestIds.includes(request.id)} onChange={(event) => setSelectedRequestIds((current) => event.target.checked ? [...current, request.id] : current.filter((id) => id !== request.id))} />}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs">
-                      <span className="text-violet-500">
+                    <td className="px-4 py-3 font-mono text-xs font-bold text-black">
+                      <span>
                         C-
                         {request.applicant_company_short_id ??
                           (isApplicant ? accountShortId : "—")}

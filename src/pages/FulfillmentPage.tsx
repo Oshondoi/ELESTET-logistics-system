@@ -145,6 +145,7 @@ import {
   fetchCarriers,
 } from "../services/directoriesService";
 import { Card } from "../components/ui/Card";
+import { ChromeTabs } from "../components/ui/ChromeTabs";
 import { InvoicePhotoCell } from "../components/ui/InvoicePhotoCell";
 import { createStoreInSupabase } from "../services/storeService";
 import { supabase } from "../lib/supabase";
@@ -21918,40 +21919,26 @@ export const FulfillmentPage = ({
 
   return (
     <div className="space-y-4">
-      <Card className="rounded-3xl p-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex w-fit items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
-            <button
-              type="button"
-              onClick={() => setWorkspaceTab("requests")}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "requests" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-            >
-              Заявки
-            </button>
-            <button
-              type="button"
-              onClick={() => setWorkspaceTab("batches")}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "batches" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-            >
-              Партии
-            </button>
-            <button
-              type="button"
-              onClick={() => setWorkspaceTab("workshop")}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${workspaceTab === "workshop" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-            >
-              Сбор в цехе
-            </button>
-          </div>
-          <button
-            type="button"
-            onClick={() => setPhoneCameraOpen(true)}
-            className="ml-auto flex h-9 shrink-0 items-center rounded-2xl bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 lg:hidden"
-          >
-            Камера
-          </button>
+      <div className="relative -mx-2 -mt-2 sm:-mx-3 sm:-mt-3 lg:-mx-4 lg:-mt-4">
+        <div className="elestet-main-tabs">
+          <ChromeTabs
+            tabs={[
+              { id: "requests", label: "Заявки" },
+              { id: "batches", label: "Партии" },
+              { id: "workshop", label: "Сбор в цехе" },
+            ]}
+            value={workspaceTab}
+            onChange={setWorkspaceTab}
+          />
         </div>
-      </Card>
+        <button
+          type="button"
+          onClick={() => setPhoneCameraOpen(true)}
+          className="absolute right-2 top-1.5 flex h-9 shrink-0 items-center rounded-2xl bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 lg:hidden"
+        >
+          Камера
+        </button>
+      </div>
       {phoneCameraOpen ? (
         <PhoneBoxCamera onClose={() => setPhoneCameraOpen(false)} />
       ) : null}
@@ -22653,108 +22640,87 @@ export const FulfillmentPage = ({
                   mode: "plan",
                 });
               }}
+              onDeleted={(batchId) => {
+                setWorkshopSession((current) => (current?.batchId === batchId ? null : current));
+              }}
             />
           ) : (
           <>
           {/* Header */}
-          <Card className="rounded-3xl p-3">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <div className="relative flex min-w-[280px] items-center">
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="pointer-events-none absolute left-3 h-4 w-4 text-slate-400"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <circle cx="11" cy="11" r="8" />
-                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                  </svg>
-                  <input
-                    type="text"
-                    value={batchSearch}
-                    onChange={(e) => setBatchSearch(e.target.value)}
-                    placeholder="Поиск по партиям…"
-                    className="h-9 w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-8 text-sm text-slate-800 placeholder-slate-400 outline-none transition focus:border-blue-200 focus:bg-white focus:ring-2 focus:ring-blue-100"
-                  />
-                  {batchSearch && (
-                    <button
-                      type="button"
-                      onClick={() => setBatchSearch("")}
-                      className="absolute right-2.5 flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-600"
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        className="h-3 w-3"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                      >
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-                {batchSearch && (
-                  <span className="whitespace-nowrap text-xs text-slate-400">
-                    {filteredBatches.length === 0
-                      ? "Не найдено"
-                      : `${filteredBatches.length} из ${filtered.length}`}
-                  </span>
-                )}
-              </div>
-              {partnerBatchesFull.length > 0 && (
-                <div className="flex items-center gap-1 rounded-2xl bg-violet-50 p-0.5">
-                  {(["all", "mine", "outsource"] as const).map((o) => (
-                    <button
-                      key={o}
-                      type="button"
-                      onClick={() => setFilterOwner(o)}
-                      className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${
-                        filterOwner === o
-                          ? "bg-violet-600 text-white shadow-sm"
-                          : "text-slate-700 hover:text-slate-900"
-                      }`}
-                    >
-                      {o === "mine" ? "Мои" : o === "all" ? "Все" : "Аутсорс"}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center gap-1 rounded-2xl bg-slate-100 p-0.5">
-                {(["all", "active", "done", "cancelled"] as const).map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setFilterStatus(s)}
-                    className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${filterStatus === s ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                  >
-                    {s === "all" ? "Все" : STATUS_LABELS[s]}
-                  </button>
-                ))}
+          <div className="elestet-main-header !mt-0">
+            <div className="elestet-search min-w-[240px] flex-1">
+              <input
+                type="text"
+                placeholder=" "
+                value={batchSearch}
+                onChange={(e) => setBatchSearch(e.target.value)}
+                className={`elestet-search-input${batchSearch ? " has-clear" : ""}`}
+              />
+              <span className="elestet-search-label">Поиск</span>
+              {batchSearch && (
                 <button
                   type="button"
-                  onClick={() => void handleSelectArchiveTab()}
-                  className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${isArchiveTab ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                  onClick={() => setBatchSearch("")}
+                  title="Очистить поиск"
+                  aria-label="Очистить поиск"
+                  className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
                 >
-                  Архив
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
                 </button>
+              )}
+            </div>
+            {batchSearch && (
+              <span className="whitespace-nowrap text-xs text-slate-400">
+                {filteredBatches.length === 0
+                  ? "Не найдено"
+                  : `${filteredBatches.length} из ${filtered.length}`}
+              </span>
+            )}
+            {partnerBatchesFull.length > 0 && (
+              <div className="flex gap-1.5">
+                {(["all", "mine", "outsource"] as const).map((o) => (
+                  <button
+                    key={o}
+                    type="button"
+                    onClick={() => setFilterOwner(o)}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${filterOwner === o ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                  >
+                    {o === "mine" ? "Мои" : o === "all" ? "Все" : "Аутсорс"}
+                  </button>
+                ))}
               </div>
+            )}
+            <div className="flex gap-1.5">
+              {(["all", "active", "done", "cancelled"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setFilterStatus(s)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${!isArchiveTab && filterStatus === s ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                >
+                  {s === "all" ? "Все" : STATUS_LABELS[s]}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => void handleSelectArchiveTab()}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${isArchiveTab ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+              >
+                Архив
+              </button>
+            </div>
+            <div className="ml-auto flex gap-2">
               {canManage && (
                 <button
                   type="button"
                   onClick={() => setSettingsOpen(true)}
-                  className="flex h-9 w-9 items-center justify-center rounded-2xl text-slate-400 hover:bg-slate-100"
+                  className="elestet-btn elestet-btn-compact"
+                  aria-label="Настройки"
+                  title="Настройки"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="h-4 w-4"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                  >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="3" />
                     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
                   </svg>
@@ -22764,22 +22730,16 @@ export const FulfillmentPage = ({
                 <button
                   type="button"
                   onClick={() => setCreateOpen(true)}
-                  className="flex h-9 items-center gap-1.5 rounded-2xl bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700"
+                  className="elestet-btn elestet-btn-primary"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="h-3.5 w-3.5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                  >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                     <path d="M12 5v14M5 12h14" />
                   </svg>
                   Создать партию
                 </button>
               )}
             </div>
-          </Card>
+          </div>
 
           {loadError && (
             <div className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-600">
@@ -22787,7 +22747,7 @@ export const FulfillmentPage = ({
             </div>
           )}
 
-          <Card className="overflow-hidden rounded-3xl p-0">
+          <Card className="elestet-inset !mt-0 overflow-hidden rounded-3xl p-0">
             {isLoading ? (
               <div className="flex items-center justify-center py-16 text-sm text-slate-400">
                 Загрузка…
@@ -22882,13 +22842,13 @@ export const FulfillmentPage = ({
                             />
                           </td>
                           <td
-                            className="px-4 py-3 text-slate-400 text-xs font-mono"
+                            className="px-4 py-3 text-xs font-mono font-bold text-black"
                             onClick={(e) => e.stopPropagation()}
                           >
                             <div className="flex items-center gap-1.5">
                               <div className="flex flex-col leading-tight">
                                 {info?.owner_short_id != null && (
-                                  <span className="text-[10px] text-violet-400 font-semibold">
+                                  <span className="text-[10px] font-bold text-black">
                                     C-{info.owner_short_id}
                                   </span>
                                 )}
@@ -23333,14 +23293,14 @@ export const FulfillmentPage = ({
                               />
                             </td>
                             <td
-                              className="px-4 py-3 text-slate-400 text-xs font-mono"
+                              className="px-4 py-3 text-xs font-mono font-bold text-black"
                               onClick={(e) => e.stopPropagation()}
                             >
                               <div className="flex items-center gap-1.5">
                                 <div className="flex flex-col leading-tight">
                                   {(b.customer_company_short_id ??
                                     accountShortId) != null && (
-                                    <span className="text-[10px] text-violet-400 font-semibold">
+                                    <span className="text-[10px] font-bold text-black">
                                       C-
                                       {b.customer_company_short_id ??
                                         accountShortId}
@@ -24058,13 +24018,13 @@ export const FulfillmentPage = ({
                                       />
                                     </td>
                                     <td
-                                      className="px-4 py-3 text-slate-400 text-xs font-mono"
+                                      className="px-4 py-3 text-xs font-mono font-bold text-black"
                                       onClick={(e) => e.stopPropagation()}
                                     >
                                       <div className="flex items-center gap-1.5">
                                         <div className="flex flex-col leading-tight">
                                           {info?.owner_short_id != null && (
-                                            <span className="text-[10px] text-violet-400 font-semibold">
+                                            <span className="text-[10px] font-bold text-black">
                                               C-{info.owner_short_id}
                                             </span>
                                           )}
@@ -24448,14 +24408,14 @@ export const FulfillmentPage = ({
                                     />
                                   </td>
                                   <td
-                                    className="px-4 py-3 text-slate-400 text-xs font-mono"
+                                    className="px-4 py-3 text-xs font-mono font-bold text-black"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     <div className="flex items-center gap-1.5">
                                       <div className="flex flex-col leading-tight">
                                         {(b.customer_company_short_id ??
                                           accountShortId) != null && (
-                                          <span className="text-[10px] text-violet-400 font-semibold">
+                                          <span className="text-[10px] font-bold text-black">
                                             C-
                                             {b.customer_company_short_id ??
                                               accountShortId}

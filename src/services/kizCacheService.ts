@@ -428,11 +428,12 @@ export async function fetchLabelGoods(storeId: string, gtin: string): Promise<La
   if (!gtin) return empty
   const client = db()
   const { data: catalog } = await client.from('teksher_products')
-    .select('name')
+    .select('name, full_name')
     .eq('store_id', storeId)
     .eq('gtin', gtin)
     .limit(1)
-  const teksherName = String((catalog?.[0] as { name?: string | null } | undefined)?.name ?? '').trim()
+  const catalogRow = catalog?.[0] as { name?: string | null; full_name?: string | null } | undefined
+  const teksherName = String(catalogRow?.full_name ?? '').trim() || String(catalogRow?.name ?? '').trim()
   const { data: links, error: linkError } = await client.from('fulfillment_product_gtin_links')
     .select('wb_barcode')
     .eq('store_id', storeId)
@@ -463,7 +464,7 @@ export async function fetchLabelGoods(storeId: string, gtin: string): Promise<La
   const wb = size?.wbSize?.trim() ?? ''
   const sizeText = tech && wb && tech !== wb ? `${tech} (${wb})` : tech || wb
   return {
-    name: teksherName || product.name?.trim() || '',
+    name: teksherName,
     article: product.vendor_code?.trim() ?? '',
     color: product.color?.trim() ?? '',
     size: sizeText,

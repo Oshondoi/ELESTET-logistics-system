@@ -103,14 +103,15 @@ export async function fetchWorkshopCollections(accountId: string): Promise<Works
   const client = db()
   const { data, error } = await client
     .from('fulfillment_workshop_pools')
-    .select('batch_id, issued_count, active, fulfillment_batches!inner(name, short_id, store_id, created_at)')
+    .select('batch_id, short_id, issued_count, active, fulfillment_batches!inner(name, store_id, created_at, deleted_at)')
     .eq('account_id', accountId)
   if (error) throw new Error(workshopError(error))
   const rows = (data ?? []) as Array<{
     batch_id: string
+    short_id: number | null
     issued_count: number
     active: boolean
-    fulfillment_batches: { name: string; short_id: number | null; store_id: string | null; created_at: string }
+    fulfillment_batches: { name: string; store_id: string | null; created_at: string; deleted_at: string | null }
   }>
   const ids = rows.map((row) => row.batch_id)
   let boxes: Array<{ batch_id: string; supply_id: string | null }> = []
@@ -123,13 +124,14 @@ export async function fetchWorkshopCollections(accountId: string): Promise<Works
     boxes = boxResult.data ?? []
   }
   return rows
+    .filter((row) => !row.fulfillment_batches.deleted_at)
     .map((row) => {
       const own = boxes.filter((box) => box.batch_id === row.batch_id)
       const batch = row.fulfillment_batches
       return {
         batchId: row.batch_id,
         name: batch.name,
-        shortId: batch.short_id,
+        shortId: row.short_id,
         storeId: batch.store_id,
         createdAt: batch.created_at,
         issuedCount: row.issued_count,
@@ -141,8 +143,20 @@ export async function fetchWorkshopCollections(accountId: string): Promise<Works
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
-export async function startWorkshop(batchId: string): Promise<void> {
-  await poolCall('start_workshop_boxes', { p_batch_id: batchId })
+export async function deleteWorkshopCollection(batchId: string): Promise<void> {
+  const { error } = await db()
+    .from('fulfillment_batches')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', batchId)
+    .eq('workshop_only', true)
+  if (error) throw new Error(workshopError(error))
+}
+
+export async function startWorkshop(batchId: string): Promise<number | null> {
+  const { data, error } = await db().rpc('start_workshop_boxes', { p_batch_id: batchId })
+  if (error) throw new Error(workshopError(error))
+  const row = Array.isArray(data) ? data[0] : data
+  return row?.short_id ?? null
 }
 
 export async function addWorkshopShells(batchId: string): Promise<void> {
