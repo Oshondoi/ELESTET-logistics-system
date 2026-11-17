@@ -1,4 +1,5 @@
 import { kizHasCryptoTail, kizIdentity } from '../lib/kizCode'
+import { arrangeOperationPairs, pageOperationRows } from '../lib/operationPairs'
 import { supabase } from '../lib/supabase'
 
 export type CachedCode = {
@@ -23,6 +24,7 @@ export type CachedOperation = {
   gtin?: string
   createdAt?: string
   createdDate?: string
+  productGroupCode?: string | null
   product: Record<string, unknown> | null
 }
 
@@ -175,19 +177,8 @@ export async function fetchCachedCodes(
   return { items, total: count ?? items.length }
 }
 
-export async function fetchCachedOperations(
-  storeId: string,
-  page: number,
-): Promise<{ items: CachedOperation[]; total: number }> {
-  const client = db()
-  const from = page * PAGE
-  const { data, error, count } = await client.from('teksher_operations')
-    .select('operation_id, operation_type, type, status, kms_count, codes_count, gtin, created_at_teksher, created_date, product', { count: 'exact' })
-    .eq('store_id', storeId)
-    .order('created_at_teksher', { ascending: false, nullsFirst: false })
-    .range(from, from + PAGE - 1)
-  if (error) throw new Error('Не удалось прочитать операции из базы.')
-  const items = ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+function cachedOperation(row: Record<string, unknown>): CachedOperation {
+  return {
     id: String(row.operation_id ?? ''),
     operationId: String(row.operation_id ?? ''),
     operationType: (row.operation_type as string | null) ?? undefined,
@@ -198,9 +189,31 @@ export async function fetchCachedOperations(
     gtin: (row.gtin as string | null) ?? undefined,
     createdAt: (row.created_at_teksher as string | null) ?? undefined,
     createdDate: (row.created_date as string | null) ?? undefined,
+    productGroupCode: (row.product_group_code as string | null) ?? null,
     product: (row.product as Record<string, unknown> | null) ?? null,
-  }))
-  return { items, total: count ?? items.length }
+  }
+}
+
+export async function fetchCachedOperations(
+  storeId: string,
+  page: number,
+): Promise<{ items: CachedOperation[]; total: number; pages: number; offset: number }> {
+  const client = db()
+  const items: CachedOperation[] = []
+  for (let from = 0; from < 20000; from += 1000) {
+    const { data, error } = await client.from('teksher_operations')
+      .select('operation_id, operation_type, type, status, kms_count, codes_count, gtin, created_at_teksher, created_date, product_group_code, product')
+      .eq('store_id', storeId)
+      .order('id', { ascending: true })
+      .range(from, from + 999)
+    if (error) throw new Error('Не удалось прочитать операции из базы.')
+    const batch = ((data ?? []) as Array<Record<string, unknown>>).map(cachedOperation)
+    items.push(...batch)
+    if (batch.length < 1000) break
+  }
+  const arranged = arrangeOperationPairs(items)
+  const paged = pageOperationRows(arranged, page, PAGE)
+  return { items: paged.items, total: arranged.length, pages: paged.pages, offset: paged.offset }
 }
 
 function printKey(gtin: string, serial: string): string {

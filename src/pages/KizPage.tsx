@@ -204,9 +204,9 @@ function PageSizeSelect({ value, disabled, onChange }: { value: TeksherPageSize;
   )
 }
 
-function ListPager({ page, pageSize, total, onPage }: { page: number; pageSize: number; total: number; onPage: (page: number) => void }) {
-  if (total <= pageSize) return null
-  const pages = Math.ceil(total / pageSize)
+function ListPager({ page, pageSize, total, pages: pageCount, onPage }: { page: number; pageSize: number; total: number; pages?: number; onPage: (page: number) => void }) {
+  const pages = pageCount ?? Math.ceil(total / pageSize)
+  if (pages <= 1) return null
   return (
     <div className="flex items-center justify-center gap-3 border-t border-slate-100 p-3 text-xs text-slate-500">
       <button type="button" disabled={page === 0} onClick={() => onPage(page - 1)} className="font-medium text-blue-600 disabled:text-slate-300">Назад</button>
@@ -386,6 +386,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
   // Operations
   const [operations, setOperations] = useState<TeksherOperation[]>([])
   const [operationsTotal, setOperationsTotal] = useState(0)
+  const [operationsPages, setOperationsPages] = useState(1)
+  const [operationsOffset, setOperationsOffset] = useState(0)
   const [operationsPage, setOperationsPage] = useState(0)
   const [operationsLoading, setOperationsLoading] = useState(false)
   const [operationsSyncing, setOperationsSyncing] = useState(false)
@@ -586,6 +588,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
       const result = await fetchCachedOperations(activeStore.id, page)
       setOperations(result.items)
       setOperationsTotal(result.total)
+      setOperationsPages(result.pages)
+      setOperationsOffset(result.offset)
     } catch (reason) {
       showAction('err', reason instanceof Error ? reason.message : 'Не удалось прочитать операции из базы.')
     } finally {
@@ -1644,7 +1648,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                           const linked = Boolean(gtin) && Object.prototype.hasOwnProperty.call(linkFaces, gtin)
                           return (
                             <tr key={opId} className={hasPrintCode ? 'bg-emerald-50 transition-colors hover:bg-emerald-100' : 'transition-colors hover:bg-slate-50/50'}>
-                              <td className="px-4 py-3 text-xs text-slate-400">{operationsPage * 20 + idx + 1}</td>
+                              <td className="px-4 py-3 text-xs text-slate-400">{operationsOffset + idx + 1}</td>
                               <td className="px-4 py-2"><PhotoThumb url={linked ? linkFaces[gtin] : null} /></td>
                               <td className="px-4 py-3" title={opId}>
                                 <div className="flex items-center gap-2">
@@ -1705,7 +1709,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                         })}
                       </tbody>
                     </table>
-                    <ListPager page={operationsPage} pageSize={20} total={operationsTotal} onPage={setOperationsPage} />
+                    <ListPager page={operationsPage} pageSize={20} total={operationsTotal} pages={operationsPages} onPage={setOperationsPage} />
                   </div>
                 )}
               </>
