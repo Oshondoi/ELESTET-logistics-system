@@ -354,6 +354,7 @@ export interface Account {
   trial_ends_at?: string | null;
   grace_until?: string | null;
   plan_features?: Record<string, unknown> | null;
+  service_company?: boolean | null;
 }
 
 export interface AccountMember {

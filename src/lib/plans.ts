@@ -11,6 +11,8 @@ export interface AccountBillingInfo {
   trial_ends_at?: string | null
   grace_until?: string | null
   plan_features?: Record<string, unknown> | null
+  // Служебная компания сервиса. Даты тарифа на неё не действуют.
+  service_company?: boolean | null
 }
 
 // ── Статус аккаунта ──────────────────────────────────────────
@@ -30,6 +32,9 @@ export interface ActiveOverride {
 
 export function getBillingStatus(account: AccountBillingInfo, override?: ActiveOverride | null): BillingStatus {
   const now = new Date()
+
+  // Служебная компания сервиса всегда оплачена. Даты и чужие оверрайды её не переводят в expired.
+  if (account.service_company) return 'active'
 
   // 0. Переопределение (приоритет выше billing полей)
   if (override && new Date(override.free_until) >= now) {
