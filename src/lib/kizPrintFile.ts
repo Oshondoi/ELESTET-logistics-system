@@ -13,8 +13,17 @@ function fileText(value: string): string {
     .replace(/<GS>/gi, '\u001d')
 }
 
+// CSV Teksher берёт строку в кавычки, если в коде есть запятая или кавычка, и удваивает кавычку внутри.
+// Без снятия обёртки серия становится длиннее и код выпадает, либо закрывающая кавычка прилипает к хвосту.
+function unescapeCsvLine(line: string): string {
+  if (line.length >= 2 && line.startsWith('"') && line.endsWith('"')) {
+    return line.slice(1, -1).replace(/""/g, '"')
+  }
+  return line
+}
+
 export function parsePrintFile(value: string): ParsedPrintFile {
-  const text = fileText(value)
+  const text = fileText(value).split(/\r?\n/).map(unescapeCsvLine).join('\n')
   const fullPattern = /01\d{14}21[!-~]{13}(?:\u001d91[!-~]{4}\u001d92[!-~]+|91[!-~]{4}92[!-~]+)/g
   const shortPattern = /01\d{14}21[!-~]{13}/g
   const full = new Map<string, string>()
