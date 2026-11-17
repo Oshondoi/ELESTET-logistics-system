@@ -307,7 +307,7 @@ export function KizLinkCard({ storeId, canManage, onOrder }: { storeId: string; 
             <div className="shrink-0 space-y-2 border-b border-slate-100 px-4 py-3">
               {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
               {linkPlan.errors.length > 0 && <div className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">{linkPlan.errors.map((problem) => <p key={problem}>{problem}</p>)}</div>}
-              {!canManage && <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">Менять связку может владелец или администратор.</p>}
+              {!canManage && <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">Менять связку может владелец, администратор или сотрудник с правом «Связка баркода и GTIN».</p>}
               {catalogReady && !error && products.length === 0 && <p className="text-sm text-slate-500">В этом магазине нет товаров WB. Сначала обновите их на странице товаров.</p>}
               {catalogReady && !error && gtins.length === 0 && <p className="text-sm text-slate-500">В базе нет товаров Teksher. Сначала нажмите «Обновить» на вкладке «Товары (GTIN)».</p>}
             </div>

@@ -145,6 +145,7 @@ export interface RolePermissions {
   // Стикеры
   stickers_view: boolean;
   stickers_manage: boolean;
+  kiz_links_manage: boolean;
   stickers_delete: boolean;
   stickers_import: boolean;
   teksher_disconnect: boolean;
@@ -202,6 +203,7 @@ export const DEFAULT_PERMISSIONS: RolePermissions = {
   directories_tariff_manage: false,
   stickers_view: false,
   stickers_manage: false,
+  kiz_links_manage: false,
   stickers_delete: false,
   stickers_import: false,
   teksher_disconnect: false,
@@ -254,6 +256,7 @@ export const FULL_PERMISSIONS: RolePermissions = {
   directories_tariff_manage: true,
   stickers_view: true,
   stickers_manage: true,
+  kiz_links_manage: true,
   stickers_delete: true,
   stickers_import: true,
   teksher_disconnect: true,

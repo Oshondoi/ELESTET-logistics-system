@@ -101,6 +101,7 @@ const PERMISSION_GROUPS: PermGroup[] = [
     items: [
       { key: 'stickers_view', label: 'Просмотр стикеров' },
       { key: 'stickers_manage', label: 'Управление стикерами' },
+      { key: 'kiz_links_manage', label: 'Связка баркода и GTIN' },
     ],
     subItems: [
       { key: 'stickers_delete', label: 'Удаление шаблонов и наборов' },

@@ -50,6 +50,7 @@ const permLabels: Record<string, string> = {
   directories_tariff_manage: 'Редактирование тарифов работ',
   stickers_view: 'Стикеры (просмотр)',
   stickers_manage: 'Стикеры (управление)',
+  kiz_links_manage: 'Связка баркода и GTIN',
   stickers_delete: 'Удаление стикеров',
   stickers_import: 'Импорт из WB',
   teksher_disconnect: 'Отключение Teksher',

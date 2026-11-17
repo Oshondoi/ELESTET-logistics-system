@@ -105,7 +105,7 @@ export function kizLinkError(error: { message?: string; code?: string } | null):
   if (/set_kiz_barcode_gtin_link|clear_kiz_barcode_gtin_link|schema cache|does not exist/i.test(message)) {
     return 'Связка ещё не готова в базе. Повторите чуть позже.'
   }
-  if (/владелец или администратор/i.test(message)) return 'Связку меняет владелец или администратор компании.'
+  if (/Связка баркода и GTIN|владелец или администратор/i.test(message)) return 'Связку меняет владелец, администратор или сотрудник с правом «Связка баркода и GTIN».'
   if (/уже связан/i.test(message)) return 'Этот GTIN уже связан с другим размером. Сначала снимите ту связку.'
   if (/нет среди товаров Teksher/i.test(message)) return message
   if (/не найден в товарах/i.test(message)) return message
