@@ -341,7 +341,12 @@ export async function savePrintCodes(accountId: string, storeId: string, codes: 
   for (let index = 0; index < rows.length; index += 200) {
     const chunk = rows.slice(index, index + 200)
     const { error } = await client.from('kiz_print_codes').upsert(chunk, { onConflict: 'store_id,operation_id,gtin,serial' })
-    if (error) throw new Error('Не удалось сохранить полные коды. Таблица печати ещё не создана в базе.')
+    if (error) {
+      const denied = error.code === '42501' || /row-level security|permission denied/i.test(error.message ?? '')
+      throw new Error(denied
+        ? 'Сохранять полные коды может владелец, администратор или сотрудник с правом «Управление стикерами».'
+        : 'Не удалось сохранить полные коды. Таблица печати ещё не создана в базе.')
+    }
   }
   return rows.length
 }

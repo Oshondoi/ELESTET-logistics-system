@@ -949,7 +949,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
       <div className="flex min-h-0 flex-1 flex-col bg-white">
 
       {mainTab === 'stickers2' && (
-        <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} canManageLinks={canManageLinks} canDisconnectTeksher={canDisconnectTeksher} />
+        <KizPage stores={stores} selectedStoreId={selectedStoreId} onStoreChange={onStoreChange} isAdmin={isAdmin} canManage={canManage} canManageLinks={canManageLinks} canDisconnectTeksher={canDisconnectTeksher} />
       )}
 
       {isAdmin && mainTab === 'stickers3' && <div className="elestet-inset flex min-h-0 flex-1 flex-col py-4"><KizGuidePage /></div>}
@@ -965,6 +965,7 @@ export const StickersPage = ({ stickers, bundles, stores, selectedStoreId, activ
           applyToAll={printPreferences.apply_to_all}
           isBundle={printSetup.isBundle}
           hasOwnSettings={printSetup.groups.some((group) => Boolean(group.productId && productPrintOverrides.has(group.productId)))}
+          canRemember={canManage}
           onClose={() => setPrintSetup(null)}
           onRemember={rememberPrintGroups}
           onCreateBundle={openBundleCreatorFromPrint}

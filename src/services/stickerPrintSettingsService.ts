@@ -73,6 +73,13 @@ export async function fetchStickerPrintPreferences(accountId: string, storeId: s
   return { ...defaults, ...((data?.settings as Partial<StickerPrintPreferences> | null) ?? {}) }
 }
 
+const printSettingsDenied = 'Сохранять настройки печати может владелец, администратор или сотрудник с правом «Управление стикерами».'
+
+function throwPrintSettingsError(error: { code?: string; message?: string }): never {
+  const denied = error.code === '42501' || /row-level security|permission denied/i.test(error.message ?? '')
+  throw new Error(denied ? printSettingsDenied : (error.message || 'Не удалось сохранить настройки печати'))
+}
+
 export async function saveStickerPrintPreferences(accountId: string, storeId: string, settings: StickerPrintPreferences): Promise<void> {
   if (!supabase) throw new Error('Supabase is not configured')
   const db = supabase as any
@@ -82,7 +89,7 @@ export async function saveStickerPrintPreferences(accountId: string, storeId: st
     settings,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'account_id,store_id' })
-  if (error) throw error
+  if (error) throwPrintSettingsError(error)
 }
 
 export async function fetchStickerProductOverrides(accountId: string, storeId: string): Promise<Map<string, StickerProductPrintOverride>> {
@@ -114,7 +121,7 @@ export async function saveStickerProductOverride(
     overrides,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'account_id,store_id,product_id' })
-  if (error) throw error
+  if (error) throwPrintSettingsError(error)
 }
 
 export async function deleteStickerProductOverride(accountId: string, storeId: string, productId: string): Promise<void> {
@@ -126,5 +133,5 @@ export async function deleteStickerProductOverride(accountId: string, storeId: s
     .eq('account_id', accountId)
     .eq('store_id', storeId)
     .eq('product_id', productId)
-  if (error) throw error
+  if (error) throwPrintSettingsError(error)
 }

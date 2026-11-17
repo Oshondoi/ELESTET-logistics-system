@@ -111,6 +111,7 @@ interface KizPageProps {
   selectedStoreId: string
   onStoreChange: (id: string) => void
   isAdmin?: boolean
+  canManage?: boolean
   canManageLinks?: boolean
   canDisconnectTeksher?: boolean
 }
@@ -333,7 +334,7 @@ function SearchableSelect({ value, options, placeholder = '— Выберите 
 
 // ── Основной компонент ────────────────────────────────────────────────────────
 
-export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks = false, canDisconnectTeksher = false }: KizPageProps) => {
+export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = false, canManageLinks = false, canDisconnectTeksher = false }: KizPageProps) => {
   const sortedStores = [...stores].sort((a, b) => {
     const aConn = a.teksher_login ? 0 : 1
     const bConn = b.teksher_login ? 0 : 1
@@ -832,7 +833,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
   }, [applyConfirmOpen])
 
   const capturePrintFile = async (operationId: string) => {
-    if (!activeStore?.id || captureOperationId) return
+    if (!canManage || !activeStore?.id || captureOperationId) return
     setCaptureOperationId(operationId)
     try {
       let result = await fetchPrintCsv(activeStore.id, operationId, false)
@@ -1540,6 +1541,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                 <div className="elestet-section-header">
                   <span className="text-xs text-slate-500">Всего: {operationsTotal}</span>
                   <div className="ml-auto flex items-center gap-2">
+                    {canManage && <>
                     <input
                       ref={printFileRef}
                       type="file"
@@ -1579,6 +1581,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                     >
                       {printFileBusy ? 'Читаем файл…' : 'Загрузить файл кодов'}
                     </button>
+                    </>}
                     <button
                       type="button"
                       onClick={() => void refreshOperations()}
@@ -1683,7 +1686,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                                           })
                                         }}
                                       />
-                                      {!hasPrintCode && (
+                                      {!hasPrintCode && canManage && (
                                         <button
                                           type="button"
                                           disabled={captureOperationId !== null}

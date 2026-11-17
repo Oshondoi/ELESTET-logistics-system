@@ -416,6 +416,15 @@ export function renderSystemCombined(page: SheetPage): HTMLCanvasElement {
   return renderSheet({ size: '58x40', blocks }, page).canvas
 }
 
+export function openPdfTab(pdf: jsPDF, preview: Window | null = null): void {
+  const url = pdf.output('bloburl') as unknown as string
+  if (preview) {
+    preview.location.href = url
+    return
+  }
+  if (!window.open(url, '_blank')) throw new Error('Браузер заблокировал новую вкладку.')
+}
+
 export function pagesToPdf(size: LabelSizeId, canvases: HTMLCanvasElement[]): jsPDF {
   const sheet = labelSizeMm(size)
   const pdf = new jsPDF({ unit: 'mm', format: [sheet.w, sheet.h], orientation: 'landscape' })

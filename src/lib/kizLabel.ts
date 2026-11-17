@@ -1,11 +1,8 @@
 import bwipjs from 'bwip-js/browser'
-import jsPDF from 'jspdf'
 import { kizHasCryptoTail, normalizeKizCode } from './kizCode'
 import type { LabelGoods, PrintCode } from '../services/kizCacheService'
 
 const PDF_LIMIT = 1000
-const PAGE_W_MM = 58
-const PAGE_H_MM = 40
 
 function parts(item: PrintCode): { gtin: string; serial: string } {
   if (item.gtin && item.serial) return { gtin: item.gtin, serial: item.serial }
@@ -15,6 +12,11 @@ function parts(item: PrintCode): { gtin: string; serial: string } {
     gtin: item.gtin || match?.[1] || '',
     serial: item.serial || match?.[2] || '',
   }
+}
+
+function gs1Field(value: string): string {
+  // Скобки в тексте для bwip-js отмечают части кода. Скобка или каретка внутри самого кода передаётся своим байтом.
+  return value.replace(/\^/g, '^094').replace(/\(/g, '^040').replace(/\)/g, '^041')
 }
 
 function gs1Text(code: string): string {
@@ -29,22 +31,18 @@ function gs1Text(code: string): string {
   if (!head || !key || !signature) {
     throw new Error('КИЗ нельзя печатать: не удалось разобрать хвост 91/92.')
   }
-  const body = `${head[2]}${key.slice(2)}${signature.slice(2)}`
-  if (/[()]/.test(body)) {
-    throw new Error('КИЗ нельзя печатать: в серийном номере или хвосте есть скобки.')
-  }
-  return `(01)${head[1]}(21)${head[2]}(91)${key.slice(2)}(92)${signature.slice(2)}`
+  return `(01)${head[1]}(21)${gs1Field(head[2])}(91)${gs1Field(key.slice(2))}(92)${gs1Field(signature.slice(2))}`
 }
 
 function matrix(code: string, maxPixels: number): HTMLCanvasElement {
   const text = gs1Text(code)
   try {
     const probe = document.createElement('canvas')
-    bwipjs.toCanvas(probe, { bcid: 'gs1datamatrix', text, scale: 1, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
+    bwipjs.toCanvas(probe, { bcid: 'gs1datamatrix', text, scale: 1, parse: true, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
     const scale = Math.max(1, Math.floor(maxPixels / probe.width))
     if (scale === 1) return probe
     const canvas = document.createElement('canvas')
-    bwipjs.toCanvas(canvas, { bcid: 'gs1datamatrix', text, scale, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
+    bwipjs.toCanvas(canvas, { bcid: 'gs1datamatrix', text, scale, parse: true, parsefnc: true, paddingwidth: 0, paddingheight: 0 })
     return canvas
   } catch (reason) {
     const detail = reason instanceof Error ? reason.message : ''
@@ -161,20 +159,17 @@ function drawHorizontal(item: PrintCode, goods: LabelGoods, number: number): HTM
   return canvas
 }
 
-export function buildKizPdf(
+export function buildKizPages(
   items: PrintCode[],
   product: Record<string, unknown> | null,
   linked: LabelGoods,
-): { pdf: jsPDF; limited: boolean } {
+): { pages: HTMLCanvasElement[]; limited: boolean } {
   const source = items.slice(0, PDF_LIMIT)
   const goods = goodsOf(product, linked)
-  const pdf = new jsPDF({ unit: 'mm', format: [PAGE_W_MM, PAGE_H_MM], orientation: 'landscape' })
-  source.forEach((item, index) => {
-    if (index > 0) pdf.addPage([PAGE_W_MM, PAGE_H_MM], 'landscape')
-    const canvas = drawHorizontal(item, goods, index + 1)
-    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, PAGE_W_MM, PAGE_H_MM)
-  })
-  return { pdf, limited: items.length > PDF_LIMIT }
+  return {
+    pages: source.map((item, index) => drawHorizontal(item, goods, index + 1)),
+    limited: items.length > PDF_LIMIT,
+  }
 }
 
 export function downloadKizCsv(items: PrintCode[], operationId: string): void {
@@ -184,8 +179,4 @@ export function downloadKizCsv(items: PrintCode[], operationId: string): void {
   link.download = `kiz-${operationId}.csv`
   link.click()
   window.setTimeout(() => URL.revokeObjectURL(link.href), 30_000)
-}
-
-export function openKizPdf(pdf: jsPDF, operationId: string): void {
-  pdf.save(`kiz-${operationId}.pdf`)
 }

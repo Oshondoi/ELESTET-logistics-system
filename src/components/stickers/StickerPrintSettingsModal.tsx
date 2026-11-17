@@ -47,6 +47,7 @@ interface Props {
   applyToAll?: boolean
   isBundle?: boolean
   hasOwnSettings?: boolean
+  canRemember?: boolean
   onClose: () => void
   onRemember: (groups: StickerPrintGroupDraft[], action: 'product' | 'all' | 'release-own' | 'release-all') => Promise<void>
   onPrint: (stickers: StickerTemplate[], sheetId: string | null) => void
@@ -94,7 +95,7 @@ function chosenColors(group: StickerPrintGroupDraft): string[] {
   return group.availableColors.filter((color) => picked.has(color.toLocaleLowerCase('ru-RU')))
 }
 
-export function StickerPrintSettingsModal({ open, title, groups: initialGroups, showColorTabs = false, allowCreateBundle = false, applyToAll = false, isBundle = false, hasOwnSettings = false, onClose, onRemember, onPrint, sheets = [], onCreateBundle }: Props) {
+export function StickerPrintSettingsModal({ open, title, groups: initialGroups, showColorTabs = false, allowCreateBundle = false, applyToAll = false, isBundle = false, hasOwnSettings = false, canRemember = true, onClose, onRemember, onPrint, sheets = [], onCreateBundle }: Props) {
   const [groups, setGroups] = useState<StickerPrintGroupDraft[]>(initialGroups)
   const [activeKey, setActiveKey] = useState(initialGroups[0]?.key ?? '')
   const [isRemembering, setIsRemembering] = useState(false)
@@ -316,10 +317,10 @@ export function StickerPrintSettingsModal({ open, title, groups: initialGroups, 
           <span className={`text-sm ${rememberError ? 'text-rose-600' : 'text-slate-500'}`}>{rememberError ?? <>Выбрано размеров: <b className="text-slate-900">{selectedCount}</b></>}</span>
           <div className="flex flex-wrap justify-end gap-2">
             <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50">Отмена</button>
-            <button type="button" disabled={isRemembering} onClick={() => void remember('product')} className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50">{isRemembering ? 'Сохранение…' : isBundle ? 'Запомнить' : 'Запомнить для товара'}</button>
-            {!isBundle && <button type="button" disabled={isRemembering} onClick={() => void remember('all')} className="rounded-xl border border-blue-200 px-4 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Запомнить для всех</button>}
-            {!isBundle && applyToAll && <button type="button" disabled={isRemembering} onClick={() => void remember('release-all')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Выключить для всех</button>}
-            {!isBundle && hasOwnSettings && <button type="button" disabled={isRemembering} onClick={() => void remember('release-own')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Выключить свою</button>}
+            {canRemember && <button type="button" disabled={isRemembering} onClick={() => void remember('product')} className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50">{isRemembering ? 'Сохранение…' : isBundle ? 'Запомнить' : 'Запомнить для товара'}</button>}
+            {canRemember && !isBundle && <button type="button" disabled={isRemembering} onClick={() => void remember('all')} className="rounded-xl border border-blue-200 px-4 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">Запомнить для всех</button>}
+            {canRemember && !isBundle && applyToAll && <button type="button" disabled={isRemembering} onClick={() => void remember('release-all')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Выключить для всех</button>}
+            {canRemember && !isBundle && hasOwnSettings && <button type="button" disabled={isRemembering} onClick={() => void remember('release-own')} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50">Выключить свою</button>}
             {allowCreateBundle && onCreateBundle && <button type="button" disabled={selectedCount === 0} onClick={() => onCreateBundle(groupsToStickers(groups))} className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 disabled:opacity-40">Создать набор</button>}
             <button type="button" disabled={selectedCount === 0} onClick={() => onPrint(groupsToStickers(groups), sheetId)} className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">Печать</button>
           </div>

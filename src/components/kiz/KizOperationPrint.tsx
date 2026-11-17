@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { buildKizPdf, downloadKizCsv, openKizPdf } from '../../lib/kizLabel'
-import { pagesToPdf, renderSheet, renderSystemCombined, type LabelTemplate } from '../../lib/labelSheet'
+import { buildKizPages, downloadKizCsv } from '../../lib/kizLabel'
+import { openPdfTab, pagesToPdf, renderSheet, renderSystemCombined, type LabelTemplate } from '../../lib/labelSheet'
 import { fetchLabelGoods, resolvePrintCodes, type PrintCode } from '../../services/kizCacheService'
 import { fetchLabelTemplates, goodsForPrint } from '../../services/labelTemplateService'
 
@@ -68,12 +68,12 @@ export function KizOperationPrint({
     }
   }, [menu])
 
-  const printSheets = async (kind: 'kiz' | 'combined', codes: PrintCode[], template: LabelTemplate | null) => {
+  const printSheets = async (kind: 'kiz' | 'combined', codes: PrintCode[], template: LabelTemplate | null, preview: Window | null) => {
     if (kind === 'kiz' && !template) {
       const linked = await fetchLabelGoods(storeId, gtin ?? codes[0]?.gtin ?? '')
-      const { pdf, limited } = buildKizPdf(codes, product, linked)
-      openKizPdf(pdf, operationId)
-      onDone(limited ? 'В PDF первые 1000 кодов. Полный список — в CSV.' : 'PDF сохранён.')
+      const { pages, limited } = buildKizPages(codes, product, linked)
+      openPdfTab(pagesToPdf('58x40', pages), preview)
+      onDone(limited ? 'В новой вкладке первые 1000 кодов. Полный список — в CSV.' : 'Лист открыт в новой вкладке.')
       return
     }
     const codeGtin = gtin || codes[0]?.gtin || ''
@@ -97,20 +97,21 @@ export function KizOperationPrint({
       }
     })
     if (canvases.length === 0) throw new Error(firstError || 'Нет кодов, которые можно напечатать.')
-    const size = template?.size ?? '58x40'
-    pagesToPdf(size, canvases).save(`kiz-${operationId}.pdf`)
+    openPdfTab(pagesToPdf(template?.size ?? '58x40', canvases), preview)
     onDone(skipped
-      ? `PDF сохранён. Не напечатано ${skipped}: ${firstError}`
-      : 'PDF сохранён.')
+      ? `Лист открыт в новой вкладке. Не напечатано ${skipped}: ${firstError}`
+      : 'Лист открыт в новой вкладке.')
   }
 
   const run = async (kind: PrintKind) => {
     if (busy) return
     setMenu(null)
+    const preview = kind === 'csv' ? null : window.open('', '_blank')
     setBusy(true)
     try {
       const codes = await resolvePrintCodes(storeId, operationId, expectedCount)
       if (codes.length === 0) {
+        preview?.close()
         onError('В этой операции нет кодов для печати.')
         return
       }
@@ -122,11 +123,13 @@ export function KizOperationPrint({
       const templates = accountId ? await fetchLabelTemplates(accountId) : []
       const options = templates.filter((item) => item.mode === kind)
       if (options.length > 0) {
+        preview?.close()
         setChoice({ kind, codes, options })
         return
       }
-      await printSheets(kind, codes, null)
+      await printSheets(kind, codes, null, preview)
     } catch (reason) {
+      preview?.close()
       onError(reason instanceof Error ? reason.message : 'Не удалось подготовить печать.')
     } finally {
       setBusy(false)
@@ -136,11 +139,13 @@ export function KizOperationPrint({
   const choose = async (template: LabelTemplate | null) => {
     if (!choice) return
     const current = choice
+    const preview = window.open('', '_blank')
     setChoice(null)
     setBusy(true)
     try {
-      await printSheets(current.kind, current.codes, template)
+      await printSheets(current.kind, current.codes, template, preview)
     } catch (reason) {
+      preview?.close()
       onError(reason instanceof Error ? reason.message : 'Не удалось подготовить печать.')
     } finally {
       setBusy(false)
