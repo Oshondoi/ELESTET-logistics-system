@@ -275,6 +275,16 @@ button:focus-visible {
   background: #1d4ed8;
 }
 
+.elestet-btn.is-quiet {
+  border-color: transparent;
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.elestet-btn.is-quiet:hover {
+  background: #e2e8f0;
+}
+
 .elestet-status {
   font-size: 14px;
   font-weight: 500;

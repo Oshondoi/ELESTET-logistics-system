@@ -15,6 +15,16 @@
 - Link reserve RPCs verify confirmed Supabase Auth identity; expiry invalidates the URL but retains the Auth user and independent reserve drafts. First confirmed `R` makes the active link infinite; another link does not create a second company for an existing owner. `list_recent_request_executors` derives candidates from existing confirmed requests, with no duplicate company table.
 - `fulfillment_reception_history` now contains only retained legacy row history; v42 removed its per-item trigger. New business confirmations use `fulfillment_step_versions`; never reinterpret old row entries as confirmed snapshots.
 
+## Workshop collection (applied to production Supabase 15–16.11.2026)
+
+- Patches: `supabase/patch_fulfillment_workshop_boxes.sql`, then `supabase/patch_fulfillment_workshop_group_ids.sql`.
+- `fulfillment_workshop_pools` is one collection per batch: `issued_count` only grows, `active`, `completed_at`, company `short_id` for `G-n`.
+- `fulfillment_workshop_boxes` appears on the first scan of a number. `supply_id` and `supply_box_number` are filled when that box is confirmed into a supply. The workshop number stays. The supply shows `supply_box_number`.
+- `fulfillment_workshop_box_items` stores barcode, quantity and name inside a workshop box.
+- `fulfillment_batches.workshop_only` keeps a collection out of the party list and stops `assign_batch_short_id` from spending a `P` number.
+- `account_number_counters.entity` accepts `group` besides `store` and `batch`. A deleted collection does not return its `G` number.
+- Business rules: `memory-bank/components/workshop-collection.md`.
+
 ## Main File
 - `supabase/schema.sql`
 

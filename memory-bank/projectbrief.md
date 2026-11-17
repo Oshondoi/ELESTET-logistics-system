@@ -18,6 +18,7 @@ Build a clean, extensible SaaS-style operations panel for shipment tracking and 
 - Supabase-ready SQL schema
 - Strict Supabase-backed runtime for reads/writes
 - Fulfillment batches with reception, QA, packaging, labeling, boxes and logistics stages
+- Workshop collection on its own fulfillment tab: company number `G`, scan into a chosen box, whole free boxes only into a supply. Rules: `memory-bank/components/workshop-collection.md`
 - FBS order cache/sync with WB, supply grouping, stickers, picking lists and order transfers
 - WMS Lite: warehouses, configurable one/two-sided racks, pallet positions, visual box slots, QR-addressed physical boxes and their contents
 - Internal superadmin tools: finance, diary, glossary, administration, versioned architectural discussions, prompts and tasks

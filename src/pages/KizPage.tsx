@@ -1303,7 +1303,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManageLinks
                         key={item.id}
                         type="button"
                         onClick={() => setLinkFilter(item.id)}
-                        className={linkFilter === item.id ? 'elestet-btn elestet-btn-primary' : 'elestet-btn !border-transparent !bg-slate-100 !text-slate-500 hover:!bg-slate-200'}
+                        className={linkFilter === item.id ? 'elestet-btn elestet-btn-primary' : 'elestet-btn is-quiet'}
                       >
                         {item.label}
                       </button>
