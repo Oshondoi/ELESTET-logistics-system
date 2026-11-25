@@ -201,6 +201,7 @@ export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, audi
     setWbCodesApplied(null)
     setErrors([])
     setWbCodeFileName(file.name)
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
     try {
       const parsed = await parseWbBoxCodesImportFile(file)
       const nextErrors = [...parsed.errors]
@@ -361,7 +362,7 @@ export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, audi
           {([['contents', 'Содержимое коробов'], ['wb', 'Загрузить WB ШК'], ['export', 'Экспорт'], ['constructor', 'Конструктор']] as const).map(([tab, label]) => <button key={tab} type="button" disabled={Boolean(busyAction) || tabLocked(tab)} title={tabLocked(tab) ? 'Нет права изменять данные коробов' : undefined} onClick={() => changeTab(tab)} className={`border-b-2 px-2 py-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 sm:text-sm ${!showHistory && activeTab === tab ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain p-6 [scrollbar-gutter:stable]">
-          {!showHistory && errors.length > 0 && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"><p className="font-bold">Excel не применён</p><ul className="mt-1 list-disc space-y-1 pl-5">{errors.map((error, index) => <li key={`${index}-${error}`}>{error}</li>)}</ul></div>}
+          {!showHistory && errors.length > 0 && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"><p className="font-bold">Excel не применён</p><ul className="mt-1 list-disc space-y-1 pl-5">{errors.slice(0, 20).map((error, index) => <li key={`${index}-${error}`}>{error}</li>)}{errors.length > 20 && <li>И ещё {errors.length - 20}.</li>}</ul></div>}
           {showHistory ? <FulfillmentExcelHistory supplyId={supply.id} /> : activeTab === 'contents' ? renderContents() : activeTab === 'wb' ? renderWb() : activeTab === 'constructor' ? <FulfillmentExcelConstructorPanel accountId={accountId} supply={supply} batchNumber={batchNumber} /> : exportContent}
         </div>
         <input ref={fileInputRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file) }} />

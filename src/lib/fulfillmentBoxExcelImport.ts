@@ -87,19 +87,25 @@ export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeEx
 
   const sheetName = workbook.SheetNames[0]
   const worksheet = workbook.Sheets[sheetName]
-  // raw:false keeps the displayed text and prevents numeric-looking WB codes
-  // from being coerced into JavaScript numbers.
-  const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-    header: 1,
-    raw: false,
-    defval: '',
-    blankrows: true,
+  const shownText = (cell: { w?: unknown; v?: unknown } | undefined) => (
+    cell?.w != null ? String(cell.w) : cell?.v == null ? '' : String(cell.v)
+  )
+  const byRow = new Map<number, Map<number, { w?: unknown; v?: unknown; f?: unknown; t?: unknown }>>()
+  Object.keys(worksheet).forEach((key) => {
+    if (key.startsWith('!')) return
+    const address = XLSX.utils.decode_cell(key)
+    const cell = worksheet[key] as { w?: unknown; v?: unknown; f?: unknown; t?: unknown }
+    if (!shownText(cell).trim() && !cell?.f && cell?.t !== 'e') return
+    const columns = byRow.get(address.r) ?? new Map()
+    columns.set(address.c, cell)
+    byRow.set(address.r, columns)
   })
   const headerMatches: Array<{ rowIndex: number; codeIndex: number; externalCodeIndex: number }> = []
   const duplicateHeaderRows: number[] = []
 
-  matrix.forEach((source, rowIndex) => {
-    const headers = source.map(normalizeHeader)
+  ;[...byRow.keys()].sort((left, right) => left - right).forEach((rowIndex) => {
+    const headers: string[] = []
+    byRow.get(rowIndex)?.forEach((cell, index) => { headers[index] = normalizeHeader(shownText(cell)) })
     const codeIndexes = headers
       .map((header, index) => WB_BOX_CODE_HEADERS.some((candidate) => header === normalizeHeader(candidate)) ? index : -1)
       .filter((index) => index >= 0)
@@ -135,13 +141,15 @@ export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeEx
   const errors: string[] = []
   const firstRowByCode = new Map<string, number>()
   const firstRowByExternalCode = new Map<string, number>()
+  const seenPairs = new Set<string>()
 
-  matrix.slice(headerRowIndex + 1).forEach((source, offset) => {
-    const sourceRow = headerRowIndex + offset + 2
-    const codeCell = worksheet[XLSX.utils.encode_cell({ r: sourceRow - 1, c: codeIndex })]
-    const externalCell = worksheet[XLSX.utils.encode_cell({ r: sourceRow - 1, c: externalCodeIndex })]
-    const code = normalizeWbBoxCode(source[codeIndex])
-    const externalCode = normalizeWbBoxCode(source[externalCodeIndex])
+  ;[...byRow.keys()].filter((rowIndex) => rowIndex > headerRowIndex).sort((left, right) => left - right).forEach((rowIndex) => {
+    const columns = byRow.get(rowIndex)
+    const codeCell = columns?.get(codeIndex)
+    const externalCell = columns?.get(externalCodeIndex)
+    const sourceRow = rowIndex + 1
+    const code = normalizeWbBoxCode(shownText(codeCell))
+    const externalCode = normalizeWbBoxCode(shownText(externalCell))
     if (codeCell?.f || externalCell?.f || codeCell?.t === 'e' || externalCell?.t === 'e') {
       errors.push(`Строка ${sourceRow}: ШК WB должны быть обычным текстом, без формул и ошибок Excel.`)
       return
@@ -155,6 +163,8 @@ export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeEx
       errors.push(`Строка ${sourceRow}: ШК WB слишком длинный.`)
       return
     }
+    const pairKey = `${code}\n${externalCode}`
+    if (seenPairs.has(pairKey)) return
     const duplicateRow = firstRowByCode.get(code)
     if (duplicateRow !== undefined) {
       errors.push(`Строка ${sourceRow}: ШК короба «${code}» уже указан в строке ${duplicateRow}.`)
@@ -167,6 +177,7 @@ export async function parseWbBoxCodesImportFile(file: File): Promise<WbBoxCodeEx
       return
     }
     firstRowByExternalCode.set(externalCode, sourceRow)
+    seenPairs.add(pairKey)
     rows.push({ sourceRow, boxNumber: rows.length + 1, code, externalCode })
   })
 
