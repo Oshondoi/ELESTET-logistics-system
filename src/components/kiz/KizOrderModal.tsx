@@ -5,6 +5,7 @@ import {
   fetchKizOrderSources,
   kizPhotoUrl,
   kizProductMatches,
+  kizProductSearchExtras,
   kizSizeRows,
   type KizBarcodeLink,
   type KizGtinCard,
@@ -96,7 +97,7 @@ export function KizOrderModal({
       index,
       linked: kizSizeRows(product).some((row) => linkByBarcode.has(row.barcode)),
     }))
-    .filter((item) => !selectedIds.includes(item.product.id) && kizProductMatches(item.product, query))
+    .filter((item) => !selectedIds.includes(item.product.id) && kizProductMatches(item.product, query, kizProductSearchExtras(item.product, linkByBarcode, cardByGtin)))
     .sort((a, b) => Number(b.linked) - Number(a.linked) || a.index - b.index)
     .slice(0, 40)
 
@@ -242,7 +243,7 @@ export function KizOrderModal({
                 value={query}
                 onFocus={() => setListOpen(true)}
                 onChange={(event) => { setQuery(event.target.value); setListOpen(true) }}
-                placeholder="Артикул WB, артикул продавца, баркод или название"
+                placeholder="Название, артикул, баркод или GTIN"
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
               />
               {listOpen && (

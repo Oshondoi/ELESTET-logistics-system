@@ -85,9 +85,28 @@ export function kizSizeRows(product: KizWbProduct): KizSizeRow[] {
     .map((item) => item.row)
 }
 
-export function kizProductMatches(product: KizWbProduct, query: string): boolean {
+export function kizProductSearchExtras(
+  product: KizWbProduct,
+  linkByBarcode: Map<string, string>,
+  cardByGtin?: Map<string, { name?: string | null; full_name?: string | null }>,
+): string[] {
+  const extras: string[] = []
+  for (const row of kizSizeRows(product)) {
+    if (row.techSize && row.techSize !== '—') extras.push(row.techSize)
+    const gtin = linkByBarcode.get(row.barcode)
+    if (!gtin) continue
+    extras.push(gtin)
+    const card = cardByGtin?.get(gtin)
+    if (card?.full_name) extras.push(card.full_name)
+    if (card?.name) extras.push(card.name)
+  }
+  return extras
+}
+
+export function kizProductMatches(product: KizWbProduct, query: string, extra: Array<string | null | undefined> = []): boolean {
   const needle = query.trim().toLowerCase()
   if (!needle) return true
+  const compact = needle.replace(/[\s-]/g, '')
   const haystack = [
     String(product.nm_id),
     product.vendor_code,
@@ -96,8 +115,14 @@ export function kizProductMatches(product: KizWbProduct, query: string): boolean
     product.color,
     ...(product.barcodes ?? []),
     ...kizSizeRows(product).map((row) => row.barcode),
+    ...extra,
   ]
-  return haystack.some((value) => (value ?? '').toLowerCase().includes(needle))
+  return haystack.some((value) => {
+    const text = (value ?? '').toLowerCase()
+    if (!text) return false
+    if (text.includes(needle)) return true
+    return compact !== needle && text.replace(/[\s-]/g, '').includes(compact)
+  })
 }
 
 export function kizLinkError(error: { message?: string; code?: string } | null): string {

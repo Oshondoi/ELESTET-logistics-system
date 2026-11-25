@@ -10,6 +10,7 @@ import {
   fetchStoreTeksherProducts,
   kizPhotoUrl,
   kizProductMatches,
+  kizProductSearchExtras,
   kizSizeRows,
   saveKizBarcodeLink,
   type KizBarcodeLink,
@@ -210,7 +211,8 @@ export function KizLinkCard({ storeId, canManage, onOrder }: { storeId: string; 
   const linkByBarcode = useMemo(() => new Map(links.map((link) => [link.wb_barcode, link.gtin])), [links])
   const gtinNow = (barcode: string) => (Object.prototype.hasOwnProperty.call(pending, barcode) ? pending[barcode] : linkByBarcode.get(barcode) ?? null)
   const productLinked = (product: KizWbProduct) => kizSizeRows(product).some((row) => Boolean(gtinNow(row.barcode)))
-  const found = products.filter((product) => !selectedIds.includes(product.id) && kizProductMatches(product, query)).slice(0, 40)
+  const cardByGtin = useMemo(() => new Map(gtins.map((card) => [card.gtin, card])), [gtins])
+  const found = products.filter((product) => !selectedIds.includes(product.id) && kizProductMatches(product, query, kizProductSearchExtras(product, linkByBarcode, cardByGtin))).slice(0, 40)
   const selected = selectedIds
     .map((id) => products.find((product) => product.id === id))
     .filter((product): product is KizWbProduct => Boolean(product))
@@ -319,7 +321,7 @@ export function KizLinkCard({ storeId, canManage, onOrder }: { storeId: string; 
                 value={query}
                 onFocus={() => setListOpen(true)}
                 onChange={(event) => { setQuery(event.target.value); setListOpen(true) }}
-                placeholder="Артикул WB, артикул продавца, баркод или название"
+                placeholder="Название, артикул, баркод или GTIN"
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
               />
               {listOpen && (

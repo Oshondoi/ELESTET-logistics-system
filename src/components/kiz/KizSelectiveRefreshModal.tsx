@@ -5,9 +5,11 @@ import {
   fetchKizOrderSources,
   kizPhotoUrl,
   kizProductMatches,
+  kizProductSearchExtras,
   kizSizeRows,
   refreshSelectedGtinCards,
   type KizBarcodeLink,
+  type KizGtinCard,
   type KizWbProduct,
 } from '../../services/kizLinkService'
 
@@ -26,6 +28,7 @@ export function KizSelectiveRefreshModal({
 }) {
   const [products, setProducts] = useState<KizWbProduct[]>([])
   const [links, setLinks] = useState<KizBarcodeLink[]>([])
+  const [gtins, setGtins] = useState<KizGtinCard[]>([])
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -48,6 +51,7 @@ export function KizSelectiveRefreshModal({
       .then((sources) => {
         setProducts(sources.products)
         setLinks(sources.links)
+        setGtins(sources.gtins)
       })
       .catch((loadFailure: unknown) => {
         setLoadError(loadFailure instanceof Error ? loadFailure.message : 'Не удалось открыть товары.')
@@ -56,6 +60,7 @@ export function KizSelectiveRefreshModal({
   }, [open, storeId])
 
   const linkByBarcode = useMemo(() => new Map(links.map((link) => [link.wb_barcode, link.gtin])), [links])
+  const cardByGtin = useMemo(() => new Map(gtins.map((card) => [card.gtin, card])), [gtins])
   const selected = selectedIds
     .map((id) => products.find((product) => product.id === id))
     .filter((product): product is KizWbProduct => Boolean(product))
@@ -65,7 +70,7 @@ export function KizSelectiveRefreshModal({
       index,
       linked: kizSizeRows(product).some((row) => linkByBarcode.has(row.barcode)),
     }))
-    .filter((item) => !selectedIds.includes(item.product.id) && kizProductMatches(item.product, query))
+    .filter((item) => !selectedIds.includes(item.product.id) && kizProductMatches(item.product, query, kizProductSearchExtras(item.product, linkByBarcode, cardByGtin)))
     .sort((a, b) => Number(b.linked) - Number(a.linked) || a.index - b.index)
     .slice(0, 40)
 
@@ -142,7 +147,7 @@ export function KizSelectiveRefreshModal({
               value={query}
               onFocus={() => setListOpen(true)}
               onChange={(event) => { setQuery(event.target.value); setListOpen(true) }}
-              placeholder="Артикул WB, артикул продавца, баркод или название"
+              placeholder="Название, артикул, баркод или GTIN"
               className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-400"
             />
             {listOpen && (
