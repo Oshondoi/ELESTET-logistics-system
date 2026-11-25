@@ -366,7 +366,7 @@ export function FulfillmentBoxExcelDialog({ accountId, supply, batchNumber, audi
           {showHistory ? <FulfillmentExcelHistory supplyId={supply.id} /> : activeTab === 'contents' ? renderContents() : activeTab === 'wb' ? renderWb() : activeTab === 'constructor' ? <FulfillmentExcelConstructorPanel accountId={accountId} supply={supply} batchNumber={batchNumber} /> : exportContent}
         </div>
         <input ref={fileInputRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file) }} />
-        <input ref={wbCodesInputRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWbCodesFile(file) }} />
+        <input ref={wbCodesInputRef} type="file" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleWbCodesFile(file) }} />
       </div>
     </div>,
     document.body,
