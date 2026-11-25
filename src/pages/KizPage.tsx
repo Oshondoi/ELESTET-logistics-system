@@ -768,9 +768,10 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
     setFullSyncing(true)
     setListSyncNote('Полное обновление товаров…')
     try {
-      await syncStoreTeksherCatalog(activeStore.id)
+      const saved = await syncStoreTeksherCatalog(activeStore.id)
       await loadProducts(0, productsSearch)
-      showAction('ok', 'Товары Teksher записаны в базу')
+      const missed = saved.failed > 0 ? ` Не открылось карточек: ${saved.failed}.` : ''
+      showAction('ok', `Товары записаны. Карточки с параметрами: ${saved.cards}.${missed}`)
     } catch (syncFailure: unknown) {
       showAction('err', syncFailure instanceof Error ? syncFailure.message : 'Не удалось обновить товары Teksher.')
     } finally {

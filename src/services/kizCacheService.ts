@@ -1,5 +1,5 @@
 import { kizHasCryptoTail, kizIdentity } from '../lib/kizCode'
-import { parseGtinGoodsName } from '../lib/gtinGoods'
+import { gtinAttributeValue, parseGtinGoodsName } from '../lib/gtinGoods'
 import { arrangeOperationPairs, pageOperationRows } from '../lib/operationPairs'
 import { supabase } from '../lib/supabase'
 
@@ -442,60 +442,22 @@ export async function fetchOperationCodes(storeId: string, operationId: string):
     .filter((item) => item.code)
 }
 
-async function linkedGoods(storeId: string, gtin: string): Promise<Pick<LabelGoods, 'article' | 'color' | 'size'>> {
-  const empty = { article: '', color: '', size: '' }
-  const client = db()
-  const { data: links, error: linkError } = await client.from('fulfillment_product_gtin_links')
-    .select('wb_barcode')
-    .eq('store_id', storeId)
-    .eq('gtin', gtin)
-    .eq('active', true)
-    .limit(1)
-  if (linkError) return empty
-  const barcode = (links?.[0] as { wb_barcode?: string } | undefined)?.wb_barcode
-  if (!barcode) return empty
-  const { data, error } = await client.from('products')
-    .select('vendor_code, color, sizes, barcodes')
-    .eq('store_id', storeId)
-  if (error) return empty
-  const products = (data ?? []) as Array<{
-    vendor_code?: string | null
-    color?: string | null
-    barcodes?: string[] | null
-    sizes?: Array<{ techSize?: string; wbSize?: string; skus?: string[] }> | null
-  }>
-  const product = products.find((item) => {
-    if (item.barcodes?.includes(barcode)) return true
-    return (item.sizes ?? []).some((size) => size.skus?.includes(barcode))
-  })
-  if (!product) return empty
-  const size = (product.sizes ?? []).find((item) => item.skus?.includes(barcode))
-  const tech = size?.techSize?.trim() ?? ''
-  const wb = size?.wbSize?.trim() ?? ''
-  return {
-    article: product.vendor_code?.trim() ?? '',
-    color: product.color?.trim() ?? '',
-    size: tech && wb && tech !== wb ? `${tech} (${wb})` : tech || wb,
-  }
-}
-
 export async function fetchLabelGoods(storeId: string, gtin: string): Promise<LabelGoods> {
   const empty = { name: '', article: '', color: '', size: '' }
   if (!gtin) return empty
   const client = db()
   const { data: catalog } = await client.from('teksher_products')
-    .select('name, full_name')
+    .select('name, full_name, attributes')
     .eq('store_id', storeId)
     .eq('gtin', gtin)
     .limit(1)
-  const catalogRow = catalog?.[0] as { name?: string | null; full_name?: string | null } | undefined
+  const catalogRow = catalog?.[0] as { name?: string | null; full_name?: string | null; attributes?: unknown } | undefined
   const name = String(catalogRow?.full_name ?? '').trim() || String(catalogRow?.name ?? '').trim()
   const fields = parseGtinGoodsName(name)
-  const linked = await linkedGoods(storeId, gtin)
   return {
     name,
-    article: fields.article || linked.article,
-    color: fields.color || linked.color,
-    size: fields.size || linked.size,
+    article: gtinAttributeValue(catalogRow?.attributes, ['артикул']) || fields.article,
+    color: gtinAttributeValue(catalogRow?.attributes, ['цвет']) || fields.color,
+    size: gtinAttributeValue(catalogRow?.attributes, ['размер']) || fields.size,
   }
 }

@@ -251,6 +251,74 @@ function productGtin(product: JsonObject): string {
   return firstText(product.gtin, product.GTIN, asObject(product.product).gtin)
 }
 
+function optionalText(value: unknown): string | null {
+  const text = String(value ?? '').trim()
+  return text || null
+}
+
+function productCard(raw: unknown): JsonObject {
+  const body = asObject(unwrapTeksher(raw))
+  if (firstText(body.gtin)) return body
+  const nested = asObject(body.product ?? body.content)
+  return firstText(nested.gtin) ? nested : body
+}
+
+function catalogProductRow(storeId: string, item: JsonObject, syncedAt: string): JsonObject | null {
+  const digits = String(item.gtin ?? '').replace(/\D/g, '')
+  if (digits.length < 8 || digits.length > 14) return null
+  const country = asObject(item.manufacturedCountry)
+  const countryText = typeof item.manufacturedCountry === 'string' ? item.manufacturedCountry : ''
+  const countryId = country.id ?? item.manufacturedCountryId
+  const row: JsonObject = {
+    store_id: storeId,
+    teksher_id: item.id == null ? null : String(item.id),
+    gtin: digits.padStart(14, '0'),
+    full_name: optionalText(item.fullName ?? item.full_name),
+    status: optionalText(item.status),
+    trademark: optionalText(item.trademark),
+    manufacturer_full_name: optionalText(item.manufacturerFullName ?? item.manufacturer_full_name),
+    manufactured_country_id: countryId == null || countryId === '' || !Number.isFinite(Number(countryId)) ? null : Number(countryId),
+    manufactured_country_code: optionalText(country.code ?? country.alpha2 ?? item.manufacturedCountryCode),
+    manufactured_country_name: optionalText(country.name ?? country.fullName ?? item.manufacturedCountryName ?? countryText),
+    synced_at: syncedAt,
+    in_catalog: true,
+  }
+  if (Array.isArray(item.attributes)) row.attributes = item.attributes
+  const group = optionalText(item.productGroupCode ?? item.product_group_code)
+  if (group) row.product_group_code = group
+  if (item.codesCount != null || item.codes_count != null) row.codes_count = Number(item.codesCount ?? item.codes_count)
+  const shortName = optionalText(item.name)
+  if (shortName) row.name = shortName
+  return row
+}
+
+async function fillCatalogCards(token: string, rows: JsonObject[], syncedAt: string, storeId: string): Promise<{ cards: number; failed: number }> {
+  const pending = rows.filter((row) => row.teksher_id)
+  let cursor = 0
+  let cards = 0
+  let failed = 0
+  const workers = Array.from({ length: Math.min(6, pending.length) }, async () => {
+    while (cursor < pending.length) {
+      const row = pending[cursor]
+      cursor += 1
+      try {
+        const raw = await teksherJson(`${BASE}/products/${encodeURIComponent(String(row.teksher_id))}`, token)
+        const filled = catalogProductRow(storeId, productCard(raw), syncedAt)
+        if (!filled || filled.gtin !== row.gtin) {
+          failed += 1
+          continue
+        }
+        Object.assign(row, filled)
+        cards += 1
+      } catch {
+        failed += 1
+      }
+    }
+  })
+  if (pending.length > 0) await Promise.all(workers)
+  return { cards, failed }
+}
+
 function groupReferences(group: JsonObject): string[] {
   return [
     group.id,
@@ -682,7 +750,8 @@ Deno.serve(async (req: Request) => {
   // Пишет в уже существующую таблицу, отдельный каталог не создаёт.
   if (action === 'link_products') {
     const pageSize = 100
-    const byGtin = new Map<string, Record<string, unknown>>()
+    const syncedAt = new Date().toISOString()
+    const byGtin = new Map<string, JsonObject>()
     let page = 0
     let total = Number.POSITIVE_INFINITY
     while (page < 100 && page * pageSize < total) {
@@ -691,33 +760,21 @@ Deno.serve(async (req: Request) => {
       if (!response.ok) return err(`Teksher: ${response.status}`)
       const payload = await response.json() as Record<string, unknown>
       const pageInfo = (payload.page ?? {}) as Record<string, unknown>
-      const items = (payload.content ?? payload.items ?? []) as Record<string, unknown>[]
+      const items = (payload.content ?? payload.items ?? []) as JsonObject[]
       const reported = Number(pageInfo.totalElements ?? payload.totalElements)
       if (Number.isFinite(reported)) total = reported
       items.forEach((item) => {
-        const digits = String(item.gtin ?? '').replace(/\D/g, '')
-        if (digits.length < 8 || digits.length > 14) return
-        const gtin = digits.padStart(14, '0')
-        byGtin.set(gtin, {
-          store_id,
-          teksher_id: item.id == null ? null : String(item.id),
-          gtin,
-          name: String(item.name ?? '') || null,
-          full_name: String(item.fullName ?? item.full_name ?? '') || null,
-          product_group_code: String(item.productGroupCode ?? item.product_group_code ?? '') || null,
-          status: String(item.status ?? '') || null,
-          codes_count: item.codesCount == null && item.codes_count == null ? null : Number(item.codesCount ?? item.codes_count),
-          trademark: String(item.trademark ?? '') || null,
-          synced_at: new Date().toISOString(),
-          in_catalog: true,
-        })
+        const row = catalogProductRow(store_id, item, syncedAt)
+        if (row) byGtin.set(String(row.gtin), row)
       })
       if (items.length < pageSize || pageInfo.last === true) break
       page += 1
     }
     const rows = [...byGtin.values()]
-    if (rows.length > 0) {
-      const { error: cacheError } = await svc.from('teksher_products').upsert(rows, { onConflict: 'store_id,gtin' })
+    const cardResult = await fillCatalogCards(token, rows, syncedAt, store_id)
+    for (let index = 0; index < rows.length; index += 100) {
+      const chunk = rows.slice(index, index + 100)
+      const { error: cacheError } = await svc.from('teksher_products').upsert(chunk, { onConflict: 'store_id,gtin' })
       if (cacheError) return err(`Не удалось сохранить товары Teksher: ${cacheError.message}`)
     }
     const keep = new Set(rows.map((row) => String(row.gtin)))
@@ -751,6 +808,8 @@ Deno.serve(async (req: Request) => {
         product_group_code: row.product_group_code,
         status: row.status,
       })),
+      cards: cardResult.cards,
+      cards_failed: cardResult.failed,
     })
   }
 

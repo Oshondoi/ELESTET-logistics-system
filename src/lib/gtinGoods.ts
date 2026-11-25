@@ -4,6 +4,26 @@ export type GtinGoodsFields = {
   size: string
 }
 
+function attributeText(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return String(value).trim()
+  if (!value || typeof value !== 'object') return ''
+  const row = value as { name?: unknown; value?: unknown; code?: unknown }
+  return String(row.name ?? row.value ?? row.code ?? '').trim()
+}
+
+export function gtinAttributeValue(attributes: unknown, needles: string[]): string {
+  if (!Array.isArray(attributes)) return ''
+  for (const item of attributes) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as { name?: unknown; value?: unknown }
+    const name = String(row.name ?? '').toLowerCase()
+    if (!needles.some((needle) => name.includes(needle))) continue
+    const value = attributeText(row.value)
+    if (value) return value
+  }
+  return ''
+}
+
 const SIZE_WORD = /(?:\d{1,2}X{1,3}[SML]|X{1,3}[SML]|[SML]|XS)/i
 
 function clean(value: string): string {

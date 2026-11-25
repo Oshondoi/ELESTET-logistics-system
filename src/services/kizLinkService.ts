@@ -116,7 +116,7 @@ function catalogNeedle(search: string): string {
   return search.trim().replace(/[%_,]/g, '')
 }
 
-export async function syncStoreTeksherCatalog(storeId: string): Promise<number> {
+export async function syncStoreTeksherCatalog(storeId: string): Promise<{ items: number; cards: number; failed: number }> {
   if (!supabase) throw new Error('База не настроена. Обновите страницу.')
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) throw new Error('Сессия истекла. Войдите снова.')
@@ -125,9 +125,13 @@ export async function syncStoreTeksherCatalog(storeId: string): Promise<number> 
     headers: { Authorization: `Bearer ${session.access_token}` },
   })
   if (error) throw new Error('Не удалось обновить товары Teksher.')
-  const payload = data as { error?: string; items?: unknown[] } | null
+  const payload = data as { error?: string; items?: unknown[]; cards?: number; cards_failed?: number } | null
   if (payload?.error) throw new Error(payload.error)
-  return payload?.items?.length ?? 0
+  return {
+    items: payload?.items?.length ?? 0,
+    cards: Number(payload?.cards ?? 0),
+    failed: Number(payload?.cards_failed ?? 0),
+  }
 }
 
 export type TeksherCatalogItem = {
