@@ -10,9 +10,10 @@ import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
 import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
 import { parsePrintFileBytes } from '../lib/kizPrintFile'
 import { fetchCachedCodes, fetchCachedOperations, fetchPrintCsv, linkPrintCodesOnPage, loadPrintCodeCoverage, printOperationIdsOnPage, savePrintCodes, syncAllOperations, syncCachedCodes, syncCachedCodesQuick, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
-import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
+import { fetchFilteredCatalogGtins, fetchGtinLinkFaces, fetchTeksherCatalog, refreshGtinCardsInBatches, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { KizSelectiveRefreshModal } from '../components/kiz/KizSelectiveRefreshModal'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
+import { Modal } from '../components/ui/Modal'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
 import { TransgranPanel } from '../components/kiz/TransgranPanel'
 import { getStoreSelectorLabel } from '../lib/storeDisplay'
@@ -39,6 +40,7 @@ interface TeksherProduct {
   codesCount?: number
   productGroupCode?: string
   trademark?: string
+  size?: string
 }
 
 interface TeksherCode {
@@ -381,6 +383,8 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
   const [productsLoading, setProductsLoading] = useState(false)
   const [productsSearch, setProductsSearch] = useState('')
   const [selectiveOpen, setSelectiveOpen] = useState(false)
+  const [refreshChoiceOpen, setRefreshChoiceOpen] = useState(false)
+  const [filterRefreshing, setFilterRefreshing] = useState(false)
   const [linkFilter, setLinkFilter] = useState<'all' | 'yes' | 'no'>('all')
   const [linkFaces, setLinkFaces] = useState<Record<string, string | null>>({})
 
@@ -1319,11 +1323,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                   <div className="ml-auto flex gap-2">
                     <button
                       type="button"
-                      onClick={() => setSelectiveOpen(true)}
-                      disabled={productsLoading || fullSyncing || !activeStore?.id}
+                      onClick={() => setRefreshChoiceOpen(true)}
+                      disabled={productsLoading || fullSyncing || filterRefreshing || !activeStore?.id}
                       className="elestet-btn"
                     >
-                      Выборочное обновление
+                      {filterRefreshing ? 'Обновляем фильтр…' : 'Выборочное обновление'}
                     </button>
                     <button
                       type="button"
@@ -1379,6 +1383,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Фото</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">GTIN</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Название</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Размер</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Связка</th>
                           <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500">Статус</th>
                           <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500">Коды</th>
@@ -1396,6 +1401,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                             <td className="px-4 py-3 text-xs text-slate-700" title={p.fullName ?? p.name ?? ''}>
                               {p.fullName ?? p.name ?? '—'}
                             </td>
+                            <td className="px-4 py-3 text-xs text-slate-700">{p.size || '—'}</td>
                             <td className="px-4 py-3">
                               <span className={`text-xs font-semibold ${linked ? 'text-emerald-700' : 'text-slate-400'}`}>{linked ? 'Есть' : 'Нет'}</span>
                             </td>
@@ -1746,6 +1752,60 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
           onOrder={handleEmitLines}
           onShowOperations={() => { setEmitModal(false); handleSetTab('operations'); void loadOperations() }}
         />
+      )}
+      {activeStore?.id && (
+        <Modal
+          open={refreshChoiceOpen}
+          onClose={() => { if (!filterRefreshing) setRefreshChoiceOpen(false) }}
+          title="Выборочное обновление"
+          className="max-w-lg"
+        >
+          <div className="space-y-3">
+            <button
+              type="button"
+              disabled={filterRefreshing || (!productsSearch.trim() && linkFilter === 'all')}
+              onClick={() => {
+                const storeId = activeStore?.id
+                if (!storeId || filterRefreshing) return
+                setFilterRefreshing(true)
+                void fetchFilteredCatalogGtins(storeId, productsSearch, linkFilter, Object.keys(linkFaces))
+                  .then(async (gtins) => {
+                    if (gtins.length === 0) {
+                      showAction('err', 'По этому фильтру товаров нет.')
+                      return
+                    }
+                    const result = await refreshGtinCardsInBatches(storeId, gtins)
+                    setRefreshChoiceOpen(false)
+                    await loadProducts(0, productsSearch)
+                    const missed = result.failed > 0 ? ` Не открылось: ${result.failed}.` : ''
+                    const absent = result.missing > 0 ? ` Нет в каталоге: ${result.missing}.` : ''
+                    showAction('ok', result.cards > 0
+                      ? `Карточки фильтра обновлены: ${result.cards}.${missed}${absent}`
+                      : `Карточки фильтра не обновились.${missed}${absent}`)
+                  })
+                  .catch((reason) => showAction('err', reason instanceof Error ? reason.message : 'Не удалось обновить фильтр.'))
+                  .finally(() => setFilterRefreshing(false))
+              }}
+              className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {filterRefreshing ? 'Обновляем…' : 'Обновить по фильтру'}
+            </button>
+            <p className="text-xs text-slate-500">
+              {!productsSearch.trim() && linkFilter === 'all'
+                ? 'Поиск пустой и стоит «Все». Это весь каталог, его берёт «Полное обновление».'
+                : `Обновятся все карточки фильтра: ${productsTotal}. Не только строки на экране.`}
+            </p>
+            <button
+              type="button"
+              disabled={filterRefreshing}
+              onClick={() => { setRefreshChoiceOpen(false); setSelectiveOpen(true) }}
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Выбрать детально
+            </button>
+            <p className="text-xs text-slate-500">Откроется окно с фото и размерами. Отмеченные размеры обновятся отдельно.</p>
+          </div>
+        </Modal>
       )}
       {activeStore?.id && (
         <KizSelectiveRefreshModal

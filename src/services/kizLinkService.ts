@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { gtinAttributeValue } from '../lib/gtinGoods'
 
 export type KizBarcodeLink = {
   wb_barcode: string
@@ -229,6 +230,7 @@ export type TeksherCatalogItem = {
   fullName?: string
   status?: string
   codesCount?: number
+  size?: string
 }
 
 export async function fetchGtinLinkFaces(storeId: string): Promise<Record<string, string | null>> {
@@ -268,6 +270,27 @@ export async function fetchGtinLinkFaces(storeId: string): Promise<Record<string
   return faces
 }
 
+async function catalogMatchClause(storeId: string, search: string): Promise<string | null> {
+  const needle = catalogNeedle(search)
+  if (!needle) return null
+  const linked = await gtinsLinkedToMatchingGoods(storeId, needle)
+  const pattern = `"%${needle}%"`
+  const parts = [
+    `name.ilike.${pattern}`,
+    `full_name.ilike.${pattern}`,
+    `gtin.ilike.${pattern}`,
+    `trademark.ilike.${pattern}`,
+  ]
+  if (linked.length > 0) parts.push(`gtin.in.(${linked.join(',')})`)
+  return parts.join(',')
+}
+
+function applyLinkFilter(query: any, link: 'all' | 'yes' | 'no', linkedGtins: string[]) {
+  if (link === 'yes') return query.in('gtin', linkedGtins)
+  if (link === 'no' && linkedGtins.length > 0) return query.not('gtin', 'in', `(${linkedGtins.map((gtin) => `"${gtin}"`).join(',')})`)
+  return query
+}
+
 export async function fetchTeksherCatalog(
   storeId: string,
   page: number,
@@ -280,25 +303,13 @@ export async function fetchTeksherCatalog(
   const size = 20
   const from = page * size
   let query = client.from('teksher_products')
-    .select('teksher_id,gtin,name,full_name,status,codes_count', { count: 'exact' })
+    .select('teksher_id,gtin,name,full_name,status,codes_count,attributes', { count: 'exact' })
     .eq('store_id', storeId)
     .eq('in_catalog', true)
     .order('full_name')
-  const needle = catalogNeedle(search)
-  if (needle) {
-    const linked = await gtinsLinkedToMatchingGoods(storeId, needle)
-    const pattern = `"%${needle}%"`
-    const parts = [
-      `name.ilike.${pattern}`,
-      `full_name.ilike.${pattern}`,
-      `gtin.ilike.${pattern}`,
-      `trademark.ilike.${pattern}`,
-    ]
-    if (linked.length > 0) parts.push(`gtin.in.(${linked.join(',')})`)
-    query = query.or(parts.join(','))
-  }
-  if (link === 'yes') query = query.in('gtin', linkedGtins)
-  if (link === 'no' && linkedGtins.length > 0) query = query.not('gtin', 'in', `(${linkedGtins.map((gtin) => `"${gtin}"`).join(',')})`)
+  const match = await catalogMatchClause(storeId, search)
+  if (match) query = query.or(match)
+  query = applyLinkFilter(query, link, linkedGtins)
   const { data, error, count } = await query.range(from, from + size - 1)
   if (error) throw new Error('Не удалось загрузить товары Teksher.')
   const items = ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
@@ -308,8 +319,50 @@ export async function fetchTeksherCatalog(
     fullName: (row.full_name as string | null) ?? undefined,
     status: (row.status as string | null) ?? undefined,
     codesCount: row.codes_count == null ? undefined : Number(row.codes_count),
+    size: gtinAttributeValue(row.attributes, ['размер']) || undefined,
   }))
   return { items, total: count ?? items.length }
+}
+
+export async function fetchFilteredCatalogGtins(
+  storeId: string,
+  search: string,
+  link: 'all' | 'yes' | 'no' = 'all',
+  linkedGtins: string[] = [],
+): Promise<string[]> {
+  if (link === 'yes' && linkedGtins.length === 0) return []
+  const client = db()
+  const match = await catalogMatchClause(storeId, search)
+  const gtins: string[] = []
+  for (let from = 0; from < 20000; from += 500) {
+    let query = client.from('teksher_products')
+      .select('gtin')
+      .eq('store_id', storeId)
+      .eq('in_catalog', true)
+      .order('gtin')
+    if (match) query = query.or(match)
+    query = applyLinkFilter(query, link, linkedGtins)
+    const { data, error } = await query.range(from, from + 499)
+    if (error) throw new Error('Не удалось собрать товары фильтра.')
+    const rows = (data ?? []) as Array<{ gtin?: string | null }>
+    rows.forEach((row) => { if (row.gtin) gtins.push(row.gtin) })
+    if (rows.length < 500) break
+  }
+  return gtins
+}
+
+export async function refreshGtinCardsInBatches(
+  storeId: string,
+  gtins: string[],
+): Promise<{ cards: number; failed: number; missing: number }> {
+  const totals = { cards: 0, failed: 0, missing: 0 }
+  for (let index = 0; index < gtins.length; index += 40) {
+    const part = await refreshSelectedGtinCards(storeId, gtins.slice(index, index + 40))
+    totals.cards += part.cards
+    totals.failed += part.failed
+    totals.missing += part.missing
+  }
+  return totals
 }
 
 export async function fetchStoreTeksherProducts(storeId: string): Promise<KizGtinCard[]> {
