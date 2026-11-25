@@ -1,6 +1,5 @@
 import { kizHasCryptoTail, kizIdentity } from '../lib/kizCode'
 import { gtinAttributeValue, parseGtinGoodsName } from '../lib/gtinGoods'
-import { arrangeOperationPairs } from '../lib/operationPairs'
 import { supabase } from '../lib/supabase'
 
 export type CachedCode = {
@@ -200,21 +199,18 @@ export async function fetchCachedOperations(
   page: number,
 ): Promise<{ items: CachedOperation[]; total: number; pages: number; offset: number }> {
   const client = db()
-  const from = Math.max(page, 0) * PAGE
-  const { data, error, count } = await client.from('teksher_operations')
-    .select('operation_id, operation_type, type, status, kms_count, codes_count, gtin, created_at_teksher, created_date, product_group_code, product', { count: 'exact' })
-    .eq('store_id', storeId)
-    .order('created_at_teksher', { ascending: false, nullsFirst: false })
-    .order('operation_id', { ascending: true })
-    .range(from, from + PAGE - 1)
+  const { data, error } = await client.rpc('list_teksher_operations_page', {
+    p_store_id: storeId,
+    p_page: Math.max(page, 0),
+    p_page_size: PAGE,
+  })
   if (error) throw new Error('Не удалось прочитать операции из базы.')
-  const pageRows = ((data ?? []) as Array<Record<string, unknown>>).map(cachedOperation)
-  const total = count ?? pageRows.length
+  const payload = (data ?? {}) as { items?: Array<Record<string, unknown>>; total?: number; pages?: number; offset?: number }
   return {
-    items: arrangeOperationPairs(pageRows),
-    total,
-    pages: Math.max(Math.ceil(total / PAGE), 1),
-    offset: from,
+    items: (payload.items ?? []).map(cachedOperation),
+    total: payload.total ?? 0,
+    pages: Math.max(payload.pages ?? 1, 1),
+    offset: payload.offset ?? 0,
   }
 }
 
