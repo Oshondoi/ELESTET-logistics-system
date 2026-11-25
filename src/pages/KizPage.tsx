@@ -1569,18 +1569,17 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                         className="h-[34px] rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-800 outline-none focus:border-blue-400"
                       />
                     </label>
-                    {operationsDate && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOperationsDate('')
-                          setOperationsPage(0)
-                        }}
-                        className="elestet-btn"
-                      >
-                        Все даты
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      disabled={!operationsDate}
+                      onClick={() => {
+                        setOperationsDate('')
+                        setOperationsPage(0)
+                      }}
+                      className="elestet-btn"
+                    >
+                      Все даты
+                    </button>
                     {canManage && <>
                     <input
                       ref={printFileRef}
