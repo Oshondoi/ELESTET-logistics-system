@@ -1,4 +1,5 @@
 import { kizHasCryptoTail, kizIdentity } from '../lib/kizCode'
+import { parseGtinGoodsName } from '../lib/gtinGoods'
 import { arrangeOperationPairs, pageOperationRows } from '../lib/operationPairs'
 import { supabase } from '../lib/supabase'
 
@@ -451,40 +452,7 @@ export async function fetchLabelGoods(storeId: string, gtin: string): Promise<La
     .eq('gtin', gtin)
     .limit(1)
   const catalogRow = catalog?.[0] as { name?: string | null; full_name?: string | null } | undefined
-  const teksherName = String(catalogRow?.full_name ?? '').trim() || String(catalogRow?.name ?? '').trim()
-  const { data: links, error: linkError } = await client.from('fulfillment_product_gtin_links')
-    .select('wb_barcode')
-    .eq('store_id', storeId)
-    .eq('gtin', gtin)
-    .eq('active', true)
-    .limit(1)
-  if (linkError) return { ...empty, name: teksherName }
-  const barcode = (links?.[0] as { wb_barcode?: string } | undefined)?.wb_barcode
-  if (!barcode) return { ...empty, name: teksherName }
-  const { data, error } = await client.from('products')
-    .select('vendor_code, name, color, sizes, barcodes')
-    .eq('store_id', storeId)
-  if (error) return { ...empty, name: teksherName }
-  const products = (data ?? []) as Array<{
-    vendor_code?: string | null
-    name?: string | null
-    color?: string | null
-    barcodes?: string[] | null
-    sizes?: Array<{ techSize?: string; wbSize?: string; skus?: string[] }> | null
-  }>
-  const product = products.find((item) => {
-    if (item.barcodes?.includes(barcode)) return true
-    return (item.sizes ?? []).some((size) => size.skus?.includes(barcode))
-  })
-  if (!product) return { ...empty, name: teksherName }
-  const size = (product.sizes ?? []).find((item) => item.skus?.includes(barcode))
-  const tech = size?.techSize?.trim() ?? ''
-  const wb = size?.wbSize?.trim() ?? ''
-  const sizeText = tech && wb && tech !== wb ? `${tech} (${wb})` : tech || wb
-  return {
-    name: teksherName,
-    article: product.vendor_code?.trim() ?? '',
-    color: product.color?.trim() ?? '',
-    size: sizeText,
-  }
+  const name = String(catalogRow?.full_name ?? '').trim() || String(catalogRow?.name ?? '').trim()
+  const fields = parseGtinGoodsName(name)
+  return { name, article: fields.article, color: fields.color, size: fields.size }
 }

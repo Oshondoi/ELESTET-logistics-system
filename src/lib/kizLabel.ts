@@ -155,7 +155,10 @@ function drawHorizontal(item: PrintCode, goods: LabelGoods, number: number): HTM
   ctx.fillText(gtin, codeX, codeY + size + Math.round(0.28 * dpi))
   ctx.fillText(serial, codeX, codeY + size + Math.round(0.52 * dpi))
   ctx.textAlign = 'right'
-  ctx.fillText(String(number), width - Math.round(0.22 * dpi), height - Math.round(0.22 * dpi))
+  ctx.textBaseline = 'bottom'
+  ctx.font = `bold ${Math.round(0.72 * dpi)}px Arial`
+  ctx.fillText(String(number), width - Math.round(0.1 * dpi), height - Math.round(0.06 * dpi))
+  ctx.textBaseline = 'alphabetic'
   return canvas
 }
 

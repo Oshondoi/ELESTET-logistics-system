@@ -40,7 +40,8 @@ function idOf(operation: PairableOperation): string {
   return operation.operationId || operation.id
 }
 
-// Нанесение — более поздний статус пары. Заказ остаётся при нём, а не на своей старой дате.
+// Нанесение — более поздний статус пары. Заказ встаёт под ним.
+// Лишний более старый заказ того же количества тоже остаётся у этой пары.
 export function arrangeOperationPairs<T extends PairableOperation>(operations: T[]): T[] {
   const orders = new Map<number, T[]>()
   const markings: T[] = []
@@ -66,7 +67,7 @@ export function arrangeOperationPairs<T extends PairableOperation>(operations: T
   markings.sort((left, right) => timeOf(left) - timeOf(right) || idOf(left).localeCompare(idOf(right)))
 
   const used = new Set<string>()
-  const blocks: Array<{ at: number; rows: T[] }> = []
+  const blocks: Array<{ at: number; count: number; rows: T[] }> = []
 
   for (const marking of markings) {
     const count = countOf(marking) ?? 0
@@ -75,16 +76,23 @@ export function arrangeOperationPairs<T extends PairableOperation>(operations: T
     ))
     const order = candidates.length > 0 ? candidates[candidates.length - 1] : null
     if (order) used.add(idOf(order))
-    blocks.push({ at: timeOf(marking), rows: order ? [marking, order] : [marking] })
+    blocks.push({ at: timeOf(marking), count, rows: order ? [marking, order] : [marking] })
   }
 
   for (const bucket of orders.values()) {
-    for (const order of bucket) {
-      if (used.has(idOf(order))) continue
-      blocks.push({ at: timeOf(order), rows: [order] })
+    const leftovers = bucket.filter((order) => !used.has(idOf(order)))
+    leftovers.sort((left, right) => timeOf(right) - timeOf(left) || idOf(left).localeCompare(idOf(right)))
+    for (const order of leftovers) {
+      const count = countOf(order) ?? 0
+      const hosts = blocks
+        .filter((block) => block.count === count && block.at >= timeOf(order) && block.rows.some((row) => kindOf(row) === 'marking') && sameGoods(block.rows[0], order))
+        .sort((left, right) => right.at - left.at)
+      const host = hosts[0]
+      if (host) host.rows.push(order)
+      else blocks.push({ at: timeOf(order), count, rows: [order] })
     }
   }
-  for (const single of singles) blocks.push({ at: timeOf(single), rows: [single] })
+  for (const single of singles) blocks.push({ at: timeOf(single), count: countOf(single) ?? -1, rows: [single] })
 
   blocks.sort((left, right) => right.at - left.at || idOf(left.rows[0]).localeCompare(idOf(right.rows[0])))
   return blocks.flatMap((block) => block.rows)
@@ -100,8 +108,7 @@ export function pageOperationRows<T extends PairableOperation>(
   while (index < rows.length) {
     starts.push(index)
     let take = Math.min(pageSize, rows.length - index)
-    const cut = index + take
-    if (cut < rows.length && isPairCut(rows[cut - 1], rows[cut])) take += 1
+    while (index + take < rows.length && sticksToPrevious(rows[index + take - 1], rows[index + take])) take += 1
     index += Math.max(take, 1)
   }
   const pageCount = Math.max(starts.length, 1)
@@ -111,14 +118,11 @@ export function pageOperationRows<T extends PairableOperation>(
   return { items: rows.slice(offset, next), pages: pageCount, offset }
 }
 
-function isPairCut(left: PairableOperation | undefined, right: PairableOperation | undefined): boolean {
+function sticksToPrevious(left: PairableOperation | undefined, right: PairableOperation | undefined): boolean {
   if (!left || !right) return false
   const leftKind = kindOf(left)
   const rightKind = kindOf(right)
   const count = countOf(left)
-  return count != null
-    && count === countOf(right)
-    && leftKind === 'marking'
-    && rightKind === 'order'
-    && sameGoods(left, right)
+  const follows = (leftKind === 'marking' && rightKind === 'order') || (leftKind === 'order' && rightKind === 'order')
+  return count != null && count === countOf(right) && follows && sameGoods(left, right)
 }
