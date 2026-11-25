@@ -406,9 +406,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
   const [applyConfirmOpen, setApplyConfirmOpen] = useState(false)
   const applyConfirmRef = useRef<((agreed: boolean) => void) | null>(null)
   const [printOperationIds, setPrintOperationIds] = useState<Set<string>>(new Set())
-  const [printSavedCount, setPrintSavedCount] = useState(0)
-  const [printGateway, setPrintGateway] = useState(false)
-  const [printSearching, setPrintSearching] = useState(false)
   const printFileRef = useRef<HTMLInputElement>(null)
   const [listSyncNote, setListSyncNote] = useState('')
   const [syncPageSize, setSyncPageSize] = useState<TeksherPageSize>(20)
@@ -612,24 +609,16 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
   }, [tab, activeStore?.id, loadOperations, operationsPage])
 
   const refreshPrintCoverage = useCallback(async (storeId: string, operationIds: string[]) => {
-    setPrintSearching(true)
-    try {
-      const coverage = await loadPrintCodeCoverage(storeId)
-      setPrintSavedCount(coverage.saved)
-      const known = new Set(coverage.operationIds)
-      setPrintOperationIds(known)
-      if (coverage.saved === 0 || operationIds.length === 0) {
-        setPrintGateway(false)
-        return { saved: coverage.saved, operationIds: [...known], gateway: false }
-      }
-      const linked = await linkPrintCodesOnPage(storeId, operationIds)
-      const ids = new Set(linked.operationIds)
-      setPrintOperationIds(ids)
-      setPrintGateway(linked.gateway && ids.size === 0)
-      return { saved: coverage.saved, operationIds: [...ids], gateway: linked.gateway }
-    } finally {
-      setPrintSearching(false)
+    const coverage = await loadPrintCodeCoverage(storeId)
+    const known = new Set(coverage.operationIds)
+    setPrintOperationIds(known)
+    if (coverage.saved === 0 || operationIds.length === 0) {
+      return { saved: coverage.saved, operationIds: [...known], gateway: false }
     }
+    const linked = await linkPrintCodesOnPage(storeId, operationIds)
+    const ids = new Set(linked.operationIds)
+    setPrintOperationIds(ids)
+    return { saved: coverage.saved, operationIds: [...ids], gateway: linked.gateway }
   }, [])
 
   useEffect(() => {
@@ -1640,19 +1629,6 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                     </button>
                   </div>
                 </div>
-                <p className="text-xs text-slate-400">Печать в строке включится, когда полный файл уже в базе. «Забрать CSV» скачивает его из Текшера. Если нанесения ещё не было, этот клик отправляет нанесение на весь заказ. Ручная загрузка файла тоже подходит.</p>
-                {activeStore && (printSavedCount > 0 || printOperationIds.size > 0) && (
-                  printSearching && printOperationIds.size === 0 ? (
-                    <p className="text-xs font-medium text-slate-500">Полный код сохранён. Ищем его строку в этом списке…</p>
-                  ) : printOperationIds.size > 0 ? (
-                    <p className="text-xs font-medium text-emerald-700">На этой странице полный код есть у операций: {printOperationIds.size}. Такие строки подсвечены.</p>
-                  ) : printGateway ? (
-                    <p className="text-xs font-medium text-amber-700">Полный код сохранён в магазине «{getStoreSelectorLabel(activeStore)}»: {printSavedCount}. Текшер не ответил, поэтому строка пока без подсветки. Нажмите печать на нужной операции ещё раз.</p>
-                  ) : (
-                    <p className="text-xs font-medium text-amber-700">Полный код сохранён в магазине «{getStoreSelectorLabel(activeStore)}»: {printSavedCount}. На этой странице списка его операция не нашлась.</p>
-                  )
-                )}
-
                 {operationsLoading ? (
                   <Skeleton rows={6} />
                 ) : operations.length === 0 ? (
@@ -1722,9 +1698,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                                           showAction('ok', message)
                                           if (!activeStore?.id) return
                                           void loadPrintCodeCoverage(activeStore.id).then((coverage) => {
-                                            setPrintSavedCount(coverage.saved)
                                             setPrintOperationIds(new Set(coverage.operationIds))
-                                            setPrintGateway(false)
                                           })
                                         }}
                                       />
