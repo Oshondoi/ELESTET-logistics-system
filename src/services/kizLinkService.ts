@@ -138,7 +138,49 @@ export function kizLinkError(error: { message?: string; code?: string } | null):
 }
 
 function catalogNeedle(search: string): string {
-  return search.trim().replace(/[%_,]/g, '')
+  return search.trim().replace(/[%_,.()"'\\]/g, '')
+}
+
+async function gtinsLinkedToMatchingGoods(storeId: string, needle: string): Promise<string[]> {
+  const client = db()
+  const pattern = `"%${needle}%"`
+  const cardFilter = `vendor_code.ilike.${pattern},name.ilike.${pattern},brand.ilike.${pattern},color.ilike.${pattern}`
+  const { data: cards, error: cardError } = await client.from('products')
+    .select('barcodes,sizes')
+    .eq('store_id', storeId)
+    .or(cardFilter)
+  if (cardError) throw new Error('Не удалось найти товар по артикулу.')
+  const barcodes = new Set<string>()
+  for (const product of (cards ?? []) as KizWbProduct[]) {
+    for (const barcode of product.barcodes ?? []) if (barcode) barcodes.add(barcode)
+    for (const size of (product.sizes ?? []) as Array<{ skus?: string[] }>) {
+      for (const sku of size.skus ?? []) if (sku) barcodes.add(sku)
+    }
+  }
+  const found = new Set<string>()
+  const { data: byBarcode, error: barcodeError } = await client.from('fulfillment_product_gtin_links')
+    .select('gtin')
+    .eq('store_id', storeId)
+    .eq('active', true)
+    .ilike('wb_barcode', `%${needle}%`)
+  if (barcodeError) throw new Error('Не удалось найти связку по баркоду.')
+  for (const row of (byBarcode ?? []) as Array<{ gtin?: string | null }>) {
+    if (row.gtin) found.add(row.gtin)
+  }
+  const barcodeList = [...barcodes]
+  for (let index = 0; index < barcodeList.length; index += 100) {
+    const chunk = barcodeList.slice(index, index + 100)
+    const { data, error } = await client.from('fulfillment_product_gtin_links')
+      .select('gtin')
+      .eq('store_id', storeId)
+      .eq('active', true)
+      .in('wb_barcode', chunk)
+    if (error) throw new Error('Не удалось найти связку по артикулу.')
+    for (const row of (data ?? []) as Array<{ gtin?: string | null }>) {
+      if (row.gtin) found.add(row.gtin)
+    }
+  }
+  return [...found]
 }
 
 export async function refreshSelectedGtinCards(
@@ -243,7 +285,18 @@ export async function fetchTeksherCatalog(
     .eq('in_catalog', true)
     .order('full_name')
   const needle = catalogNeedle(search)
-  if (needle) query = query.or(`name.ilike.%${needle}%,full_name.ilike.%${needle}%,gtin.ilike.%${needle}%`)
+  if (needle) {
+    const linked = await gtinsLinkedToMatchingGoods(storeId, needle)
+    const pattern = `"%${needle}%"`
+    const parts = [
+      `name.ilike.${pattern}`,
+      `full_name.ilike.${pattern}`,
+      `gtin.ilike.${pattern}`,
+      `trademark.ilike.${pattern}`,
+    ]
+    if (linked.length > 0) parts.push(`gtin.in.(${linked.join(',')})`)
+    query = query.or(parts.join(','))
+  }
   if (link === 'yes') query = query.in('gtin', linkedGtins)
   if (link === 'no' && linkedGtins.length > 0) query = query.not('gtin', 'in', `(${linkedGtins.map((gtin) => `"${gtin}"`).join(',')})`)
   const { data, error, count } = await query.range(from, from + size - 1)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Modal } from '../ui/Modal'
 import { PhotoThumb } from '../ui/PhotoThumb'
 import {
@@ -14,6 +14,35 @@ import {
 } from '../../services/kizLinkService'
 
 const MAX_CARDS = 40
+
+function SelectAllSizes({
+  state,
+  disabled,
+  onChange,
+}: {
+  state: 'none' | 'some' | 'all'
+  disabled: boolean
+  onChange: () => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === 'some'
+  }, [state])
+  return (
+    <label className={`inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-600 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+      <input
+        ref={ref}
+        type="checkbox"
+        checked={state === 'all'}
+        disabled={disabled}
+        onChange={onChange}
+        aria-label="Все размеры"
+        className="h-5 w-5 accent-blue-600 disabled:opacity-40"
+      />
+      Все
+    </label>
+  )
+}
 
 export function KizSelectiveRefreshModal({
   open,
@@ -184,18 +213,32 @@ export function KizSelectiveRefreshModal({
             <div className="space-y-3">
               {selected.map((product) => {
                 const rows = kizSizeRows(product)
-                const linkedCount = rows.filter((row) => linkByBarcode.has(row.barcode)).length
+                const linkedKeys = rows.filter((row) => linkByBarcode.has(row.barcode)).map((row) => row.rowKey)
+                const picked = linkedKeys.filter((key) => checked.has(key)).length
+                const selectState = linkedKeys.length === 0 || picked === 0 ? 'none' : picked === linkedKeys.length ? 'all' : 'some'
                 return (
-                  <section key={product.id} className={`rounded-2xl border p-3 ${linkedCount > 0 ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'}`}>
+                  <section key={product.id} className={`rounded-2xl border p-3 ${linkedKeys.length > 0 ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'}`}>
                     <div className="flex items-start gap-3">
                       <PhotoThumb url={kizPhotoUrl(product.photos)} className="h-14 w-11 rounded-lg" previewZIndex={80} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-slate-800">{product.name || 'Без названия'}</p>
                         <p className="truncate text-xs text-slate-400">{product.nm_id} · {product.vendor_code || '—'} · {product.color || 'цвет не указан'}</p>
-                        <p className={`mt-1 text-xs font-medium ${linkedCount > 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                          {linkedCount > 0 ? 'Есть связка' : 'Нет связки с GTIN'}
+                        <p className={`mt-1 text-xs font-medium ${linkedKeys.length > 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                          {linkedKeys.length > 0 ? 'Есть связка' : 'Нет связки с GTIN'}
                         </p>
                       </div>
+                      <SelectAllSizes
+                        state={selectState}
+                        disabled={linkedKeys.length === 0 || busy}
+                        onChange={() => {
+                          setChecked((current) => {
+                            const next = new Set(current)
+                            const allOn = linkedKeys.length > 0 && linkedKeys.every((key) => current.has(key))
+                            linkedKeys.forEach((key) => allOn ? next.delete(key) : next.add(key))
+                            return next
+                          })
+                        }}
+                      />
                       <button
                         type="button"
                         aria-label="Убрать товар"
