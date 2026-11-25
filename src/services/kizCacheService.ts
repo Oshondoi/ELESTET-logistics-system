@@ -1,6 +1,6 @@
 import { kizHasCryptoTail, kizIdentity } from '../lib/kizCode'
 import { gtinAttributeValue, parseGtinGoodsName } from '../lib/gtinGoods'
-import { arrangeOperationPairs, pageOperationRows } from '../lib/operationPairs'
+import { arrangeOperationPairs } from '../lib/operationPairs'
 import { supabase } from '../lib/supabase'
 
 export type CachedCode = {
@@ -200,21 +200,34 @@ export async function fetchCachedOperations(
   page: number,
 ): Promise<{ items: CachedOperation[]; total: number; pages: number; offset: number }> {
   const client = db()
-  const items: CachedOperation[] = []
-  for (let from = 0; from < 20000; from += 1000) {
-    const { data, error } = await client.from('teksher_operations')
-      .select('operation_id, operation_type, type, status, kms_count, codes_count, gtin, created_at_teksher, created_date, product_group_code, product')
-      .eq('store_id', storeId)
-      .order('id', { ascending: true })
-      .range(from, from + 999)
-    if (error) throw new Error('Не удалось прочитать операции из базы.')
-    const batch = ((data ?? []) as Array<Record<string, unknown>>).map(cachedOperation)
-    items.push(...batch)
-    if (batch.length < 1000) break
+  const from = Math.max(page, 0) * PAGE
+  const { data, error, count } = await client.from('teksher_operations')
+    .select('operation_id, operation_type, type, status, kms_count, codes_count, gtin, created_at_teksher, created_date, product_group_code, product', { count: 'exact' })
+    .eq('store_id', storeId)
+    .order('created_at_teksher', { ascending: false, nullsFirst: false })
+    .order('operation_id', { ascending: true })
+    .range(from, from + PAGE - 1)
+  if (error) throw new Error('Не удалось прочитать операции из базы.')
+  const pageRows = ((data ?? []) as Array<Record<string, unknown>>).map(cachedOperation)
+  const total = count ?? pageRows.length
+  return {
+    items: arrangeOperationPairs(pageRows),
+    total,
+    pages: Math.max(Math.ceil(total / PAGE), 1),
+    offset: from,
   }
-  const arranged = arrangeOperationPairs(items)
-  const paged = pageOperationRows(arranged, page, PAGE)
-  return { items: paged.items, total: arranged.length, pages: paged.pages, offset: paged.offset }
+}
+
+export async function printOperationIdsOnPage(storeId: string, operationIds: string[]): Promise<string[]> {
+  const ids = [...new Set(operationIds.map((id) => id.trim()).filter(Boolean))]
+  if (ids.length === 0) return []
+  const client = db()
+  const { data, error } = await client.from('kiz_print_codes')
+    .select('operation_id')
+    .eq('store_id', storeId)
+    .in('operation_id', ids)
+  if (error) throw new Error('Не удалось прочитать операции с полным кодом.')
+  return [...new Set(((data ?? []) as Array<{ operation_id?: string | null }>).map((row) => String(row.operation_id ?? '')).filter(Boolean))]
 }
 
 function printKey(gtin: string, serial: string): string {

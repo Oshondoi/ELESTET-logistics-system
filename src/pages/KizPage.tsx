@@ -9,7 +9,7 @@ import { KizLinkCard } from '../components/kiz/KizLinkCard'
 import { KizOperationPrint } from '../components/kiz/KizOperationPrint'
 import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeLabel } from '../lib/teksherLabels'
 import { parsePrintFileBytes } from '../lib/kizPrintFile'
-import { fetchCachedCodes, fetchCachedOperations, fetchPrintCsv, linkPrintCodesOnPage, loadPrintCodeCoverage, savePrintCodes, syncAllOperations, syncCachedCodes, syncCachedCodesQuick, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
+import { fetchCachedCodes, fetchCachedOperations, fetchPrintCsv, linkPrintCodesOnPage, loadPrintCodeCoverage, printOperationIdsOnPage, savePrintCodes, syncAllOperations, syncCachedCodes, syncCachedCodesQuick, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
@@ -626,15 +626,15 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
     if (tab !== 'operations' || !activeStore?.id) return
     let cancel = false
     const operationIds = operations.map((op) => String(op.operationId ?? op.id))
-    void refreshPrintCoverage(activeStore.id, operationIds)
+    void printOperationIdsOnPage(activeStore.id, operationIds)
+      .then((ids) => {
+        if (!cancel) setPrintOperationIds(new Set(ids))
+      })
       .catch(() => {
-        if (cancel) return
-        setPrintSavedCount(0)
-        setPrintOperationIds(new Set())
-        setPrintGateway(false)
+        if (!cancel) setPrintOperationIds(new Set())
       })
     return () => { cancel = true }
-  }, [tab, activeStore?.id, operations, refreshPrintCoverage])
+  }, [tab, activeStore?.id, operations])
 
   const refreshCodesQuick = async () => {
     if (!activeStore?.id || codesSyncing || fullSyncing) return
@@ -1607,11 +1607,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                   </div>
                 </div>
                 <p className="text-xs text-slate-400">Печать в строке включится, когда полный файл уже в базе. «Забрать CSV» скачивает его из Текшера. Если нанесения ещё не было, этот клик отправляет нанесение на весь заказ. Ручная загрузка файла тоже подходит.</p>
-                {activeStore && printSavedCount > 0 && (
+                {activeStore && (printSavedCount > 0 || printOperationIds.size > 0) && (
                   printSearching && printOperationIds.size === 0 ? (
                     <p className="text-xs font-medium text-slate-500">Полный код сохранён. Ищем его строку в этом списке…</p>
                   ) : printOperationIds.size > 0 ? (
-                    <p className="text-xs font-medium text-emerald-700">В магазине «{getStoreSelectorLabel(activeStore)}» полный код есть у операций: {printOperationIds.size}. Такие строки подсвечены.</p>
+                    <p className="text-xs font-medium text-emerald-700">На этой странице полный код есть у операций: {printOperationIds.size}. Такие строки подсвечены.</p>
                   ) : printGateway ? (
                     <p className="text-xs font-medium text-amber-700">Полный код сохранён в магазине «{getStoreSelectorLabel(activeStore)}»: {printSavedCount}. Текшер не ответил, поэтому строка пока без подсветки. Нажмите печать на нужной операции ещё раз.</p>
                   ) : (
