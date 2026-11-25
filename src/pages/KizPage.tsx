@@ -149,6 +149,15 @@ function fmtDate(d: string | undefined): string {
   catch { return d }
 }
 
+function operationsDayRange(day: string): { from: string; to: string } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null
+  const [year, month, date] = day.split('-').map(Number)
+  const from = new Date(year, month - 1, date)
+  const to = new Date(year, month - 1, date + 1)
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return null
+  return { from: from.toISOString(), to: to.toISOString() }
+}
+
 // ── Компоненты ────────────────────────────────────────────────────────────────
 
 const StatusBadge = ({ status }: { status: string | undefined }) => {
@@ -389,6 +398,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
   const [operationsPages, setOperationsPages] = useState(1)
   const [operationsOffset, setOperationsOffset] = useState(0)
   const [operationsPage, setOperationsPage] = useState(0)
+  const [operationsDate, setOperationsDate] = useState('')
   const [operationsLoading, setOperationsLoading] = useState(false)
   const [operationsSyncing, setOperationsSyncing] = useState(false)
   const [printFileBusy, setPrintFileBusy] = useState(false)
@@ -581,11 +591,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
     if (tab === 'codes' && activeStore?.id) void loadCodes(codesPage, codesStatusFilter)
   }, [tab, activeStore?.id, loadCodes, codesPage, codesStatusFilter])
 
-  const loadOperations = useCallback(async (page = operationsPage) => {
+  const loadOperations = useCallback(async (page = operationsPage, day = operationsDate) => {
     if (!activeStore?.id) return
     setOperationsLoading(true)
     try {
-      const result = await fetchCachedOperations(activeStore.id, page)
+      const result = await fetchCachedOperations(activeStore.id, page, operationsDayRange(day))
       setOperations(result.items)
       setOperationsTotal(result.total)
       setOperationsPages(result.pages)
@@ -595,7 +605,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
     } finally {
       setOperationsLoading(false)
     }
-  }, [activeStore?.id, operationsPage])
+  }, [activeStore?.id, operationsPage, operationsDate])
 
   useEffect(() => {
     if (tab === 'operations' && activeStore?.id) void loadOperations(operationsPage)
@@ -1546,6 +1556,31 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                 <div className="elestet-section-header">
                   <span className="text-xs text-slate-500">Всего: {operationsTotal}</span>
                   <div className="ml-auto flex items-center gap-2">
+                    <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-500">
+                      Дата
+                      <input
+                        type="date"
+                        value={operationsDate}
+                        aria-label="Дата операций"
+                        onChange={(event) => {
+                          setOperationsDate(event.target.value)
+                          setOperationsPage(0)
+                        }}
+                        className="h-[34px] rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-800 outline-none focus:border-blue-400"
+                      />
+                    </label>
+                    {operationsDate && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOperationsDate('')
+                          setOperationsPage(0)
+                        }}
+                        className="elestet-btn"
+                      >
+                        Все даты
+                      </button>
+                    )}
                     {canManage && <>
                     <input
                       ref={printFileRef}
@@ -1622,7 +1657,10 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                 {operationsLoading ? (
                   <Skeleton rows={6} />
                 ) : operations.length === 0 ? (
-                  <EmptyState text="В базе нет операций" sub="«Быстрое обновление» берёт свежую сотню и следующих живых. «Полное обновление» проходит весь список." />
+                  <EmptyState
+                    text={operationsDate ? 'За эту дату операций нет' : 'В базе нет операций'}
+                    sub={operationsDate ? 'Снимите дату, чтобы вернуть весь список.' : '«Быстрое обновление» берёт свежую сотню и следующих живых. «Полное обновление» проходит весь список.'}
+                  />
                 ) : (
                   <div className="w-full overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
                     <table className="w-full min-w-[860px] text-sm">

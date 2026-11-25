@@ -4,11 +4,17 @@
 -- Заказ, который относится к нанесению, стоит сразу под ним.
 -- Остальные заказы остаются на своей дате.
 -- Страница не режет нанесение и его заказ пополам.
+-- p_from и p_to, если заданы, оставляют только документы этого промежутка.
+-- Границы задаёт браузер по своему календарному дню, как в колонке «Дата».
+
+drop function if exists public.list_teksher_operations_page(uuid, integer, integer);
 
 create or replace function public.list_teksher_operations_page(
   p_store_id uuid,
   p_page integer default 0,
-  p_page_size integer default 20
+  p_page_size integer default 20,
+  p_from timestamptz default null,
+  p_to timestamptz default null
 )
 returns jsonb
 language plpgsql
@@ -154,7 +160,9 @@ begin
     operation.grp
   from _kiz_blocks block
   join _kiz_block_rows line on line.block_id = block.block_id
-  join _kiz_ops operation on operation.operation_id = line.operation_id;
+  join _kiz_ops operation on operation.operation_id = line.operation_id
+  where (p_from is null or operation.at_ts >= p_from)
+    and (p_to is null or operation.at_ts < p_to);
 
   select count(*) into v_n from _kiz_final;
 
@@ -223,7 +231,7 @@ begin
 end;
 $$;
 
-revoke all on function public.list_teksher_operations_page(uuid, integer, integer) from public, anon;
-grant execute on function public.list_teksher_operations_page(uuid, integer, integer) to authenticated;
+revoke all on function public.list_teksher_operations_page(uuid, integer, integer, timestamptz, timestamptz) from public, anon;
+grant execute on function public.list_teksher_operations_page(uuid, integer, integer, timestamptz, timestamptz) to authenticated;
 
 notify pgrst, 'reload schema';

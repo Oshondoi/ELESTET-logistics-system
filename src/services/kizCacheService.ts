@@ -197,13 +197,19 @@ function cachedOperation(row: Record<string, unknown>): CachedOperation {
 export async function fetchCachedOperations(
   storeId: string,
   page: number,
+  range?: { from: string; to: string } | null,
 ): Promise<{ items: CachedOperation[]; total: number; pages: number; offset: number }> {
   const client = db()
-  const { data, error } = await client.rpc('list_teksher_operations_page', {
+  const args: Record<string, unknown> = {
     p_store_id: storeId,
     p_page: Math.max(page, 0),
     p_page_size: PAGE,
-  })
+  }
+  if (range) {
+    args.p_from = range.from
+    args.p_to = range.to
+  }
+  const { data, error } = await client.rpc('list_teksher_operations_page', args)
   if (error) throw new Error('Не удалось прочитать операции из базы.')
   const payload = (data ?? {}) as { items?: Array<Record<string, unknown>>; total?: number; pages?: number; offset?: number }
   return {
