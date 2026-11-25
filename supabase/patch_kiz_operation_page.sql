@@ -1,8 +1,9 @@
 -- Один порядок операций магазина для всех пользователей.
 -- База собирает список целиком и отдаёт только запрошенную страницу.
--- Нанесение стоит на своей дате. Под ним заказ того же количества.
--- Лишний более старый заказ того же количества встаёт под эту пару.
--- Страница не режет такую группу пополам.
+-- Документы идут по дате, сверху самые новые, как в Teksher.
+-- Заказ, который относится к нанесению, стоит сразу под ним.
+-- Остальные заказы остаются на своей дате.
+-- Страница не режет нанесение и его заказ пополам.
 
 create or replace function public.list_teksher_operations_page(
   p_store_id uuid,
@@ -18,9 +19,7 @@ as $$
 declare
   v_page_size integer := least(greatest(coalesce(p_page_size, 20), 1), 100);
   v_block integer := 0;
-  v_pos integer;
   v_order text;
-  v_host integer;
   v_n integer := 0;
   v_index integer := 0;
   v_take integer;
@@ -112,38 +111,17 @@ begin
     end if;
   end loop;
 
-  create index _kiz_blocks_host_idx on _kiz_blocks (cnt, at_ts desc, block_id asc) where has_marking;
-  analyze _kiz_blocks;
-
   for o in
     select operation_id, cnt, at_ts, grp
     from _kiz_ops
     where kind = 'order' and not used
     order by at_ts desc, operation_id asc
   loop
-    v_host := null;
-    select host.block_id into v_host
-    from _kiz_blocks host
-    where host.has_marking
-      and host.cnt = o.cnt
-      and host.at_ts >= o.at_ts
-      and (host.grp = '' or o.grp = '' or host.grp = o.grp)
-    order by host.at_ts desc, host.block_id asc
-    limit 1;
-
-    if v_host is not null then
-      select coalesce(max(row.pos), -1) + 1 into v_pos
-      from _kiz_block_rows row
-      where row.block_id = v_host;
-      insert into _kiz_block_rows (block_id, pos, operation_id)
-      values (v_host, v_pos, o.operation_id);
-    else
-      v_block := v_block + 1;
-      insert into _kiz_blocks (block_id, at_ts, cnt, head_id, has_marking, grp)
-      values (v_block, o.at_ts, o.cnt, o.operation_id, false, o.grp);
-      insert into _kiz_block_rows (block_id, pos, operation_id)
-      values (v_block, 0, o.operation_id);
-    end if;
+    v_block := v_block + 1;
+    insert into _kiz_blocks (block_id, at_ts, cnt, head_id, has_marking, grp)
+    values (v_block, o.at_ts, o.cnt, o.operation_id, false, o.grp);
+    insert into _kiz_block_rows (block_id, pos, operation_id)
+    values (v_block, 0, o.operation_id);
   end loop;
 
   for s in
