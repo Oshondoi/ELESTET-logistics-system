@@ -116,6 +116,27 @@ function catalogNeedle(search: string): string {
   return search.trim().replace(/[%_,]/g, '')
 }
 
+export async function refreshSelectedGtinCards(
+  storeId: string,
+  gtins: string[],
+): Promise<{ cards: number; failed: number; missing: number }> {
+  if (!supabase) throw new Error('База не настроена. Обновите страницу.')
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) throw new Error('Сессия истекла. Войдите снова.')
+  const { data, error } = await supabase.functions.invoke('teksher-auth', {
+    body: { store_id: storeId, action: 'refresh_gtin_cards', gtins },
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  })
+  if (error) throw new Error('Не удалось обновить выбранные карточки.')
+  const payload = data as { error?: string; cards?: number; failed?: number; missing?: number } | null
+  if (payload?.error) throw new Error(payload.error)
+  return {
+    cards: Number(payload?.cards ?? 0),
+    failed: Number(payload?.failed ?? 0),
+    missing: Number(payload?.missing ?? 0),
+  }
+}
+
 export async function syncStoreTeksherCatalog(storeId: string): Promise<{ items: number; cards: number; failed: number }> {
   if (!supabase) throw new Error('База не настроена. Обновите страницу.')
   const { data: { session } } = await supabase.auth.getSession()

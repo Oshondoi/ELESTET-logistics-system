@@ -813,6 +813,47 @@ Deno.serve(async (req: Request) => {
     })
   }
 
+  // Карточки только отмеченных GTIN. Остальной каталог не читается и не помечается устаревшим.
+  if (action === 'refresh_gtin_cards') {
+    const requested = [...new Set(
+      (Array.isArray(body.gtins) ? body.gtins : [])
+        .map((value) => String(value ?? '').replace(/\D/g, ''))
+        .filter((value) => value.length >= 8 && value.length <= 14)
+        .map((value) => value.padStart(14, '0')),
+    )]
+    if (requested.length === 0) return err('Отметьте размер со связкой.')
+    if (requested.length > 40) return err('За раз можно обновить 40 размеров.')
+    const { data: stored, error: storedError } = await svc.from('teksher_products')
+      .select('gtin,teksher_id')
+      .eq('store_id', store_id)
+      .in('gtin', requested)
+    if (storedError) return err('Не удалось прочитать карточки GTIN.')
+    const known = new Map<string, string>()
+    for (const row of (stored ?? []) as Array<{ gtin?: string | null; teksher_id?: string | null }>) {
+      const gtin = String(row.gtin ?? '')
+      const teksherId = String(row.teksher_id ?? '').trim()
+      if (gtin && teksherId) known.set(gtin, teksherId)
+    }
+    const syncedAt = new Date().toISOString()
+    const rows: JsonObject[] = [...known.entries()].map(([gtin, teksherId]) => ({
+      store_id,
+      gtin,
+      teksher_id: teksherId,
+    }))
+    const cardResult = await fillCatalogCards(token, rows, syncedAt, store_id)
+    const ready = rows.filter((row) => row.synced_at === syncedAt)
+    for (let index = 0; index < ready.length; index += 100) {
+      const chunk = ready.slice(index, index + 100)
+      const { error: cacheError } = await svc.from('teksher_products').upsert(chunk, { onConflict: 'store_id,gtin' })
+      if (cacheError) return err(`Не удалось сохранить карточки: ${cacheError.message}`)
+    }
+    return ok({
+      cards: ready.length,
+      failed: cardResult.failed,
+      missing: requested.filter((gtin) => !known.has(gtin)).length,
+    })
+  }
+
   // ── action: codes ───────────────────────────────────────────────────────────
   if (action === 'codes') {
     const page = Number(body.page ?? 0)

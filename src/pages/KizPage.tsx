@@ -11,6 +11,7 @@ import { operationCanPrint, teksherStatusClass, teksherStatusLabel, teksherTypeL
 import { parsePrintFileBytes } from '../lib/kizPrintFile'
 import { fetchCachedCodes, fetchCachedOperations, fetchPrintCsv, linkPrintCodesOnPage, loadPrintCodeCoverage, printOperationIdsOnPage, savePrintCodes, syncAllOperations, syncCachedCodes, syncCachedCodesQuick, syncCachedOperations, TEKSHER_PAGE_SIZES, teksherPageSize, type CachedOperation, type TeksherPageSize } from '../services/kizCacheService'
 import { fetchGtinLinkFaces, fetchTeksherCatalog, syncStoreTeksherCatalog } from '../services/kizLinkService'
+import { KizSelectiveRefreshModal } from '../components/kiz/KizSelectiveRefreshModal'
 import { PhotoThumb } from '../components/ui/PhotoThumb'
 import { KizOrderModal, type KizOrderLine } from '../components/kiz/KizOrderModal'
 import { TransgranPanel } from '../components/kiz/TransgranPanel'
@@ -379,6 +380,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
   const [productsPage, setProductsPage] = useState(0)
   const [productsLoading, setProductsLoading] = useState(false)
   const [productsSearch, setProductsSearch] = useState('')
+  const [selectiveOpen, setSelectiveOpen] = useState(false)
   const [linkFilter, setLinkFilter] = useState<'all' | 'yes' | 'no'>('all')
   const [linkFaces, setLinkFaces] = useState<Record<string, string | null>>({})
 
@@ -1317,11 +1319,11 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                   <div className="ml-auto flex gap-2">
                     <button
                       type="button"
-                      onClick={() => void loadProducts(0, productsSearch)}
-                      disabled={productsLoading || fullSyncing}
+                      onClick={() => setSelectiveOpen(true)}
+                      disabled={productsLoading || fullSyncing || !activeStore?.id}
                       className="elestet-btn"
                     >
-                      Быстрое обновление
+                      Выборочное обновление
                     </button>
                     <button
                       type="button"
@@ -1366,7 +1368,7 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
                 ) : products.length === 0 ? (
                   <EmptyState
                     text={productsSearch || linkFilter !== 'all' ? 'Ничего не найдено' : 'Товаров пока нет'}
-                    sub={productsSearch || linkFilter !== 'all' ? 'Смените поиск или фильтр связки.' : '«Быстрое обновление» читает эту страницу из базы. «Полное обновление» забирает весь каталог из Teksher.'}
+                    sub={productsSearch || linkFilter !== 'all' ? 'Смените поиск или фильтр связки.' : '«Выборочное обновление» забирает карточки отмеченных размеров. «Полное обновление» забирает весь каталог из Teksher.'}
                   />
                 ) : (
                   <div className="w-full overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
@@ -1743,6 +1745,22 @@ export const KizPage = ({ stores, selectedStoreId, onStoreChange, canManage = fa
           onClose={() => setEmitModal(false)}
           onOrder={handleEmitLines}
           onShowOperations={() => { setEmitModal(false); handleSetTab('operations'); void loadOperations() }}
+        />
+      )}
+      {activeStore?.id && (
+        <KizSelectiveRefreshModal
+          open={selectiveOpen}
+          storeId={activeStore.id}
+          onClose={() => setSelectiveOpen(false)}
+          onUpdated={(result) => {
+            setSelectiveOpen(false)
+            void loadProducts(productsPage, productsSearch)
+            const missed = result.failed > 0 ? ` Не открылось: ${result.failed}.` : ''
+            const absent = result.missing > 0 ? ` Нет в каталоге: ${result.missing}.` : ''
+            showAction('ok', result.cards > 0
+              ? `Карточки обновлены: ${result.cards}.${missed}${absent}`
+              : `Карточки не обновились.${missed}${absent}`)
+          }}
         />
       )}
 
